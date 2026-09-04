@@ -1,0 +1,35 @@
+{
+  "name": "@gitnest/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GitNest desktop application.",
+  "author": "GitNest Contributors",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "dist:win": "electron-builder --win --x64 --config electron-builder.yml",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit"
+  },
+  "devDependencies": {
+    "@gitnest/application": "workspace:*",
+    "@gitnest/contracts": "workspace:*",
+    "@gitnest/design-system": "workspace:*",
+    "@gitnest/git-cli": "workspace:*",
+    "@gitnest/git-core": "workspace:*",
+    "@gitnest/persistence-json": "workspace:*",
+    "@gitnest/testkit": "workspace:*",
+    "@gitnest/workspace-core": "workspace:*",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^44.2.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "vite": "^7.3.6"
+  }
+}

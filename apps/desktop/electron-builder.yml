@@ -1,0 +1,62 @@
+appId: io.gitnest.desktop
+productName: GitNest
+copyright: Copyright © 2026 GitNest Contributors
+
+directories:
+  output: ../../release
+  buildResources: build
+
+asar: true
+compression: normal
+npmRebuild: false
+forceCodeSigning: false
+publish: []
+afterPack: build/after-pack.cjs
+
+files:
+  - out/**/*
+  - package.json
+  - "!out/**/*.map"
+  - "!out/**/node_modules/**"
+  - "!node_modules/**"
+  - "!**/*.test.*"
+  - "!**/*.spec.*"
+
+extraMetadata:
+  main: out/main/index.js
+  dependencies: {}
+
+electronLanguages:
+  - en-US
+  - zh-CN
+
+artifactName: GitNest-${version}-${arch}.${ext}
+
+win:
+  executableName: GitNest
+  icon: build/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+
+nsis:
+  artifactName: GitNest-Setup-${version}-${arch}.${ext}
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: GitNest
+  deleteAppDataOnUninstall: false
+  differentialPackage: false
+
+portable:
+  artifactName: GitNest-Portable-${version}-${arch}.${ext}
+  requestExecutionLevel: user

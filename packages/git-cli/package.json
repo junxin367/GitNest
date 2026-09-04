@@ -1,0 +1,15 @@
+{
+  "name": "@gitnest/git-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@gitnest/git-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@gitnest/testkit": "workspace:*"
+  }
+}

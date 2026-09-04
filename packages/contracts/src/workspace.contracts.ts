@@ -1,0 +1,251 @@
+export type WorkspaceEntryKindDto =
+  | "workspace-meta-repository"
+  | "workspace-directory"
+  | "standalone-repository";
+
+export type WorkspaceErrorCode =
+  | "INVALID_REQUEST"
+  | "DIRECTORY_UNAVAILABLE"
+  | "NO_REPOSITORIES_FOUND"
+  | "ENTRY_NOT_FOUND"
+  | "GROUP_NOT_FOUND"
+  | "SCAN_CANCELLED"
+  | "SCAN_FAILED"
+  | "PERSISTENCE_FAILED"
+  | "INVALID_PERSISTED_DATA";
+
+export interface WorkspaceErrorDto {
+  code: WorkspaceErrorCode;
+  message: string;
+  details: Readonly<Record<string, string | number | boolean>>;
+}
+
+export type WorkspaceResult<Value> =
+  | {
+      ok: true;
+      value: Value;
+    }
+  | {
+      ok: false;
+      error: WorkspaceErrorDto;
+    };
+
+export interface RepositoryTargetDto {
+  repositoryId: string;
+  worktreeId: string;
+}
+
+export interface WorkspaceRepositoryDto {
+  id: string;
+  name: string;
+  commonDir: string;
+  canonicalCommonDir: string;
+  primaryWorktreeId?: string;
+  worktreeIds: string[];
+}
+
+export interface WorkspaceWorktreeDto {
+  id: string;
+  repositoryId: string;
+  name: string;
+  path: string;
+  canonicalPath: string;
+  gitDir?: string;
+  head: string;
+  branch?: string;
+  isPrimary: boolean;
+  isBare: boolean;
+  isDetached: boolean;
+  isLocked: boolean;
+  lockReason?: string;
+  isPrunable: boolean;
+  pruneReason?: string;
+}
+
+export interface WorkspaceScanIssueDto {
+  path: string;
+  code:
+    | "DIRECTORY_UNAVAILABLE"
+    | "PERMISSION_DENIED"
+    | "REPOSITORY_UNAVAILABLE"
+    | "OUTSIDE_ROOT_LINK_SKIPPED"
+    | "SYMLINK_LOOP_SKIPPED";
+  message: string;
+}
+
+export interface RepositoryGroupDto {
+  id: string;
+  name: string;
+  targets: RepositoryTargetDto[];
+  collapsed: boolean;
+}
+
+interface WorkspaceEntryBaseDto {
+  id: string;
+  displayName: string;
+  path: string;
+  canonicalPath: string;
+  excludes: string[];
+  order: number;
+  groups: RepositoryGroupDto[];
+  scanIssues: WorkspaceScanIssueDto[];
+  lastScannedAt: string;
+}
+
+export interface AggregateWorkspaceEntryDto
+  extends WorkspaceEntryBaseDto {
+  kind: "workspace-meta-repository";
+  rootTarget: RepositoryTargetDto;
+}
+
+export interface DirectoryWorkspaceEntryDto
+  extends WorkspaceEntryBaseDto {
+  kind: "workspace-directory";
+}
+
+export interface StandaloneRepositoryEntryDto
+  extends WorkspaceEntryBaseDto {
+  kind: "standalone-repository";
+  target: RepositoryTargetDto;
+}
+
+export type WorkspaceEntryDto =
+  | AggregateWorkspaceEntryDto
+  | DirectoryWorkspaceEntryDto
+  | StandaloneRepositoryEntryDto;
+
+export interface WorkspaceDetailsDto {
+  schemaVersion: 1;
+  id: string;
+  name: string;
+  entries: WorkspaceEntryDto[];
+  repositories: WorkspaceRepositoryDto[];
+  worktrees: WorkspaceWorktreeDto[];
+  selectedEntryId?: string;
+  selectedTarget?: RepositoryTargetDto;
+  updatedAt: string;
+}
+
+export interface AddWorkspaceEntryRequest {
+  path: string;
+  source: "picker" | "manual" | "drop";
+}
+
+export interface UpdateWorkspaceEntryRequest {
+  entryId: string;
+  displayName?: string;
+  order?: number;
+}
+
+export interface SetWorkspaceGroupCollapsedRequest {
+  entryId: string;
+  groupId: string;
+  collapsed: boolean;
+}
+
+export interface SelectWorkspaceEntryRequest {
+  entryId: string;
+}
+
+export interface SelectRepositoryTargetRequest {
+  target: RepositoryTargetDto;
+}
+
+export interface RepositoryStatusSnapshotDto
+  extends RepositoryTargetDto {
+  branch?: string;
+  head: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  staged: number;
+  unstaged: number;
+  untracked: number;
+  conflicted: number;
+  operationState?:
+    | "merge"
+    | "rebase"
+    | "cherry-pick"
+    | "revert"
+    | "bisect";
+  refreshPending: boolean;
+  stale: boolean;
+  refreshedAt: string;
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+
+export interface WorkspaceOperationDto {
+  id: string;
+  kind:
+    | "scan"
+    | "status"
+    | "stage"
+    | "unstage"
+    | "commit"
+    | "fetch"
+    | "pull"
+    | "push"
+    | "switch-branch"
+    | "create-branch"
+    | "rename-branch"
+    | "delete-branch"
+    | "worktree-create"
+    | "worktree-lock"
+    | "worktree-unlock"
+    | "worktree-move"
+    | "worktree-repair"
+    | "worktree-prune"
+    | "worktree-remove";
+  scope: "workspace" | "repository" | "worktree";
+  targetIds: string[];
+  state:
+    | "queued"
+    | "running"
+    | "cancelling"
+    | "succeeded"
+    | "failed"
+    | "cancelled"
+    | "interrupted";
+  progress: number;
+  succeeded: number;
+  failed: number;
+  message: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export interface WorkspaceMonitorStateDto {
+  mode: "inactive" | "watching" | "polling";
+  watchedTargets: number;
+  message: string;
+  lastEventAt?: string;
+}
+
+export interface WorkspaceRuntimeStateDto {
+  workspace: WorkspaceDetailsDto;
+  snapshots: RepositoryStatusSnapshotDto[];
+  operations: WorkspaceOperationDto[];
+  monitor: WorkspaceMonitorStateDto;
+}
+
+export interface WorkspaceRefreshAcceptedDto {
+  operationId: string;
+}
+
+export interface WorkspaceMutationResultDto {
+  workspace: WorkspaceDetailsDto;
+  focusedEntryId: string;
+  duplicate: boolean;
+}
+
+export type WorkspaceDirectorySelectionDto =
+  | {
+      cancelled: true;
+    }
+  | {
+      cancelled: false;
+      path: string;
+    };

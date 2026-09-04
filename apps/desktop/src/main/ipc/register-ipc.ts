@@ -1,0 +1,1894 @@
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  type IpcMainInvokeEvent
+} from "electron";
+import { fileURLToPath } from "node:url";
+import {
+  isAbsolute,
+  normalize,
+  relative,
+  resolve
+} from "node:path";
+
+import {
+  IPC_CHANNELS,
+  type AccountRemovalImpactRequest,
+  type BindAccountRequest,
+  type CancelRepositoryOperationRequest,
+  type CancelRepositoryQueryRequest,
+  type CreateRepositoryCommitRequest,
+  type GitReadErrorDto,
+  type GitReadResult,
+  type AddWorkspaceEntryRequest,
+  type IpcArguments,
+  type IpcChannel,
+  type IpcResult,
+  type OpenExternalTerminalRequest,
+  type RemoveAccountRequest,
+  type RepositoryInspectionRequest,
+  type RepositoryCommitRequest,
+  type RepositoryCommandDto,
+  type RepositoryCommandExecuteRequest,
+  type RepositoryCommandPreflightRequest,
+  type RepositoryDiffRequest,
+  type RepositoryHistoryRequest,
+  type RepositoryPathsMutationRequest,
+  type RepositoryQueryRequest,
+  type RuntimeInfo,
+  type RuntimePlatform,
+  type SaveAccountRequest,
+  type SelectRepositoryTargetRequest,
+  type SelectWorkspaceEntryRequest,
+  type SetWorkspaceGroupCollapsedRequest,
+  type TestAccountRequest,
+  type UnbindAccountRequest,
+  type UpdateWorkspaceEntryRequest,
+  type WorkspaceErrorDto,
+  type WorkspaceResult,
+  type WorktreeCommandDto,
+  type WorktreeCommandExecuteRequest,
+  type WorktreeCommandPreflightRequest
+} from "@gitnest/contracts";
+import { GitError } from "@gitnest/git-core";
+import { WorkspaceError } from "@gitnest/workspace-core";
+
+import type { ApplicationServices } from "../bootstrap/register-services";
+import {
+  selectWorkspaceDirectory,
+  selectWorktreeDirectory
+} from "../adapters/dialog.adapter";
+
+let registered = false;
+const MAX_MUTATION_PATHS = 200;
+const MAX_MUTATION_PATH_LENGTH = 4_096;
+const MAX_COMMIT_SUBJECT_LENGTH = 200;
+const MAX_COMMIT_BODY_LENGTH = 100_000;
+const MAX_REPOSITORY_COMMAND_TARGETS = 50;
+const MAX_REPOSITORY_COMMAND_NAME_LENGTH = 255;
+const MAX_REPOSITORY_REVISION_LENGTH = 4_096;
+const MAX_OPERATION_ID_LENGTH = 160;
+const MAX_REPOSITORY_TARGET_ID_LENGTH = 512;
+const MAX_WORKTREE_PATH_LENGTH = 32_767;
+const EXTERNAL_TERMINAL_KINDS = new Set([
+  "windows-terminal",
+  "powershell",
+  "cmd",
+  "git-bash"
+]);
+const ACCOUNT_PROVIDERS = new Set([
+  "github",
+  "gitlab",
+  "gitee",
+  "custom"
+]);
+const ACCOUNT_AUTH_TYPES = new Set([
+  "https-token",
+  "system-ssh"
+]);
+const MAX_ACCOUNT_HOST_LENGTH = 320;
+const MAX_ACCOUNT_USERNAME_LENGTH = 255;
+const MAX_ACCOUNT_TOKEN_LENGTH = 8_192;
+const MAX_ACCOUNT_REPOSITORY_URL_LENGTH = 4_096;
+
+export function registerIpcHandlers(
+  services: ApplicationServices
+): void {
+  if (registered) {
+    return;
+  }
+
+  registered = true;
+
+  registerHandler(
+    IPC_CHANNELS.systemGetRuntimeInfo,
+    (): RuntimeInfo => ({
+      appVersion: app.getVersion(),
+      electronVersion: process.versions.electron,
+      chromeVersion: process.versions.chrome,
+      nodeVersion: process.versions.node,
+      platform: process.platform as RuntimePlatform
+    })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.systemListExternalTerminals,
+    () =>
+      captureGitRead(async () =>
+        (await services.externalTerminal.listAvailable()).map(
+          (profile) => ({
+            kind: profile.kind,
+            label: profile.label
+          })
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.systemOpenExternalTerminal,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input =
+          validateOpenExternalTerminalRequest(request);
+        return services.externalTerminal.open(
+          input.target,
+          input.kind
+        );
+      })
+  );
+
+  registerHandler(IPC_CHANNELS.accountList, () =>
+    captureGitRead(() => services.accounts.list())
+  );
+
+  registerHandler(
+    IPC_CHANNELS.accountSave,
+    (_event, request) =>
+      captureGitRead(() =>
+        services.accounts.save(
+          validateSaveAccountRequest(request)
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.accountBind,
+    (_event, request) =>
+      captureGitRead(() =>
+        services.accounts.bind(
+          validateBindAccountRequest(request)
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.accountUnbind,
+    (_event, request) =>
+      captureGitRead(() =>
+        services.accounts.unbind(
+          validateUnbindAccountRequest(request)
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.accountGetRemovalImpact,
+    (_event, request) =>
+      captureGitRead(() =>
+        services.accounts.getRemovalImpact(
+          validateAccountRemovalImpactRequest(request)
+            .accountId
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.accountRemove,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input = validateRemoveAccountRequest(request);
+        return services.accounts.remove(
+          input.accountId,
+          input.confirmed
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.accountTest,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input = validateTestAccountRequest(request);
+        return services.accounts.test(
+          input.accountId,
+          input.repositoryUrl
+        );
+      })
+  );
+
+  registerHandler(IPC_CHANNELS.windowMinimize, (event): void => {
+    getSenderWindow(event).minimize();
+  });
+
+  registerHandler(
+    IPC_CHANNELS.windowToggleMaximize,
+    (event): boolean => {
+      const window = getSenderWindow(event);
+
+      if (window.isMaximized()) {
+        window.unmaximize();
+      } else {
+        window.maximize();
+      }
+
+      return window.isMaximized();
+    }
+  );
+
+  registerHandler(IPC_CHANNELS.windowClose, (event): void => {
+    getSenderWindow(event).close();
+  });
+
+  registerHandler(IPC_CHANNELS.gitGetEnvironment, () =>
+    captureGitRead(() => services.gitInspection.getEnvironment())
+  );
+
+  registerHandler(
+    IPC_CHANNELS.gitInspectRepository,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input = validateInspectionRequest(request);
+
+        return services.gitInspection.inspectRepository(input.path, {
+          ...(input.historyLimit === undefined
+            ? {}
+            : { historyLimit: input.historyLimit })
+        });
+      })
+  );
+
+  registerHandler(IPC_CHANNELS.workspaceGetCurrent, () =>
+    captureWorkspace(() => services.workspace.getCurrent())
+  );
+
+  registerHandler(IPC_CHANNELS.workspaceGetState, () =>
+    captureWorkspace(() => services.workspace.getState())
+  );
+
+  registerHandler(
+    IPC_CHANNELS.workspaceSelectDirectory,
+    (event) =>
+      captureWorkspace(() =>
+        selectWorkspaceDirectory(getSenderWindow(event))
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.workspaceAddEntry,
+    (_event, request) =>
+      captureWorkspace(() =>
+        services.workspace.addEntry(
+          validateAddWorkspaceEntryRequest(request)
+        )
+      )
+  );
+
+  registerHandler(IPC_CHANNELS.workspaceRescan, () =>
+    captureWorkspace(() => services.workspace.rescan())
+  );
+
+  registerHandler(
+    IPC_CHANNELS.workspaceUpdateEntry,
+    (_event, request) =>
+      captureWorkspace(() =>
+        services.workspace.updateEntry(
+          validateUpdateWorkspaceEntryRequest(request)
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.workspaceSetGroupCollapsed,
+    (_event, request) =>
+      captureWorkspace(() =>
+        services.workspace.setGroupCollapsed(
+          validateSetGroupCollapsedRequest(request)
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.workspaceSelectEntry,
+    (_event, request) =>
+      captureWorkspace(() =>
+        services.workspace.selectEntry(
+          validateSelectWorkspaceEntryRequest(request).entryId
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.workspaceSelectTarget,
+    (_event, request) =>
+      captureWorkspace(() =>
+        services.workspace.selectTarget(
+          validateSelectRepositoryTargetRequest(request).target
+        )
+      )
+  );
+
+  registerHandler(IPC_CHANNELS.workspaceRefresh, () =>
+    captureWorkspace(() =>
+      services.workspace.requestWorkspaceRefresh("manual")
+    )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.worktreeSelectDirectory,
+    (event) =>
+      captureWorkspace(async () => {
+        const selection = await selectWorktreeDirectory(
+          getSenderWindow(event)
+        );
+        if (!selection.cancelled) {
+          await services.worktreePaths.grantSelection(
+            selection.path
+          );
+        }
+        return selection;
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.worktreeCommandPreflight,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input =
+          validateWorktreeCommandPreflightRequest(
+            request
+          );
+        return services.worktreeCommands.preflight(
+          input.command
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.worktreeCommandExecute,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input =
+          validateWorktreeCommandExecuteRequest(request);
+        return services.worktreeCommands.execute(
+          input.command,
+          input.preflightId,
+          input.confirmed
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryGetChanges,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input = validateRepositoryQueryRequest(request);
+        return services.repositoryQueries.getChanges(
+          input.queryId,
+          input.target
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryGetDiff,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input = validateRepositoryDiffRequest(request);
+        return services.repositoryQueries.getDiff(
+          input.queryId,
+          input.target,
+          input.path,
+          input.mode
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryGetHistory,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input = validateRepositoryHistoryRequest(request);
+        return services.repositoryQueries.getHistory(
+          input.queryId,
+          input.target,
+          input.limit,
+          input.offset
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryGetCommit,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input = validateRepositoryCommitRequest(request);
+        return services.repositoryQueries.getCommit(
+          input.queryId,
+          input.target,
+          input.commitHash
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryGetBranches,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input = validateRepositoryQueryRequest(request);
+        return services.repositoryQueries.getBranches(
+          input.queryId,
+          input.target
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryCancelQuery,
+    (_event, request) =>
+      captureGitRead(async () => {
+        services.repositoryQueries.cancel(
+          validateCancelRepositoryQueryRequest(request).queryId
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryStage,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input =
+          validateRepositoryPathsMutationRequest(request);
+        return services.repositoryMutations.stage(
+          input.target,
+          input.paths
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryUnstage,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input =
+          validateRepositoryPathsMutationRequest(request);
+        return services.repositoryMutations.unstage(
+          input.target,
+          input.paths
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryCreateCommit,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input =
+          validateCreateRepositoryCommitRequest(request);
+        return services.repositoryMutations.commit(
+          input.target,
+          input.subject,
+          input.body
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryCommandPreflight,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input =
+          validateRepositoryCommandPreflightRequest(request);
+        return services.repositoryCommands.preflight(
+          input.command
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryCommandExecute,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input =
+          validateRepositoryCommandExecuteRequest(request);
+        return services.repositoryCommands.execute(
+          input.command,
+          input.preflightId,
+          input.confirmed
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryCancelOperation,
+    (_event, request) =>
+      captureGitRead(() =>
+        services.repositoryCommands.cancel(
+          validateCancelRepositoryOperationRequest(request)
+            .operationId
+        )
+      )
+  );
+}
+
+function getSenderWindow(event: IpcMainInvokeEvent): BrowserWindow {
+  const window = BrowserWindow.fromWebContents(event.sender);
+
+  if (!window) {
+    throw new Error("Unable to resolve the sender window.");
+  }
+
+  return window;
+}
+
+type IpcHandler<Channel extends IpcChannel> = (
+  event: IpcMainInvokeEvent,
+  ...args: IpcArguments<Channel>
+) => IpcResult<Channel> | Promise<IpcResult<Channel>>;
+
+function registerHandler<Channel extends IpcChannel>(
+  channel: Channel,
+  handler: IpcHandler<Channel>
+): void {
+  ipcMain.handle(channel, async (event, ...args: unknown[]) => {
+    assertTrustedSender(event);
+
+    return handler(
+      event,
+      ...(args as IpcArguments<Channel>)
+    );
+  });
+}
+
+async function captureGitRead<Value>(
+  action: () => Promise<Value>
+): Promise<GitReadResult<Value>> {
+  try {
+    return {
+      ok: true,
+      value: await action()
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: toGitReadError(error)
+    };
+  }
+}
+
+async function captureWorkspace<Value>(
+  action: () => Promise<Value>
+): Promise<WorkspaceResult<Value>> {
+  try {
+    return {
+      ok: true,
+      value: await action()
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: toWorkspaceError(error)
+    };
+  }
+}
+
+function toGitReadError(error: unknown): GitReadErrorDto {
+  if (error instanceof GitError) {
+    return {
+      code: error.code,
+      message: error.message,
+      details: error.details
+    };
+  }
+
+  if (error instanceof WorkspaceError) {
+    return {
+      code:
+        error.code === "INVALID_REQUEST" ||
+        error.code === "DIRECTORY_UNAVAILABLE"
+          ? error.code
+          : "COMMAND_FAILED",
+      message: error.message,
+      details: error.details
+    };
+  }
+
+  return {
+    code: "COMMAND_FAILED",
+    message:
+      error instanceof Error
+        ? error.message
+        : "An unknown Git read error occurred.",
+    details: {}
+  };
+}
+
+function toWorkspaceError(error: unknown): WorkspaceErrorDto {
+  if (error instanceof WorkspaceError) {
+    return {
+      code: error.code,
+      message: error.message,
+      details: error.details
+    };
+  }
+
+  return {
+    code: "SCAN_FAILED",
+    message:
+      error instanceof Error
+        ? error.message
+        : "An unknown Workspace error occurred.",
+    details: {}
+  };
+}
+
+function validateInspectionRequest(
+  request: unknown
+): RepositoryInspectionRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("path" in request) ||
+    typeof request.path !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Repository inspection requires an absolute path."
+    );
+  }
+
+  if (
+    "historyLimit" in request &&
+    request.historyLimit !== undefined &&
+    typeof request.historyLimit !== "number"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "History limit must be numeric when provided."
+    );
+  }
+
+  return {
+    path: request.path,
+    ...("historyLimit" in request &&
+    typeof request.historyLimit === "number"
+      ? { historyLimit: request.historyLimit }
+      : {})
+  };
+}
+
+function validateAddWorkspaceEntryRequest(
+  request: unknown
+): AddWorkspaceEntryRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("path" in request) ||
+    typeof request.path !== "string" ||
+    !("source" in request) ||
+    !["picker", "manual", "drop"].includes(
+      String(request.source)
+    )
+  ) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "Adding a Workspace entry requires a path and source."
+    );
+  }
+
+  return {
+    path: request.path,
+    source: request.source as AddWorkspaceEntryRequest["source"]
+  };
+}
+
+function validateUpdateWorkspaceEntryRequest(
+  request: unknown
+): UpdateWorkspaceEntryRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("entryId" in request) ||
+    typeof request.entryId !== "string"
+  ) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "Updating a Workspace entry requires an entry id."
+    );
+  }
+
+  const displayName =
+    "displayName" in request ? request.displayName : undefined;
+  const order = "order" in request ? request.order : undefined;
+
+  if (
+    displayName !== undefined &&
+    typeof displayName !== "string"
+  ) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "Display name must be a string."
+    );
+  }
+
+  if (order !== undefined && typeof order !== "number") {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "Workspace entry order must be numeric."
+    );
+  }
+
+  return {
+    entryId: request.entryId,
+    ...(displayName === undefined ? {} : { displayName }),
+    ...(order === undefined ? {} : { order })
+  };
+}
+
+function validateSetGroupCollapsedRequest(
+  request: unknown
+): SetWorkspaceGroupCollapsedRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("entryId" in request) ||
+    typeof request.entryId !== "string" ||
+    !("groupId" in request) ||
+    typeof request.groupId !== "string" ||
+    !("collapsed" in request) ||
+    typeof request.collapsed !== "boolean"
+  ) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "Updating a group requires entry, group, and collapsed state."
+    );
+  }
+
+  return {
+    entryId: request.entryId,
+    groupId: request.groupId,
+    collapsed: request.collapsed
+  };
+}
+
+function validateSelectWorkspaceEntryRequest(
+  request: unknown
+): SelectWorkspaceEntryRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("entryId" in request) ||
+    typeof request.entryId !== "string"
+  ) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "Selecting a Workspace entry requires an entry id."
+    );
+  }
+
+  return { entryId: request.entryId };
+}
+
+function validateSelectRepositoryTargetRequest(
+  request: unknown
+): SelectRepositoryTargetRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("target" in request) ||
+    !request.target ||
+    typeof request.target !== "object" ||
+    !("repositoryId" in request.target) ||
+    typeof request.target.repositoryId !== "string" ||
+    !("worktreeId" in request.target) ||
+    typeof request.target.worktreeId !== "string"
+  ) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "Selecting a repository requires a repository and worktree id."
+    );
+  }
+
+  return {
+    target: {
+      repositoryId: request.target.repositoryId,
+      worktreeId: request.target.worktreeId
+    }
+  };
+}
+
+function validateRepositoryQueryRequest(
+  request: unknown
+): RepositoryQueryRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("queryId" in request) ||
+    typeof request.queryId !== "string" ||
+    !("target" in request)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Repository queries require a query id and target."
+    );
+  }
+
+  return {
+    queryId: request.queryId,
+    target: validateRepositoryTarget(request.target)
+  };
+}
+
+function validateRepositoryDiffRequest(
+  request: unknown
+): RepositoryDiffRequest {
+  const base = validateRepositoryQueryRequest(request);
+
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("path" in request) ||
+    typeof request.path !== "string" ||
+    !("mode" in request) ||
+    !["unstaged", "staged", "untracked"].includes(
+      String(request.mode)
+    )
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Diff queries require a path and supported mode."
+    );
+  }
+
+  return {
+    ...base,
+    path: request.path,
+    mode: request.mode as RepositoryDiffRequest["mode"]
+  };
+}
+
+function validateRepositoryHistoryRequest(
+  request: unknown
+): RepositoryHistoryRequest {
+  const base = validateRepositoryQueryRequest(request);
+
+  if (!request || typeof request !== "object") {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "History queries require a request object."
+    );
+  }
+
+  const limit = "limit" in request ? request.limit : undefined;
+  const offset = "offset" in request ? request.offset : undefined;
+
+  if (
+    (limit !== undefined && typeof limit !== "number") ||
+    (offset !== undefined && typeof offset !== "number")
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "History limit and offset must be numeric."
+    );
+  }
+
+  return {
+    ...base,
+    ...(limit === undefined ? {} : { limit }),
+    ...(offset === undefined ? {} : { offset })
+  };
+}
+
+function validateRepositoryCommitRequest(
+  request: unknown
+): RepositoryCommitRequest {
+  const base = validateRepositoryQueryRequest(request);
+
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("commitHash" in request) ||
+    typeof request.commitHash !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Commit queries require an object id."
+    );
+  }
+
+  return {
+    ...base,
+    commitHash: request.commitHash
+  };
+}
+
+function validateCancelRepositoryQueryRequest(
+  request: unknown
+): CancelRepositoryQueryRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("queryId" in request) ||
+    typeof request.queryId !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Cancelling a query requires its id."
+    );
+  }
+
+  return { queryId: request.queryId };
+}
+
+function validateRepositoryPathsMutationRequest(
+  request: unknown
+): RepositoryPathsMutationRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("target" in request) ||
+    !("paths" in request) ||
+    !Array.isArray(request.paths) ||
+    request.paths.length === 0 ||
+    request.paths.length > MAX_MUTATION_PATHS
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      `Repository mutations require a target and between 1 and ${MAX_MUTATION_PATHS} paths.`
+    );
+  }
+
+  const paths = request.paths.map((path) => {
+    if (
+      typeof path !== "string" ||
+      !path ||
+      path.length > MAX_MUTATION_PATH_LENGTH ||
+      path === "." ||
+      path.includes("\0") ||
+      isAbsolute(path) ||
+      /^[a-zA-Z]:/.test(path) ||
+      path.startsWith("/") ||
+      path.startsWith("\\") ||
+      path
+        .split(/[\\/]+/)
+        .some((segment) => segment === ".." || segment === ".")
+    ) {
+      throw new GitError(
+        "INVALID_REQUEST",
+        "Mutation paths must be exact relative paths inside the Worktree."
+      );
+    }
+
+    return path;
+  });
+
+  if (new Set(paths).size !== paths.length) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Mutation paths must not contain duplicates."
+    );
+  }
+
+  return {
+    target: validateRepositoryTarget(request.target),
+    paths
+  };
+}
+
+function validateCreateRepositoryCommitRequest(
+  request: unknown
+): CreateRepositoryCommitRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("target" in request) ||
+    !("subject" in request) ||
+    typeof request.subject !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Creating a commit requires a target and subject."
+    );
+  }
+
+  const body = "body" in request ? request.body : undefined;
+  if (
+    body !== undefined &&
+    typeof body !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Commit bodies must be strings when provided."
+    );
+  }
+
+  const subject = request.subject.trim();
+  const normalizedBody = body?.trim();
+  if (
+    !subject ||
+    subject.length > MAX_COMMIT_SUBJECT_LENGTH ||
+    subject.includes("\0") ||
+    /[\r\n]/.test(subject) ||
+    (normalizedBody !== undefined &&
+      (normalizedBody.length > MAX_COMMIT_BODY_LENGTH ||
+        normalizedBody.includes("\0")))
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Commit messages exceed the supported bounds or contain invalid characters."
+    );
+  }
+
+  return {
+    target: validateRepositoryTarget(request.target),
+    subject,
+    ...(normalizedBody ? { body: normalizedBody } : {})
+  };
+}
+
+export function validateRepositoryCommandPreflightRequest(
+  request: unknown
+): RepositoryCommandPreflightRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("command" in request)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Repository command preflight requires a command."
+    );
+  }
+
+  return {
+    command: validateRepositoryCommand(request.command)
+  };
+}
+
+export function validateRepositoryCommandExecuteRequest(
+  request: unknown
+): RepositoryCommandExecuteRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("command" in request) ||
+    !("preflightId" in request) ||
+    typeof request.preflightId !== "string" ||
+    !("confirmed" in request) ||
+    typeof request.confirmed !== "boolean"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Executing a repository command requires command, preflight id, and confirmation state."
+    );
+  }
+
+  return {
+    command: validateRepositoryCommand(request.command),
+    preflightId: validateOperationIdentifier(
+      request.preflightId,
+      "Preflight"
+    ),
+    confirmed: request.confirmed
+  };
+}
+
+export function validateCancelRepositoryOperationRequest(
+  request: unknown
+): CancelRepositoryOperationRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("operationId" in request) ||
+    typeof request.operationId !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Cancelling an operation requires its id."
+    );
+  }
+
+  return {
+    operationId: validateOperationIdentifier(
+      request.operationId,
+      "Operation"
+    )
+  };
+}
+
+export function validateOpenExternalTerminalRequest(
+  request: unknown
+): OpenExternalTerminalRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("target" in request) ||
+    !("kind" in request) ||
+    typeof request.kind !== "string" ||
+    !EXTERNAL_TERMINAL_KINDS.has(request.kind)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Opening a terminal requires a target and supported terminal kind."
+    );
+  }
+
+  return {
+    target: validateRepositoryTarget(request.target),
+    kind: request.kind as OpenExternalTerminalRequest["kind"]
+  };
+}
+
+export function validateSaveAccountRequest(
+  request: unknown
+): SaveAccountRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("provider" in request) ||
+    typeof request.provider !== "string" ||
+    !ACCOUNT_PROVIDERS.has(request.provider) ||
+    !("host" in request) ||
+    typeof request.host !== "string" ||
+    !("authType" in request) ||
+    typeof request.authType !== "string" ||
+    !ACCOUNT_AUTH_TYPES.has(request.authType)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Saving an account requires a supported provider, host, and authentication type."
+    );
+  }
+
+  const id =
+    "id" in request ? request.id : undefined;
+  const username =
+    "username" in request ? request.username : undefined;
+  const token =
+    "token" in request ? request.token : undefined;
+  const makeHostDefault =
+    "makeHostDefault" in request
+      ? request.makeHostDefault
+      : undefined;
+  if (id !== undefined && typeof id !== "string") {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Account ids must be strings."
+    );
+  }
+  if (
+    username !== undefined &&
+    typeof username !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Account usernames must be strings."
+    );
+  }
+  if (token !== undefined && typeof token !== "string") {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Account tokens must be strings."
+    );
+  }
+  if (
+    makeHostDefault !== undefined &&
+    typeof makeHostDefault !== "boolean"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Host default selection must be boolean."
+    );
+  }
+
+  const host = request.host.trim();
+  const normalizedUsername = username?.trim();
+  const normalizedToken = token?.trim();
+  if (
+    !host ||
+    host.length > MAX_ACCOUNT_HOST_LENGTH ||
+    host.includes("\0") ||
+    /[\r\n]/.test(host) ||
+    (normalizedUsername !== undefined &&
+      (normalizedUsername.length >
+        MAX_ACCOUNT_USERNAME_LENGTH ||
+        normalizedUsername.includes("\0") ||
+        /[\r\n]/.test(normalizedUsername))) ||
+    (normalizedToken !== undefined &&
+      (normalizedToken.length > MAX_ACCOUNT_TOKEN_LENGTH ||
+        normalizedToken.includes("\0") ||
+        /[\r\n]/.test(normalizedToken)))
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Account fields exceed the supported bounds or contain invalid characters."
+    );
+  }
+  if (
+    request.authType === "system-ssh" &&
+    normalizedToken
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "System SSH accounts do not accept tokens."
+    );
+  }
+
+  return {
+    ...(id !== undefined
+      ? { id: validateAccountIdentifier(id) }
+      : {}),
+    provider:
+      request.provider as SaveAccountRequest["provider"],
+    host,
+    ...(normalizedUsername
+      ? { username: normalizedUsername }
+      : {}),
+    authType:
+      request.authType as SaveAccountRequest["authType"],
+    ...(normalizedToken ? { token: normalizedToken } : {}),
+    makeHostDefault: makeHostDefault ?? false
+  };
+}
+
+export function validateBindAccountRequest(
+  request: unknown
+): BindAccountRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("accountId" in request) ||
+    typeof request.accountId !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Binding an account requires its id."
+    );
+  }
+  const repositoryId =
+    "repositoryId" in request
+      ? request.repositoryId
+      : undefined;
+  if (
+    repositoryId !== undefined &&
+    typeof repositoryId !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Repository ids must be strings."
+    );
+  }
+  return {
+    accountId: validateAccountIdentifier(request.accountId),
+    ...(repositoryId !== undefined
+      ? {
+          repositoryId:
+            validateAccountIdentifier(repositoryId)
+        }
+      : {})
+  };
+}
+
+export function validateUnbindAccountRequest(
+  request: unknown
+): UnbindAccountRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("host" in request) ||
+    typeof request.host !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Unbinding an account requires its host."
+    );
+  }
+  const repositoryId =
+    "repositoryId" in request
+      ? request.repositoryId
+      : undefined;
+  if (
+    repositoryId !== undefined &&
+    typeof repositoryId !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Repository ids must be strings."
+    );
+  }
+  const host = request.host.trim();
+  if (
+    !host ||
+    host.length > MAX_ACCOUNT_HOST_LENGTH ||
+    host.includes("\0") ||
+    /[\r\n]/.test(host)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Account hosts exceed the supported bounds."
+    );
+  }
+  return {
+    host,
+    ...(repositoryId !== undefined
+      ? {
+          repositoryId:
+            validateAccountIdentifier(repositoryId)
+        }
+      : {})
+  };
+}
+
+export function validateAccountRemovalImpactRequest(
+  request: unknown
+): AccountRemovalImpactRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("accountId" in request) ||
+    typeof request.accountId !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Account removal impact requires an account id."
+    );
+  }
+  return {
+    accountId: validateAccountIdentifier(request.accountId)
+  };
+}
+
+export function validateRemoveAccountRequest(
+  request: unknown
+): RemoveAccountRequest {
+  const impact =
+    validateAccountRemovalImpactRequest(request);
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("confirmed" in request) ||
+    typeof request.confirmed !== "boolean"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Removing an account requires explicit confirmation state."
+    );
+  }
+  return {
+    ...impact,
+    confirmed: request.confirmed
+  };
+}
+
+export function validateTestAccountRequest(
+  request: unknown
+): TestAccountRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("accountId" in request) ||
+    typeof request.accountId !== "string" ||
+    !("repositoryUrl" in request) ||
+    typeof request.repositoryUrl !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Testing an account requires its id and a repository URL."
+    );
+  }
+  const repositoryUrl = request.repositoryUrl.trim();
+  if (
+    !repositoryUrl ||
+    repositoryUrl.length >
+      MAX_ACCOUNT_REPOSITORY_URL_LENGTH ||
+    repositoryUrl.includes("\0") ||
+    /[\r\n]/.test(repositoryUrl)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "The repository URL exceeds the supported bounds."
+    );
+  }
+  return {
+    accountId: validateAccountIdentifier(request.accountId),
+    repositoryUrl
+  };
+}
+
+function validateAccountIdentifier(value: string): string {
+  if (
+    !value ||
+    value.length > MAX_REPOSITORY_TARGET_ID_LENGTH ||
+    !/^[a-zA-Z0-9_-]+$/.test(value)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Account and repository ids contain invalid characters."
+    );
+  }
+  return value;
+}
+
+function validateRepositoryCommand(
+  command: unknown
+): RepositoryCommandDto {
+  if (
+    !command ||
+    typeof command !== "object" ||
+    !("type" in command) ||
+    typeof command.type !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Repository commands require a supported type."
+    );
+  }
+
+  const input = command as Record<string, unknown>;
+  switch (command.type) {
+    case "fetch": {
+      const remote = validateOptionalCommandText(
+        input.remote,
+        "Remote",
+        MAX_REPOSITORY_COMMAND_NAME_LENGTH
+      );
+      return {
+        type: "fetch",
+        targets: validateRepositoryCommandTargets(input.targets),
+        ...(remote ? { remote } : {}),
+        prune: validateOptionalBoolean(
+          input.prune,
+          "Fetch prune"
+        )
+      };
+    }
+    case "pull":
+      if (input.strategy !== "ff-only") {
+        throw new GitError(
+          "INVALID_REQUEST",
+          "Pull supports only the ff-only strategy."
+        );
+      }
+      return {
+        type: "pull",
+        targets: validateRepositoryCommandTargets(input.targets),
+        strategy: "ff-only"
+      };
+    case "push": {
+      const targets = validateRepositoryCommandTargets(
+        input.targets
+      );
+      const forceWithLease = validateOptionalBoolean(
+        input.forceWithLease,
+        "Force-with-lease"
+      );
+      if (forceWithLease && targets.length !== 1) {
+        throw new GitError(
+          "INVALID_REQUEST",
+          "Force-with-lease is limited to one repository target."
+        );
+      }
+      const remote = validateOptionalCommandText(
+        input.remote,
+        "Remote",
+        MAX_REPOSITORY_COMMAND_NAME_LENGTH
+      );
+      return {
+        type: "push",
+        targets,
+        ...(remote ? { remote } : {}),
+        forceWithLease
+      };
+    }
+    case "switch-branch":
+      return {
+        type: "switch-branch",
+        target: validateRepositoryTarget(input.target),
+        branch: validateCommandText(
+          input.branch,
+          "Branch",
+          MAX_REPOSITORY_COMMAND_NAME_LENGTH
+        )
+      };
+    case "create-branch": {
+      const startPoint = validateOptionalCommandText(
+        input.startPoint,
+        "Start point",
+        MAX_REPOSITORY_REVISION_LENGTH
+      );
+      return {
+        type: "create-branch",
+        target: validateRepositoryTarget(input.target),
+        branch: validateCommandText(
+          input.branch,
+          "Branch",
+          MAX_REPOSITORY_COMMAND_NAME_LENGTH
+        ),
+        ...(startPoint ? { startPoint } : {})
+      };
+    }
+    case "rename-branch":
+      return {
+        type: "rename-branch",
+        target: validateRepositoryTarget(input.target),
+        branch: validateCommandText(
+          input.branch,
+          "Branch",
+          MAX_REPOSITORY_COMMAND_NAME_LENGTH
+        ),
+        newName: validateCommandText(
+          input.newName,
+          "New branch",
+          MAX_REPOSITORY_COMMAND_NAME_LENGTH
+        )
+      };
+    case "delete-branch":
+      return {
+        type: "delete-branch",
+        target: validateRepositoryTarget(input.target),
+        branch: validateCommandText(
+          input.branch,
+          "Branch",
+          MAX_REPOSITORY_COMMAND_NAME_LENGTH
+        )
+      };
+    default:
+      throw new GitError(
+        "INVALID_REQUEST",
+        "Unsupported repository command."
+      );
+  }
+}
+
+export function validateWorktreeCommandPreflightRequest(
+  request: unknown
+): WorktreeCommandPreflightRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("command" in request)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Worktree command preflight requires a command."
+    );
+  }
+  return {
+    command: validateWorktreeCommand(request.command)
+  };
+}
+
+export function validateWorktreeCommandExecuteRequest(
+  request: unknown
+): WorktreeCommandExecuteRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("command" in request) ||
+    !("preflightId" in request) ||
+    typeof request.preflightId !== "string" ||
+    !("confirmed" in request) ||
+    typeof request.confirmed !== "boolean"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Worktree execution requires a command, preflight id, and explicit confirmation state."
+    );
+  }
+  return {
+    command: validateWorktreeCommand(request.command),
+    preflightId: validateOperationIdentifier(
+      request.preflightId,
+      "Preflight"
+    ),
+    confirmed: request.confirmed
+  };
+}
+
+function validateWorktreeCommand(
+  command: unknown
+): WorktreeCommandDto {
+  if (
+    !command ||
+    typeof command !== "object" ||
+    !("type" in command) ||
+    typeof command.type !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Worktree commands require a supported type."
+    );
+  }
+  const input = command as Record<string, unknown>;
+  switch (command.type) {
+    case "create": {
+      const branch = validateOptionalCommandText(
+        input.branch,
+        "Branch",
+        MAX_REPOSITORY_COMMAND_NAME_LENGTH
+      );
+      const startPoint = validateOptionalCommandText(
+        input.startPoint,
+        "Start point",
+        MAX_REPOSITORY_REVISION_LENGTH
+      );
+      return {
+        type: "create",
+        repositoryId: validateCommandText(
+          input.repositoryId,
+          "Repository id",
+          MAX_REPOSITORY_TARGET_ID_LENGTH
+        ),
+        path: validateWorktreePath(input.path),
+        ...(branch ? { branch } : {}),
+        ...(startPoint ? { startPoint } : {})
+      };
+    }
+    case "lock": {
+      const reason = validateOptionalCommandText(
+        input.reason,
+        "Lock reason",
+        512
+      );
+      return {
+        type: "lock",
+        worktreeId: validateCommandText(
+          input.worktreeId,
+          "Worktree id",
+          MAX_REPOSITORY_TARGET_ID_LENGTH
+        ),
+        ...(reason ? { reason } : {})
+      };
+    }
+    case "unlock":
+    case "repair":
+    case "remove":
+      return {
+        type: command.type,
+        worktreeId: validateCommandText(
+          input.worktreeId,
+          "Worktree id",
+          MAX_REPOSITORY_TARGET_ID_LENGTH
+        )
+      };
+    case "move":
+      return {
+        type: "move",
+        worktreeId: validateCommandText(
+          input.worktreeId,
+          "Worktree id",
+          MAX_REPOSITORY_TARGET_ID_LENGTH
+        ),
+        destination: validateWorktreePath(
+          input.destination
+        )
+      };
+    case "prune":
+      return {
+        type: "prune",
+        repositoryId: validateCommandText(
+          input.repositoryId,
+          "Repository id",
+          MAX_REPOSITORY_TARGET_ID_LENGTH
+        )
+      };
+    default:
+      throw new GitError(
+        "INVALID_REQUEST",
+        "Unsupported Worktree command."
+      );
+  }
+}
+
+function validateWorktreePath(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value.length > MAX_WORKTREE_PATH_LENGTH ||
+    value.includes("\0") ||
+    /[\r\n]/.test(value) ||
+    !isAbsolute(value)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      `Worktree paths must be absolute single-line paths of at most ${MAX_WORKTREE_PATH_LENGTH} characters.`
+    );
+  }
+  return normalize(resolve(value));
+}
+
+function validateRepositoryCommandTargets(
+  targets: unknown
+): RepositoryQueryRequest["target"][] {
+  if (
+    !Array.isArray(targets) ||
+    targets.length === 0 ||
+    targets.length > MAX_REPOSITORY_COMMAND_TARGETS
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      `Repository commands require between 1 and ${MAX_REPOSITORY_COMMAND_TARGETS} targets.`
+    );
+  }
+
+  const validated = targets.map(validateRepositoryTarget);
+  const targetKeys = validated.map(
+    (target) =>
+      `${target.repositoryId}\0${target.worktreeId}`
+  );
+  if (new Set(targetKeys).size !== targetKeys.length) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Repository command targets must be unique."
+    );
+  }
+  return validated;
+}
+
+function validateOptionalBoolean(
+  value: unknown,
+  label: string
+): boolean {
+  if (value === undefined) {
+    return false;
+  }
+  if (typeof value !== "boolean") {
+    throw new GitError(
+      "INVALID_REQUEST",
+      `${label} must be boolean when provided.`
+    );
+  }
+  return value;
+}
+
+function validateOptionalCommandText(
+  value: unknown,
+  label: string,
+  maxLength: number
+): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return validateCommandText(value, label, maxLength);
+}
+
+function validateCommandText(
+  value: unknown,
+  label: string,
+  maxLength: number
+): string {
+  if (typeof value !== "string") {
+    throw new GitError(
+      "INVALID_REQUEST",
+      `${label} must be a string.`
+    );
+  }
+  const normalized = value.trim();
+  if (
+    !normalized ||
+    normalized.length > maxLength ||
+    normalized.includes("\0") ||
+    /[\r\n]/.test(normalized)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      `${label} exceeds the supported bounds or contains invalid characters.`
+    );
+  }
+  return normalized;
+}
+
+function validateOperationIdentifier(
+  value: string,
+  label: string
+): string {
+  if (
+    !value ||
+    value.length > MAX_OPERATION_ID_LENGTH ||
+    !/^[a-zA-Z0-9_-]+$/.test(value)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      `${label} ids contain invalid characters.`
+    );
+  }
+  return value;
+}
+
+function validateRepositoryTarget(
+  target: unknown
+): RepositoryQueryRequest["target"] {
+  if (
+    !target ||
+    typeof target !== "object" ||
+    !("repositoryId" in target) ||
+    typeof target.repositoryId !== "string" ||
+    !target.repositoryId ||
+    target.repositoryId.length > MAX_REPOSITORY_TARGET_ID_LENGTH ||
+    target.repositoryId.includes("\0") ||
+    /[\r\n]/.test(target.repositoryId) ||
+    !("worktreeId" in target) ||
+    typeof target.worktreeId !== "string" ||
+    !target.worktreeId ||
+    target.worktreeId.length > MAX_REPOSITORY_TARGET_ID_LENGTH ||
+    target.worktreeId.includes("\0") ||
+    /[\r\n]/.test(target.worktreeId)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Repository targets require repository and worktree ids."
+    );
+  }
+
+  return {
+    repositoryId: target.repositoryId,
+    worktreeId: target.worktreeId
+  };
+}
+
+function assertTrustedSender(event: IpcMainInvokeEvent): void {
+  const senderUrl = event.senderFrame?.url ?? event.sender.getURL();
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+  const rendererDirectory = resolve(import.meta.dirname, "../renderer");
+
+  if (
+    !isTrustedSenderUrl({
+      senderUrl,
+      rendererUrl,
+      rendererDirectory,
+      packaged: app.isPackaged
+    })
+  ) {
+    throw new Error("Rejected IPC request from an untrusted renderer.");
+  }
+}
+
+interface TrustedSenderInput {
+  senderUrl: string;
+  rendererUrl?: string | undefined;
+  rendererDirectory: string;
+  packaged: boolean;
+}
+
+export function isTrustedSenderUrl({
+  senderUrl,
+  rendererUrl,
+  rendererDirectory,
+  packaged
+}: TrustedSenderInput): boolean {
+  try {
+    const parsedSender = new URL(senderUrl);
+
+    if (!packaged && rendererUrl) {
+      const parsedRenderer = new URL(rendererUrl);
+      return (
+        parsedSender.protocol === parsedRenderer.protocol &&
+        parsedSender.host === parsedRenderer.host
+      );
+    }
+
+    if (parsedSender.protocol !== "file:") {
+      return false;
+    }
+
+    const senderPath = fileURLToPath(parsedSender);
+    const relativePath = relative(rendererDirectory, senderPath);
+
+    return (
+      relativePath === "" ||
+      (!relativePath.startsWith("..") && !isAbsolute(relativePath))
+    );
+  } catch {
+    return false;
+  }
+}

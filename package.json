@@ -1,0 +1,33 @@
+{
+  "name": "gitnest",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A local-first multi-repository Git workspace for Windows.",
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @gitnest/desktop dev",
+    "build": "pnpm --filter @gitnest/desktop build",
+    "preview": "pnpm --filter @gitnest/desktop preview",
+    "typecheck": "tsc -p packages/contracts/tsconfig.json --noEmit && tsc -p packages/git-core/tsconfig.json --noEmit && tsc -p packages/git-cli/tsconfig.json --noEmit && tsc -p packages/workspace-core/tsconfig.json --noEmit && tsc -p packages/persistence-json/tsconfig.json --noEmit && tsc -p packages/application/tsconfig.json --noEmit && tsc -p packages/testkit/tsconfig.json --noEmit && tsc -p packages/design-system/tsconfig.json --noEmit && pnpm --filter @gitnest/desktop typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke:m2-03": "pnpm build && node scripts/gn-m2-03-electron-smoke.mjs",
+    "smoke:m3-01": "pnpm build && node scripts/gn-m3-01-electron-smoke.mjs",
+    "smoke:m3-02": "pnpm build && node scripts/gn-m3-02-electron-smoke.mjs",
+    "assets:icon": "node scripts/generate-app-icon.mjs",
+    "dist:win": "node scripts/build-windows-release.mjs",
+    "audit:win": "node scripts/audit-windows-release.mjs",
+    "smoke:m3-03": "node scripts/gn-m3-03-package-smoke.mjs"
+  },
+  "devDependencies": {
+    "@electron/asar": "^4.3.0",
+    "@types/node": "^26.4.1",
+    "jsdom": "^30.0.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}

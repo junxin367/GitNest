@@ -1,0 +1,476 @@
+import {
+  mkdir,
+  readFile,
+  readdir,
+  writeFile
+} from "node:fs/promises";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import { createEmptyWorkspace } from "@gitnest/workspace-core";
+import {
+  createTemporaryDirectoryFixture,
+  type TemporaryDirectoryFixture
+} from "@gitnest/testkit";
+
+import { AtomicJsonStore } from "./atomic-json-store";
+import { JsonRepositorySnapshotStore } from "./repository-snapshot.repository";
+import { JsonWorkspaceStore } from "./workspace.repository";
+
+describe("JsonWorkspaceStore", () => {
+  let temporary: TemporaryDirectoryFixture | undefined;
+
+  afterEach(async () => {
+    await temporary?.dispose();
+    temporary = undefined;
+  });
+
+  it("writes through a same-directory temporary file and atomically replaces an existing document", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture("json-store");
+    const filePath = join(
+      temporary.path,
+      "workspaces",
+      "default.workspace.json"
+    );
+    const store = new JsonWorkspaceStore(filePath);
+    const initial = createEmptyWorkspace(
+      "2026-09-04T10:00:00.000Z"
+    );
+    const updated = {
+      ...initial,
+      name: "Persisted Workspace",
+      updatedAt: "2026-09-04T11:00:00.000Z"
+    };
+
+    await store.save(initial);
+    await store.save(updated);
+
+    await expect(store.load()).resolves.toEqual(updated);
+    await expect(
+      readdir(join(temporary.path, "workspaces"))
+    ).resolves.toEqual(["default.workspace.json"]);
+    await expect(readFile(filePath, "utf8")).resolves.not.toMatch(
+      /token|password|private.?key/i
+    );
+  });
+
+  it("rejects an unsupported persisted schema", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture("json-invalid");
+    const filePath = join(
+      temporary.path,
+      "default.workspace.json"
+    );
+    await new AtomicJsonStore(filePath).write({
+      schemaVersion: 99
+    });
+
+    const store = new JsonWorkspaceStore(filePath);
+    await expect(store.load()).rejects.toMatchObject({
+      code: "INVALID_PERSISTED_DATA"
+    });
+    await expect(
+      store.save(createEmptyWorkspace())
+    ).rejects.toMatchObject({
+      code: "PERSISTENCE_FAILED",
+      message: expect.stringContaining("Refusing to overwrite")
+    });
+    await expect(readFile(filePath, "utf8")).resolves.toContain(
+      '"schemaVersion": 99'
+    );
+  });
+
+  it("classifies malformed JSON as invalid persisted data", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture("json-malformed");
+    const filePath = join(
+      temporary.path,
+      "default.workspace.json"
+    );
+    await writeFile(filePath, "{ invalid", "utf8");
+
+    const store = new JsonWorkspaceStore(filePath);
+    await expect(store.load()).rejects.toMatchObject({
+      code: "INVALID_PERSISTED_DATA"
+    });
+    await expect(
+      store.save(createEmptyWorkspace())
+    ).rejects.toMatchObject({
+      code: "PERSISTENCE_FAILED"
+    });
+    await expect(readFile(filePath, "utf8")).resolves.toBe(
+      "{ invalid"
+    );
+  });
+
+  it("recovers the newest valid same-directory pending write when the final file is absent", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture("json-recovery");
+    const directory = join(temporary.path, "workspaces");
+    const filePath = join(
+      directory,
+      "default.workspace.json"
+    );
+    await mkdir(directory, { recursive: true });
+    const workspace = createEmptyWorkspace(
+      "2026-09-04T12:00:00.000Z"
+    );
+    await writeFile(
+      join(
+        directory,
+        ".default.workspace.json.100.1.valid.tmp"
+      ),
+      `${JSON.stringify(workspace)}\n`,
+      "utf8"
+    );
+    await writeFile(
+      join(
+        directory,
+        ".default.workspace.json.100.0.invalid.tmp"
+      ),
+      "{ invalid",
+      "utf8"
+    );
+
+    await expect(
+      new JsonWorkspaceStore(filePath).load()
+    ).resolves.toEqual(workspace);
+    await expect(readdir(directory)).resolves.toEqual([
+      "default.workspace.json"
+    ]);
+  });
+
+  it("preserves malformed pending writes and blocks initialization when recovery is impossible", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture(
+        "json-invalid-recovery"
+      );
+    const directory = join(temporary.path, "workspaces");
+    const filePath = join(
+      directory,
+      "default.workspace.json"
+    );
+    const pendingName =
+      ".default.workspace.json.100.1.invalid.tmp";
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, pendingName),
+      "{ invalid",
+      "utf8"
+    );
+    const store = new JsonWorkspaceStore(filePath);
+
+    await expect(store.load()).rejects.toMatchObject({
+      code: "INVALID_PERSISTED_DATA"
+    });
+    await expect(
+      store.save(createEmptyWorkspace())
+    ).rejects.toMatchObject({
+      code: "INVALID_PERSISTED_DATA"
+    });
+    await expect(readdir(directory)).resolves.toEqual([
+      pendingName
+    ]);
+  });
+
+  it("cleans stale pending writes only after a valid final document is present", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture(
+        "json-stale-pending"
+      );
+    const directory = join(temporary.path, "workspaces");
+    const filePath = join(
+      directory,
+      "default.workspace.json"
+    );
+    const workspace = createEmptyWorkspace(
+      "2026-09-04T12:00:00.000Z"
+    );
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      filePath,
+      `${JSON.stringify(workspace)}\n`,
+      "utf8"
+    );
+    await writeFile(
+      join(
+        directory,
+        ".default.workspace.json.100.1.tmp"
+      ),
+      "{ invalid",
+      "utf8"
+    );
+
+    await expect(
+      new JsonWorkspaceStore(filePath).load()
+    ).resolves.toEqual(workspace);
+    await expect(readdir(directory)).resolves.toEqual([
+      "default.workspace.json"
+    ]);
+  });
+
+  it("migrates a supported v0 Workspace, persists v1 atomically, and drops unknown fields", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture(
+        "workspace-migration"
+      );
+    const filePath = join(
+      temporary.path,
+      "default.workspace.json"
+    );
+    await new AtomicJsonStore(filePath).write(
+      createLegacyWorkspaceDocument()
+    );
+
+    const migrated = await new JsonWorkspaceStore(
+      filePath
+    ).load();
+    expect(migrated).toMatchObject({
+      schemaVersion: 1,
+      entries: [
+        {
+          scanIssues: [],
+          groups: [{ collapsed: false }]
+        }
+      ],
+      worktrees: [
+        {
+          isDetached: false,
+          isLocked: false,
+          isPrunable: false
+        }
+      ]
+    });
+    const persisted = JSON.parse(
+      await readFile(filePath, "utf8")
+    );
+    expect(persisted.schemaVersion).toBe(1);
+    expect(persisted.unknownLegacyField).toBeUndefined();
+  });
+
+  it("rejects semantically inconsistent Repository and selected-target relationships", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture(
+        "workspace-relationships"
+      );
+    const filePath = join(
+      temporary.path,
+      "default.workspace.json"
+    );
+    const document =
+      createCurrentWorkspaceDocument() as Record<
+        string,
+        unknown
+      >;
+    const repositories = document.repositories as Array<
+      Record<string, unknown>
+    >;
+    const worktrees = document.worktrees as Array<
+      Record<string, unknown>
+    >;
+    (repositories[0]?.worktreeIds as string[]).push(
+      "orphan-worktree"
+    );
+    worktrees.push({
+      ...worktrees[0],
+      id: "orphan-worktree",
+      path: "C:\\workspace\\orphan",
+      canonicalPath: "c:\\workspace\\orphan",
+      isPrimary: false
+    });
+    document.selectedTarget = {
+      repositoryId: "repository",
+      worktreeId: "orphan-worktree"
+    };
+    await new AtomicJsonStore(filePath).write(document);
+
+    await expect(
+      new JsonWorkspaceStore(filePath).load()
+    ).rejects.toMatchObject({
+      code: "INVALID_PERSISTED_DATA"
+    });
+  });
+
+  it("persists and restores repository status snapshots independently from Workspace configuration", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture("snapshot-store");
+    const filePath = join(
+      temporary.path,
+      "cache",
+      "workspace.snapshots.json"
+    );
+    const store = new JsonRepositorySnapshotStore(
+      filePath,
+      () => "2026-09-04T12:00:00.000Z"
+    );
+    const snapshots = [
+      {
+        repositoryId: "repository",
+        worktreeId: "worktree",
+        branch: "main",
+        head: "abc123",
+        upstream: "origin/main",
+        ahead: 1,
+        behind: 2,
+        staged: 1,
+        unstaged: 2,
+        untracked: 3,
+        conflicted: 0,
+        refreshPending: false,
+        stale: false,
+        refreshedAt: "2026-09-04T11:59:00.000Z"
+      }
+    ];
+
+    await store.save("workspace", snapshots);
+
+    await expect(store.load("workspace")).resolves.toEqual(
+      snapshots
+    );
+    await expect(store.load("other-workspace")).rejects.toMatchObject({
+      code: "INVALID_PERSISTED_DATA"
+    });
+  });
+
+  it("migrates legacy snapshots to explicit stale terminal cache state", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture(
+        "snapshot-migration"
+      );
+    const filePath = join(
+      temporary.path,
+      "cache",
+      "workspace.snapshots.json"
+    );
+    await new AtomicJsonStore(filePath).write({
+      schemaVersion: 0,
+      workspaceId: "workspace",
+      snapshots: [
+        {
+          repositoryId: "repository",
+          worktreeId: "worktree",
+          branch: "main",
+          head: "abc123",
+          ahead: 0,
+          behind: 0,
+          staged: 0,
+          unstaged: 0,
+          untracked: 0,
+          conflicted: 0,
+          refreshedAt: "2026-09-04T11:59:00.000Z"
+        }
+      ],
+      updatedAt: "2026-09-04T12:00:00.000Z",
+      unknownLegacyField: true
+    });
+    const store = new JsonRepositorySnapshotStore(
+      filePath
+    );
+
+    await expect(store.load("workspace")).resolves.toEqual([
+      expect.objectContaining({
+        refreshPending: false,
+        stale: true
+      })
+    ]);
+    const persisted = JSON.parse(
+      await readFile(filePath, "utf8")
+    );
+    expect(persisted.schemaVersion).toBe(1);
+    expect(persisted.unknownLegacyField).toBeUndefined();
+  });
+});
+
+function createLegacyWorkspaceDocument(): unknown {
+  return {
+    schemaVersion: 0,
+    id: "workspace",
+    name: "Legacy Workspace",
+    entries: [
+      {
+        id: "entry",
+        displayName: "Root",
+        path: "C:\\workspace",
+        canonicalPath: "c:\\workspace",
+        excludes: [],
+        order: 0,
+        groups: [
+          {
+            id: "group",
+            name: "根目录仓库",
+            targets: [
+              {
+                repositoryId: "repository",
+                worktreeId: "worktree"
+              }
+            ]
+          }
+        ],
+        lastScannedAt: "2026-09-04T11:00:00.000Z",
+        kind: "workspace-directory"
+      }
+    ],
+    repositories: [
+      {
+        id: "repository",
+        name: "repository",
+        commonDir: "C:\\workspace\\repository\\.git",
+        canonicalCommonDir:
+          "c:\\workspace\\repository\\.git",
+        primaryWorktreeId: "worktree",
+        worktreeIds: ["worktree"]
+      }
+    ],
+    worktrees: [
+      {
+        id: "worktree",
+        repositoryId: "repository",
+        name: "repository",
+        path: "C:\\workspace\\repository",
+        canonicalPath: "c:\\workspace\\repository",
+        gitDir: "C:\\workspace\\repository\\.git",
+        head: "abc123",
+        branch: "main",
+        isPrimary: true,
+        isBare: false
+      }
+    ],
+    selectedEntryId: "entry",
+    selectedTarget: {
+      repositoryId: "repository",
+      worktreeId: "worktree"
+    },
+    updatedAt: "2026-09-04T12:00:00.000Z",
+    unknownLegacyField: true
+  };
+}
+
+function createCurrentWorkspaceDocument(): unknown {
+  const document = structuredClone(
+    createLegacyWorkspaceDocument()
+  ) as Record<string, unknown>;
+  document.schemaVersion = 1;
+  delete document.unknownLegacyField;
+  const entries = document.entries as Array<
+    Record<string, unknown>
+  >;
+  for (const entry of entries) {
+    entry.scanIssues = [];
+    for (const group of entry.groups as Array<
+      Record<string, unknown>
+    >) {
+      group.collapsed = false;
+    }
+  }
+  const worktrees = document.worktrees as Array<
+    Record<string, unknown>
+  >;
+  for (const worktree of worktrees) {
+    worktree.isDetached = false;
+    worktree.isLocked = false;
+    worktree.isPrunable = false;
+  }
+  return document;
+}

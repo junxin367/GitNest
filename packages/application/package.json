@@ -1,0 +1,13 @@
+{
+  "name": "@gitnest/application",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@gitnest/git-core": "workspace:*",
+    "@gitnest/workspace-core": "workspace:*"
+  }
+}

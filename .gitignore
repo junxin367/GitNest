@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build, test, and release output
+coverage/
+dist/
+out/
+release/
+test-results/
+playwright-report/
+.vite/
+.cache/
+*.tsbuildinfo
+
+# Local runtime and tool state
+temp/
+tmp/
+*.tmp
+*.log
+*.pid
+builder-debug.yml
+builder-effective-config.yaml
+.codex-review-*/
+
+# Environment and signing secrets
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini

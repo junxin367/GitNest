@@ -1,0 +1,416 @@
+# GitNest M1 实施计划与治理契约
+
+- 日期：2026-09-04
+- 状态：完成（M1 Workspace 基础能力）
+- 依据：`docs/superpowers/specs/2026-09-04-gitnest-workspace-architecture-design.md`
+- 当前范围：M1 Workspace 基础能力
+- 执行方式：主流程直接开发，不调用 Superpowers 研发类 Skill
+
+## Global Constraints
+
+### Superpowers 治理契约
+
+- 适用性判定：治理
+- 状态：M1 完成
+- 任务等级：复杂高风险
+- 当前已生效的上位约束：
+  - 以已确认的 GitNest 架构、Workspace 需求和 HTML 原型为产品与视觉基线。
+  - Windows 优先，平台相关行为必须通过适配器隔离。
+  - 当前用户工作区可能包含未提交内容，必须保留并避免覆盖无关改动。
+  - `D:\code\sc\sc_code` 只可作为只读验收样本，不得写入、清理或执行 Git 写操作。
+- 用户明确指定：
+  - 使用 `superpowers-workflow-governance` 编排。
+  - 研发任务由主流程直接执行，不使用任何 Superpowers 研发类 Skill。
+  - 当前进入 GitNest 开发阶段。
+  - 独立 Reviewer 无结果时由主流程有界自审替代，不再作为继续研发的阻塞门禁。
+  - 完整研发结束后执行多轮系统自测与优化。
+- 允许或必须使用的 Superpowers Skill：
+  - 仅 `superpowers-workflow-governance`。
+- 禁用或裁剪的通用默认步骤：
+  - 不调用 `brainstorming`、`writing-plans`、`executing-plans`、`subagent-driven-development`、`test-driven-development`、`systematic-debugging`、`requesting-code-review`、`verification-before-completion`、`using-git-worktrees` 或 `finishing-a-development-branch`。
+  - 不因测试策略而机械执行逐编辑红绿循环；按验收闭包运行最小反馈和一次交付验收。
+  - 不为每个内部 Step 单独 Review。
+- 开发期反馈：
+  - 只运行受当前增量影响的最小单元、集成或组件测试。
+  - 失败证据用于定位，不计为验收成功。
+- 交付单元验收：
+  - 每个 Task 稳定后运行其约定的测试、静态检查和运行验证一次。
+  - 相关代码变化后只重跑失效范围。
+- 最终集成验证：
+  - M1 四个 Task 完成后运行一次全量类型检查、单元与集成测试、Electron 启动检查和核心 E2E。
+  - 使用只读样本验证真实 Workspace 扫描；不对样本执行 Stage、Commit、Fetch、Pull、Push 或 Worktree 写操作。
+  - 首个完整正式版本研发结束后再执行三轮系统自测与优化：
+    - 第一轮为正确性与回归：全量类型检查、单元测试、集成测试、契约测试、Electron 启动检查和核心 E2E。
+    - 第二轮为安全与韧性：临时目录写入边界、路径越界、取消与超时、并发与恢复、凭据和日志脱敏、只读 Git 不变量。
+    - 第三轮为体验与性能：启动和缓存、较大 Workspace、1440 × 900 与约 1100px 布局、可访问性、资源占用和交互一致性。
+  - 每轮只修复具有可达路径和证据的 Finding；修复后重跑受影响证据，三轮结束后再运行一次最终集成验证。
+- Review 检查点：
+  - 每个 Task 完成并取得验收证据后，由主流程进行一次有界范围自审与差异检查。
+  - 独立 Review 可作为附加证据，但不是门禁；独立通道无结果不得伪装为 Review 通过，也不阻塞后续 Task。
+  - 只有跨 Task 的 IPC、路径安全、持久化或并发风险未被单 Task 自审覆盖时，增加一次 M1 整体自审。
+  - Finding 必须满足违反项、可达路径、实际影响、证据和问题所有权后才能进入修复。
+- 可复用证据：
+  - 相同工作树状态、配置、依赖和覆盖范围下的成功证据必须复用，不重复运行。
+- Worktree：禁止
+- Commit：禁止
+
+## M1 交付顺序
+
+```text
+GN-M1-01 安全桌面壳层 [完成]
+        ↓
+GN-M1-02 只读 Git 适配器 [完成]
+        ↓
+GN-M1-03 多根 Workspace 发现与持久化 [完成]
+        ↓
+GN-M1-04 状态刷新、操作中心与 M1 界面 [完成]
+        ↓
+M1 最终集成验证 [完成]
+```
+
+共享根配置、`packages/contracts` 和 Electron IPC 注册采用串行修改。只读调查可并行；本计划不通过 Git Worktree 并行写入。
+
+## Task GN-M1-01 验收闭包
+
+- Task 状态：
+  - 完成。
+- 单一交付目标：
+  - 在 Windows 上启动一个可运行的 Electron + React + TypeScript 桌面壳层，呈现已确认的 GitNest 基础布局，并通过类型化 Preload Bridge 与 Main 通信。
+- 问题所有者：
+  - GN-M1-01。
+- 输入与前置条件：
+  - 已确认架构文档、`DESIGN.md` 和 `prototypes/workspace-shell/index.html`。
+  - Node.js 22、可用的 pnpm 运行时和 Windows Git。
+- 业务不变量族：
+  - pnpm Monorepo 边界与架构目录一致。
+  - `contextIsolation: true`、`nodeIntegration: false`，Renderer 无 Node.js 权限。
+  - Renderer 不直接调用 `ipcRenderer`，只使用类型化 Bridge。
+  - 初始壳层保留 Activity Rail、Workspace Sidebar、主内容区和独立右侧 Inspector。
+  - 1440 × 900 下四张核心指标卡保持单行，最小目标宽度约 1100px。
+- 允许修改范围：
+  - 根目录工程配置。
+  - `apps/desktop`。
+  - `packages/contracts`、`packages/design-system` 和测试基础配置。
+  - 本实施计划中的状态与证据记录。
+- 禁止修改或必须移交的范围：
+  - 不实现真实 Git、Workspace 扫描、账号、Worktree 或远程同步逻辑。
+  - 不修改只读样本目录。
+  - 不重写现有 HTML 原型的产品结构。
+- 可观察验收证据：
+  - 依赖安装成功。
+  - 严格 TypeScript 检查通过。
+  - Electron 开发模式能够启动并渲染桌面壳层。
+  - 安全配置和 Bridge 契约测试通过。
+  - 1440 × 900 与约 1100px 宽度的关键布局人工或截图检查通过。
+- 独立回滚边界：
+  - 删除本 Task 新增的根工程配置、桌面壳层、Contracts 和 Design System 文件，不影响现有设计文档与原型。
+- 前置依赖、并行条件与共享写入：
+  - 无前置 Task。
+  - 根配置和 Contracts 为后续 Task 的共享写入点，本 Task 完成前不并行修改。
+- Finding 状态与证据：
+  - Finding ID：GN-M1-01-F01
+  - 状态：已确认并解决
+  - 严重级别：Important
+  - 违反的要求或不变量：Electron 窗口必须加载安全 Preload，并呈现可运行 React 壳层。
+  - 可达路径：electron-vite 在 ESM 项目中生成 `out/preload/index.mjs`；sandboxed Renderer 不能执行 ESM Preload，导致 `window.gitnest` 不存在，React effect 失败。
+  - 实际影响：应用窗口只有背景色，用户无法使用任何界面。
+  - 证据与来源：生产构建输出、CDP 返回的 `rootHtml: ""` 与 `hasBridge: false`、空白截图，以及 Electron/electron-vite 官方 sandboxed Preload 约束。
+  - 问题所有者与范围：GN-M1-01；Main/Preload 构建和窗口加载路径。
+  - 下一步：已改为单文件 CommonJS Preload，CDP 验证 `hasBridge: true`、DOM 已挂载、Node 全局未暴露，并增加输出路径回归测试。
+- 当前修复失败计数：
+  - GN-M1-01-F01：2 次，已解决；未发生第四次尝试。
+- 交付验收证据：
+  - `pnpm typecheck` 通过。
+  - `pnpm test` 通过：4 个测试文件、7 个用例。
+  - `pnpm build` 通过，并生成 Main、CommonJS Preload 和 Renderer 产物。
+  - 生产产物 CDP 验证：Bridge 存在、React Root 已挂载、`window.require` 不存在、1440 × 900 下四指标单行、Inspector 独立、无横向溢出。
+  - 1100 × 812 验证：四指标保持单行，主区与 Inspector 边界相接且不覆盖，无横向溢出。
+  - 运行交互验证：主题切换、分组独立折叠、Inspector 关闭与恢复均成功。
+  - 开发模式验证：收紧 CSP 后 Vite Client、React 入口和 Bridge 均成功加载。
+- Review 结论：
+  - 非 Superpowers 独立范围 Review：无已确认阻塞 Finding。
+  - Low 风险“构建产物 smoke test 仍为间接保护”移交 GN-M1-04 最终集成验证。
+  - Low 风险“IPC Channel 与返回类型尚未形成类型级映射”移交 GN-M1-02，在新增 Git 契约前处理。
+
+## Task GN-M1-02 验收闭包
+
+- Task 状态：
+  - 完成。
+- 单一交付目标：
+  - 对任意已登记的本地工作目录执行安全、只读的 Git 环境检测与状态读取，并返回稳定的领域模型。
+- 问题所有者：
+  - GN-M1-02。
+- 输入与前置条件：
+  - GN-M1-01 的 Monorepo、Contracts 和测试运行器可用。
+  - 用户安装的 Git for Windows 可执行。
+- 业务不变量族：
+  - Git 命令只使用 `spawn(executable, args)`；禁止 `shell: true` 和字符串命令。
+  - Renderer 不能提交任意 Git 参数。
+  - 支持 Git 路径、版本、LFS、Credential Helper 和 SSH 环境检测。
+  - 支持解析 status porcelain v2、分支、历史摘要和 worktree porcelain。
+  - 读取操作支持超时、取消和结构化错误。
+  - 日志不包含凭据、带凭据 URL 或未脱敏的敏感环境变量。
+  - 所有集成测试只写 Testkit 临时目录。
+- 允许修改范围：
+  - `packages/git-core`、`packages/git-cli`、`packages/testkit`。
+  - 与 Git 环境和只读仓库查询直接相关的 Contracts、Application、Main IPC 和测试。
+- 禁止修改或必须移交的范围：
+  - 不实现 Stage、Commit、Fetch、Pull、Push、分支写操作或 Worktree 写操作。
+  - 不对用户仓库执行写命令。
+  - Workspace 自动分类与持久化移交 GN-M1-03。
+- 可观察验收证据：
+  - 解析器单元测试覆盖正常、空仓库、Detached HEAD、冲突、重命名、空格和非 ASCII 路径。
+  - 临时真实 Git 仓库集成测试通过。
+  - Git 环境检测返回当前可执行文件、版本与能力。
+  - 对 `D:\code\sc\sc_code` 只运行只读状态命令并成功生成 Snapshot。
+- 独立回滚边界：
+  - 回滚 Git Core、Git CLI、Testkit 及其只读 IPC 接线，不移除 GN-M1-01 壳层。
+- 前置依赖、并行条件与共享写入：
+  - 依赖 GN-M1-01。
+  - Parser 与 Testkit 可在接口冻结后并行实现；Contracts 和 IPC 写入串行。
+- Finding 状态与证据：
+  - Finding ID：GN-M1-02-F01
+  - 状态：已确认并解决
+  - 严重级别：Important
+  - 违反的要求或不变量：Windows 绝对路径必须在 CLI Adapter 边界统一规范化。
+  - 可达路径：Git for Windows 的 `rev-parse`、branch worktree path 和 worktree porcelain 返回 `/` 分隔符，而 Node Fixture 使用 `\` 分隔符。
+  - 实际影响：同一本地路径会因表示差异导致身份比较、Worktree 关联和路径去重失败。
+  - 证据与来源：真实 Git 集成测试首次失败，期望 `C:\...`、实际返回 `C:/...`。
+  - 问题所有者与范围：GN-M1-02；Git CLI Adapter 输出边界。
+  - 下一步：已在 identity、branch worktreePath 和 worktree path 返回前统一使用 Windows 路径规范化；失败测试随后通过。
+  - Finding ID：GN-M1-02-F02
+  - 状态：已确认并解决
+  - 严重级别：Important
+  - 违反的要求或不变量：任何生产只读 Git 命令都必须强制 `GIT_OPTIONAL_LOCKS=0` 和禁交互，调用方不得覆盖。
+  - 可达路径：`runProcess` 是 Git CLI 包公开执行边界，原环境合并顺序允许 `environment` 参数覆盖安全变量。
+  - 实际影响：包内新增调用方可能重新启用 Git 可选锁与交互，破坏只读保证或挂起后台进程。
+  - 证据与来源：`createReadOnlyProcessEnvironment` 原合并顺序和显式覆盖输入。
+  - 问题所有者与范围：GN-M1-02；Git 进程执行器。
+  - 下一步：安全变量改为最后写入，并增加尝试覆盖时仍保持只读值的回归测试。
+- 当前修复失败计数：
+  - GN-M1-02-F01：1 次，已解决。
+  - GN-M1-02-F02：0 次，已解决。
+- 交付验收证据：
+  - `pnpm typecheck` 通过。
+  - `pnpm test` 通过：9 个测试文件、22 个用例。
+  - `pnpm build` 通过，并生成 Main、CommonJS Preload 和 Renderer 产物。
+  - Testkit 真实临时仓库覆盖空格、`&`、中文路径、staged、unstaged、untracked、分支和 linked worktree。
+  - 运行中的超时、取消和输出上限均通过真实子进程测试。
+  - Electron IPC 检测到 `C:\Program Files\Git\cmd\git.exe`、Git `2.53.0.windows.3`、Git LFS `3.7.1` 和一个 Credential Helper。
+  - `D:\code\sc\sc_code` 只读检查返回 `master`、12 个分支、3 条历史和 11 个 Worktree。
+  - 不存在路径返回结构化 `DIRECTORY_UNAVAILABLE`。
+  - 只读样本 `.git/index` 的长度与 UTC 时间戳在检查前后完全一致。
+  - 1440 × 900 与 1100 × 812 下 Git 环境 UI、四指标单行和独立 Inspector 均通过。
+- Review 通道记录与阻塞解除：
+  - PAL external precommit 最终分析超时，无 Finding 或结论。
+  - PAL Codex code-review CLI 超时，无 Finding 或结论。
+  - 两个非 Superpowers 独立只读 Reviewer 在多次有界等待和收束请求后仍未返回结论，均已终止。
+  - 当前没有独立 Review 证据，也没有来自 Review 的代码 Finding；不得把工具无结果伪装为 Review 通过。
+  - 用户已于 2026-09-04 明确授权以主流程多轮自测和优化替代独立 Review 门禁；原阻塞解除。
+  - 主流程有界自审覆盖 Git 进程调用、只读环境强制值、路径规范化、Parser、IPC 暴露、Renderer 隔离和 Testkit 临时目录删除边界。
+  - 自审搜索未发现 `shell: true`、Renderer 直接 Node/Electron 导入、字符串命令执行或待处理 TODO/FIXME；`ipcRenderer` 仅存在于 Preload。
+  - 自审未发现新的可证实 Finding，GN-M1-02 通过并继续 GN-M1-03。
+
+## Task GN-M1-03 验收闭包
+
+- Task 状态：
+  - 完成。
+- 单一交付目标：
+  - 用户通过选择器、手动路径或拖拽添加多个顶层目录后，GitNest 能自动发现、分类、分组、去重并持久化 Workspace，重启后恢复相同结构。
+- 问题所有者：
+  - GN-M1-03。
+- 输入与前置条件：
+  - GN-M1-01 的安全壳层。
+  - GN-M1-02 的只读 Git 能力。
+- 业务不变量族：
+  - 三种添加入口共用同一发现管线。
+  - 根目录本身是仓库时仍继续扫描子目录。
+  - 自动分类严格区分 Workspace 元仓库、Workspace 目录、普通仓库和无仓库目录。
+  - 直属子仓库进入 `根目录仓库`，更深仓库按首段相对路径分组。
+  - 相同规范化路径去重，不同本地路径不因 Remote 相同而合并。
+  - linked worktree 通过 `RepositoryTarget(repositoryId + worktreeId)` 精确指向并按 commonDir 建立关系。
+  - 重叠根目录按最具体已添加根归属。
+  - 扫描排除依赖、缓存、构建目录和越界重解析点；局部错误不终止其余扫描。
+  - AppData JSON 原子写入，用户仓库中不创建 `.gitnest`。
+- 允许修改范围：
+  - `packages/workspace-core`、`packages/persistence-json`、`packages/application`。
+  - 相关 Contracts、Main IPC、Preload Bridge、Renderer Workspace 功能与测试。
+- 禁止修改或必须移交的范围：
+  - 不实现文件监听和持续刷新，移交 GN-M1-04。
+  - 不实现 Git 写操作、账号中心、Worktree 写操作。
+  - 不写入只读验收样本。
+- 可观察验收证据：
+  - 路径规范化、自动分类、分组、重叠根和 commonDir 关系单元测试通过。
+  - 临时目录集成测试覆盖元仓库、目录型 Workspace、普通仓库、空目录、无权目录和 linked worktree。
+  - 三种入口产生等价结果。
+  - 重启应用或重载存储后恢复顶层顺序、显示名、分组和折叠状态。
+  - `D:\code\sc\sc_code` 只读扫描结果符合需求示例。
+- 独立回滚边界：
+  - 回滚 Workspace Core、Persistence、应用用例和对应 UI/IPC，不影响 Git 只读适配器。
+- 前置依赖、并行条件与共享写入：
+  - 依赖 GN-M1-01、GN-M1-02。
+  - Domain、扫描器和 JSON Store 可在契约冻结后并行；Contracts、Application 和 Renderer 接线串行。
+- Finding 状态与证据：
+  - Finding ID：GN-M1-03-F01
+  - 状态：已确认并解决
+  - 严重级别：Important
+  - 违反的要求或不变量：多目录添加允许部分成功时，已成功持久化的条目必须立即反映在 UI，失败不能掩盖已有成功结果。
+  - 可达路径：Renderer 原批量循环在后续路径返回错误时提前退出，`setWorkspace` 尚未执行；此前成功目录已写入 AppData，但当前窗口继续显示旧状态。
+  - 实际影响：用户拖入多个目录且其中一个无效时，会误以为所有目录都未添加，重载后却突然出现已成功条目。
+  - 证据与来源：`useWorkspace` 原提前返回路径的有界源码自审。
+  - 问题所有者与范围：GN-M1-03；Renderer Workspace 批量添加反馈。
+  - 下一步：已抽取批量添加编排，逐项继续、保留最新成功 Workspace，并同时报告成功、重复和失败数量；回归测试覆盖“成功、失败、继续成功”。
+  - Finding ID：GN-M1-03-F02
+  - 状态：已确认并解决
+  - 严重级别：Important
+  - 违反的要求或不变量：持久化数据有效性未知时，不得同时展示零指标和“尚未添加目录”的正常空状态。
+  - 可达路径：启动加载损坏 JSON 时 `workspace` 为 `null` 且存在错误，原页面仍渲染零指标与正常空 Workspace。
+  - 实际影响：用户可能把配置损坏误认为首次启动或数据被清空。
+  - 证据与来源：损坏 schema/JSON 持久化测试与页面条件渲染自审。
+  - 问题所有者与范围：GN-M1-03；Persistence 错误分类与 Workspace Overview 缺省状态。
+  - 下一步：Malformed JSON 统一映射 `INVALID_PERSISTED_DATA`，页面以阻断错误状态替换指标和空数据占位。
+  - Finding ID：GN-M1-03-F03
+  - 状态：已确认并解决
+  - 严重级别：Low
+  - 违反的要求或不变量：默认中文界面中的扫描问题说明应保持语言一致。
+  - 可达路径：真实样本的越界链接跳过项直接显示 Workspace Core 英文消息。
+  - 实际影响：局部问题面板语言混杂，降低可读性。
+  - 证据与来源：1440 × 900 与 1100 × 812 运行截图。
+  - 问题所有者与范围：GN-M1-03；Workspace Scanner 用户可见问题消息。
+  - 下一步：扫描取消、权限、不可用、越界链接和循环跳过消息已改为中文。
+- 当前修复失败计数：
+  - GN-M1-03-F01：0 次，已解决。
+  - GN-M1-03-F02：0 次，已解决。
+  - GN-M1-03-F03：0 次，已解决。
+- 交付验收证据：
+  - `pnpm typecheck` 通过。
+  - `pnpm test` 通过：14 个测试文件、31 个用例。
+  - `pnpm build` 通过，并生成 Main、CommonJS Preload 和 Renderer 生产产物。
+  - Workspace Core 单元测试覆盖根仓库继续扫描、子仓库停止深入、默认排除、权限局部错误、越界链接、自动分类、目录分组、重叠根和 commonDir/Worktree 合并。
+  - Persistence 测试覆盖首次保存、原子替换既有文档、无临时文件残留、schema 拒绝、Malformed JSON 分类和无凭据字段。
+  - Testkit 真实临时目录覆盖 Workspace 元仓库、Workspace 目录、普通仓库、空目录、默认排除目录和 linked worktree；确认扫描后用户根目录中不存在 `.gitnest`。
+  - 应用集成测试覆盖三种来源、规范化路径去重、重叠根最具体归属、折叠状态、显示名称、顺序和新服务实例恢复。
+  - 生产 Electron `file:` 页面通过：类型化 Workspace Bridge 存在、Renderer 无 Node 全局、启动从隔离 AppData 恢复条目。
+  - `D:\code\sc\sc_code` 只读扫描识别为 Workspace 元仓库，得到 21 个仓库、`python/svr/tool/web` 等分组和 219 个关联 Worktree；增加 `core` 重叠根后原根归属正确收束。
+  - 只读样本 `.git/index` 的长度 `10300` 与 UTC 时间戳 `2026-09-03T03:32:00.1652530Z` 在扫描前后完全一致。
+  - 1440 × 900 与 1100 × 812 下四指标保持单行，页面操作入口可见，Inspector 独立且无覆盖，无横向溢出。
+- Review 结论：
+  - 主流程有界自审覆盖扫描终止规则、越界链接、路径身份、重叠根、原子存储、IPC 校验、Renderer 多入口反馈和持久化异常状态。
+  - 生产 `workspace-core` 无 Node/Electron 导入；Renderer 无直接 Node/Electron/IPC 导入；生产文件写入只存在于 AppData JSON 适配器。
+  - 三个已确认 Finding 均已解决，无剩余阻塞 Finding。
+
+## Task GN-M1-04 验收闭包
+
+- Task 状态：
+  - 完成。
+- 单一交付目标：
+  - 打开 Workspace 时先显示缓存，再安全地后台刷新仓库状态，并在完整 M1 界面中呈现多根仓库树、状态总览、Inspector 和操作进度。
+- 问题所有者：
+  - GN-M1-04。
+- 输入与前置条件：
+  - GN-M1-01 至 GN-M1-03 已验收。
+- 业务不变量族：
+  - 启动先显示最近 Snapshot 和更新时间，再后台重扫。
+  - Git 状态读取默认最多四路并发；同仓重复请求合并。
+  - 当前仓库优先刷新，非当前仓库有界刷新。
+  - 文件监听只触发防抖刷新，Git CLI 始终是最终事实来源。
+  - 监听失败、网络盘或数量过多时降级为低频轮询并展示状态。
+  - 单目录或单仓错误局部展示，不阻断其余结果。
+  - 多个顶层条目同级展示，分组独立折叠并持久化。
+  - Inspector 始终为独立右侧列；主内容收窄但不被覆盖。
+  - 四张核心指标卡保持一行，仓库头部操作区保持右侧。
+- 允许修改范围：
+  - `packages/application` 的缓存、事件、操作和刷新编排。
+  - 文件系统与 Watcher 适配器。
+  - 相关 Contracts、IPC、Preload、Renderer 页面、Widget、Feature、Entity、Design System 和测试。
+- 禁止修改或必须移交的范围：
+  - 不实现 M2 Git 写操作、混合认证和外部终端。
+  - 不实现 M3 Worktree 写操作、安装包和自动更新。
+- 可观察验收证据：
+  - 并发限制、请求合并、防抖、失效和轮询降级测试通过。
+  - 组件测试覆盖多根树、分组折叠、空状态、局部错误和 Inspector。
+  - Electron E2E 覆盖添加目录、恢复 Workspace、切换仓库和手动刷新。
+  - 1440 × 900 与约 1100px 宽度视觉检查符合原型基线。
+  - M1 全量类型检查、测试和 Electron 启动检查通过。
+- 独立回滚边界：
+  - 回滚刷新编排、Watcher、M1 完整页面及其接线，保留已验收的发现与存储能力。
+- 前置依赖、并行条件与共享写入：
+  - 依赖 GN-M1-01、GN-M1-02、GN-M1-03。
+  - 刷新逻辑和纯 UI 组件可在契约冻结后并行；共享 Renderer 状态、Contracts 与 IPC 接线串行。
+- Finding 状态与证据：
+  - Finding ID：GN-M1-04-F01
+  - 状态：已确认并解决
+  - 严重级别：Important
+  - 违反的要求或不变量：启动后台刷新和窗口首次聚焦刷新不得为同一批目标创建重复全量操作。
+  - 可达路径：缓存状态返回后通过微任务登记启动刷新，首次 `browser-window-focus` 可在该窗口中抢先创建 21 仓状态刷新。
+  - 实际影响：底层 Git 请求虽由 in-flight Map 合并，但操作中心出现两条重复全量刷新记录。
+  - 证据与来源：生产 Electron 首次启动操作记录出现两条 21 目标 Status Operation。
+  - 问题所有者与范围：GN-M1-04；Workspace Runtime 启动/聚焦编排。
+  - 下一步：启动操作 ID 改为与缓存状态返回同一同步段登记；聚焦刷新在启动或活动状态刷新期间避让，并增加回归测试。
+  - Finding ID：GN-M1-04-F02
+  - 状态：已确认并解决
+  - 严重级别：Important
+  - 违反的要求或不变量：全量 Workspace 重扫期间不得让旧 Watcher 产生被同一全量刷新覆盖的噪声操作。
+  - 可达路径：手动全量刷新开始后旧 Watcher 仍活动，重扫期间的文件提示创建两个单仓 Status Operation。
+  - 实际影响：操作中心混入无必要单仓刷新记录，用户难以判断真正的全量刷新阶段。
+  - 证据与来源：生产 Electron 连续手动刷新后的 Operation 列表。
+  - 问题所有者与范围：GN-M1-04；Workspace Watcher 与全量刷新协调。
+  - 下一步：全量重扫前暂停并清空 Watcher/防抖定时器，重扫完成后重建监听，再执行统一全量状态刷新。
+  - Finding ID：GN-M1-04-F03
+  - 状态：已确认并解决
+  - 严重级别：Important
+  - 违反的要求或不变量：Renderer 关闭或事件订阅者异常不得中断后台刷新与 Snapshot 持久化。
+  - 可达路径：Runtime 原同步调用订阅 Listener；窗口销毁竞态导致 `webContents.send` 抛错时会向刷新调用栈传播。
+  - 实际影响：刷新操作可能在已读取 Git 状态后失败，缓存未保存。
+  - 证据与来源：事件发射边界源码自审。
+  - 问题所有者与范围：GN-M1-04；Runtime State Event 广播。
+  - 下一步：每个 Listener 独立隔离异常，增加抛错订阅者回归测试，保证其他状态与缓存流程继续。
+  - Finding ID：GN-M1-04-F04
+  - 状态：已确认并解决
+  - 严重级别：Low
+  - 违反的要求或不变量：单仓状态读取错误应在当前上下文、状态表和局部问题区域可观察。
+  - 可达路径：右侧“局部问题”原只渲染目录扫描问题，Snapshot Error 仅出现在表格和选中仓库 Inspector。
+  - 实际影响：用户未选中失败仓库时，局部问题汇总数量与内容不一致。
+  - 证据与来源：GN-M1-04 UI 差异自审。
+  - 问题所有者与范围：GN-M1-04；Workspace Overview 错误汇总。
+  - 下一步：目录扫描问题与 Repository Snapshot Error 统一进入局部问题列表。
+- 当前修复失败计数：
+  - GN-M1-04-F01：0 次，已解决。
+  - GN-M1-04-F02：0 次，已解决。
+  - GN-M1-04-F03：0 次，已解决。
+  - GN-M1-04-F04：0 次，已解决。
+- 交付验收证据：
+  - `pnpm typecheck` 通过。
+  - `pnpm test` 通过：17 个测试文件、38 个用例。
+  - `pnpm build` 通过，并生成 Main、CommonJS Preload 和 Renderer 生产产物。
+  - Git CLI 新增轻量 `status --porcelain=v2 -z` Snapshot 读取，避免 Workspace 总览重复读取历史、分支和 Worktree 列表。
+  - Runtime 单元测试确认最多四路并发、连续手动刷新复用同一操作、同仓文件事件防抖、缓存优先加载、首次聚焦避让启动刷新、Watcher 失败降级低频轮询。
+  - 真实临时 Git Workspace 集成测试确认首次状态刷新写入独立 Snapshot Cache、外部文件修改提示触发局部刷新、新 Runtime 先恢复 stale Cache。
+  - Node Watcher 真实文件事件测试通过，事件携带精确 RepositoryTarget。
+  - 生产 Electron 启动只创建一条 Workspace Scan 和一条 21 仓 Status Operation；21 个 Snapshot 全部成功。
+  - 连续两次手动刷新返回同一个 Operation ID，最终只新增一条 Scan 和一条 21 仓 Status Operation。
+  - `D:\code\sc\sc_code` 状态总览显示 21 个仓库、1 个存在变更、14 个需要同步和 219 个关联 Worktree；监听 42 个工作目录/Git 元数据路径。
+  - 只读样本 `.git/index` 长度 `10300` 与 UTC 时间戳 `2026-09-03T03:32:00.1652530Z` 在启动、重扫和状态刷新前后完全一致。
+  - 1440 × 900 与 1100 × 812 下四指标保持单行、仓库状态表无横向溢出、页面操作可见、Inspector 独立且无覆盖。
+  - 最终生产页面 Console/Runtime 异常事件为 0；Renderer `window.require` 为 `undefined`。
+  - 最终截图：`test-results/gn-m1-04-1440.png`、`test-results/gn-m1-04-1100.png`。
+- Review 结论：
+  - 主流程有界自审覆盖缓存加载、刷新并发、请求合并、Watcher 生命周期、轮询降级、事件广播、Snapshot 错误与完整 M1 UI。
+  - 生产写入仍仅限 AppData Workspace/Snapshot JSON；Git 状态读取强制只读环境；Renderer 无直接 Node/Electron/IPC 导入。
+  - 四个已确认 Finding 均已解决，无剩余阻塞 Finding。
+
+## M1 最终集成验证
+
+- 状态：完成。
+- 验证结论：
+  - GN-M1-01 至 GN-M1-04 的成功证据在最终代码状态下有效。
+  - 全量严格类型检查、17 文件 38 用例、生产构建、生产 Electron 启动、核心 IPC、真实只读 Workspace、状态缓存、Watcher、操作中心与两种目标画布全部通过。
+  - M1 验收目标“准确识别本地仓库、顶层类型、目录分组、状态和 Worktree，且扫描不修改用户目录”已满足。
+  - 当前无活动 Electron 测试进程。
+
+## M1 后续边界
+
+- M1 已于 2026-09-04 验收通过；进入 M2 前建立独立治理契约。
+- M2 包含 Changes/Commit、History、远程同步、分支、混合认证和外部终端。
+- M3 包含完整 Worktree 写操作、恢复迁移、诊断日志和 Windows 正式交付。
+- M2/M3 不得在 M1 Task 中顺手实现。
