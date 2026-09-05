@@ -87,6 +87,28 @@ export function DetailInspector({
             repositoryAccountBinding.accountId
         )
       : undefined;
+  const operationActive = operations.some(
+    (item) =>
+      item.state === "queued" ||
+      item.state === "running" ||
+      item.state === "cancelling"
+  );
+  const monitorTone =
+    monitor?.mode === "polling"
+      ? "yellow"
+      : operationActive
+        ? "blue"
+        : monitor?.mode === "watching"
+          ? "green"
+          : "neutral";
+  const monitorLabel =
+    monitor?.mode === "polling"
+      ? "轮询"
+      : operationActive
+        ? "刷新中"
+        : monitor?.mode === "watching"
+          ? "已连接"
+          : "初始化";
 
   useEffect(() => {
     setDisplayName(selectedEntry?.displayName ?? "");
@@ -114,6 +136,7 @@ export function DetailInspector({
           aria-label="折叠详情面板"
           className="icon-button"
           onClick={onClose}
+          title="折叠详情面板"
           type="button"
         >
           <Icon name="close" />
@@ -126,7 +149,7 @@ export function DetailInspector({
           <span
             className={`status-pill ${
               selectedSnapshot?.error
-                ? "yellow"
+                ? "red"
                 : selectedSnapshot?.refreshPending ||
                     selectedSnapshot?.stale
                   ? "blue"
@@ -210,10 +233,10 @@ export function DetailInspector({
           <span>认证来源</span>
           <span
             className={`status-pill ${
-              repositoryAccount ? "blue" : "green"
+              repositoryAccount ? "blue" : "neutral"
             }`}
           >
-            {repositoryAccount ? "仓库覆盖" : "系统 Git"}
+            {repositoryAccount ? "仓库覆盖" : "继承默认"}
           </span>
         </div>
         <div className="inspector-note authentication-source">
@@ -347,20 +370,9 @@ export function DetailInspector({
         <div className="inspector-section-title">
           <span>运行状态</span>
           <span
-            className={`status-pill ${
-              monitor?.mode === "polling" ? "yellow" : "green"
-            }`}
+            className={`status-pill ${monitorTone}`}
           >
-            {monitor?.mode === "polling"
-              ? "轮询"
-              : operations.some(
-                    (item) =>
-                      item.state === "queued" ||
-                      item.state === "running" ||
-                      item.state === "cancelling"
-                  )
-                ? "刷新中"
-                : "已连接"}
+            {monitorLabel}
           </span>
         </div>
         <div className="runtime-hero">
@@ -368,8 +380,8 @@ export function DetailInspector({
             <Icon name="check" size={22} />
           </span>
           <div>
-            <strong>安全壳层已启动</strong>
-            <p>Renderer 通过白名单 Bridge 获取运行时元数据。</p>
+            <strong>本地服务已连接</strong>
+            <p>应用可以安全读取 Workspace 与 Git 状态。</p>
           </div>
         </div>
       </section>
@@ -405,7 +417,7 @@ export function DetailInspector({
           <span>Git for Windows</span>
           <span
             className={`status-pill ${
-              gitError ? "yellow" : "green"
+              gitError ? "red" : "green"
             }`}
           >
             {gitError ? "不可用" : "已检测"}
@@ -459,67 +471,12 @@ export function DetailInspector({
       </section>
 
       <section className="inspector-section">
-        <div className="inspector-section-title">安全边界</div>
+        <div className="inspector-section-title">安全保护</div>
         <div className="inspector-note">
           <Icon name="warning" size={15} />
           <p>
-            Node Integration 已关闭；窗口导航和新窗口默认拒绝；IPC
-            请求验证发送来源。
+            页面无法直接访问 Node.js；外部导航、新窗口和未授权请求会被应用阻止。
           </p>
-        </div>
-      </section>
-
-      <section className="inspector-section">
-        <div className="inspector-section-title">研发进度</div>
-        <div className="next-list">
-          <span>
-            <strong>M1</strong>
-            Workspace、状态刷新与安全壳层
-          </span>
-          <span>
-            <strong>GN-M2-01</strong>
-            仓库只读详情
-          </span>
-          <span>
-            <strong>GN-M2-02</strong>
-            Stage、Unstage 与 Commit
-          </span>
-          <span>
-            <strong>GN-M2-03</strong>
-            Fetch、Pull、Push 与分支
-          </span>
-          <span>
-            <strong>GN-M2-04</strong>
-            账号、外部终端与完整操作中心
-          </span>
-          <span>
-            <strong>GN-M3-01</strong>
-            Worktree 安全管理
-          </span>
-          <span>
-            <strong>GN-M3-02</strong>
-            恢复、迁移与诊断
-          </span>
-          <span>
-            <strong>GN-M3-03</strong>
-            Windows 安装与便携交付（已验收）
-          </span>
-          <span>
-            <strong>RC-H1</strong>
-            正确性与回归硬化（已通过）
-          </span>
-          <span>
-            <strong>RC-H2</strong>
-            安全性与韧性硬化（已通过）
-          </span>
-          <span>
-            <strong>RC-H3</strong>
-            UX 与性能硬化（已通过）
-          </span>
-          <span>
-            <strong>1.0.0</strong>
-            首个正式版本候选
-          </span>
         </div>
       </section>
     </aside>
@@ -536,7 +493,7 @@ function DetailRow({
   return (
     <div className="detail-row">
       <dt>{label}</dt>
-      <dd>{value}</dd>
+      <dd title={value}>{value}</dd>
     </div>
   );
 }

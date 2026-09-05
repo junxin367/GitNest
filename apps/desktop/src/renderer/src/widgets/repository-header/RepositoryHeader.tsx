@@ -1,5 +1,6 @@
 import {
-  useEffect
+  useEffect,
+  useRef
 } from "react";
 
 import type {
@@ -125,14 +126,6 @@ export function RepositoryHeader({
         : view === "settings"
           ? "settings"
           : "layers";
-  const openContext =
-    view === "repository"
-      ? onOpenRepository
-      : view === "operations"
-        ? onOpenOperations
-        : view === "settings"
-          ? onOpenSettings
-          : onOpenWorkspace;
   const branchOptions = useRepositoryBranchOptions(
     workspace?.selectedTarget,
     view === "repository"
@@ -154,6 +147,11 @@ export function RepositoryHeader({
     view !== "repository" ||
     !workspace?.selectedTarget ||
     commandLocked;
+  const terminalMenuRef = useRef<HTMLDetailsElement>(null);
+  const terminalDisabled =
+    repositoryCommandDisabled ||
+    terminalLoading ||
+    terminalProfiles.length === 0;
 
   useEffect(() => {
     if (
@@ -168,14 +166,50 @@ export function RepositoryHeader({
     view
   ]);
 
+  useEffect(() => {
+    const menu = terminalMenuRef.current;
+    if (!menu) {
+      return;
+    }
+    if (terminalDisabled) {
+      menu.removeAttribute("open");
+    }
+
+    const closeFromOutside = (event: PointerEvent) => {
+      if (
+        menu.open &&
+        event.target instanceof Node &&
+        !menu.contains(event.target)
+      ) {
+        menu.removeAttribute("open");
+      }
+    };
+    const closeFromKeyboard = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && menu.open) {
+        event.preventDefault();
+        menu.removeAttribute("open");
+        menu.querySelector("summary")?.focus();
+      }
+    };
+
+    document.addEventListener("pointerdown", closeFromOutside);
+    document.addEventListener("keydown", closeFromKeyboard);
+    return () => {
+      document.removeEventListener(
+        "pointerdown",
+        closeFromOutside
+      );
+      document.removeEventListener(
+        "keydown",
+        closeFromKeyboard
+      );
+    };
+  }, [terminalDisabled]);
+
   return (
     <>
       <header className="repository-header">
-        <button
-          className="context-summary context-summary-button"
-          onClick={openContext}
-          type="button"
-        >
+        <div className="context-summary">
           <span className="context-icon">
             <Icon
               name={contextIcon}
@@ -186,12 +220,12 @@ export function RepositoryHeader({
             <strong>
               {contextName ?? "GitNest Workspace"}
             </strong>
-            <span>
+            <span title={contextPath}>
               <Icon name="folder" size={12} />
               {contextPath}
             </span>
           </div>
-        </button>
+        </div>
 
         {view === "repository" && workspace?.selectedTarget && (
           <label
@@ -249,6 +283,7 @@ export function RepositoryHeader({
 
         <div className="repository-actions">
           <button
+            aria-busy={refreshing}
             className="toolbar-button"
             disabled={refreshing || !workspace?.entries.length}
             onClick={onRefresh}
@@ -261,6 +296,7 @@ export function RepositoryHeader({
           {view === "repository" && (
             <>
           <button
+            aria-busy={commandActive === "fetch"}
             className="toolbar-button"
             disabled={repositoryCommandDisabled}
             onClick={onFetch}
@@ -271,6 +307,7 @@ export function RepositoryHeader({
             {commandActive === "fetch" ? "预检中" : "Fetch"}
           </button>
           <button
+            aria-busy={commandActive === "pull"}
             className="toolbar-button"
             disabled={repositoryCommandDisabled}
             onClick={onPull}
@@ -281,6 +318,7 @@ export function RepositoryHeader({
             {commandActive === "pull" ? "预检中" : "Pull"}
           </button>
           <button
+            aria-busy={commandActive === "push"}
             className="toolbar-button"
             disabled={repositoryCommandDisabled}
             onClick={onPush}
@@ -300,24 +338,20 @@ export function RepositoryHeader({
           >
             <Icon name="warning" />
           </button>
-          <details className="toolbar-menu terminal-menu">
+          <details
+            className="toolbar-menu terminal-menu"
+            ref={terminalMenuRef}
+          >
             <summary
-              aria-disabled={
-                repositoryCommandDisabled ||
-                terminalLoading ||
-                terminalProfiles.length === 0
-              }
+              aria-disabled={terminalDisabled}
               aria-label="打开外部终端"
               className="toolbar-icon-button"
               onClick={(event) => {
-                if (
-                  repositoryCommandDisabled ||
-                  terminalLoading ||
-                  terminalProfiles.length === 0
-                ) {
+                if (terminalDisabled) {
                   event.preventDefault();
                 }
               }}
+              tabIndex={terminalDisabled ? -1 : 0}
               title={
                 terminalProfiles.length > 0
                   ? "在当前 Worktree 打开外部终端"
@@ -353,11 +387,15 @@ export function RepositoryHeader({
             </>
           )}
           <button
-            aria-label="切换详情面板"
+            aria-label={
+              inspectorOpen ? "折叠详情面板" : "展开详情面板"
+            }
             aria-pressed={inspectorOpen}
             className="toolbar-icon-button"
             onClick={onToggleInspector}
-            title="切换详情面板"
+            title={
+              inspectorOpen ? "折叠详情面板" : "展开详情面板"
+            }
             type="button"
           >
             <Icon name="panel" />
@@ -404,6 +442,11 @@ export function RepositoryHeader({
             <button
               disabled={!workspace?.selectedTarget}
               onClick={onOpenRepository}
+              title={
+                workspace?.selectedTarget
+                  ? "打开当前仓库"
+                  : "请先从 Workspace 选择一个仓库"
+              }
               type="button"
             >
               当前仓库
@@ -429,9 +472,6 @@ export function RepositoryHeader({
               type="button"
             >
               设置
-            </button>
-            <button disabled type="button">
-              搜索
             </button>
           </>
         )}

@@ -14,6 +14,7 @@ body,
 
 html {
   background: var(--canvas);
+  overscroll-behavior: none;
 }
 
 body {
@@ -34,24 +35,52 @@ textarea {
 
 button {
   color: inherit;
+  touch-action: manipulation;
 }
 
-button:not(:disabled) {
+button:not(:disabled),
+summary:not([aria-disabled="true"]) {
   cursor: pointer;
 }
 
-button:disabled {
+button:disabled,
+summary[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.48;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  color: var(--color-text-disabled);
+  cursor: not-allowed;
+  opacity: 0.72;
 }
 
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
-a:focus-visible {
+a:focus-visible,
+summary:focus-visible,
+main:focus-visible {
   outline: 1px solid var(--color-focus);
   outline-offset: 2px;
+}
+
+button:not(:disabled):active,
+summary:not([aria-disabled="true"]):active {
+  opacity: 0.78;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
 }
 
 ::selection {
@@ -86,7 +115,7 @@ a:focus-visible {
   display: grid;
   grid-template-rows: var(--control-default) minmax(0, 1fr) var(--space-5);
   width: 100vw;
-  min-width: 1100px;
+  min-width: 0;
   height: 100vh;
   background: var(--canvas);
 }
@@ -94,10 +123,10 @@ a:focus-visible {
 .skip-link {
   position: fixed;
   top: var(--space-2);
-  left: 72px;
+  left: calc(var(--space-7) + var(--space-5));
   z-index: var(--z-toast);
   padding: var(--space-2) var(--space-3);
-  color: #071411;
+  color: var(--on-accent);
   background: var(--accent);
   border-radius: var(--radius-regular);
   font-weight: var(--font-weight-semibold);
@@ -137,13 +166,9 @@ a:focus-visible {
   place-items: center;
   width: 26px;
   height: 26px;
-  color: #071411;
+  color: var(--on-accent);
   background: var(--accent);
   border-radius: var(--radius-regular);
-}
-
-html[data-theme="light"] .brand-mark {
-  color: white;
 }
 
 .brand-name {
@@ -155,10 +180,10 @@ html[data-theme="light"] .brand-mark {
 .build-pill {
   height: 20px;
   padding: 0 var(--space-2);
-  color: var(--accent);
+  color: var(--accent-strong);
   background: var(--accent-soft);
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-semibold);
   line-height: 20px;
 }
@@ -183,6 +208,11 @@ html[data-theme="light"] .brand-mark {
   background: var(--surface-hover);
 }
 
+.titlebar-menu button.active {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
 .titlebar-drag-region {
   min-width: var(--space-4);
   height: 100%;
@@ -195,7 +225,7 @@ html[data-theme="light"] .brand-mark {
   padding: 0 var(--space-3);
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -229,8 +259,8 @@ html[data-theme="light"] .brand-mark {
 }
 
 .window-button-close:hover {
-  color: white;
-  background: #c42b1c;
+  color: var(--color-on-danger);
+  background: var(--color-window-close);
 }
 
 .workspace-frame {
@@ -313,9 +343,9 @@ html[data-theme="light"] .brand-mark {
   border-right: 1px solid var(--border-soft);
 }
 
-.workspace-switcher {
+.workspace-identity {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
+  grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
@@ -328,10 +358,6 @@ html[data-theme="light"] .brand-mark {
   border-bottom: 1px solid var(--border-soft);
 }
 
-.workspace-switcher:hover {
-  background: var(--surface-hover);
-}
-
 .workspace-avatar {
   display: grid;
   place-items: center;
@@ -342,29 +368,29 @@ html[data-theme="light"] .brand-mark {
   border-radius: var(--radius-regular);
 }
 
-.workspace-switcher-copy {
+.workspace-identity-copy {
   display: block;
   min-width: 0;
 }
 
-.workspace-switcher-copy strong,
-.workspace-switcher-copy span {
+.workspace-identity-copy strong,
+.workspace-identity-copy span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.workspace-switcher-copy strong {
+.workspace-identity-copy strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: var(--font-weight-semibold);
 }
 
-.workspace-switcher-copy span {
-  margin-top: 1px;
+.workspace-identity-copy span {
+  margin-top: calc(var(--space-1) / 4);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 
 .workspace-overview-button {
@@ -409,7 +435,7 @@ html[data-theme="light"] .brand-mark {
 .sidebar-search-wrap input {
   width: 100%;
   height: var(--control-compact);
-  padding: 0 var(--space-3) 0 34px;
+  padding: 0 36px 0 34px;
   color: var(--text);
   background: var(--surface-2);
   border: 1px solid var(--border-soft);
@@ -426,6 +452,25 @@ html[data-theme="light"] .brand-mark {
 
 .sidebar-search-wrap input:focus {
   border-color: var(--accent);
+}
+
+.sidebar-search-clear {
+  position: absolute;
+  right: var(--space-1);
+  display: grid;
+  place-items: center;
+  width: var(--control-compact);
+  height: var(--control-compact);
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-regular);
+}
+
+.sidebar-search-clear:hover {
+  color: var(--text);
+  background: var(--surface-hover);
 }
 
 .repository-list {
@@ -498,27 +543,27 @@ html[data-theme="light"] .brand-mark {
   color: var(--yellow);
   background: var(--yellow-soft);
   border-radius: 999px;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-semibold);
 }
 
 .workspace-root-copy strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-size-body);
   font-weight: var(--font-weight-semibold);
 }
 
 .workspace-root-copy span {
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-semibold);
 }
 
 .workspace-root-copy small {
-  margin-top: 2px;
+  margin-top: calc(var(--space-1) / 2);
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .repository-group {
@@ -530,7 +575,7 @@ html[data-theme="light"] .brand-mark {
   grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
   width: 100%;
-  min-height: 30px;
+  min-height: var(--control-compact);
   padding: 0 var(--space-2);
   color: var(--muted);
   text-align: left;
@@ -561,14 +606,14 @@ html[data-theme="light"] .brand-mark {
   color: var(--muted);
   background: var(--surface-3);
   border-radius: 999px;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 18px;
   text-align: center;
 }
 
 .group-body {
   position: relative;
-  margin-left: 16px;
+  margin-left: var(--space-4);
   padding-left: var(--space-2);
 }
 
@@ -596,7 +641,7 @@ html[data-theme="light"] .brand-mark {
   background: transparent;
   border: 0;
   border-radius: var(--radius-regular);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
 }
 
 .repository-row:hover {
@@ -653,7 +698,7 @@ html[data-theme="light"] .brand-mark {
   color: var(--muted);
   background: var(--surface-3);
   border-radius: 999px;
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   line-height: 18px;
 }
 
@@ -678,10 +723,17 @@ html[data-theme="light"] .brand-mark {
 }
 
 .sidebar-empty {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
   padding: var(--space-5) var(--space-3);
   color: var(--muted);
   font-size: var(--font-size-caption);
   text-align: center;
+}
+
+.sidebar-empty .button {
+  width: auto;
 }
 
 .sidebar-footer {
@@ -695,7 +747,7 @@ html[data-theme="light"] .brand-mark {
   gap: var(--space-2);
   padding: var(--space-2);
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .sidebar-footer > div .icon {
@@ -717,6 +769,7 @@ html[data-theme="light"] .brand-mark {
 }
 
 .content-frame {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
   min-width: 0;
@@ -748,25 +801,12 @@ html[data-theme="light"] .brand-mark {
 
 .context-summary {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
-}
-
-.context-summary-button {
-  flex: 1 1 auto;
   max-width: 560px;
   overflow: hidden;
-  padding: 0;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-regular);
-}
-
-.context-summary-button:hover .context-icon {
-  color: var(--text);
-  background: var(--surface-hover);
 }
 
 .context-icon {
@@ -795,25 +835,8 @@ html[data-theme="light"] .brand-mark {
 
 .context-summary strong {
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--font-size-body);
   font-weight: var(--font-weight-semibold);
-}
-
-.header-branch {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  max-width: 160px;
-  height: 20px;
-  padding: 0 var(--space-2);
-  overflow: hidden;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-radius: 999px;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .header-branch-switcher {
@@ -836,12 +859,12 @@ html[data-theme="light"] .brand-mark {
 .header-branch-switcher select {
   min-width: 0;
   width: 100%;
+  height: 100%;
   color: var(--text);
   background: transparent;
   border: 0;
   font-family: var(--font-mono);
-  font-size: 10px;
-  outline: 0;
+  font-size: var(--font-size-caption);
 }
 
 .header-branch-switcher select:disabled {
@@ -854,9 +877,9 @@ html[data-theme="light"] .brand-mark {
 }
 
 .context-summary span {
-  margin-top: 1px;
+  margin-top: calc(var(--space-1) / 4);
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .repository-actions {
@@ -884,10 +907,13 @@ html[data-theme="light"] .brand-mark {
   transition:
     color var(--motion-micro),
     background-color var(--motion-micro),
-    border-color var(--motion-micro);
+    border-color var(--motion-micro),
+    opacity var(--motion-micro),
+    transform var(--motion-micro);
 }
 
 .toolbar-button {
+  min-width: 76px;
   padding: 0 var(--space-3);
   font-size: var(--font-size-caption);
 }
@@ -899,7 +925,13 @@ html[data-theme="light"] .brand-mark {
 }
 
 .force-push-button {
-  color: var(--yellow);
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: color-mix(
+    in srgb,
+    var(--red) 24%,
+    transparent
+  );
 }
 
 .force-push-button:hover:not(:disabled) {
@@ -925,6 +957,10 @@ html[data-theme="light"] .brand-mark {
   display: none;
 }
 
+.toolbar-menu:not([open]) .toolbar-menu-popover {
+  display: none;
+}
+
 .toolbar-menu > summary[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.48;
@@ -947,13 +983,13 @@ html[data-theme="light"] .brand-mark {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-regular);
-  box-shadow: 0 14px 38px rgb(0 0 0 / 28%);
+  box-shadow: var(--shadow-popover);
 }
 
 .toolbar-menu-popover > span {
   padding: var(--space-1) var(--space-2) var(--space-2);
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
 }
@@ -962,14 +998,14 @@ html[data-theme="light"] .brand-mark {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 30px;
+  min-height: var(--control-compact);
   padding: 0 var(--space-2);
   color: var(--text-soft);
   text-align: left;
   background: transparent;
   border: 0;
   border-radius: var(--radius-regular);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .toolbar-menu-popover button:hover:not(:disabled) {
@@ -998,8 +1034,9 @@ html[data-theme="light"] .brand-mark {
 
 .context-tabs button {
   position: relative;
+  min-width: var(--control-compact);
   height: var(--control-default);
-  padding: 0;
+  padding: 0 var(--space-1);
   color: var(--muted);
   background: transparent;
   border: 0;
@@ -1027,10 +1064,18 @@ html[data-theme="light"] .brand-mark {
 }
 
 .page-scroll {
+  container-type: inline-size;
   min-width: 0;
   min-height: 0;
   overflow: auto;
   padding: var(--space-5);
+}
+
+.page-scroll > :not(.command-dialog-backdrop) {
+  width: 100%;
+  max-width: var(--page-max-width);
+  margin-right: auto;
+  margin-left: auto;
 }
 
 .page-heading {
@@ -1049,7 +1094,7 @@ html[data-theme="light"] .brand-mark {
   display: block;
   margin-bottom: var(--space-1);
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-semibold);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1123,7 +1168,7 @@ html[data-theme="light"] .brand-mark {
 
 .manual-path-form small {
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .workspace-feedback {
@@ -1145,9 +1190,9 @@ html[data-theme="light"] .brand-mark {
 }
 
 .workspace-feedback.error {
-  color: var(--yellow);
-  background: var(--yellow-soft);
-  border-color: color-mix(in srgb, var(--yellow) 24%, transparent);
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: color-mix(in srgb, var(--red) 28%, transparent);
 }
 
 .workspace-feedback > div {
@@ -1165,11 +1210,9 @@ html[data-theme="light"] .brand-mark {
 }
 
 .workspace-feedback span {
-  overflow: hidden;
   color: var(--text-soft);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
 }
 
 .workspace-feedback .icon-button {
@@ -1191,27 +1234,23 @@ html[data-theme="light"] .brand-mark {
 }
 
 .button.primary {
-  color: #071411;
+  color: var(--on-accent);
   background: var(--accent);
   border-color: var(--accent);
   font-weight: var(--font-weight-semibold);
 }
 
 .button.danger {
-  color: white;
+  color: var(--color-on-danger);
   background: var(--red);
   border-color: var(--red);
   font-weight: var(--font-weight-semibold);
 }
 
 .button.danger:hover:not(:disabled) {
-  color: white;
+  color: var(--color-on-danger);
   background: color-mix(in srgb, var(--red) 84%, black);
   border-color: color-mix(in srgb, var(--red) 84%, black);
-}
-
-html[data-theme="light"] .button.primary {
-  color: white;
 }
 
 .metric-grid {
@@ -1294,12 +1333,11 @@ html[data-theme="light"] .button.primary {
 
 .metric-foot {
   display: block;
-  overflow: hidden;
+  min-height: 3em;
   margin-top: var(--space-1);
   color: var(--muted);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
 }
 
 .dashboard-grid {
@@ -1347,50 +1385,16 @@ html[data-theme="light"] .button.primary {
   overflow: hidden;
   margin-left: auto;
   color: var(--muted);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.shell-table {
-  width: 100%;
-}
-
-.shell-table-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(110px, 0.9fr) minmax(90px, 0.6fr);
-  align-items: center;
-  min-height: var(--control-large);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--border-soft);
-  color: var(--text-soft);
   font-size: var(--font-size-caption);
-}
-
-.shell-table-row:last-child {
-  border-bottom: 0;
-}
-
-.shell-table-row:not(.shell-table-head):hover {
-  background: var(--surface-hover);
-}
-
-.shell-table-head {
-  min-height: var(--control-default);
-  color: var(--muted);
-  background: var(--surface-2);
-  font-size: 10px;
-  font-weight: var(--font-weight-semibold);
-}
-
-.shell-table-row > span {
-  overflow: hidden;
-  padding-right: var(--space-2);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .repository-status-table {
+  width: 100%;
+}
+
+.repository-status-item {
   width: 100%;
 }
 
@@ -1417,6 +1421,10 @@ html[data-theme="light"] .button.primary {
   border-bottom: 0;
 }
 
+.repository-status-item:last-child .repository-status-row {
+  border-bottom: 0;
+}
+
 button.repository-status-row:hover {
   background: var(--surface-hover);
 }
@@ -1430,7 +1438,7 @@ button.repository-status-row.selected {
   min-height: var(--control-default);
   color: var(--muted);
   background: var(--surface-2);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -1453,10 +1461,10 @@ button.repository-status-row.selected {
   display: block;
   max-width: 100%;
   overflow: hidden;
-  margin-top: 1px;
+  margin-top: calc(var(--space-1) / 4);
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-regular);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1479,7 +1487,7 @@ button.repository-status-row.selected {
   min-height: 22px;
   padding: 0 var(--space-2);
   border-radius: 999px;
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-semibold);
   white-space: nowrap;
 }
@@ -1502,6 +1510,11 @@ button.repository-status-row.selected {
 .status-pill.yellow {
   color: var(--yellow);
   background: var(--yellow-soft);
+}
+
+.status-pill.red {
+  color: var(--red);
+  background: var(--red-soft);
 }
 
 .empty-state {
@@ -1654,11 +1667,9 @@ button.repository-status-row.selected {
 }
 
 .scan-issue span {
-  overflow: hidden;
   color: var(--muted);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
 }
 
 .operation-list {
@@ -1702,8 +1713,8 @@ button.repository-status-row.selected {
 
 .operation-icon.state-failed,
 .operation-icon.state-interrupted {
-  color: var(--yellow);
-  background: var(--yellow-soft);
+  color: var(--red);
+  background: var(--red-soft);
 }
 
 .operation-icon.state-cancelled,
@@ -1728,16 +1739,16 @@ button.repository-status-row.selected {
 
 .operation-row > div > span {
   overflow: hidden;
-  margin-top: 2px;
+  margin-top: calc(var(--space-1) / 2);
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .operation-state {
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   white-space: nowrap;
 }
 
@@ -1751,13 +1762,14 @@ button.repository-status-row.selected {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  height: 24px;
+  height: var(--control-compact);
   padding: 0 var(--space-2);
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid var(--border-soft);
+  color: var(--red);
+  background: var(--red-soft);
+  border: 1px solid
+    color-mix(in srgb, var(--red) 24%, transparent);
   border-radius: var(--radius-regular);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .operation-cancel-button:hover:not(:disabled) {
@@ -1851,7 +1863,7 @@ button.repository-status-row.selected {
   gap: var(--space-2);
   margin-bottom: var(--space-3);
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1890,7 +1902,7 @@ button.repository-status-row.selected {
   margin: var(--space-1) 0 0;
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .repository-snapshot-details {
@@ -1945,7 +1957,7 @@ button.repository-status-row.selected {
   margin: 0;
   color: var(--text-soft);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2002,34 +2014,10 @@ button.repository-status-row.selected {
   margin-top: var(--space-2);
 }
 
-.next-list {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.next-list span {
-  display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
-  gap: var(--space-2);
-  align-items: center;
-  min-height: 34px;
-  padding: 0 var(--space-2);
-  color: var(--text-soft);
-  background: var(--surface-2);
-  border-radius: var(--radius-regular);
-  font-size: var(--font-size-caption);
-}
-
-.next-list strong {
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-
 .repository-page-heading p {
   overflow: hidden;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2061,7 +2049,7 @@ button.repository-status-row.selected {
 
 .repository-health-card > span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .repository-health-card > strong {
@@ -2074,7 +2062,7 @@ button.repository-status-row.selected {
 .repository-health-card > small {
   margin-top: var(--space-1);
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .repository-overview-grid {
@@ -2199,7 +2187,7 @@ button.repository-status-row.selected {
 .file-pane-header > span,
 .diff-header span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .change-file-list {
@@ -2251,9 +2239,9 @@ button.repository-status-row.selected {
 }
 
 .change-file-row small {
-  margin-top: 2px;
+  margin-top: calc(var(--space-1) / 2);
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .change-file-row > .icon {
@@ -2269,7 +2257,7 @@ button.repository-status-row.selected {
   background: var(--yellow-soft);
   border-radius: var(--radius-regular);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -2327,13 +2315,13 @@ button.repository-status-row.selected {
 }
 
 .diff-mode-actions button {
-  height: 26px;
+  height: var(--control-compact);
   padding: 0 var(--space-2);
   color: var(--muted);
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-regular);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .diff-mode-actions button:hover,
@@ -2348,9 +2336,9 @@ button.repository-status-row.selected {
 }
 
 .mutation-file-actions .button {
-  height: 26px;
+  height: var(--control-compact);
   padding: 0 var(--space-2);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .diff-content {
@@ -2358,9 +2346,9 @@ button.repository-status-row.selected {
   min-height: 0;
   overflow: auto;
   padding: var(--space-2) 0;
-  background: color-mix(in srgb, var(--canvas) 58%, var(--surface));
+  background: var(--color-code-bg);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   line-height: 1.55;
 }
 
@@ -2442,7 +2430,7 @@ button.repository-status-row.selected {
   background: color-mix(in srgb, var(--yellow-soft) 88%, var(--surface));
   border-top: 1px solid color-mix(in srgb, var(--yellow) 20%, transparent);
   font-family: var(--font-sans);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .commit-composer {
@@ -2468,7 +2456,7 @@ button.repository-status-row.selected {
 .commit-form label span {
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-regular);
 }
 
@@ -2518,7 +2506,7 @@ button.repository-status-row.selected {
   min-width: 0;
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .commit-form-footer .button {
@@ -2549,7 +2537,7 @@ button.repository-status-row.selected {
 .commit-detail .panel-header {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-navigation);
   background: var(--surface);
 }
 
@@ -2598,13 +2586,13 @@ button.repository-status-row.selected {
 .commit-row small {
   margin-top: 2px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .commit-row > code {
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .commit-node {
@@ -2665,7 +2653,7 @@ button.repository-status-row.selected {
 .commit-detail-meta {
   margin-top: var(--space-2);
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .commit-detail-meta code {
@@ -2678,12 +2666,12 @@ button.repository-status-row.selected {
 }
 
 .commit-refs span {
-  padding: 2px var(--space-2);
+  padding: calc(var(--space-1) / 2) var(--space-2);
   color: var(--blue);
   background: var(--blue-soft);
   border-radius: 999px;
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .commit-detail-body pre {
@@ -2700,7 +2688,7 @@ button.repository-status-row.selected {
   border-top: 1px solid var(--border-soft);
   border-bottom: 1px solid var(--border-soft);
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .text-success {
@@ -2723,7 +2711,7 @@ button.repository-status-row.selected {
   min-height: 32px;
   align-items: center;
   border-bottom: 1px solid var(--border-soft);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .commit-file-list span {
@@ -2762,7 +2750,7 @@ button.repository-status-row.selected {
 
 .branch-management-toolbar label {
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-medium);
 }
 
@@ -2782,7 +2770,7 @@ button.repository-status-row.selected {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-regular);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .branch-management-toolbar input {
@@ -2803,7 +2791,7 @@ button.repository-status-row.selected {
   flex: 0 1 420px;
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .branches-table {
@@ -2835,7 +2823,7 @@ button.repository-status-row.selected {
   min-height: var(--control-default);
   color: var(--muted);
   background: var(--surface-2);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -2871,20 +2859,30 @@ button.repository-status-row.selected {
 .branch-row-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: var(--space-1);
   padding-right: 0 !important;
 }
 
 .mini-action {
-  height: 24px;
+  min-height: var(--control-compact);
   padding: 0 var(--space-2);
   color: var(--muted);
   background: transparent;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-regular);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   white-space: nowrap;
+}
+
+.mini-action.danger {
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: color-mix(
+    in srgb,
+    var(--red) 24%,
+    transparent
+  );
 }
 
 .mini-action:hover:not(:disabled) {
@@ -2979,13 +2977,13 @@ button.repository-status-row.selected {
   margin-top: var(--space-1);
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .worktree-card span {
   margin-top: var(--space-2);
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .worktree-management {
@@ -3017,15 +3015,16 @@ button.repository-status-row.selected {
   min-width: 0;
 }
 
+.worktree-create-panel .field > label,
 .worktree-create-panel .field > span {
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-medium);
 }
 
 .worktree-create-panel .field > small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .worktree-create-panel input,
@@ -3038,7 +3037,7 @@ button.repository-status-row.selected {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-regular);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .worktree-create-panel input:hover,
@@ -3076,7 +3075,7 @@ button.repository-status-row.selected {
 .worktree-form-footer > span {
   min-width: 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .worktree-safety-panel {
@@ -3089,7 +3088,7 @@ button.repository-status-row.selected {
   margin: 0;
   padding: var(--space-4) var(--space-5);
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
 }
 
@@ -3110,14 +3109,14 @@ button.repository-status-row.selected {
 }
 
 .worktree-inventory-header h2 {
-  margin: 2px 0 0;
+  margin: calc(var(--space-1) / 2) 0 0;
   color: var(--text);
   font-size: var(--font-size-emphasis);
 }
 
 .worktree-inventory-header > span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .worktree-management-card {
@@ -3168,7 +3167,7 @@ button.repository-status-row.selected {
   color: var(--text-soft);
   background: var(--surface-2);
   border-radius: var(--radius-regular);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .worktree-reason span {
@@ -3251,7 +3250,7 @@ button.repository-status-row.selected {
   gap: var(--space-1);
   min-width: 0;
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   font-weight: var(--font-weight-medium);
 }
 
@@ -3288,13 +3287,14 @@ button.repository-status-row.selected {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-height: var(--control-compact);
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .account-checkbox input {
-  width: 14px;
-  height: 14px;
+  width: var(--icon-small);
+  height: var(--icon-small);
   accent-color: var(--accent);
 }
 
@@ -3313,7 +3313,7 @@ button.repository-status-row.selected {
 .account-security-note p {
   margin: 0;
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
 }
 
@@ -3335,7 +3335,7 @@ button.repository-status-row.selected {
 .system-auth-content > p {
   margin: var(--space-2) 0 var(--space-4);
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
 }
 
@@ -3384,9 +3384,9 @@ button.repository-status-row.selected {
 }
 
 .account-card-heading > div > span {
-  margin-top: 2px;
+  margin-top: calc(var(--space-1) / 2);
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .account-binding-summary {
@@ -3394,7 +3394,7 @@ button.repository-status-row.selected {
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-4);
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .account-test-row {
@@ -3403,11 +3403,19 @@ button.repository-status-row.selected {
   min-width: 0;
 }
 
+.account-test-field {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-soft);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
 .account-test-row input {
   flex: 1 1 auto;
   height: var(--control-compact);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .account-card-actions {
@@ -3454,10 +3462,10 @@ button.repository-status-row.selected {
 }
 
 .terminal-profile-list small {
-  margin-top: 2px;
+  margin-top: calc(var(--space-1) / 2);
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .account-removal-dialog {
@@ -3500,12 +3508,12 @@ button.repository-status-row.selected {
   align-items: center;
   gap: var(--space-2);
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .operation-metric strong {
   color: var(--text);
-  font-size: 24px;
+  font-size: var(--font-size-title);
 }
 
 .bulk-sync-panel,
@@ -3531,13 +3539,13 @@ button.repository-status-row.selected {
 }
 
 .operation-filter-tabs button {
-  height: 26px;
+  height: var(--control-compact);
   padding: 0 var(--space-2);
   color: var(--muted);
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-regular);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .operation-filter-tabs button:hover,
@@ -3583,7 +3591,7 @@ button.repository-status-row.selected {
 .operation-history-copy > p {
   margin: var(--space-1) 0 0;
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 1.45;
 }
 
@@ -3600,14 +3608,14 @@ button.repository-status-row.selected {
   align-items: center;
   gap: var(--space-1);
   max-width: 220px;
-  min-height: 22px;
+  min-height: var(--control-compact);
   padding: 0 var(--space-2);
   overflow: hidden;
   color: var(--muted);
   background: var(--surface-2);
   border: 1px solid var(--border-soft);
   border-radius: 999px;
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3627,7 +3635,7 @@ button.repository-status-row.selected {
   gap: var(--space-1);
   min-width: 122px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
 }
 
 .operation-history-meta > div {
@@ -3645,7 +3653,8 @@ button.repository-status-row.selected {
   color: var(--muted);
   background: var(--titlebar);
   border-top: 1px solid var(--border-soft);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
+  overflow: hidden;
   user-select: none;
 }
 
@@ -3666,6 +3675,7 @@ button.repository-status-row.selected {
 
 .status-bar-spacer {
   flex: 1 1 auto;
+  min-width: 0;
 }
 
 .command-dialog-backdrop {
@@ -3675,11 +3685,7 @@ button.repository-status-row.selected {
   display: grid;
   place-items: center;
   padding: var(--space-5);
-  background: color-mix(
-    in srgb,
-    var(--canvas) 78%,
-    transparent
-  );
+  background: var(--color-overlay);
   backdrop-filter: blur(7px);
 }
 
@@ -3692,7 +3698,7 @@ button.repository-status-row.selected {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-large);
-  box-shadow: 0 24px 72px rgb(0 0 0 / 38%);
+  box-shadow: var(--shadow-modal);
 }
 
 .command-dialog.danger {
@@ -3701,6 +3707,10 @@ button.repository-status-row.selected {
     var(--red) 44%,
     var(--border)
   );
+}
+
+.command-dialog.danger .eyebrow {
+  color: var(--red);
 }
 
 .command-dialog-header {
@@ -3721,7 +3731,7 @@ button.repository-status-row.selected {
 }
 
 .command-dialog-header h2 {
-  margin-top: 2px;
+  margin-top: calc(var(--space-1) / 2);
   color: var(--text);
   font-size: var(--font-size-emphasis);
 }
@@ -3729,7 +3739,7 @@ button.repository-status-row.selected {
 .command-dialog-header p {
   margin-top: var(--space-1);
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .command-dialog-icon {
@@ -3792,7 +3802,7 @@ button.repository-status-row.selected {
 .command-impact-list article > div span {
   overflow: hidden;
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3801,7 +3811,7 @@ button.repository-status-row.selected {
   overflow: hidden;
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3809,7 +3819,7 @@ button.repository-status-row.selected {
 .command-impact-list p {
   margin: 0;
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
   line-height: 1.5;
 }
 
@@ -3823,7 +3833,7 @@ button.repository-status-row.selected {
   border: 1px solid
     color-mix(in srgb, var(--blue) 24%, transparent);
   border-radius: var(--radius-regular);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
 }
 
 .command-warning.warning {
@@ -3846,7 +3856,7 @@ button.repository-status-row.selected {
 }
 
 .command-warning .icon {
-  margin-top: 1px;
+  margin-top: calc(var(--space-1) / 4);
 }
 
 .command-dialog-footer {
@@ -3863,7 +3873,7 @@ button.repository-status-row.selected {
   max-width: 420px;
   margin: 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: var(--font-size-caption);
   line-height: 1.45;
 }
 
@@ -3875,8 +3885,11 @@ button.repository-status-row.selected {
 
 .drop-overlay {
   position: fixed;
-  inset: 56px 16px 36px;
-  z-index: var(--z-modal);
+  inset:
+    calc(var(--control-default) + var(--space-4))
+    var(--space-4)
+    calc(var(--space-5) + var(--space-3));
+  z-index: var(--z-overlay);
   display: grid;
   place-content: center;
   justify-items: center;
@@ -3914,13 +3927,57 @@ button.repository-status-row.selected {
   }
 }
 
+[aria-busy="true"] > .icon {
+  animation: workspace-spin 900ms linear infinite;
+}
+
+.account-form-actions .button.primary,
+.worktree-form-footer .button.primary {
+  min-width: 112px;
+}
+
+.commit-form-footer .button.primary,
+.command-dialog-footer .button:last-child {
+  min-width: 144px;
+}
+
+.empty-state .button {
+  margin-top: var(--space-3);
+}
+
+@container (max-width: 900px) {
+  .metric-grid,
+  .repository-health-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1600px) {
+  .header-branch-switcher {
+    flex-basis: 160px;
+    max-width: 160px;
+  }
+}
+
+@media (max-width: 1360px) {
+  .content-frame {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .inspector {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: var(--z-navigation);
+    width: min(360px, 100%);
+    box-shadow: var(--shadow-drawer);
+  }
+}
+
 @media (max-width: 1240px) {
   .workspace-frame {
     grid-template-columns: 48px 244px minmax(0, 1fr);
-  }
-
-  .content-frame {
-    grid-template-columns: minmax(0, 1fr) 280px;
   }
 
   .page-scroll {
@@ -3928,6 +3985,7 @@ button.repository-status-row.selected {
   }
 
   .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-2);
   }
 
@@ -3992,7 +4050,7 @@ button.repository-status-row.selected {
   }
 
   .metric-foot {
-    font-size: 9px;
+    font-size: var(--font-size-caption);
   }
 
   .dashboard-grid {
@@ -4057,6 +4115,11 @@ button.repository-status-row.selected {
   .titlebar-runtime {
     display: none;
   }
+
+  .status-bar > span:first-child,
+  .status-bar > span:last-child {
+    display: none;
+  }
 }
 
 @media (max-width: 1140px) {
@@ -4085,7 +4148,7 @@ button.repository-status-row.selected {
 
   .toolbar-button {
     gap: var(--space-1);
-    font-size: 10px;
+    font-size: var(--font-size-caption);
   }
 
   .header-branch-switcher {
@@ -4136,7 +4199,7 @@ button.repository-status-row.selected {
       78px
       62px;
     padding: 0 var(--space-3);
-    font-size: 10px;
+    font-size: var(--font-size-caption);
   }
 
   .repository-health-grid {
@@ -4174,7 +4237,7 @@ button.repository-status-row.selected {
       54px
       minmax(182px, 1.35fr);
     padding: 0 var(--space-3);
-    font-size: 10px;
+    font-size: var(--font-size-caption);
   }
 
   .command-dialog-footer {

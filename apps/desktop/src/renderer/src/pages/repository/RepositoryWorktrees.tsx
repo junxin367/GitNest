@@ -74,8 +74,14 @@ export function RepositoryWorktrees({
 
   if (!repository) {
     return (
-      <div className="empty-state">
-        <strong>仓库实例已不可用</strong>
+      <div className="empty-state repository-empty-state">
+        <span className="empty-state-icon warning-icon">
+          <Icon name="warning" size={20} />
+        </span>
+        <div>
+          <strong>仓库实例已不可用</strong>
+          <p>请从左侧 Workspace 树重新选择一个有效仓库。</p>
+        </div>
       </div>
     );
   }
@@ -106,6 +112,7 @@ export function RepositoryWorktrees({
             aria-label="关闭 Worktree 操作提示"
             className="icon-button"
             onClick={commands.clearFeedback}
+            title="关闭 Worktree 操作提示"
             type="button"
           >
             <Icon name="close" />
@@ -125,12 +132,15 @@ export function RepositoryWorktrees({
             </span>
           </header>
           <form onSubmit={submitCreate}>
-            <label className="field">
-              <span>目标绝对路径</span>
+            <div className="field">
+              <label htmlFor="worktree-create-path">
+                目标绝对路径
+              </label>
               <div className="worktree-path-input">
                 <input
                   aria-label="Worktree 目标绝对路径"
                   disabled={commands.busy}
+                  id="worktree-create-path"
                   onChange={(event) =>
                     setCreatePath(event.target.value)
                   }
@@ -159,7 +169,7 @@ export function RepositoryWorktrees({
               <small>
                 可选择一个空目录，或选择父目录后在路径末尾补充新目录名。
               </small>
-            </label>
+            </div>
             <div className="worktree-create-fields">
               <label className="field">
                 <span>分支（可选）</span>
@@ -191,6 +201,7 @@ export function RepositoryWorktrees({
                 目标必须不存在或为空，且不能与已有 Worktree 重叠。
               </span>
               <button
+                aria-busy={commands.active === "create"}
                 className="button primary"
                 disabled={commands.busy || !createPath.trim()}
                 type="submit"
@@ -224,6 +235,7 @@ export function RepositoryWorktrees({
             <li>Prune 只清理失效 Git 登记。</li>
           </ul>
           <button
+            aria-busy={commands.active === "prune"}
             className="button"
             disabled={commands.busy || prunableCount === 0}
             onClick={() =>
@@ -293,8 +305,14 @@ export function RepositoryWorktrees({
         </div>
 
         {worktrees.length === 0 && (
-          <div className="empty-state">
-            <strong>没有可展示的 Worktree</strong>
+          <div className="empty-state repository-empty-state">
+            <span className="empty-state-icon">
+              <Icon name="worktree" size={20} />
+            </span>
+            <div>
+              <strong>没有可展示的 Worktree</strong>
+              <p>创建或修复 Worktree 后会显示在这里。</p>
+            </div>
           </div>
         )}
       </section>

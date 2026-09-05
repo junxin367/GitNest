@@ -50,7 +50,14 @@ describe("useModalFocusTrap", () => {
     });
     const cancel = button("Cancel");
     const confirm = button("Confirm");
+    const background = button("Background");
+    const page = container.querySelector(".page-scroll");
     expect(document.activeElement).toBe(confirm);
+    expect(background.inert).toBe(true);
+    expect(document.documentElement.dataset.modalOpen).toBe("true");
+    expect((page as HTMLElement).style.overflow).toBe(
+      "hidden"
+    );
 
     confirm.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -73,6 +80,11 @@ describe("useModalFocusTrap", () => {
       root.render(null);
     });
     expect(document.activeElement).toBe(trigger);
+    expect(background.inert).toBe(false);
+    expect(
+      document.documentElement.dataset.modalOpen
+    ).toBeUndefined();
+    expect((page as HTMLElement).style.overflow).toBe("");
   });
 
   function button(label: string): HTMLButtonElement {
@@ -93,14 +105,19 @@ function Dialog() {
   useModalFocusTrap(dialogRef);
 
   return (
-    <section ref={dialogRef} role="dialog">
-      <button type="button">Cancel</button>
-      <button
-        data-modal-initial-focus
-        type="button"
-      >
-        Confirm
-      </button>
-    </section>
+    <div className="page-scroll">
+      <button type="button">Background</button>
+      <div className="command-dialog-backdrop">
+        <section ref={dialogRef} role="dialog">
+          <button type="button">Cancel</button>
+          <button
+            data-modal-initial-focus
+            type="button"
+          >
+            Confirm
+          </button>
+        </section>
+      </div>
+    </div>
   );
 }

@@ -41,7 +41,7 @@ interface WorkspaceOverviewPageProps {
   operation: LocalWorkspaceOperation;
   busy: boolean;
   onAddDirectory(): void;
-  onAddManualPath(path: string): Promise<void>;
+  onAddManualPath(path: string): Promise<boolean>;
   onSelectTarget(target: RepositoryTargetDto): void;
   onCancelOperation(operationId: string): void;
   onClearFeedback(): void;
@@ -185,12 +185,16 @@ export function WorkspaceOverviewPage({
       item.state === "cancelling"
   );
 
-  const submitManualPath = (event: FormEvent) => {
+  const submitManualPath = async (event: FormEvent) => {
     event.preventDefault();
     const path = manualPath.trim();
 
     if (path) {
-      void onAddManualPath(path);
+      const added = await onAddManualPath(path);
+      if (added) {
+        setManualPath("");
+        setManualPathOpen(false);
+      }
     }
   };
 
@@ -200,7 +204,7 @@ export function WorkspaceOverviewPage({
         <section className="page-heading">
           <div>
             <span className="eyebrow">
-              Workspace-first Git desktop
+              多仓库工作区
             </span>
             <h1>Workspace 概览</h1>
             <p>
@@ -231,15 +235,16 @@ export function WorkspaceOverviewPage({
     <div className="page-scroll">
       <section className="page-heading">
         <div>
-          <span className="eyebrow">Workspace-first Git desktop</span>
+          <span className="eyebrow">多仓库工作区</span>
           <h1>Workspace 概览</h1>
           <p>
-            最近 Snapshot 会立即显示，后台刷新使用最多四路 Git
-            读取；文件监听只触发防抖刷新，Git CLI 始终是最终事实来源。
+            集中查看仓库变更、同步状态和后台操作；只有在你明确执行操作时，GitNest 才会修改仓库。
           </p>
         </div>
         <div className="page-actions">
           <button
+            aria-controls="manual-path-form"
+            aria-expanded={manualPathOpen}
             className="button"
             disabled={busy}
             onClick={() =>
@@ -265,6 +270,7 @@ export function WorkspaceOverviewPage({
       {manualPathOpen && (
         <form
           className="manual-path-form"
+          id="manual-path-form"
           onSubmit={submitManualPath}
         >
           <label htmlFor="manual-workspace-path">
@@ -319,6 +325,7 @@ export function WorkspaceOverviewPage({
             aria-label="关闭提示"
             className="icon-button"
             onClick={onClearFeedback}
+            title="关闭提示"
             type="button"
           >
             <Icon name="close" />
@@ -361,70 +368,80 @@ export function WorkspaceOverviewPage({
               </span>
             </header>
             {statusRows.length > 0 && workspace ? (
-              <div className="repository-status-table" role="table">
+              <div
+                aria-label="仓库状态"
+                className="repository-status-table"
+                role="list"
+              >
                 <div
+                  aria-hidden="true"
                   className="repository-status-row repository-status-head"
-                  role="row"
                 >
-                  <span role="columnheader">仓库</span>
-                  <span role="columnheader">分支</span>
-                  <span role="columnheader">工作区</span>
-                  <span role="columnheader">同步</span>
+                  <span>仓库</span>
+                  <span>分支</span>
+                  <span>工作区</span>
+                  <span>同步</span>
                 </div>
                 {statusRows.map(
-                  ({ target, repository, worktree, snapshot }) => (
-                    <button
-                      aria-current={
-                        repositoryTargetSelected(
-                          workspace.selectedTarget,
-                          target
-                        )
-                          ? "true"
-                          : undefined
-                      }
-                      className={`repository-status-row${
-                        repositoryTargetSelected(
-                          workspace.selectedTarget,
-                          target
-                        )
-                          ? " selected"
-                          : ""
-                      }`}
-                      key={`${target.repositoryId}:${target.worktreeId}`}
-                      onClick={() => onSelectTarget(target)}
-                      role="row"
-                      type="button"
-                    >
-                      <span className="table-name" role="cell">
-                        <span
-                          className={`repository-state ${snapshotTone(snapshot)}`}
+                  ({ target, repository, worktree, snapshot }) => {
+                    const name =
+                      worktree?.name ??
+                      repository?.name ??
+                      "未知仓库";
+                    const branch =
+                      snapshot?.branch ??
+                      worktree?.branch ??
+                      "detached";
+                    const state = workspaceStatusLabel(snapshot);
+                    const sync = syncLabel(snapshot);
+                    const selected = repositoryTargetSelected(
+                      workspace.selectedTarget,
+                      target
+                    );
+
+                    return (
+                      <div
+                        className="repository-status-item"
+                        key={`${target.repositoryId}:${target.worktreeId}`}
+                        role="listitem"
+                      >
+                        <button
+                          aria-current={
+                            selected ? "true" : undefined
+                          }
+                          aria-label={`${name}，分支 ${branch}，工作区 ${state}，同步 ${sync}`}
+                          className={`repository-status-row${
+                            selected ? " selected" : ""
+                          }`}
+                          onClick={() => onSelectTarget(target)}
+                          type="button"
                         >
-                          <Icon name="repository" size={13} />
-                        </span>
-                        <span title={worktree?.path}>
-                          {worktree?.name ??
-                            repository?.name ??
-                            "未知仓库"}
-                          <small>{worktree?.path ?? "路径不可用"}</small>
-                        </span>
-                      </span>
-                      <span role="cell">
-                        {snapshot?.branch ??
-                          worktree?.branch ??
-                          "detached"}
-                      </span>
-                      <span role="cell">
-                        <span
-                          className={`status-pill ${snapshotPillTone(snapshot)}`}
-                        >
-                          {workspaceStatusLabel(snapshot)}
-                        </span>
-                      </span>
-                      <span role="cell">
-                        {syncLabel(snapshot)}
-                      </span>
-                    </button>
-                  )
+                          <span className="table-name">
+                            <span
+                              className={`repository-state ${snapshotTone(snapshot)}`}
+                            >
+                              <Icon name="repository" size={13} />
+                            </span>
+                            <span title={worktree?.path}>
+                              {name}
+                              <small>
+                                {worktree?.path ?? "路径不可用"}
+                              </small>
+                            </span>
+                          </span>
+                          <span>{branch}</span>
+                          <span>
+                            <span
+                              className={`status-pill ${snapshotPillTone(snapshot)}`}
+                            >
+                              {state}
+                            </span>
+                          </span>
+                          <span>{sync}</span>
+                        </button>
+                      </div>
+                    );
+                  }
                 )}
               </div>
             ) : (
@@ -489,7 +506,17 @@ export function WorkspaceOverviewPage({
                         {operationKindLabel(item.kind)}
                       </strong>
                       <span>{item.message}</span>
-                      <div className="operation-progress">
+                      <div
+                        aria-label={`${operationKindLabel(item.kind)}进度`}
+                        aria-valuemax={100}
+                        aria-valuemin={0}
+                        aria-valuenow={Math.round(
+                          Math.max(0, Math.min(item.progress, 1)) *
+                            100
+                        )}
+                        className="operation-progress"
+                        role="progressbar"
+                      >
                         <span
                           style={{
                             transform: `scaleX(${Math.max(
@@ -586,7 +613,11 @@ export function WorkspaceOverviewPage({
             <header className="panel-header">
               <div className="panel-title">
                 <Icon
-                  name={scanIssues.length > 0 ? "warning" : "check"}
+                  name={
+                    localProblems.length > 0
+                      ? "warning"
+                      : "check"
+                  }
                 />
                 局部问题
               </div>
@@ -613,10 +644,10 @@ export function WorkspaceOverviewPage({
               </div>
             ) : (
               <div className="stage-card">
-                <span className="status-pill blue">M1 · 04</span>
-                <strong>Refresh & Operations</strong>
+                <span className="status-pill green">状态正常</span>
+                <strong>未发现局部问题</strong>
                 <p>
-                  缓存优先启动、有界并发、请求合并和监听降级已经接入。
+                  当前扫描结果和仓库状态读取均未报告异常。
                 </p>
               </div>
             )}
@@ -676,11 +707,11 @@ function snapshotTone(
   if (snapshot?.refreshPending) {
     return "pending";
   }
-  if (!snapshot || snapshot.stale || snapshot.error) {
-    return "idle";
-  }
-  if (snapshot.conflicted > 0) {
+  if (snapshot?.error || snapshot?.conflicted) {
     return "danger";
+  }
+  if (!snapshot || snapshot.stale) {
+    return "idle";
   }
   if (getSnapshotChangeCount(snapshot) > 0) {
     return "warning";
@@ -690,9 +721,9 @@ function snapshotTone(
 
 function snapshotPillTone(
   snapshot: RepositoryStatusSnapshotDto | undefined
-): "neutral" | "blue" | "green" | "yellow" {
+): "neutral" | "blue" | "green" | "yellow" | "red" {
   if (snapshot?.error || snapshot?.conflicted) {
-    return "yellow";
+    return "red";
   }
   if (snapshot?.refreshPending || snapshot?.stale || !snapshot) {
     return "blue";

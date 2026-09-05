@@ -36,7 +36,7 @@ export interface WorkspaceController {
   operation: WorkspaceOperation;
   busy: boolean;
   chooseDirectory(): Promise<void>;
-  addManualPath(path: string): Promise<void>;
+  addManualPath(path: string): Promise<boolean>;
   addDroppedFiles(files: File[]): Promise<void>;
   refresh(): Promise<void>;
   selectEntry(entryId: string): Promise<void>;
@@ -141,7 +141,7 @@ export function useWorkspace(): WorkspaceController {
     async (
       paths: string[],
       source: AddWorkspaceEntryRequest["source"]
-    ) => {
+    ): Promise<boolean> => {
       const uniquePaths = [...new Set(paths.filter(Boolean))];
 
       if (uniquePaths.length === 0) {
@@ -150,7 +150,7 @@ export function useWorkspace(): WorkspaceController {
           message: "没有可添加的目录路径。",
           details: {}
         });
-        return;
+        return false;
       }
 
       setOperation("scanning");
@@ -190,7 +190,7 @@ export function useWorkspace(): WorkspaceController {
               duplicateCount: result.duplicates
             }
           });
-          return;
+          return false;
         }
 
         setNotice(
@@ -200,8 +200,10 @@ export function useWorkspace(): WorkspaceController {
               ? `已添加 ${result.added} 个目录，另有 ${result.duplicates} 个重复目录已定位。`
               : `已完成 ${uniquePaths.length} 个目录的只读扫描。`
         );
+        return true;
       } catch (reason) {
         setUnexpectedError(reason);
+        return false;
       } finally {
         setOperation(null);
       }

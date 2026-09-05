@@ -42,6 +42,7 @@
   --color-primary: #36c7b5;
   --color-primary-strong: #23aa9b;
   --color-primary-soft: rgba(54, 199, 181, 0.13);
+  --color-on-primary: #071411;
   --color-success: #56d18b;
   --color-success-soft: rgba(86, 209, 139, 0.13);
   --color-warning: #f0c66a;
@@ -63,6 +64,12 @@
   --color-border-subtle: #1e2a37;
   --color-focus: #7de3d7;
   --color-overlay: rgba(4, 8, 12, 0.48);
+  --color-window-close: #c42b1c;
+  --color-on-danger: #ffffff;
+  --color-code-bg: #0b1118;
+  --shadow-popover: 0 14px 38px rgb(0 0 0 / 28%);
+  --shadow-modal: 0 24px 72px rgb(0 0 0 / 38%);
+  --shadow-drawer: -18px 0 48px rgb(0 0 0 / 28%);
 
   --z-content: 0;
   --z-navigation: 100;
@@ -88,6 +95,7 @@
   --accent: var(--color-primary);
   --accent-strong: var(--color-primary-strong);
   --accent-soft: var(--color-primary-soft);
+  --on-accent: var(--color-on-primary);
   --blue: var(--color-info);
   --blue-soft: var(--color-info-soft);
   --green: var(--color-success);
@@ -104,20 +112,21 @@
 html[data-theme="light"] {
   color-scheme: light;
 
-  --color-primary: #087f75;
-  --color-primary-strong: #06645d;
-  --color-primary-soft: rgba(8, 127, 117, 0.1);
+  --color-primary: #06736a;
+  --color-primary-strong: #055951;
+  --color-primary-soft: rgba(6, 115, 106, 0.1);
+  --color-on-primary: #ffffff;
   --color-success: #177245;
   --color-success-soft: rgba(23, 114, 69, 0.1);
-  --color-warning: #946100;
-  --color-warning-soft: rgba(169, 110, 0, 0.11);
+  --color-warning: #805300;
+  --color-warning-soft: rgba(128, 83, 0, 0.11);
   --color-danger: #b82e3a;
   --color-danger-soft: rgba(184, 46, 58, 0.09);
   --color-info: #1f60a8;
   --color-info-soft: rgba(31, 96, 168, 0.1);
   --color-text-primary: #1b2733;
   --color-text-secondary: #3f4f61;
-  --color-text-muted: #647588;
+  --color-text-muted: #586a7d;
   --color-text-disabled: #98a5b2;
   --color-bg-page: #f2f5f8;
   --color-bg-surface: #ffffff;
@@ -126,8 +135,12 @@ html[data-theme="light"] {
   --color-bg-hover: #e8eff5;
   --color-border: #cfdae4;
   --color-border-subtle: #e4eaf0;
-  --color-focus: #087f75;
+  --color-focus: #06736a;
   --color-overlay: rgba(24, 37, 49, 0.46);
+  --color-code-bg: #f7f9fb;
+  --shadow-popover: 0 14px 38px rgb(37 55 72 / 16%);
+  --shadow-modal: 0 24px 72px rgb(37 55 72 / 20%);
+  --shadow-drawer: -18px 0 48px rgb(37 55 72 / 18%);
   --titlebar: #e9eef4;
   --rail: #eef2f7;
   --sidebar: #f7f9fc;

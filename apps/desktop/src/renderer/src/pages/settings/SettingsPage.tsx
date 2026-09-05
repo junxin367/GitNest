@@ -1,5 +1,7 @@
 import {
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent
 } from "react";
@@ -15,6 +17,7 @@ import type {
 
 import type { AccountController } from "../../features/account-manage/useAccounts";
 import { Icon } from "../../shared/ui/Icon";
+import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
 
 interface SettingsPageProps {
   workspace: WorkspaceDetailsDto | null;
@@ -87,6 +90,7 @@ export function SettingsPage({
         </div>
         <div className="page-actions">
           <button
+            aria-busy={accounts.active === "loading"}
             className="button"
             disabled={accounts.active !== null}
             onClick={() => void accounts.reload()}
@@ -98,7 +102,8 @@ export function SettingsPage({
         </div>
       </section>
 
-      {(accounts.error || accounts.notice) && (
+      {(accounts.notice ||
+        (accounts.error && accounts.overview)) && (
         <div
           className={`workspace-feedback ${
             accounts.error ? "error" : "success"
@@ -122,6 +127,7 @@ export function SettingsPage({
             aria-label="关闭账号提示"
             className="icon-button"
             onClick={accounts.clearFeedback}
+            title="关闭账号提示"
             type="button"
           >
             <Icon name="close" />
@@ -165,12 +171,14 @@ export function SettingsPage({
               <label>
                 主机
                 <input
+                  autoComplete="url"
                   maxLength={320}
                   onChange={(event) =>
                     setHost(event.target.value)
                   }
                   placeholder="git.example.com"
                   spellCheck={false}
+                  required
                   value={host}
                 />
               </label>
@@ -198,6 +206,7 @@ export function SettingsPage({
               <label>
                 用户名（可选）
                 <input
+                  autoComplete="username"
                   maxLength={255}
                   onChange={(event) =>
                     setUsername(event.target.value)
@@ -222,6 +231,7 @@ export function SettingsPage({
                     }
                     placeholder="仅本次提交存在于 Renderer"
                     spellCheck={false}
+                    required
                     type="password"
                     value={token}
                   />
@@ -258,6 +268,7 @@ export function SettingsPage({
                 清空敏感输入
               </button>
               <button
+                aria-busy={accounts.active === "saving"}
                 className="button primary"
                 disabled={
                   accounts.active !== null ||
@@ -339,6 +350,27 @@ export function SettingsPage({
               <Icon name="refresh" size={18} />
             </span>
             <span>正在读取账号元数据…</span>
+          </div>
+        ) : accounts.error && !accounts.overview ? (
+          <div
+            className="empty-state repository-empty-state"
+            role="alert"
+          >
+            <span className="empty-state-icon warning-icon">
+              <Icon name="warning" size={20} />
+            </span>
+            <div>
+              <strong>账号数据暂时不可用</strong>
+              <p>{accounts.error.message}</p>
+              <button
+                className="button"
+                disabled={accounts.active !== null}
+                onClick={() => void accounts.reload()}
+                type="button"
+              >
+                重新读取
+              </button>
+            </div>
           </div>
         ) : accounts.overview?.accounts.length ? (
           <div className="account-card-list">
@@ -429,95 +461,126 @@ export function SettingsPage({
       </article>
 
       {accounts.removalImpact && (
-        <div className="command-dialog-backdrop">
-          <section
-            aria-labelledby="account-removal-title"
-            aria-modal="true"
-            className="command-dialog danger account-removal-dialog"
-            role="dialog"
-          >
-            <header className="command-dialog-header">
-              <span className="command-dialog-icon danger">
-                <Icon name="warning" size={20} />
-              </span>
-              <div>
-                <span className="eyebrow">删除账号</span>
-                <h2 id="account-removal-title">
-                  {accounts.removalImpact.host}
-                </h2>
-                <p>
-                  将删除安全凭据和全部账号绑定，已完成的 Git
-                  操作不会回滚。
-                </p>
-              </div>
-            </header>
-            <div className="command-dialog-body">
-              <section>
-                <h3>影响范围</h3>
-                <div className="command-impact-list">
-                  <article>
-                    <div>
-                      <strong>主机默认绑定</strong>
-                      <span>
-                        {accounts.removalImpact.hostDefault
-                          ? "将移除"
-                          : "无"}
-                      </span>
-                    </div>
-                    <p>{accounts.removalImpact.host}</p>
-                  </article>
-                  <article>
-                    <div>
-                      <strong>仓库覆盖绑定</strong>
-                      <span>
-                        {
-                          accounts.removalImpact.repositoryIds
-                            .length
-                        }{" "}
-                        个
-                      </span>
-                    </div>
-                    <p>
-                      {accounts.removalImpact.repositoryIds
-                        .map(
-                          (id) => repositoryNames.get(id) ?? id
-                        )
-                        .join("、") || "无"}
-                    </p>
-                  </article>
+        <AccountRemovalDialog
+          accounts={accounts}
+          repositoryNames={repositoryNames}
+        />
+      )}
+    </div>
+  );
+}
+
+function AccountRemovalDialog({
+  accounts,
+  repositoryNames
+}: {
+  accounts: AccountController;
+  repositoryNames: Map<string, string>;
+}) {
+  const impact = accounts.removalImpact;
+  const dialogRef = useRef<HTMLElement>(null);
+  useModalFocusTrap(dialogRef);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key === "Escape" &&
+        accounts.active === null
+      ) {
+        accounts.dismissRemoval();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () =>
+      window.removeEventListener("keydown", handleKeyDown);
+  }, [accounts.active, accounts.dismissRemoval]);
+
+  if (!impact) {
+    return null;
+  }
+
+  return (
+    <div className="command-dialog-backdrop">
+      <section
+        aria-describedby="account-removal-description"
+        aria-labelledby="account-removal-title"
+        aria-modal="true"
+        className="command-dialog danger account-removal-dialog"
+        ref={dialogRef}
+        role="dialog"
+      >
+        <header className="command-dialog-header">
+          <span className="command-dialog-icon danger">
+            <Icon name="warning" size={20} />
+          </span>
+          <div>
+            <span className="eyebrow">删除账号</span>
+            <h2 id="account-removal-title">{impact.host}</h2>
+            <p id="account-removal-description">
+              将删除安全凭据和全部账号绑定，已完成的 Git
+              操作不会回滚。
+            </p>
+          </div>
+        </header>
+        <div className="command-dialog-body">
+          <section>
+            <h3>影响范围</h3>
+            <div className="command-impact-list">
+              <article>
+                <div>
+                  <strong>主机默认绑定</strong>
+                  <span>
+                    {impact.hostDefault ? "将移除" : "无"}
+                  </span>
                 </div>
-              </section>
+                <p>{impact.host}</p>
+              </article>
+              <article>
+                <div>
+                  <strong>仓库覆盖绑定</strong>
+                  <span>
+                    {impact.repositoryIds.length} 个
+                  </span>
+                </div>
+                <p>
+                  {impact.repositoryIds
+                    .map((id) => repositoryNames.get(id) ?? id)
+                    .join("、") || "无"}
+                </p>
+              </article>
             </div>
-            <footer className="command-dialog-footer">
-              <p>
-                删除后这些仓库将回退到主机默认账号或系统 Git
-                认证。
-              </p>
-              <div>
-                <button
-                  className="button"
-                  disabled={accounts.active !== null}
-                  onClick={accounts.dismissRemoval}
-                  type="button"
-                >
-                  取消
-                </button>
-                <button
-                  className="button danger"
-                  disabled={accounts.active !== null}
-                  onClick={() =>
-                    void accounts.confirmRemoval()
-                  }
-                  type="button"
-                >
-                  <Icon name="warning" />
-                  确认删除账号
-                </button>
-              </div>
-            </footer>
           </section>
         </div>
-      )}
+        <footer className="command-dialog-footer">
+          <p>
+            删除后这些仓库将回退到主机默认账号或系统 Git
+            认证。
+          </p>
+          <div>
+            <button
+              className="button"
+              data-modal-initial-focus
+              disabled={accounts.active !== null}
+              onClick={accounts.dismissRemoval}
+              type="button"
+            >
+              取消
+            </button>
+            <button
+              aria-busy={accounts.active === "removing"}
+              className="button danger"
+              disabled={accounts.active !== null}
+              onClick={() => void accounts.confirmRemoval()}
+              type="button"
+            >
+              <Icon name="warning" />
+              {accounts.active === "removing"
+                ? "删除中…"
+                : "确认删除账号"}
+            </button>
+          </div>
+        </footer>
+      </section>
     </div>
   );
 }
@@ -565,6 +628,7 @@ function AccountCard({
     (binding) =>
       binding.repositoryId ? [binding.repositoryId] : []
   );
+  const testUrlInputId = `account-test-url-${account.id}`;
 
   return (
     <article className="account-card">
@@ -611,27 +675,32 @@ function AccountCard({
         </span>
       </div>
 
-      <div className="account-test-row">
-        <input
-          onChange={(event) =>
-            onTestUrlChange(event.target.value)
-          }
-          placeholder={
-            account.authType === "https-token"
-              ? `https://${account.host}/team/repository.git`
-              : `git@${account.host}:team/repository.git`
-          }
-          spellCheck={false}
-          value={testUrl}
-        />
-        <button
-          className="button"
-          disabled={active || !testUrl.trim()}
-          onClick={onTest}
-          type="button"
-        >
-          连接测试
-        </button>
+      <div className="account-test-field">
+        <label htmlFor={testUrlInputId}>测试仓库 URL</label>
+        <div className="account-test-row">
+          <input
+            autoComplete="url"
+            id={testUrlInputId}
+            onChange={(event) =>
+              onTestUrlChange(event.target.value)
+            }
+            placeholder={
+              account.authType === "https-token"
+                ? `https://${account.host}/team/repository.git`
+                : `git@${account.host}:team/repository.git`
+            }
+            spellCheck={false}
+            value={testUrl}
+          />
+          <button
+            className="button"
+            disabled={active || !testUrl.trim()}
+            onClick={onTest}
+            type="button"
+          >
+            连接测试
+          </button>
+        </div>
       </div>
 
       <div className="account-card-actions">
@@ -736,7 +805,7 @@ function verificationLabel(
 
 function verificationTone(
   status: AccountProfileDto["verificationStatus"]
-): "neutral" | "green" | "yellow" | "blue" {
+): "neutral" | "green" | "yellow" | "blue" | "red" {
   if (status === "verified") {
     return "green";
   }
@@ -744,10 +813,12 @@ function verificationTone(
     status === "authentication-failed" ||
     status === "permission-denied"
   ) {
-    return "yellow";
+    return status === "authentication-failed"
+      ? "red"
+      : "yellow";
   }
   if (status === "unavailable") {
-    return "blue";
+    return "red";
   }
   return "neutral";
 }

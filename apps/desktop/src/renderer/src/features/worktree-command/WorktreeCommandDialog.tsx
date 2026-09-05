@@ -52,6 +52,7 @@ export function WorktreeCommandDialog({
   return (
     <div className="command-dialog-backdrop">
       <section
+        aria-describedby="worktree-command-dialog-description"
         aria-labelledby="worktree-command-dialog-title"
         aria-modal="true"
         className={`command-dialog${dangerous ? " danger" : ""}`}
@@ -76,7 +77,7 @@ export function WorktreeCommandDialog({
             <h2 id="worktree-command-dialog-title">
               {worktreeCommandLabel(preflight.command.type)}
             </h2>
-            <p>
+            <p id="worktree-command-dialog-description">
               {preflight.targetSummary} · 预检有效至{" "}
               {formatExpiry(preflight.expiresAt)}
             </p>
@@ -160,6 +161,7 @@ export function WorktreeCommandDialog({
               取消
             </button>
             <button
+              aria-busy={busy}
               className={`button ${
                 dangerous ? "danger" : "primary"
               }`}

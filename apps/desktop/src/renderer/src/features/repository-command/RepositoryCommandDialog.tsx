@@ -51,6 +51,7 @@ export function RepositoryCommandDialog({
   return (
     <div className="command-dialog-backdrop">
       <section
+        aria-describedby="command-dialog-description"
         aria-labelledby="command-dialog-title"
         aria-modal="true"
         className={`command-dialog${dangerous ? " danger" : ""}`}
@@ -73,7 +74,7 @@ export function RepositoryCommandDialog({
             <h2 id="command-dialog-title">
               {repositoryCommandLabel(preflight.command.type)}
             </h2>
-            <p>
+            <p id="command-dialog-description">
               {preflight.targetSummary} · 预检有效至{" "}
               {formatExpiry(preflight.expiresAt)}
             </p>
@@ -159,6 +160,7 @@ export function RepositoryCommandDialog({
               取消
             </button>
             <button
+              aria-busy={busy}
               className={`button ${
                 dangerous ? "danger" : "primary"
               }`}

@@ -62,11 +62,11 @@ export function WorkspaceSidebar({
 
   return (
     <aside className="workspace-sidebar">
-      <button className="workspace-switcher" type="button">
+      <div className="workspace-identity">
         <span className="workspace-avatar">
           <Icon name="layers" size={18} />
         </span>
-        <span className="workspace-switcher-copy">
+        <span className="workspace-identity-copy">
           <strong>{workspace?.name ?? "GitNest Workspace"}</strong>
           <span>
             {workspace
@@ -74,8 +74,7 @@ export function WorkspaceSidebar({
               : "正在恢复本地 Workspace…"}
           </span>
         </span>
-        <Icon name="chevron" />
-      </button>
+      </div>
 
       <button
         aria-current={
@@ -101,9 +100,23 @@ export function WorkspaceSidebar({
           type="search"
           value={query}
         />
+        {query && (
+          <button
+            aria-label="清除仓库筛选"
+            className="sidebar-search-clear"
+            onClick={() => setQuery("")}
+            title="清除筛选"
+            type="button"
+          >
+            <Icon name="close" size={14} />
+          </button>
+        )}
       </div>
 
-      <div className="repository-list">
+      <nav
+        aria-label="Workspace 仓库"
+        className="repository-list"
+      >
         {entries.length > 0 && workspace ? (
           entries.map(({ entry, groups }) => (
             <section
@@ -239,10 +252,11 @@ export function WorkspaceSidebar({
           <SidebarEmpty
             busy={busy}
             hasEntries={Boolean(workspace?.entries.length)}
+            onClearQuery={() => setQuery("")}
             query={normalizedQuery}
           />
         )}
-      </div>
+      </nav>
 
       <div className="sidebar-footer">
         <div>
@@ -252,7 +266,7 @@ export function WorkspaceSidebar({
           />
           {busy
             ? "正在处理 Workspace…"
-            : "扫描只读 · 配置保存于 AppData"}
+            : "状态扫描只读 · 配置仅保存在本机"}
         </div>
         <button
           disabled={busy}
@@ -273,11 +287,11 @@ function snapshotTone(
   if (snapshot?.refreshPending) {
     return "pending";
   }
-  if (!snapshot || snapshot.stale || snapshot.error) {
-    return "idle";
-  }
-  if (snapshot.conflicted > 0) {
+  if (snapshot?.error || snapshot?.conflicted) {
     return "danger";
+  }
+  if (!snapshot || snapshot.stale) {
+    return "idle";
   }
   if (getSnapshotChangeCount(snapshot) > 0) {
     return "warning";
@@ -373,11 +387,13 @@ function getVisibleEntries(
 function SidebarEmpty({
   busy,
   hasEntries,
-  query
+  query,
+  onClearQuery
 }: {
   busy: boolean;
   hasEntries: boolean;
   query: string;
+  onClearQuery(): void;
 }) {
   if (busy && !hasEntries) {
     return (
@@ -390,7 +406,14 @@ function SidebarEmpty({
   if (query) {
     return (
       <div className="sidebar-empty">
-        当前筛选条件没有匹配的仓库。
+        <span>当前筛选条件没有匹配的仓库。</span>
+        <button
+          className="button"
+          onClick={onClearQuery}
+          type="button"
+        >
+          清除筛选
+        </button>
       </div>
     );
   }

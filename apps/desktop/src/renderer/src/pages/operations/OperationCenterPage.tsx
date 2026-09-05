@@ -52,6 +52,28 @@ export function OperationCenterPage({
     () => (workspace ? listWorkspaceTargets(workspace) : []),
     [workspace]
   );
+
+  if (!workspace) {
+    return (
+      <div className="page-scroll operation-center-page">
+        <section className="page-heading">
+          <div>
+            <span className="eyebrow">可观察后台任务</span>
+            <h1>操作中心</h1>
+            <p>
+              正在恢复 Workspace 与历史操作，完成前不会把未知状态显示为空记录。
+            </p>
+          </div>
+        </section>
+        <div className="repository-loading" role="status">
+          <span className="empty-state-icon spinning">
+            <Icon name="refresh" size={18} />
+          </span>
+          <span>正在读取操作记录…</span>
+        </div>
+      </div>
+    );
+  }
   const pullTargets = targets.filter((target) => {
     const snapshot = snapshots.find(
       (candidate) =>
@@ -126,6 +148,7 @@ export function OperationCenterPage({
             aria-label="关闭操作提示"
             className="icon-button"
             onClick={commands.clearFeedback}
+            title="关闭操作提示"
             type="button"
           >
             <Icon name="close" />
@@ -237,6 +260,7 @@ export function OperationCenterPage({
               ] as const
             ).map(([id, label]) => (
               <button
+                aria-pressed={filter === id}
                 className={filter === id ? "active" : ""}
                 key={id}
                 onClick={() => setFilter(id)}
@@ -269,6 +293,15 @@ export function OperationCenterPage({
             <div>
               <strong>当前筛选下没有操作</strong>
               <p>启动刷新、同步或仓库写操作后会显示在这里。</p>
+              {filter !== "all" && (
+                <button
+                  className="button"
+                  onClick={() => setFilter("all")}
+                  type="button"
+                >
+                  查看全部操作
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -372,7 +405,16 @@ function OperationCard({
             <span>{operation.targetIds.length} 个目标</span>
           )}
         </div>
-        <div className="operation-progress">
+        <div
+          aria-label={`${operationKindLabel(operation.kind)}进度`}
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={Math.round(
+            Math.max(0, Math.min(operation.progress, 1)) * 100
+          )}
+          className="operation-progress"
+          role="progressbar"
+        >
           <span
             style={{
               transform: `scaleX(${Math.max(
@@ -583,12 +625,12 @@ function operationStateLabel(
 
 function operationStateTone(
   state: WorkspaceOperationDto["state"]
-): "neutral" | "blue" | "green" | "yellow" {
+): "neutral" | "blue" | "green" | "yellow" | "red" {
   if (state === "succeeded") {
     return "green";
   }
   if (state === "failed" || state === "interrupted") {
-    return "yellow";
+    return "red";
   }
   if (
     state === "queued" ||

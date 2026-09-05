@@ -24,6 +24,11 @@ export function useModalFocusTrap(
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
+    const previousModalOpen =
+      document.documentElement.dataset.modalOpen;
+    document.documentElement.dataset.modalOpen = "true";
+    const inertedSiblings = inertOutsideDialog(dialog);
+    const lockedScrollers = lockScrollableRegions();
     const initialFocus =
       dialog.querySelector<HTMLElement>(
         "[data-modal-initial-focus]"
@@ -72,6 +77,23 @@ export function useModalFocusTrap(
         "keydown",
         handleKeyDown
       );
+      for (const { element, inert } of inertedSiblings) {
+        element.inert = inert;
+      }
+      for (const {
+        element,
+        overflow,
+        paddingRight
+      } of lockedScrollers) {
+        element.style.overflow = overflow;
+        element.style.paddingRight = paddingRight;
+      }
+      if (previousModalOpen === undefined) {
+        delete document.documentElement.dataset.modalOpen;
+      } else {
+        document.documentElement.dataset.modalOpen =
+          previousModalOpen;
+      }
       if (
         previousFocus?.isConnected &&
         !previousFocus.hasAttribute("disabled")
@@ -92,6 +114,78 @@ function readFocusableElements(
   ].filter(
     (element) =>
       !element.hidden &&
-      element.getAttribute("aria-hidden") !== "true"
+      !element.closest("[hidden], [aria-hidden='true']")
   );
+}
+
+function inertOutsideDialog(
+  dialog: HTMLElement
+): Array<{ element: HTMLElement; inert: boolean }> {
+  const result: Array<{
+    element: HTMLElement;
+    inert: boolean;
+  }> = [];
+  let activeBranch: HTMLElement | null =
+    dialog.closest<HTMLElement>(".command-dialog-backdrop") ??
+    dialog;
+
+  while (activeBranch && activeBranch !== document.body) {
+    const parent: HTMLElement | null =
+      activeBranch.parentElement;
+    if (!parent) {
+      break;
+    }
+    for (const sibling of parent.children) {
+      if (
+        sibling !== activeBranch &&
+        sibling instanceof HTMLElement
+      ) {
+        result.push({
+          element: sibling,
+          inert: Boolean(sibling.inert)
+        });
+        sibling.inert = true;
+      }
+    }
+    activeBranch = parent;
+  }
+
+  return result;
+}
+
+function lockScrollableRegions(): Array<{
+  element: HTMLElement;
+  overflow: string;
+  paddingRight: string;
+}> {
+  return [
+    ...document.querySelectorAll<HTMLElement>(
+      ".page-scroll, .inspector, .repository-list"
+    )
+  ].map((element) => {
+    const computed = getComputedStyle(element);
+    const borderWidth =
+      (Number.parseFloat(computed.borderLeftWidth) || 0) +
+      (Number.parseFloat(computed.borderRightWidth) || 0);
+    const scrollbarWidth = Math.max(
+      0,
+      element.offsetWidth -
+        element.clientWidth -
+        borderWidth
+    );
+    const previous = {
+      element,
+      overflow: element.style.overflow,
+      paddingRight: element.style.paddingRight
+    };
+
+    element.style.overflow = "hidden";
+    if (scrollbarWidth > 0) {
+      element.style.paddingRight = `${
+        (Number.parseFloat(computed.paddingRight) || 0) +
+        scrollbarWidth
+      }px`;
+    }
+    return previous;
+  });
 }

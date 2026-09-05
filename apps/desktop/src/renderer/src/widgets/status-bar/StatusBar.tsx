@@ -52,7 +52,7 @@ export function StatusBar({
     <footer className="status-bar">
       <span>
         <Icon name="check" size={12} />
-        安全壳层已就绪
+        GitNest 已就绪
       </span>
       <span className={gitError ? "status-error" : ""}>
         <Icon

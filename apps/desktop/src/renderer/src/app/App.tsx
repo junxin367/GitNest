@@ -35,8 +35,10 @@ import { WorkspaceSidebar } from "../widgets/workspace-sidebar/WorkspaceSidebar"
 type Theme = "dark" | "light";
 
 export function App() {
-  const [theme, setTheme] = useState<Theme>("dark");
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [theme, setTheme] = useState<Theme>(readInitialTheme);
+  const [inspectorOpen, setInspectorOpen] = useState(
+    () => !window.matchMedia("(max-width: 1360px)").matches
+  );
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(
     null
   );
@@ -82,7 +84,43 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute(
+        "content",
+        getComputedStyle(document.documentElement)
+          .getPropertyValue("--titlebar")
+          .trim()
+      );
+    try {
+      localStorage.setItem("gitnest.theme", theme);
+    } catch {
+      // Theme persistence is best-effort in restricted environments.
+    }
   }, [theme]);
+
+  useEffect(() => {
+    const narrowWindow = window.matchMedia(
+      "(max-width: 1360px)"
+    );
+    const closeInspectorInNarrowWindow = (
+      event: MediaQueryListEvent
+    ) => {
+      if (event.matches) {
+        setInspectorOpen(false);
+      }
+    };
+
+    narrowWindow.addEventListener(
+      "change",
+      closeInspectorInNarrowWindow
+    );
+    return () =>
+      narrowWindow.removeEventListener(
+        "change",
+        closeInspectorInNarrowWindow
+      );
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -167,6 +205,11 @@ export function App() {
         跳到主内容
       </a>
       <AppTitlebar
+        activeView={view}
+        hasRepository={Boolean(
+          workspace.workspace?.selectedTarget
+        )}
+        onNavigate={setView}
         onToggleTheme={() =>
           setTheme((current) =>
             current === "dark" ? "light" : "dark"
@@ -211,7 +254,11 @@ export function App() {
             inspectorOpen ? "" : " inspector-closed"
           }`}
         >
-          <main className="main-column" id="main-content">
+          <main
+            className="main-column"
+            id="main-content"
+            tabIndex={-1}
+          >
             <RepositoryHeader
               inspectorOpen={inspectorOpen}
               refreshing={
@@ -431,4 +478,20 @@ function handleDragLeave(
   ) {
     setDragActive(false);
   }
+}
+
+function readInitialTheme(): Theme {
+  try {
+    const stored = localStorage.getItem("gitnest.theme");
+    if (stored === "dark" || stored === "light") {
+      return stored;
+    }
+  } catch {
+    // Fall through to the operating-system preference.
+  }
+
+  return window.matchMedia("(prefers-color-scheme: light)")
+    .matches
+    ? "light"
+    : "dark";
 }

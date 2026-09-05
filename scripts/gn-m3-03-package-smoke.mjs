@@ -11,7 +11,6 @@ import {
   writeFile
 } from "node:fs/promises";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
 import {
   basename,
   dirname,
@@ -35,6 +34,7 @@ const desktopDirectory = join(
   "desktop"
 );
 const releaseDirectory = join(projectRoot, "release");
+const fixtureParentDirectory = join(projectRoot, "temp");
 const screenshotDirectory = join(
   projectRoot,
   "test-results"
@@ -99,8 +99,14 @@ try {
   await assertHostIsClean(knownFolders);
   hostShortcutsWereClean = true;
 
+  await mkdir(fixtureParentDirectory, {
+    recursive: true
+  });
   fixtureRoot = await mkdtemp(
-    join(tmpdir(), "gitnest-e2e-m3-delivery-")
+    join(
+      fixtureParentDirectory,
+      "gitnest-e2e-m3-delivery-"
+    )
   );
   installDirectory = join(
     fixtureRoot,
@@ -1292,20 +1298,22 @@ async function sha256(path) {
 }
 
 async function removeFixtureRoot(path) {
-  const resolvedTemporaryRoot = resolve(tmpdir());
+  const resolvedFixtureParent = resolve(
+    fixtureParentDirectory
+  );
   const resolvedFixture = resolve(path);
-  const pathFromTemporaryRoot = relative(
-    resolvedTemporaryRoot,
+  const pathFromFixtureParent = relative(
+    resolvedFixtureParent,
     resolvedFixture
   );
   if (
     dirname(resolvedFixture) !==
-      resolvedTemporaryRoot ||
+      resolvedFixtureParent ||
     !basename(resolvedFixture).startsWith(
       "gitnest-e2e-m3-delivery-"
     ) ||
-    pathFromTemporaryRoot.startsWith("..") ||
-    isAbsolute(pathFromTemporaryRoot)
+    pathFromFixtureParent.startsWith("..") ||
+    isAbsolute(pathFromFixtureParent)
   ) {
     throw new Error(
       "Refusing to remove an unexpected delivery fixture path."

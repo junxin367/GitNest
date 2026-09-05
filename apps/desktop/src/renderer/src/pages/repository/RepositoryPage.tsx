@@ -129,12 +129,17 @@ export function RepositoryPage({
     resolved.worktree?.name ??
     resolved.repository?.name ??
     "未知仓库";
+  const detailErrorBlocksCurrentTab =
+    Boolean(details.error) &&
+    ((tab === "changes" && !details.changes) ||
+      (tab === "history" && !details.history) ||
+      (tab === "branches" && !details.branches));
 
   return (
     <div className="page-scroll repository-page">
       <section className="page-heading repository-page-heading">
         <div>
-          <span className="eyebrow">Repository target</span>
+          <span className="eyebrow">当前工作目录</span>
           <h1>{repositoryName}</h1>
           <p title={resolved.worktree?.path}>
             {resolved.worktree?.path ?? "工作目录不可用"}
@@ -150,6 +155,7 @@ export function RepositoryPage({
             tab === "history" ||
             tab === "branches") && (
             <button
+              aria-busy={details.loading[tab]}
               className="button"
               onClick={() => void details.reload(tab)}
               type="button"
@@ -161,7 +167,7 @@ export function RepositoryPage({
         </div>
       </section>
 
-      {details.error && (
+      {details.error && !detailErrorBlocksCurrentTab && (
         <div className="workspace-feedback error" role="alert">
           <Icon name="warning" />
           <div>
@@ -195,6 +201,7 @@ export function RepositoryPage({
             aria-label="关闭写操作提示"
             className="icon-button"
             onClick={mutations.clearFeedback}
+            title="关闭写操作提示"
             type="button"
           >
             <Icon name="close" />
@@ -226,6 +233,7 @@ export function RepositoryPage({
             aria-label="关闭仓库命令提示"
             className="icon-button"
             onClick={commands.clearFeedback}
+            title="关闭仓库命令提示"
             type="button"
           >
             <Icon name="close" />
@@ -257,6 +265,7 @@ export function RepositoryPage({
             aria-label="关闭终端提示"
             className="icon-button"
             onClick={terminals.clearFeedback}
+            title="关闭终端提示"
             type="button"
           >
             <Icon name="close" />
@@ -504,6 +513,11 @@ function RepositoryChanges({
                   ? " selected"
                   : ""
               }`}
+              aria-current={
+                change.path === controller.selectedChange?.path
+                  ? "true"
+                  : undefined
+              }
               key={`${change.kind}:${change.path}`}
               onClick={() => void controller.selectChange(change)}
               type="button"
@@ -541,6 +555,10 @@ function RepositoryChanges({
                 {selected.indexStatus !== "." &&
                   selected.kind !== "untracked" && (
                     <button
+                      aria-pressed={
+                        controller.selectedChange?.mode ===
+                        "staged"
+                      }
                       className={
                         controller.selectedChange?.mode ===
                         "staged"
@@ -561,6 +579,10 @@ function RepositoryChanges({
                 {selected.worktreeStatus !== "." &&
                   selected.kind !== "untracked" && (
                     <button
+                      aria-pressed={
+                        controller.selectedChange?.mode ===
+                        "unstaged"
+                      }
                       className={
                         controller.selectedChange?.mode ===
                         "unstaged"
@@ -582,6 +604,7 @@ function RepositoryChanges({
               <div className="mutation-file-actions">
                 {canUnstageChange(selected) && (
                   <button
+                    aria-busy={mutations.active === "unstage"}
                     className="button"
                     disabled={mutations.active !== null}
                     onClick={() =>
@@ -597,6 +620,7 @@ function RepositoryChanges({
                 )}
                 {canStageChange(selected) && (
                   <button
+                    aria-busy={mutations.active === "stage"}
                     className="button primary"
                     disabled={mutations.active !== null}
                     onClick={() =>
@@ -716,7 +740,7 @@ function CommitComposer({
         <span
           className={`status-pill ${
             conflicted > 0
-              ? "yellow"
+              ? "red"
               : staged > 0
                 ? "green"
                 : "neutral"
@@ -758,6 +782,7 @@ function CommitComposer({
         <div className="commit-form-footer">
           <p>{commitGuidance(staged, conflicted)}</p>
           <button
+            aria-busy={mutations.active === "commit"}
             className="button primary"
             disabled={!canCommit}
             type="submit"
@@ -821,6 +846,11 @@ function RepositoryHistory({
         </header>
         {commits.map((item) => (
           <button
+            aria-current={
+              item.hash === controller.selectedCommitHash
+                ? "true"
+                : undefined
+            }
             className={`commit-row${
               item.hash === controller.selectedCommitHash
                 ? " selected"
@@ -843,6 +873,7 @@ function RepositoryHistory({
         ))}
         {controller.history?.page.nextOffset !== undefined && (
           <button
+            aria-busy={controller.loading.history}
             className="load-more-button"
             disabled={controller.loading.history}
             onClick={() => void controller.loadMoreHistory()}
@@ -1015,6 +1046,7 @@ function RepositoryBranches({
               value={newBranch}
             />
             <button
+              aria-busy={commands.active === "create-branch"}
               className="button primary"
               disabled={
                 commands.busy || !newBranch.trim()
@@ -1357,9 +1389,12 @@ function diffLineClass(line: string): string {
 
 function snapshotTone(
   snapshot: RepositoryStatusSnapshotDto | undefined
-): "neutral" | "blue" | "green" | "yellow" {
+): "neutral" | "blue" | "green" | "yellow" | "red" {
   if (snapshot?.error) {
-    return "yellow";
+    return "red";
+  }
+  if (snapshot?.conflicted) {
+    return "red";
   }
   if (!snapshot || snapshot.stale || snapshot.refreshPending) {
     return "blue";
