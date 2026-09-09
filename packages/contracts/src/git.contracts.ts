@@ -60,12 +60,20 @@ export interface RepositoryIdentityDto {
   head: string;
 }
 
+export interface ChangedPathStatsDto {
+  additions: number;
+  deletions: number;
+}
+
 export interface ChangedPathDto {
   path: string;
   originalPath?: string;
   indexStatus: string;
   worktreeStatus: string;
   kind: "ordinary" | "renamed" | "unmerged" | "untracked";
+  stagedStats?: ChangedPathStatsDto;
+  unstagedStats?: ChangedPathStatsDto;
+  untrackedStats?: ChangedPathStatsDto;
 }
 
 export interface RepositorySnapshotDto {
@@ -90,6 +98,7 @@ export interface BranchDto {
   current: boolean;
   remote: boolean;
   worktreePath?: string;
+  updatedAt?: string;
 }
 
 export interface CommitSummaryDto {
@@ -100,6 +109,7 @@ export interface CommitSummaryDto {
   authoredAt: string;
   subject: string;
   parentHashes: string[];
+  refs?: string[];
 }
 
 export interface WorktreeDto {

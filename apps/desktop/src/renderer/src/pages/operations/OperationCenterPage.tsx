@@ -17,6 +17,7 @@ import {
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
 import { Icon } from "../../shared/ui/Icon";
+import { Toast, ToastViewport } from "../../shared/ui/Toast";
 
 type OperationFilter =
   | "all"
@@ -124,58 +125,52 @@ export function OperationCenterPage({
         </div>
       </section>
 
-      {(commands.error || commands.notice) && (
-        <div
-          className={`workspace-feedback ${
-            commands.error ? "error" : "success"
-          }`}
-          role={commands.error ? "alert" : "status"}
-        >
-          <Icon
-            name={commands.error ? "warning" : "check"}
-          />
-          <div>
-            <strong>
-              {commands.error
+      <ToastViewport>
+        {(commands.error || commands.notice) && (
+          <Toast
+            closeLabel="关闭操作提示"
+            icon={commands.error ? "warning" : "check"}
+            key="operation-feedback"
+            message={
+              commands.error?.message ??
+              commands.notice ??
+              ""
+            }
+            onClose={commands.clearFeedback}
+            title={
+              commands.error
                 ? "仓库操作未完成"
-                : "仓库操作状态"}
-            </strong>
-            <span>
-              {commands.error?.message ?? commands.notice}
-            </span>
-          </div>
-          <button
-            aria-label="关闭操作提示"
-            className="icon-button"
-            onClick={commands.clearFeedback}
-            title="关闭操作提示"
-            type="button"
-          >
-            <Icon name="close" />
-          </button>
-        </div>
-      )}
+                : "仓库操作状态"
+            }
+            tone={commands.error ? "error" : "success"}
+          />
+        )}
+      </ToastViewport>
 
       <section className="operation-metric-grid">
         <OperationMetric
+          description="正在排队或执行的任务"
           icon="refresh"
           label="活动"
           tone="blue"
           value={activeCount}
         />
         <OperationMetric
+          description="最近完成的仓库操作"
           icon="check"
           label="成功"
           tone="green"
           value={completedCount}
         />
         <OperationMetric
+          description="需要人工处理"
           icon="warning"
           label="失败"
           tone="yellow"
           value={failedCount}
         />
         <OperationMetric
+          description="当前 Workspace 操作记录"
           icon="operations"
           label="记录"
           tone="accent"
@@ -314,20 +309,25 @@ function OperationMetric({
   label,
   value,
   icon,
-  tone
+  tone,
+  description
 }: {
+  description: string;
   label: string;
   value: number;
   icon: "refresh" | "check" | "warning" | "operations";
-  tone: string;
+  tone: "blue" | "green" | "yellow" | "accent";
 }) {
   return (
     <article className={`operation-metric tone-${tone}`}>
-      <span>
-        <Icon name={icon} />
-        {label}
-      </span>
+      <div className="operation-metric-label">
+        <span>{label}</span>
+        <span className="operation-metric-icon">
+          <Icon name={icon} />
+        </span>
+      </div>
       <strong>{value}</strong>
+      <p>{description}</p>
     </article>
   );
 }

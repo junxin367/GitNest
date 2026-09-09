@@ -13,6 +13,7 @@ import {
   type RepositoryStatusSnapshot,
   type RepositoryTarget,
   type Workspace,
+  type WorkspaceWatchEvent,
   type WorkspaceWatchHandle,
   type WorkspaceWatcher,
   type WorkspaceWatchRegistration
@@ -21,6 +22,7 @@ import {
 import { ConcurrencyLimiter } from "../operations/concurrency-limiter";
 import type {
   AddWorkspaceEntryInput,
+  RemoveWorkspaceEntryInput,
   SetWorkspaceGroupCollapsedInput,
   UpdateWorkspaceEntryInput,
   WorkspaceMutationResult
@@ -133,6 +135,7 @@ export interface WorkspaceRuntimeOptions {
   currentTargetDebounceMs?: number;
   backgroundTargetDebounceMs?: number;
   pollingIntervalMs?: number;
+  selectedTargetPollingIntervalMs?: number;
   staleAfterMs?: number;
   watcherRegistrationLimit?: number;
   autoRefresh?: boolean;
@@ -149,6 +152,9 @@ export interface WorkspaceConfigurationService {
   updateEntry(
     input: UpdateWorkspaceEntryInput
   ): Promise<Workspace>;
+  removeEntry(
+    input: RemoveWorkspaceEntryInput
+  ): Promise<Workspace>;
   setGroupCollapsed(
     input: SetWorkspaceGroupCollapsedInput
   ): Promise<Workspace>;
@@ -163,12 +169,14 @@ type RefreshReason =
   | "workspace-change"
   | "watcher"
   | "polling"
-  | "focus";
+  | "focus"
+  | "heartbeat";
 
 const DEFAULT_CONCURRENCY = 4;
 const DEFAULT_CURRENT_DEBOUNCE_MS = 400;
 const DEFAULT_BACKGROUND_DEBOUNCE_MS = 2_000;
 const DEFAULT_POLLING_INTERVAL_MS = 60_000;
+const DEFAULT_SELECTED_TARGET_POLLING_INTERVAL_MS = 15_000;
 const DEFAULT_STALE_AFTER_MS = 30_000;
 const DEFAULT_WATCHER_REGISTRATION_LIMIT = 96;
 const MAX_OPERATIONS = 30;
@@ -186,6 +194,7 @@ export class WorkspaceRuntimeService {
   readonly #currentTargetDebounceMs: number;
   readonly #backgroundTargetDebounceMs: number;
   readonly #pollingIntervalMs: number;
+  readonly #selectedTargetPollingIntervalMs: number;
   readonly #staleAfterMs: number;
   readonly #watcherRegistrationLimit: number;
   readonly #autoRefresh: boolean;
@@ -214,6 +223,10 @@ export class WorkspaceRuntimeService {
     string,
     ReturnType<typeof setTimeout>
   >();
+  readonly #queuedWatchedRefreshes = new Map<
+    string,
+    RepositoryTarget
+  >();
   #workspace: Workspace | undefined;
   #operations: WorkspaceOperation[] = [];
   #monitor: WorkspaceMonitorState = {
@@ -226,9 +239,14 @@ export class WorkspaceRuntimeService {
   #workspaceRefreshOperationId: string | undefined;
   #watchHandle: WorkspaceWatchHandle | undefined;
   #pollTimer: ReturnType<typeof setInterval> | undefined;
+  #selectedTargetPollTimer:
+    | ReturnType<typeof setInterval>
+    | undefined;
   #operationSequence = 0;
   #operationPersistenceRequested = false;
   #operationPersistenceTask: Promise<void> | undefined;
+  #snapshotPersistenceTail: Promise<void> = Promise.resolve();
+  #monitorGeneration = 0;
   #disposed = false;
 
   constructor(
@@ -255,6 +273,9 @@ export class WorkspaceRuntimeService {
       DEFAULT_BACKGROUND_DEBOUNCE_MS;
     this.#pollingIntervalMs =
       options.pollingIntervalMs ?? DEFAULT_POLLING_INTERVAL_MS;
+    this.#selectedTargetPollingIntervalMs =
+      options.selectedTargetPollingIntervalMs ??
+      DEFAULT_SELECTED_TARGET_POLLING_INTERVAL_MS;
     this.#staleAfterMs =
       options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
     this.#watcherRegistrationLimit =
@@ -318,6 +339,17 @@ export class WorkspaceRuntimeService {
     return workspace;
   }
 
+  async removeEntry(
+    input: RemoveWorkspaceEntryInput
+  ): Promise<Workspace> {
+    await this.#ensureInitialized();
+    const workspace =
+      await this.#configuration.removeEntry(input);
+    this.#acceptWorkspace(workspace);
+    this.#startMonitoringAndRefresh("workspace-change");
+    return workspace;
+  }
+
   async setGroupCollapsed(
     input: SetWorkspaceGroupCollapsedInput
   ): Promise<Workspace> {
@@ -369,15 +401,20 @@ export class WorkspaceRuntimeService {
       "worktree"
     );
 
-    const blockers = [
-      this.#worktreeMutationTails.get(key),
-      this.#repositoryMutationTails.get(
-        target.repositoryId
-      )
-    ].filter(
-      (blocker): blocker is Promise<void> =>
-        Boolean(blocker)
-    );
+    const blockers: Promise<unknown>[] = [];
+    const worktreeTail = this.#worktreeMutationTails.get(key);
+    const repositoryTail =
+      this.#repositoryMutationTails.get(target.repositoryId);
+    const statusRefresh = this.#inFlight.get(key);
+    if (worktreeTail) {
+      blockers.push(worktreeTail);
+    }
+    if (repositoryTail) {
+      blockers.push(repositoryTail);
+    }
+    if (statusRefresh) {
+      blockers.push(statusRefresh);
+    }
     const run = Promise.all(
       blockers.map((blocker) =>
         blocker.catch(() => undefined)
@@ -438,7 +475,7 @@ export class WorkspaceRuntimeService {
       "repository"
     );
     const controller = new AbortController();
-    const blockers = new Set<Promise<void>>();
+    const blockers = new Set<Promise<unknown>>();
     const repositoryTail =
       this.#repositoryMutationTails.get(
         target.repositoryId
@@ -447,11 +484,14 @@ export class WorkspaceRuntimeService {
       blockers.add(repositoryTail);
     }
     for (const candidate of repositoryTargets) {
-      const tail = this.#worktreeMutationTails.get(
-        repositoryTargetKey(candidate)
-      );
+      const key = repositoryTargetKey(candidate);
+      const tail = this.#worktreeMutationTails.get(key);
       if (tail) {
         blockers.add(tail);
+      }
+      const statusRefresh = this.#inFlight.get(key);
+      if (statusRefresh) {
+        blockers.add(statusRefresh);
       }
     }
 
@@ -594,6 +634,9 @@ export class WorkspaceRuntimeService {
   async dispose(): Promise<void> {
     this.#disposed = true;
     await this.#stopMonitoring();
+    await this.#snapshotPersistenceTail.catch(
+      () => undefined
+    );
     await this.#operationPersistenceTask?.catch(
       () => undefined
     );
@@ -824,10 +867,7 @@ export class WorkspaceRuntimeService {
     );
 
     try {
-      await this.#snapshotStore.save(
-        this.#workspace.id,
-        this.#orderedSnapshots()
-      );
+      await this.#saveSnapshots();
     } catch (error) {
       failed += 1;
       this.#monitor = {
@@ -1280,10 +1320,7 @@ export class WorkspaceRuntimeService {
     );
 
     try {
-      await this.#snapshotStore.save(
-        this.#workspace.id,
-        this.#orderedSnapshots()
-      );
+      await this.#saveSnapshots();
     } catch (error) {
       const warning = `Snapshot 缓存保存失败：${getErrorMessage(error)}`;
       this.#monitor = {
@@ -1357,9 +1394,7 @@ export class WorkspaceRuntimeService {
   }
 
   #startMonitoringAndRefresh(reason: RefreshReason): void {
-    void this.#restartMonitoring().catch((error) => {
-      void this.#switchToPolling(getErrorMessage(error));
-    });
+    void this.#restartMonitoring();
 
     if (this.#workspace) {
       void this.#runStatusRefresh(
@@ -1370,9 +1405,14 @@ export class WorkspaceRuntimeService {
   }
 
   async #restartMonitoring(): Promise<void> {
-    await this.#stopMonitoring();
+    const generation = ++this.#monitorGeneration;
+    await this.#closeMonitoringResources();
 
-    if (this.#disposed || !this.#workspace) {
+    if (
+      generation !== this.#monitorGeneration ||
+      this.#disposed ||
+      !this.#workspace
+    ) {
       return;
     }
 
@@ -1391,26 +1431,46 @@ export class WorkspaceRuntimeService {
     if (
       registrations.length > this.#watcherRegistrationLimit
     ) {
-      await this.#switchToPolling(
+      this.#activatePolling(
+        generation,
         `监听路径数量 ${registrations.length} 超过上限 ${this.#watcherRegistrationLimit}。`
       );
       return;
     }
 
     try {
-      this.#watchHandle = await this.#watcher.watch(
+      const handle = await this.#watcher.watch(
         registrations,
         (event) => {
+          if (generation !== this.#monitorGeneration) {
+            return;
+          }
+          const targets = this.#targetsForWatchEvent(event);
+          if (targets.length === 0) {
+            return;
+          }
           this.#monitor = {
             ...this.#monitor,
             lastEventAt: this.#clock()
           };
-          this.#scheduleWatchedRefresh(event.target);
+          for (const target of targets) {
+            this.#scheduleWatchedRefresh(target);
+          }
         },
         (error) => {
-          void this.#switchToPolling(error.message);
+          if (generation === this.#monitorGeneration) {
+            void this.#switchToPolling(error.message);
+          }
         }
       );
+      if (
+        generation !== this.#monitorGeneration ||
+        this.#disposed
+      ) {
+        await handle.close();
+        return;
+      }
+      this.#watchHandle = handle;
       this.#monitor = {
         mode: "watching",
         watchedTargets: uniqueTargets(
@@ -1418,21 +1478,35 @@ export class WorkspaceRuntimeService {
         ).length,
         message: `正在监听 ${registrations.length} 个工作目录与 Git 元数据路径。`
       };
+      this.#startSelectedTargetHeartbeat();
       this.#emit();
     } catch (error) {
-      await this.#switchToPolling(getErrorMessage(error));
+      if (
+        generation === this.#monitorGeneration &&
+        !this.#disposed
+      ) {
+        this.#activatePolling(
+          generation,
+          getErrorMessage(error)
+        );
+      }
     }
   }
 
   async #switchToPolling(reason: string): Promise<void> {
-    await this.#watchHandle?.close();
-    this.#watchHandle = undefined;
+    const generation = ++this.#monitorGeneration;
+    await this.#closeMonitoringResources();
+    this.#activatePolling(generation, reason);
+  }
 
-    if (this.#pollTimer) {
-      clearInterval(this.#pollTimer);
-    }
-
-    if (this.#disposed) {
+  #activatePolling(
+    generation: number,
+    reason: string
+  ): void {
+    if (
+      generation !== this.#monitorGeneration ||
+      this.#disposed
+    ) {
       return;
     }
 
@@ -1451,7 +1525,103 @@ export class WorkspaceRuntimeService {
         );
       }
     }, this.#pollingIntervalMs);
+    this.#startSelectedTargetHeartbeat();
     this.#emit();
+  }
+
+  #startSelectedTargetHeartbeat(): void {
+    if (
+      this.#selectedTargetPollTimer ||
+      this.#selectedTargetPollingIntervalMs <= 0
+    ) {
+      return;
+    }
+
+    this.#selectedTargetPollTimer = setInterval(() => {
+      this.#refreshSelectedTargetIfNeeded();
+    }, this.#selectedTargetPollingIntervalMs);
+  }
+
+  #targetsForWatchEvent(
+    event: WorkspaceWatchEvent
+  ): RepositoryTarget[] {
+    const workspace = this.#workspace;
+    if (!workspace) {
+      return [];
+    }
+
+    const targets = this.#repositoryTargets(
+      event.target.repositoryId
+    );
+    const repository = workspace.repositories.find(
+      (candidate) =>
+        candidate.id === event.target.repositoryId
+    );
+    const worktrees = targets
+      .map((target) => ({
+        target,
+        worktree: workspace.worktrees.find(
+          (candidate) =>
+            candidate.id === target.worktreeId
+        )
+      }))
+      .filter(
+        (
+          candidate
+        ): candidate is {
+          target: RepositoryTarget;
+          worktree: Workspace["worktrees"][number];
+        } => Boolean(candidate.worktree)
+      );
+
+    if (
+      isTransientGitLockPath(
+        event.path,
+        repository?.commonDir,
+        worktrees.map(({ worktree }) => worktree.gitDir)
+      )
+    ) {
+      return [];
+    }
+
+    const linkedGitTarget = worktrees
+      .filter(
+        ({ worktree }) =>
+          Boolean(worktree.gitDir) &&
+          !pathsEqual(
+            worktree.gitDir as string,
+            repository?.commonDir
+          ) &&
+          pathContains(worktree.gitDir as string, event.path)
+      )
+      .sort(
+        (left, right) =>
+          (right.worktree.gitDir?.length ?? 0) -
+          (left.worktree.gitDir?.length ?? 0)
+      )[0];
+    if (linkedGitTarget) {
+      return [linkedGitTarget.target];
+    }
+
+    if (
+      repository?.commonDir &&
+      pathContains(repository.commonDir, event.path)
+    ) {
+      return targets;
+    }
+
+    const worktreeTarget = worktrees
+      .filter(({ worktree }) =>
+        pathContains(worktree.path, event.path)
+      )
+      .sort(
+        (left, right) =>
+          right.worktree.path.length -
+          left.worktree.path.length
+      )[0];
+    return worktreeTarget
+      ? [worktreeTarget.target]
+      : [event.target];
   }
 
   #scheduleWatchedRefresh(target: RepositoryTarget): void {
@@ -1468,7 +1638,31 @@ export class WorkspaceRuntimeService {
     );
     const timer = setTimeout(() => {
       this.#debounceTimers.delete(key);
-      void this.#runStatusRefresh([target], "watcher");
+      const inFlight = this.#inFlight.get(key);
+      if (!inFlight) {
+        void this.#runStatusRefresh([target], "watcher");
+        return;
+      }
+      if (this.#queuedWatchedRefreshes.has(key)) {
+        return;
+      }
+      this.#queuedWatchedRefreshes.set(key, target);
+      void inFlight
+        .catch(() => undefined)
+        .then(() => {
+          const queued =
+            this.#queuedWatchedRefreshes.get(key);
+          if (!queued) {
+            return;
+          }
+          this.#queuedWatchedRefreshes.delete(key);
+          if (
+            !this.#disposed &&
+            this.#targetStillAvailable(queued)
+          ) {
+            this.#scheduleWatchedRefresh(queued);
+          }
+        });
     }, current
       ? this.#currentTargetDebounceMs
       : this.#backgroundTargetDebounceMs);
@@ -1491,30 +1685,50 @@ export class WorkspaceRuntimeService {
     const refreshedAt = snapshot
       ? Date.parse(snapshot.refreshedAt)
       : Number.NaN;
+    const selectedTargetStaleAfterMs =
+      this.#selectedTargetPollingIntervalMs > 0
+        ? Math.min(
+            this.#staleAfterMs,
+            this.#selectedTargetPollingIntervalMs
+          )
+        : this.#staleAfterMs;
     const stale =
       !snapshot ||
       snapshot.stale ||
       !Number.isFinite(refreshedAt) ||
-      Date.parse(this.#clock()) - refreshedAt >= this.#staleAfterMs;
+      Date.parse(this.#clock()) -
+        refreshedAt >=
+        selectedTargetStaleAfterMs;
 
     if (stale) {
-      void this.#runStatusRefresh([target], "focus");
+      void this.#runStatusRefresh([target], "heartbeat");
     }
   }
 
   async #stopMonitoring(): Promise<void> {
-    await this.#watchHandle?.close();
+    this.#monitorGeneration += 1;
+    await this.#closeMonitoringResources();
+  }
+
+  async #closeMonitoringResources(): Promise<void> {
+    const handle = this.#watchHandle;
     this.#watchHandle = undefined;
+    await handle?.close();
 
     if (this.#pollTimer) {
       clearInterval(this.#pollTimer);
       this.#pollTimer = undefined;
+    }
+    if (this.#selectedTargetPollTimer) {
+      clearInterval(this.#selectedTargetPollTimer);
+      this.#selectedTargetPollTimer = undefined;
     }
 
     for (const timer of this.#debounceTimers.values()) {
       clearTimeout(timer);
     }
     this.#debounceTimers.clear();
+    this.#queuedWatchedRefreshes.clear();
   }
 
   #targetStillAvailable(target: RepositoryTarget): boolean {
@@ -1576,6 +1790,22 @@ export class WorkspaceRuntimeService {
         (snapshot): snapshot is RepositoryStatusSnapshot =>
           Boolean(snapshot)
       );
+  }
+
+  #saveSnapshots(): Promise<void> {
+    if (!this.#workspace) {
+      return Promise.resolve();
+    }
+
+    const workspaceId = this.#workspace.id;
+    const snapshots = structuredClone(this.#orderedSnapshots());
+    const task = this.#snapshotPersistenceTail
+      .catch(() => undefined)
+      .then(() =>
+        this.#snapshotStore.save(workspaceId, snapshots)
+      );
+    this.#snapshotPersistenceTail = task.catch(() => undefined);
+    return task;
   }
 
   #createState(): WorkspaceRuntimeState {
@@ -1786,42 +2016,119 @@ function createWatchRegistrations(
     string,
     WorkspaceWatchRegistration
   >();
+  const targetsByRepository = new Map<
+    string,
+    RepositoryTarget[]
+  >();
 
   for (const target of listWorkspaceTargets(workspace)) {
-    const targetKey = repositoryTargetKey(target);
-    const worktree = workspace.worktrees.find(
-      (candidate) => candidate.id === target.worktreeId
-    );
+    const targets =
+      targetsByRepository.get(target.repositoryId) ?? [];
+    targets.push(target);
+    targetsByRepository.set(target.repositoryId, targets);
+  }
+
+  for (const [repositoryId, targets] of targetsByRepository) {
     const repository = workspace.repositories.find(
-      (candidate) => candidate.id === target.repositoryId
+      (candidate) => candidate.id === repositoryId
     );
+    const worktrees = targets
+      .map((target) => ({
+        target,
+        worktree: workspace.worktrees.find(
+          (candidate) =>
+            candidate.id === target.worktreeId
+        )
+      }))
+      .filter(
+        (
+          candidate
+        ): candidate is {
+          target: RepositoryTarget;
+          worktree: Workspace["worktrees"][number];
+        } => Boolean(candidate.worktree)
+      );
 
-    if (!worktree) {
-      continue;
+    for (const { target, worktree } of worktrees) {
+      addRegistration(worktree.path, target);
     }
 
-    addRegistration(worktree.path, true);
-    if (worktree.gitDir) {
-      addRegistration(worktree.gitDir, true);
-    }
-    if (repository?.commonDir) {
-      addRegistration(repository.commonDir, true);
+    const gitRoots = repository?.commonDir
+      ? [repository.commonDir]
+      : worktrees
+          .map(({ worktree }) => worktree.gitDir)
+          .filter(
+            (path): path is string => Boolean(path)
+          );
+    for (const gitRoot of gitRoots) {
+      const covered = [...registrations.values()].some(
+        (registration) =>
+          registration.target.repositoryId === repositoryId &&
+          registration.recursive &&
+          pathContains(registration.path, gitRoot)
+      );
+      if (!covered && targets[0]) {
+        addRegistration(gitRoot, targets[0]);
+      }
     }
 
     function addRegistration(
       path: string,
-      recursive: boolean
+      target: RepositoryTarget
     ): void {
-      const key = `${targetKey}\0${path.toLocaleLowerCase("en-US")}`;
+      const key = `${repositoryId}\0${normalizeWatchPath(path)}`;
       registrations.set(key, {
         path,
         target,
-        recursive
+        recursive: true
       });
     }
   }
 
   return [...registrations.values()];
+}
+
+function isTransientGitLockPath(
+  path: string,
+  commonDir: string | undefined,
+  gitDirs: Array<string | undefined>
+): boolean {
+  const normalizedPath = normalizeWatchPath(path);
+  if (!normalizedPath.endsWith(".lock")) {
+    return false;
+  }
+
+  return [commonDir, ...gitDirs].some(
+    (root): root is string =>
+      Boolean(root) && pathContains(root as string, path)
+  );
+}
+
+function pathsEqual(
+  left: string | undefined,
+  right: string | undefined
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    normalizeWatchPath(left) === normalizeWatchPath(right)
+  );
+}
+
+function pathContains(root: string, candidate: string): boolean {
+  const normalizedRoot = normalizeWatchPath(root);
+  const normalizedCandidate = normalizeWatchPath(candidate);
+  return (
+    normalizedCandidate === normalizedRoot ||
+    normalizedCandidate.startsWith(`${normalizedRoot}\\`)
+  );
+}
+
+function normalizeWatchPath(path: string): string {
+  return path
+    .replace(/[\\/]+/gu, "\\")
+    .replace(/\\+$/u, "")
+    .toLocaleLowerCase("en-US");
 }
 
 function statusOperationMessage(
@@ -1834,7 +2141,8 @@ function statusOperationMessage(
     "workspace-change": "Workspace 变更刷新",
     watcher: "文件变化刷新",
     polling: "低频轮询刷新",
-    focus: "窗口聚焦刷新"
+    focus: "窗口聚焦刷新",
+    heartbeat: "选中工作目录兜底刷新"
   };
   return `${labels[reason]}：${count} 个仓库。`;
 }

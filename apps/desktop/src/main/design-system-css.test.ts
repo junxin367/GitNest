@@ -35,7 +35,13 @@ describe("renderer design-system guardrails", () => {
       /\.operation-filter-tabs button\s*\{[\s\S]*?height:\s*var\(--control-compact\)/
     );
     expect(css).toMatch(
-      /\.diff-mode-actions button\s*\{[\s\S]*?height:\s*var\(--control-compact\)/
+      /\.diff-open-viewer-button\s*\{[\s\S]*?height:\s*var\(--control-compact\)/
+    );
+  });
+
+  it("keeps the portaled Open in menu on an opaque surface", () => {
+    expect(css).toMatch(
+      /\.open-in-menu\s*\{[\s\S]*?background:\s*var\(--surface\);/
     );
   });
 });

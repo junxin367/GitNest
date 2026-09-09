@@ -39,6 +39,8 @@ import type {
 } from "./repository.contracts";
 import type {
   AddWorkspaceEntryRequest,
+  RemoveWorkspaceEntryRequest,
+  RepositoryTargetDto,
   SelectRepositoryTargetRequest,
   SelectWorkspaceEntryRequest,
   SetWorkspaceGroupCollapsedRequest,
@@ -68,9 +70,64 @@ export interface ExternalTerminalProfileDto {
   label: string;
 }
 
+export type ExternalApplicationKindDto =
+  | "vscode"
+  | "cursor"
+  | "intellij-idea"
+  | "sublime-text"
+  | "file-explorer"
+  | "terminal"
+  | "git-bash";
+
+export interface ExternalApplicationProfileDto {
+  kind: ExternalApplicationKindDto;
+  label: string;
+  iconDataUrl?: string;
+}
+
+export type OpenExternalApplicationContextDto =
+  | {
+      scope: "workspace";
+    }
+  | {
+      scope: "repository";
+      target: RepositoryTargetDto;
+    }
+  | {
+      scope: "file";
+      target: RepositoryTargetDto;
+      path: string;
+    };
+
+export interface OpenExternalApplicationRequest {
+  context: OpenExternalApplicationContextDto;
+  kind: ExternalApplicationKindDto;
+}
+
+export interface ExternalApplicationOpenedDto {
+  kind: ExternalApplicationKindDto;
+  label: string;
+  scope: OpenExternalApplicationContextDto["scope"];
+}
+
 export interface OpenExternalTerminalRequest {
   target: RepositoryQueryRequest["target"];
   kind: ExternalTerminalKindDto;
+}
+
+export interface OpenDirectoryRequest {
+  target: RepositoryTargetDto;
+}
+
+export interface OpenFileLocationRequest {
+  target: RepositoryTargetDto;
+  path: string;
+}
+
+export interface OpenDiffViewerRequest {
+  target: RepositoryTargetDto;
+  path: string;
+  mode: RepositoryDiffRequest["mode"];
 }
 
 export interface ExternalTerminalOpenedDto {
@@ -124,12 +181,24 @@ export interface GitNestBridge {
   };
   system: {
     getRuntimeInfo(): Promise<RuntimeInfo>;
+    listExternalApplications(): Promise<
+      GitReadResult<ExternalApplicationProfileDto[]>
+    >;
+    openExternalApplication(
+      request: OpenExternalApplicationRequest
+    ): Promise<GitReadResult<ExternalApplicationOpenedDto>>;
     listExternalTerminals(): Promise<
       GitReadResult<ExternalTerminalProfileDto[]>
     >;
     openExternalTerminal(
       request: OpenExternalTerminalRequest
     ): Promise<GitReadResult<ExternalTerminalOpenedDto>>;
+    openDirectory(
+      request: OpenDirectoryRequest
+    ): Promise<GitReadResult<void>>;
+    openFileLocation(
+      request: OpenFileLocationRequest
+    ): Promise<GitReadResult<void>>;
   };
   git: {
     getEnvironment(): Promise<GitReadResult<GitEnvironmentDto>>;
@@ -149,6 +218,9 @@ export interface GitNestBridge {
     rescan(): Promise<WorkspaceResult<WorkspaceDetailsDto>>;
     updateEntry(
       request: UpdateWorkspaceEntryRequest
+    ): Promise<WorkspaceResult<WorkspaceDetailsDto>>;
+    removeEntry(
+      request: RemoveWorkspaceEntryRequest
     ): Promise<WorkspaceResult<WorkspaceDetailsDto>>;
     setGroupCollapsed(
       request: SetWorkspaceGroupCollapsedRequest
@@ -220,5 +292,6 @@ export interface GitNestBridge {
     minimize(): Promise<void>;
     toggleMaximize(): Promise<boolean>;
     close(): Promise<void>;
+    openDiffViewer(request: OpenDiffViewerRequest): Promise<void>;
   };
 }

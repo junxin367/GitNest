@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { lstat, open, stat } from "node:fs/promises";
 import { isAbsolute, normalize, resolve } from "node:path";
 
 import {
@@ -10,6 +10,7 @@ import {
   parseRepositoryDiff,
   parseStatusPorcelainV2,
   parseWorktrees,
+  reconcileStatOnlyUnstagedChanges,
   type GitClient,
   type GitEnvironment,
   type GitMutationClient,
@@ -25,7 +26,10 @@ import {
   type LockWorktreeOptions,
   type ReadCommitHistoryOptions,
   type ReadRepositoryDiffOptions,
+  type ReadRepositorySnapshotOptions,
   type Branch,
+  type ChangedPath,
+  type ChangedPathStats,
   type CreatedCommit,
   type GitAncestry,
   type RemoteBranchRef,
@@ -45,7 +49,9 @@ import {
   diffArguments,
   historyArguments,
   historyPageArguments,
+  STAGED_DIFF_STAT_ARGUMENTS,
   STATUS_ARGUMENTS,
+  UNSTAGED_DIFF_PATH_ARGUMENTS,
   WORKTREE_ARGUMENTS
 } from "../commands/read-repository";
 import {
@@ -211,7 +217,7 @@ export class GitCliClient
 
   async readRepositorySnapshot(
     path: string,
-    options: GitReadOptions = {}
+    options: ReadRepositorySnapshotOptions = {}
   ): Promise<RepositorySnapshot> {
     const worktreePath = await validateDirectoryPath(path);
     const executablePath = await this.#getExecutablePath(options.signal);
@@ -224,7 +230,16 @@ export class GitCliClient
         signal: options.signal,
         timeoutMs: options.timeoutMs
       });
-      return parseStatusPorcelainV2(result.stdout);
+      return await reconcileRepositorySnapshot(
+        parseStatusPorcelainV2(result.stdout),
+        {
+          executable: executablePath,
+          cwd: worktreePath,
+          signal: options.signal,
+          timeoutMs: options.timeoutMs
+        },
+        options.includeChangeStats ?? false
+      );
     } catch (error) {
       throw mapRepositoryError(error, worktreePath);
     }
@@ -1331,9 +1346,13 @@ export class GitCliClient
               })
         ]);
       const refreshedAt = new Date().toISOString();
-      const snapshot = parseStatusPorcelainV2(
-        statusResult.stdout,
-        refreshedAt
+      const snapshot = await reconcileRepositorySnapshot(
+        parseStatusPorcelainV2(
+          statusResult.stdout,
+          refreshedAt
+        ),
+        commandOptions,
+        false
       );
       const branches = parseBranches(branchResult.stdout).map(
         (branch) => ({
@@ -1440,6 +1459,228 @@ interface CommandOptions {
   cwd: string;
   signal?: AbortSignal | undefined;
   timeoutMs?: number | undefined;
+}
+
+async function reconcileRepositorySnapshot(
+  snapshot: RepositorySnapshot,
+  options: CommandOptions,
+  includeChangeStats: boolean
+): Promise<RepositorySnapshot> {
+  const hasOrdinaryWorktreeModification =
+    snapshot.changes.some(
+      (change) =>
+        change.kind === "ordinary" &&
+        change.worktreeStatus === "M"
+    );
+  if (!includeChangeStats && !hasOrdinaryWorktreeModification) {
+    return snapshot;
+  }
+
+  const [stagedResult, unstagedResult, untrackedStats] =
+    await Promise.all([
+      includeChangeStats && snapshot.staged > 0
+        ? runProcess({
+            ...options,
+            args: STAGED_DIFF_STAT_ARGUMENTS
+          })
+        : undefined,
+      (includeChangeStats || hasOrdinaryWorktreeModification) &&
+      snapshot.unstaged > 0
+        ? runProcess({
+            ...options,
+            args: UNSTAGED_DIFF_PATH_ARGUMENTS
+          })
+        : undefined,
+      includeChangeStats
+        ? readUntrackedChangeStats(
+            options.cwd,
+            snapshot.changes,
+            options.signal
+          )
+        : new Map<string, ChangedPathStats>()
+    ]);
+  const stagedStats = parseSimpleDiffStats(
+    stagedResult?.stdout ?? ""
+  );
+  const unstagedStats = parseSimpleDiffStats(
+    unstagedResult?.stdout ?? ""
+  );
+  const reconciledSnapshot =
+    hasOrdinaryWorktreeModification
+      ? reconcileStatOnlyUnstagedChanges(
+          snapshot,
+          [...unstagedStats.keys()]
+        )
+      : snapshot;
+
+  if (!includeChangeStats) {
+    return reconciledSnapshot;
+  }
+
+  return {
+    ...reconciledSnapshot,
+    changes: reconciledSnapshot.changes.map((change) =>
+      attachChangeStats(
+        change,
+        stagedStats,
+        unstagedStats,
+        untrackedStats
+      )
+    )
+  };
+}
+
+function parseSimpleDiffStats(
+  output: string
+): Map<string, ChangedPathStats> {
+  return new Map(
+    parseCommitNumstat(output).files.map((file) => [
+      file.path,
+      {
+        additions: file.additions ?? 0,
+        deletions: file.deletions ?? 0
+      }
+    ])
+  );
+}
+
+function attachChangeStats(
+  change: ChangedPath,
+  stagedStats: ReadonlyMap<string, ChangedPathStats>,
+  unstagedStats: ReadonlyMap<string, ChangedPathStats>,
+  untrackedStats: ReadonlyMap<string, ChangedPathStats>
+): ChangedPath {
+  const emptyStats: ChangedPathStats = {
+    additions: 0,
+    deletions: 0
+  };
+
+  if (change.kind === "untracked") {
+    return {
+      ...change,
+      untrackedStats:
+        untrackedStats.get(change.path) ?? emptyStats
+    };
+  }
+
+  return {
+    ...change,
+    ...(change.indexStatus === "."
+      ? {}
+      : {
+          stagedStats:
+            stagedStats.get(change.path) ?? emptyStats
+        }),
+    ...(change.worktreeStatus === "."
+      ? {}
+      : {
+          unstagedStats:
+            unstagedStats.get(change.path) ?? emptyStats
+        })
+  };
+}
+
+async function readUntrackedChangeStats(
+  worktreePath: string,
+  changes: readonly ChangedPath[],
+  signal?: AbortSignal
+): Promise<Map<string, ChangedPathStats>> {
+  const stats = new Map<string, ChangedPathStats>();
+
+  for (const change of changes) {
+    if (change.kind !== "untracked") {
+      continue;
+    }
+
+    assertReadNotCancelled(signal);
+    stats.set(
+      change.path,
+      await readUntrackedFileStats(
+        resolve(
+          worktreePath,
+          validateRelativePathspec(change.path)
+        ),
+        signal
+      )
+    );
+  }
+
+  return stats;
+}
+
+async function readUntrackedFileStats(
+  path: string,
+  signal?: AbortSignal
+): Promise<ChangedPathStats> {
+  const info = await lstat(path);
+
+  if (info.isSymbolicLink()) {
+    return { additions: 1, deletions: 0 };
+  }
+  if (!info.isFile() || info.size === 0) {
+    return { additions: 0, deletions: 0 };
+  }
+
+  const handle = await open(path, "r");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let additions = 0;
+  let bytesReadTotal = 0;
+  let lastByte = -1;
+  let binary = false;
+
+  try {
+    while (true) {
+      assertReadNotCancelled(signal);
+      const { bytesRead } = await handle.read(
+        buffer,
+        0,
+        buffer.length,
+        null
+      );
+
+      if (bytesRead === 0) {
+        break;
+      }
+
+      const chunk = buffer.subarray(0, bytesRead);
+      const binaryProbeLength = Math.max(
+        0,
+        Math.min(bytesRead, 8_000 - bytesReadTotal)
+      );
+      if (
+        binaryProbeLength > 0 &&
+        chunk.subarray(0, binaryProbeLength).includes(0)
+      ) {
+        binary = true;
+        break;
+      }
+
+      for (const byte of chunk) {
+        additions += Number(byte === 0x0a);
+      }
+      bytesReadTotal += bytesRead;
+      lastByte = chunk[bytesRead - 1] ?? lastByte;
+    }
+  } finally {
+    await handle.close();
+  }
+
+  return {
+    additions:
+      binary || bytesReadTotal === 0
+        ? 0
+        : additions + Number(lastByte !== 0x0a),
+    deletions: 0
+  };
+}
+
+function assertReadNotCancelled(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new GitError(
+      "COMMAND_CANCELLED",
+      "The Git command was cancelled."
+    );
+  }
 }
 
 async function repositoryHasHead(

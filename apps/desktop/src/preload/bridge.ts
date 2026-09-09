@@ -34,8 +34,24 @@ export function createGitNestBridge(
     system: {
       getRuntimeInfo: () =>
         invoke(IPC_CHANNELS.systemGetRuntimeInfo),
+      listExternalApplications: () =>
+        invoke(
+          IPC_CHANNELS.systemListExternalApplications
+        ),
+      openExternalApplication: (request) =>
+        invoke(
+          IPC_CHANNELS.systemOpenExternalApplication,
+          request
+        ),
       listExternalTerminals: () =>
         invoke(IPC_CHANNELS.systemListExternalTerminals),
+      openDirectory: (request) =>
+        invoke(IPC_CHANNELS.systemOpenDirectory, request),
+      openFileLocation: (request) =>
+        invoke(
+          IPC_CHANNELS.systemOpenFileLocation,
+          request
+        ),
       openExternalTerminal: (request) =>
         invoke(
           IPC_CHANNELS.systemOpenExternalTerminal,
@@ -110,6 +126,8 @@ export function createGitNestBridge(
         invoke(IPC_CHANNELS.workspaceRescan),
       updateEntry: (request) =>
         invoke(IPC_CHANNELS.workspaceUpdateEntry, request),
+      removeEntry: (request) =>
+        invoke(IPC_CHANNELS.workspaceRemoveEntry, request),
       setGroupCollapsed: (request) =>
         invoke(
           IPC_CHANNELS.workspaceSetGroupCollapsed,
@@ -130,7 +148,9 @@ export function createGitNestBridge(
       toggleMaximize: () =>
         invoke(IPC_CHANNELS.windowToggleMaximize),
       close: () =>
-        invoke(IPC_CHANNELS.windowClose)
+        invoke(IPC_CHANNELS.windowClose),
+      openDiffViewer: (request) =>
+        invoke(IPC_CHANNELS.windowOpenDiffViewer, request)
     }
   };
 }

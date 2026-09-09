@@ -5,7 +5,11 @@ import {
   validateAccountRemovalImpactRequest,
   validateBindAccountRequest,
   validateCancelRepositoryOperationRequest,
+  validateOpenDirectoryRequest,
+  validateOpenDiffViewerRequest,
+  validateOpenExternalApplicationRequest,
   validateOpenExternalTerminalRequest,
+  validateOpenFileLocationRequest,
   validateRemoveAccountRequest,
   validateRepositoryCommandExecuteRequest,
   validateRepositoryCommandPreflightRequest,
@@ -183,6 +187,59 @@ describe("repository command IPC validation", () => {
     );
   });
 
+  it("accepts only fixed external applications and scoped targets", () => {
+    expect(
+      validateOpenExternalApplicationRequest({
+        context: {
+          scope: "workspace"
+        },
+        kind: "vscode"
+      })
+    ).toEqual({
+      context: {
+        scope: "workspace"
+      },
+      kind: "vscode"
+    });
+    expect(
+      validateOpenExternalApplicationRequest({
+        context: {
+          scope: "repository",
+          target
+        },
+        kind: "file-explorer"
+      })
+    ).toEqual({
+      context: {
+        scope: "repository",
+        target
+      },
+      kind: "file-explorer"
+    });
+    expect(() =>
+      validateOpenExternalApplicationRequest({
+        context: {
+          scope: "repository",
+          target
+        },
+        kind: "custom",
+        executable: "powershell.exe"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+    expect(() =>
+      validateOpenExternalApplicationRequest({
+        context: {
+          scope: "repository"
+        },
+        kind: "cursor"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+
   it("validates account requests without widening secret-bearing IPC", () => {
     expect(
       validateSaveAccountRequest({
@@ -273,6 +330,112 @@ describe("repository command IPC validation", () => {
       validateTestAccountRequest({
         accountId: "account_1",
         repositoryUrl: "https://git.example.test/repo\nnext"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+});
+
+describe("directory IPC validation", () => {
+  it("accepts an exact repository target", () => {
+    expect(
+      validateOpenDirectoryRequest({
+        target: {
+          repositoryId: "repository",
+          worktreeId: "worktree"
+        }
+      })
+    ).toEqual({
+      target: {
+        repositoryId: "repository",
+        worktreeId: "worktree"
+      }
+    });
+  });
+
+  it("rejects a missing or malformed target", () => {
+    expect(() =>
+      validateOpenDirectoryRequest({
+        target: {
+          repositoryId: "repository"
+        }
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+
+  it("accepts only relative file paths inside the Worktree", () => {
+    const target = {
+      repositoryId: "repository",
+      worktreeId: "worktree"
+    };
+
+    expect(
+      validateOpenFileLocationRequest({
+        target,
+        path: "src/components/App.tsx"
+      })
+    ).toEqual({
+      target,
+      path: "src/components/App.tsx"
+    });
+
+    for (const path of [
+      "../secrets.txt",
+      "src/../secrets.txt",
+      "src/./App.tsx",
+      "C:\\secrets.txt",
+      "/tmp/secrets.txt"
+    ]) {
+      expect(() =>
+        validateOpenFileLocationRequest({
+          target,
+          path
+        })
+      ).toThrowError(
+        expect.objectContaining({ code: "INVALID_REQUEST" })
+      );
+    }
+  });
+});
+
+describe("Diff viewer IPC validation", () => {
+  const target = {
+    repositoryId: "repository",
+    worktreeId: "worktree"
+  };
+
+  it("accepts a supported mode and exact relative path", () => {
+    expect(
+      validateOpenDiffViewerRequest({
+        target,
+        path: "src/components/App.tsx",
+        mode: "staged"
+      })
+    ).toEqual({
+      target,
+      path: "src/components/App.tsx",
+      mode: "staged"
+    });
+  });
+
+  it("rejects paths outside the Worktree and unknown modes", () => {
+    expect(() =>
+      validateOpenDiffViewerRequest({
+        target,
+        path: "../outside.ts",
+        mode: "unstaged"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+    expect(() =>
+      validateOpenDiffViewerRequest({
+        target,
+        path: "src/App.tsx",
+        mode: "working-copy"
       })
     ).toThrowError(
       expect.objectContaining({ code: "INVALID_REQUEST" })

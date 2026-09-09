@@ -4,7 +4,9 @@ import {
   commitMetadataArguments,
   commitNumstatArguments,
   diffArguments,
-  historyPageArguments
+  historyPageArguments,
+  STAGED_DIFF_STAT_ARGUMENTS,
+  UNSTAGED_DIFF_PATH_ARGUMENTS
 } from "./read-repository";
 
 describe("repository read commands", () => {
@@ -31,9 +33,43 @@ describe("repository read commands", () => {
     expect(historyPageArguments(51, 50)).toEqual(
       expect.arrayContaining(["--max-count=51", "--skip=50"])
     );
+    expect(historyPageArguments(51, 50)).toContain(
+      "--decorate=short"
+    );
+    expect(historyPageArguments(51, 50)).toContain(
+      "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P%x1f%D%x1e"
+    );
     expect(commitMetadataArguments("abcdef")).toContain("abcdef");
     expect(commitNumstatArguments("abcdef")).toEqual(
       expect.arrayContaining(["--numstat", "-z", "abcdef"])
     );
+  });
+
+  it("reads all meaningful unstaged paths in one non-mutating command", () => {
+    expect(UNSTAGED_DIFF_PATH_ARGUMENTS).toEqual([
+      "-c",
+      "diff.autoRefreshIndex=false",
+      "--literal-pathspecs",
+      "diff",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--numstat",
+      "--find-renames",
+      "-z",
+      "--"
+    ]);
+    expect(STAGED_DIFF_STAT_ARGUMENTS).toEqual([
+      "-c",
+      "diff.autoRefreshIndex=false",
+      "--literal-pathspecs",
+      "diff",
+      "--cached",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--numstat",
+      "--find-renames",
+      "-z",
+      "--"
+    ]);
   });
 });

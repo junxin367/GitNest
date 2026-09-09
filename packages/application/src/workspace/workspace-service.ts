@@ -7,6 +7,7 @@ import {
   createPathIdentity,
   findTargetEntry,
   getEntryDefaultTarget,
+  listEntryTargets,
   listWorkspaceTargets,
   repositoryTargetKey,
   repositoryTargetsEqual,
@@ -35,6 +36,11 @@ export interface UpdateWorkspaceEntryInput {
   entryId: string;
   displayName?: string;
   order?: number;
+}
+
+export interface RemoveWorkspaceEntryInput {
+  entryId: string;
+  target?: RepositoryTarget;
 }
 
 export interface SetWorkspaceGroupCollapsedInput {
@@ -268,6 +274,164 @@ export class WorkspaceService {
       await this.#save(workspace);
       return workspace;
     });
+  }
+
+  removeEntry(
+    input: RemoveWorkspaceEntryInput
+  ): Promise<Workspace> {
+    return this.#runExclusive(async () => {
+      const current = await this.#loadWorkspace();
+      if (input.target) {
+        return this.#removeRepositoryFromEntry(
+          current,
+          input.entryId,
+          input.target
+        );
+      }
+      return this.#removeEntry(current, input.entryId);
+    });
+  }
+
+  async #removeRepositoryFromEntry(
+    current: Workspace,
+    entryId: string,
+    target: RepositoryTarget
+  ): Promise<Workspace> {
+    const entry = current.entries.find(
+      (candidate) => candidate.id === entryId
+    );
+    if (!entry) {
+      throw new WorkspaceError(
+        "ENTRY_NOT_FOUND",
+        "The Workspace entry no longer exists."
+      );
+    }
+
+    const targetKey = repositoryTargetKey(target);
+    if (
+      !listEntryTargets(entry).some(
+        (candidate) => repositoryTargetKey(candidate) === targetKey
+      )
+    ) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The repository is not part of the selected Workspace entry."
+      );
+    }
+
+    if (entry.kind === "standalone-repository") {
+      return this.#removeEntry(current, entryId);
+    }
+
+    const worktree = current.worktrees.find(
+      (candidate) =>
+        candidate.id === target.worktreeId &&
+        candidate.repositoryId === target.repositoryId
+    );
+    if (!worktree) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The repository worktree is no longer available."
+      );
+    }
+
+    if (
+      !this.#fileSystem.isWithin(entry.path, worktree.path)
+    ) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The repository is outside the selected Workspace entry."
+      );
+    }
+
+    const relativeSegments = this.#fileSystem.relativeSegments(
+      entry.path,
+      worktree.path
+    );
+    const excludedName = relativeSegments.at(-1);
+
+    if (!excludedName) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The Workspace root repository cannot be removed independently."
+      );
+    }
+
+    const roots = current.entries.map((candidate) => {
+      const root = toRootDefinition(candidate);
+      if (root.id !== entryId) {
+        return root;
+      }
+
+      const alreadyExcluded = root.excludes.some(
+        (value) =>
+          value.toLocaleLowerCase() ===
+          excludedName.toLocaleLowerCase()
+      );
+      return alreadyExcluded
+        ? root
+        : {
+            ...root,
+            excludes: [...root.excludes, excludedName]
+          };
+    });
+    const now = this.#clock();
+    const scans = await this.#scanRoots(roots, now);
+    const workspace = this.#assembler.assemble({
+      current,
+      roots,
+      scans,
+      updatedAt: now
+    });
+
+    await this.#save(workspace);
+    return workspace;
+  }
+
+  async #removeEntry(
+    current: Workspace,
+    entryId: string
+  ): Promise<Workspace> {
+    const remainingEntries = current.entries.filter(
+      (entry) => entry.id !== entryId
+    );
+    if (remainingEntries.length === current.entries.length) {
+      throw new WorkspaceError(
+        "ENTRY_NOT_FOUND",
+        "The Workspace entry no longer exists."
+      );
+    }
+
+    const roots = remainingEntries.map(toRootDefinition);
+    const now = this.#clock();
+
+    if (remainingEntries.length === 0) {
+      const {
+        selectedEntryId: _selectedEntryId,
+        selectedTarget: _selectedTarget,
+        ...workspaceBase
+      } = current;
+      const workspace: Workspace = {
+        ...workspaceBase,
+        entries: [],
+        repositories: [],
+        worktrees: [],
+        updatedAt: now
+      };
+      await this.#save(workspace);
+      return workspace;
+    }
+
+    const scans = await this.#scanRoots(roots, now);
+    const workspace = this.#assembler.assemble({
+      current,
+      roots,
+      scans,
+      updatedAt: now
+    });
+
+    await this.#save(workspace);
+    return workspace;
   }
 
   setGroupCollapsed(

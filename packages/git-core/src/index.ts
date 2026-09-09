@@ -18,6 +18,7 @@ export type {
 export type {
   Branch,
   ChangedPath,
+  ChangedPathStats,
   CommitSummary,
   RepositoryIdentity,
   RepositoryInspection,
@@ -35,7 +36,10 @@ export {
 } from "./parsers/commit-details";
 export { parseRepositoryDiff } from "./parsers/diff";
 export { parseCommitHistory } from "./parsers/history";
-export { parseStatusPorcelainV2 } from "./parsers/status-porcelain-v2";
+export {
+  parseStatusPorcelainV2,
+  reconcileStatOnlyUnstagedChanges
+} from "./parsers/status-porcelain-v2";
 export {
   parseGitLfsVersion,
   parseGitVersion
@@ -51,6 +55,7 @@ export type {
   GitReadOptions,
   InspectRepositoryOptions,
   ReadCommitHistoryOptions,
+  ReadRepositorySnapshotOptions,
   ReadRepositoryDiffOptions
 } from "./ports/git-client";
 export type {

@@ -1,7 +1,13 @@
 export const IPC_CHANNELS = {
   systemGetRuntimeInfo: "system:get-runtime-info",
+  systemListExternalApplications:
+    "system:list-external-applications",
+  systemOpenExternalApplication:
+    "system:open-external-application",
   systemListExternalTerminals: "system:list-external-terminals",
   systemOpenExternalTerminal: "system:open-external-terminal",
+  systemOpenDirectory: "system:open-directory",
+  systemOpenFileLocation: "system:open-file-location",
   accountList: "account:list",
   accountSave: "account:save",
   accountBind: "account:bind",
@@ -12,6 +18,7 @@ export const IPC_CHANNELS = {
   windowMinimize: "window:minimize",
   windowToggleMaximize: "window:toggle-maximize",
   windowClose: "window:close",
+  windowOpenDiffViewer: "window:open-diff-viewer",
   gitGetEnvironment: "git:get-environment",
   gitInspectRepository: "git:inspect-repository",
   workspaceGetCurrent: "workspace:get-current",
@@ -20,6 +27,7 @@ export const IPC_CHANNELS = {
   workspaceAddEntry: "workspace:add-entry",
   workspaceRescan: "workspace:rescan",
   workspaceUpdateEntry: "workspace:update-entry",
+  workspaceRemoveEntry: "workspace:remove-entry",
   workspaceSetGroupCollapsed: "workspace:set-group-collapsed",
   workspaceSelectEntry: "workspace:select-entry",
   workspaceSelectTarget: "workspace:select-target",

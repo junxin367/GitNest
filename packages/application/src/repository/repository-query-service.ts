@@ -64,6 +64,7 @@ export class RepositoryQueryService {
         target,
         snapshot:
           await this.#gitClient.readRepositorySnapshot(path, {
+            includeChangeStats: true,
             signal
           })
       };

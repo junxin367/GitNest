@@ -72,6 +72,8 @@
   --shadow-drawer: -18px 0 48px rgb(0 0 0 / 28%);
 
   --z-content: 0;
+  --z-raised: 1;
+  --z-selected: 2;
   --z-navigation: 100;
   --z-popover: 200;
   --z-tooltip: 300;

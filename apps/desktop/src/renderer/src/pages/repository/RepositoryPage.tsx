@@ -1,13 +1,16 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type FormEvent
+  type FormEvent,
+  type MouseEvent
 } from "react";
 
 import type {
-  ChangedPathDto,
+  GitReadErrorDto,
+  RepositoryCommitDto,
   RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
   WorkspaceDetailsDto,
@@ -16,6 +19,7 @@ import type {
 
 import type { RepositoryTab } from "../../app/navigation";
 import { useRepositoryDetails } from "../../entities/repository/useRepositoryDetails";
+import type { ExternalApplicationController } from "../../features/external-application/useExternalApplications";
 import type { RepositoryCommandController } from "../../features/repository-command/useRepositoryCommands";
 import type { ExternalTerminalController } from "../../features/external-terminal/useExternalTerminals";
 import { WorktreeCommandDialog } from "../../features/worktree-command/WorktreeCommandDialog";
@@ -31,7 +35,35 @@ import {
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
 import { Icon } from "../../shared/ui/Icon";
+import { LayerPortal } from "../../shared/ui/LayerPortal";
+import {
+  buildDiffViewerFiles,
+  type DiffViewerFile
+} from "../../shared/model/diffViewModel";
+import { copyTextToClipboard } from "../../shared/lib/copyTextToClipboard";
+import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
+import {
+  Menu,
+  MenuHeading,
+  MenuItem,
+  MenuPopover
+} from "../../shared/ui/Menu";
+import { Toast, ToastViewport } from "../../shared/ui/Toast";
+import {
+  getRendererPreferenceStorage,
+  readTreeDirectoriesCollapsedPreference,
+  writeTreeDirectoriesCollapsedPreference
+} from "./changeTreePreferences";
 import { RepositoryWorktrees } from "./RepositoryWorktrees";
+import { ApplicationIcon } from "../../widgets/repository-header/OpenInControl";
+import {
+  type DiffPanelState
+} from "../../widgets/diff-workspace/DiffPanel";
+import {
+  DiffWorkspace,
+  parseCommitMessage
+} from "../../widgets/diff-workspace/DiffWorkspace";
+import { repositoryDiffWorkspaceConfiguration } from "../../widgets/diff-workspace/diffWorkspaceConfiguration";
 
 interface RepositoryPageProps {
   workspace: WorkspaceDetailsDto | null;
@@ -41,7 +73,22 @@ interface RepositoryPageProps {
   tab: RepositoryTab;
   commands: RepositoryCommandController;
   terminals: ExternalTerminalController;
+  externalApplications: ExternalApplicationController;
   onOpenTab(tab: RepositoryTab): void;
+  onCommitSelectionChange?(
+    commit: RepositoryCommitDto["commit"] | null
+  ): void;
+}
+
+interface ChangeFileContextMenuState {
+  path: string;
+  x: number;
+  y: number;
+}
+
+interface BranchMenuState {
+  anchor: HTMLButtonElement;
+  branchName: string;
 }
 
 export function RepositoryPage({
@@ -52,9 +99,41 @@ export function RepositoryPage({
   tab,
   commands,
   terminals,
-  onOpenTab
+  externalApplications,
+  onOpenTab,
+  onCommitSelectionChange
 }: RepositoryPageProps) {
-  const details = useRepositoryDetails(target, tab);
+  const snapshot = findTargetSnapshot(snapshots, target);
+  const statusRevision = snapshot
+    ? [
+        snapshot.refreshedAt,
+        snapshot.head,
+        snapshot.branch ?? "",
+        snapshot.staged,
+        snapshot.unstaged,
+        snapshot.untracked,
+        snapshot.conflicted,
+        snapshot.error?.code ?? "",
+        snapshot.error?.message ?? ""
+      ].join("|")
+    : "";
+  const details = useRepositoryDetails(
+    target,
+    tab,
+    statusRevision
+  );
+
+  useEffect(() => {
+    onCommitSelectionChange?.(
+      tab === "history"
+        ? details.commit?.commit ?? null
+        : null
+    );
+  }, [
+    details.commit,
+    onCommitSelectionChange,
+    tab
+  ]);
   const worktreeCommands = useWorktreeCommands(
     target?.repositoryId,
     operations
@@ -70,8 +149,19 @@ export function RepositoryPage({
     target,
     mutationHooks
   );
-  const [commitSubject, setCommitSubject] = useState("");
-  const [commitBody, setCommitBody] = useState("");
+  const [commitMessage, setCommitMessage] = useState("");
+  const [pushAfterCommit, setPushAfterCommit] =
+    useState(false);
+  const [directoryOpening, setDirectoryOpening] =
+    useState(false);
+  const [directoryError, setDirectoryError] = useState<
+    string | null
+  >(null);
+  const [copyFeedback, setCopyFeedback] = useState<{
+    title: string;
+    message: string;
+    tone: "success" | "error";
+  } | null>(null);
   const targetKey = target
     ? `${target.repositoryId}:${target.worktreeId}`
     : "";
@@ -80,14 +170,86 @@ export function RepositoryPage({
   );
 
   useEffect(() => {
-    setCommitSubject("");
-    setCommitBody("");
+    setCommitMessage("");
+    setPushAfterCommit(false);
     mutations.clearFeedback();
     commands.clearFeedback();
     terminals.clearFeedback();
+    setDirectoryError(null);
+    setCopyFeedback(null);
     handledCommandCompletion.current =
       commands.completionVersion;
   }, [mutations.clearFeedback, targetKey]);
+
+  const copyCommitId = useCallback(async (hash: string) => {
+    try {
+      await copyTextToClipboard(hash);
+      setCopyFeedback({
+        title: "Commit ID 已复制",
+        message: hash,
+        tone: "success"
+      });
+    } catch {
+      setCopyFeedback({
+        title: "Commit ID 复制失败",
+        message: "当前环境未允许访问剪贴板，请手动复制。",
+        tone: "error"
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!directoryError) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(
+      () => setDirectoryError(null),
+      4_800
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [directoryError]);
+
+  const openDirectory = useCallback(
+    async (
+      directoryTarget: RepositoryTargetDto | undefined = target
+    ) => {
+      if (!directoryTarget) {
+        return;
+      }
+
+      setDirectoryOpening(true);
+      setDirectoryError(null);
+
+      const openDirectoryCapability =
+        window.gitnest?.system?.openDirectory;
+      if (typeof openDirectoryCapability !== "function") {
+        setDirectoryError(
+          "当前应用未加载目录打开能力，请重启 GitNest 后重试。"
+        );
+        setDirectoryOpening(false);
+        return;
+      }
+
+      try {
+        const result = await openDirectoryCapability({
+          target: directoryTarget
+        });
+        if (!result.ok) {
+          setDirectoryError(
+            formatDirectoryOpenError(result.error)
+          );
+        }
+      } catch (reason) {
+        setDirectoryError(
+          formatDirectoryOpenFailure(reason)
+        );
+      } finally {
+        setDirectoryOpening(false);
+      }
+    },
+    [target]
+  );
 
   useEffect(() => {
     if (
@@ -124,7 +286,6 @@ export function RepositoryPage({
   }
 
   const resolved = resolveWorkspaceTarget(workspace, target);
-  const snapshot = findTargetSnapshot(snapshots, target);
   const repositoryName =
     resolved.worktree?.name ??
     resolved.repository?.name ??
@@ -136,146 +297,169 @@ export function RepositoryPage({
       (tab === "branches" && !details.branches));
 
   return (
-    <div className="page-scroll repository-page">
-      <section className="page-heading repository-page-heading">
-        <div>
-          <span className="eyebrow">当前工作目录</span>
-          <h1>{repositoryName}</h1>
-          <p title={resolved.worktree?.path}>
-            {resolved.worktree?.path ?? "工作目录不可用"}
-          </p>
-        </div>
-        <div className="page-actions">
-          <span
-            className={`status-pill ${snapshotTone(snapshot)}`}
-          >
-            {snapshotStatus(snapshot)}
-          </span>
-          {(tab === "changes" ||
-            tab === "history" ||
-            tab === "branches") && (
-            <button
-              aria-busy={details.loading[tab]}
-              className="button"
-              onClick={() => void details.reload(tab)}
-              type="button"
+    <div
+      className={`page-scroll repository-page repository-page-${tab}`}
+    >
+      {tab !== "changes" && tab !== "overview" && (
+        <section className="page-heading repository-page-heading">
+          <div>
+            <span className="eyebrow">当前工作目录</span>
+            <h1>{repositoryName}</h1>
+            <p title={resolved.worktree?.path}>
+              {resolved.worktree?.path ?? "工作目录不可用"}
+            </p>
+          </div>
+          <div className="page-actions">
+            <span
+              className={`status-pill ${snapshotTone(snapshot)}`}
             >
-              <Icon name="refresh" />
-              重新读取
-            </button>
-          )}
-        </div>
-      </section>
-
-      {details.error && !detailErrorBlocksCurrentTab && (
-        <div className="workspace-feedback error" role="alert">
-          <Icon name="warning" />
-          <div>
-            <strong>仓库数据读取失败</strong>
-            <span>{details.error.message}</span>
+              {snapshotStatus(snapshot)}
+            </span>
+            {(tab === "history" || tab === "branches") && (
+              <button
+                aria-busy={details.loading[tab]}
+                className="button"
+                onClick={() => void details.reload(tab)}
+                type="button"
+              >
+                <Icon name="refresh" />
+                重新读取
+              </button>
+            )}
           </div>
-        </div>
+        </section>
       )}
 
-      {(mutations.error || mutations.notice) && (
-        <div
-          className={`workspace-feedback ${
-            mutations.error ? "error" : "success"
-          }`}
-          role={mutations.error ? "alert" : "status"}
-        >
-          <Icon
-            name={mutations.error ? "warning" : "check"}
+      <ToastViewport>
+        {details.error && !detailErrorBlocksCurrentTab && (
+          <Toast
+            closeLabel="关闭仓库数据提示"
+            icon="warning"
+            key="repository-details-error"
+            message={details.error.message}
+            onClose={details.clearError}
+            title="仓库数据读取失败"
+            tone="error"
           />
-          <div>
-            <strong>
-              {mutations.error
+        )}
+        {(mutations.error || mutations.notice) && (
+          <Toast
+            closeLabel="关闭写操作提示"
+            icon={mutations.error ? "warning" : "check"}
+            key="repository-mutation-feedback"
+            message={
+              mutations.error?.message ??
+              mutations.notice ??
+              ""
+            }
+            onClose={mutations.clearFeedback}
+            title={
+              mutations.error
                 ? "仓库写操作未完成"
-                : "仓库写操作完成"}
-            </strong>
-            <span>
-              {mutations.error?.message ?? mutations.notice}
-            </span>
-          </div>
-          <button
-            aria-label="关闭写操作提示"
-            className="icon-button"
-            onClick={mutations.clearFeedback}
-            title="关闭写操作提示"
-            type="button"
-          >
-            <Icon name="close" />
-          </button>
-        </div>
-      )}
-
-      {(commands.error || commands.notice) && (
-        <div
-          className={`workspace-feedback ${
-            commands.error ? "error" : "success"
-          }`}
-          role={commands.error ? "alert" : "status"}
-        >
-          <Icon
-            name={commands.error ? "warning" : "check"}
+                : "仓库写操作完成"
+            }
+            tone={mutations.error ? "error" : "success"}
           />
-          <div>
-            <strong>
-              {commands.error
+        )}
+        {(commands.error || commands.notice) && (
+          <Toast
+            closeLabel="关闭仓库命令提示"
+            icon={commands.error ? "warning" : "check"}
+            key="repository-command-feedback"
+            message={
+              commands.error?.message ??
+              commands.notice ??
+              ""
+            }
+            onClose={commands.clearFeedback}
+            title={
+              commands.error
                 ? "仓库命令未完成"
-                : "仓库命令已接受"}
-            </strong>
-            <span>
-              {commands.error?.message ?? commands.notice}
-            </span>
-          </div>
-          <button
-            aria-label="关闭仓库命令提示"
-            className="icon-button"
-            onClick={commands.clearFeedback}
-            title="关闭仓库命令提示"
-            type="button"
-          >
-            <Icon name="close" />
-          </button>
-        </div>
-      )}
-
-      {(terminals.error || terminals.notice) && (
-        <div
-          className={`workspace-feedback ${
-            terminals.error ? "error" : "success"
-          }`}
-          role={terminals.error ? "alert" : "status"}
-        >
-          <Icon
-            name={terminals.error ? "warning" : "terminal"}
+                : "仓库命令已接受"
+            }
+            tone={commands.error ? "error" : "success"}
           />
-          <div>
-            <strong>
-              {terminals.error
+        )}
+        {(terminals.error || terminals.notice) && (
+          <Toast
+            closeLabel="关闭终端提示"
+            icon={terminals.error ? "warning" : "terminal"}
+            key="external-terminal-feedback"
+            message={
+              terminals.error?.message ??
+              terminals.notice ??
+              ""
+            }
+            onClose={terminals.clearFeedback}
+            title={
+              terminals.error
                 ? "外部终端未打开"
-                : "外部终端已打开"}
-            </strong>
-            <span>
-              {terminals.error?.message ?? terminals.notice}
-            </span>
-          </div>
-          <button
-            aria-label="关闭终端提示"
-            className="icon-button"
-            onClick={terminals.clearFeedback}
-            title="关闭终端提示"
-            type="button"
-          >
-            <Icon name="close" />
-          </button>
-        </div>
-      )}
+                : "外部终端已打开"
+            }
+            tone={terminals.error ? "error" : "success"}
+          />
+        )}
+        {(worktreeCommands.error ||
+          worktreeCommands.notice) && (
+          <Toast
+            closeLabel="关闭 Worktree 操作提示"
+            icon={
+              worktreeCommands.error
+                ? "warning"
+                : "check"
+            }
+            key="worktree-command-feedback"
+            message={
+              worktreeCommands.error?.message ??
+              worktreeCommands.notice ??
+              ""
+            }
+            onClose={worktreeCommands.clearFeedback}
+            title={
+              worktreeCommands.error
+                ? "Worktree 操作未完成"
+                : "Worktree 操作状态"
+            }
+            tone={
+              worktreeCommands.error
+                ? "error"
+                : "success"
+            }
+          />
+        )}
+        {directoryError && (
+          <Toast
+            closeLabel="关闭目录提示"
+            icon="warning"
+            key="directory-error"
+            message={directoryError}
+            onClose={() => setDirectoryError(null)}
+            title="目录未打开"
+            tone="error"
+          />
+        )}
+        {copyFeedback && (
+          <Toast
+            closeLabel="关闭复制提示"
+            icon={copyFeedback.tone === "error" ? "warning" : "check"}
+            key="repository-copy-feedback"
+            message={copyFeedback.message}
+            onClose={() => setCopyFeedback(null)}
+            title={copyFeedback.title}
+            tone={copyFeedback.tone}
+          />
+        )}
+      </ToastViewport>
 
       {tab === "overview" && (
         <RepositoryOverview
+          controller={details}
+          directoryOpening={directoryOpening}
+          onCopyCommitId={copyCommitId}
+          onOpenDirectory={openDirectory}
           onOpenTab={onOpenTab}
+          repositoryName={repositoryName}
+          repositoryPath={resolved.worktree?.path}
           snapshot={snapshot}
           worktreeCount={
             resolved.repository?.worktreeIds.length ?? 0
@@ -284,25 +468,33 @@ export function RepositoryPage({
       )}
       {tab === "changes" && (
         <RepositoryChanges
-          commitBody={commitBody}
-          commitSubject={commitSubject}
+          commands={commands}
+          commitMessage={commitMessage}
           controller={details}
+          externalApplications={externalApplications}
           mutations={mutations}
-          onCommitBodyChange={setCommitBody}
-          onCommitSubjectChange={setCommitSubject}
+          onCommitMessageChange={setCommitMessage}
           onCommitted={() => {
-            setCommitSubject("");
-            setCommitBody("");
+            setCommitMessage("");
           }}
+          onPushAfterCommitChange={setPushAfterCommit}
+          pushAfterCommit={pushAfterCommit}
+          target={target}
+          workspaceId={workspace?.id}
         />
       )}
       {tab === "history" && (
-        <RepositoryHistory controller={details} />
+        <RepositoryHistory
+          branch={snapshot?.branch}
+          controller={details}
+          onCopyCommitId={copyCommitId}
+        />
       )}
       {tab === "branches" && (
         <RepositoryBranches
           commands={commands}
           controller={details}
+          snapshot={snapshot}
           target={target}
           worktreePath={resolved.worktree?.path}
         />
@@ -310,8 +502,16 @@ export function RepositoryPage({
       {tab === "worktrees" && (
         <RepositoryWorktrees
           commands={worktreeCommands}
+          directoryOpening={directoryOpening}
+          onOpenDirectory={(worktreeId) =>
+            void openDirectory({
+              repositoryId: target.repositoryId,
+              worktreeId
+            })
+          }
           repositoryId={target.repositoryId}
           snapshots={snapshots}
+          worktreeId={target.worktreeId}
           workspace={workspace}
         />
       )}
@@ -331,118 +531,284 @@ export function RepositoryPage({
 }
 
 function RepositoryOverview({
+  controller,
+  directoryOpening,
+  onCopyCommitId,
+  onOpenDirectory,
+  onOpenTab,
+  repositoryName,
+  repositoryPath,
   snapshot,
-  worktreeCount,
-  onOpenTab
+  worktreeCount
 }: {
+  controller: ReturnType<typeof useRepositoryDetails>;
+  directoryOpening: boolean;
+  onCopyCommitId(hash: string): Promise<void>;
+  onOpenDirectory(): void;
+  onOpenTab(tab: RepositoryTab): void;
   snapshot: RepositoryStatusSnapshotDto | undefined;
   worktreeCount: number;
-  onOpenTab(tab: RepositoryTab): void;
+  repositoryName: string;
+  repositoryPath: string | undefined;
 }) {
   const changes = getSnapshotChangeCount(snapshot);
+  const commits =
+    controller.history?.page.commits.slice(0, 3) ?? [];
+  const latestCommit = commits[0];
+  const historyLoading = controller.loading.history;
+  const changeFoot =
+    !snapshot
+      ? "等待状态刷新"
+      : changes > 0
+        ? `${snapshot.untracked} 未跟踪 · ${snapshot.staged} 已暂存 · ${snapshot.unstaged} 未暂存${
+            snapshot.conflicted
+              ? ` · ${snapshot.conflicted} 冲突`
+              : ""
+          }`
+        : "工作区干净";
+  const branchFoot = snapshot
+    ? snapshot.ahead
+      ? `${snapshot.branch ?? "detached"} · 准备 Push`
+      : `当前分支：${snapshot.branch ?? "detached"}`
+    : "等待状态刷新";
+  const upstreamFoot = snapshot
+    ? snapshot.upstream
+      ? `上游：${snapshot.upstream} · ${
+          snapshot.behind ? "可执行快进更新" : "无需 Pull"
+        }`
+      : snapshot.behind
+        ? "可执行快进更新 · 未配置上游"
+        : "未配置上游"
+    : "等待状态刷新";
 
   return (
     <>
-      <section className="repository-health-grid">
-        <article className="repository-health-card">
-          <span>当前分支</span>
-          <strong>{snapshot?.branch ?? "detached"}</strong>
-          <small>{snapshot?.upstream ?? "未配置上游"}</small>
+      <section className="repository-hero">
+        <span className="repository-hero-icon">
+          <Icon name="repository" size={25} />
+        </span>
+        <div className="repository-hero-copy">
+          <div className="repository-hero-title">
+            {repositoryName}
+          </div>
+          <div
+            className="repository-hero-path"
+            title={repositoryPath}
+          >
+            {repositoryPath ?? "工作目录不可用"}
+          </div>
+          <div className="repository-hero-status">
+            <span
+              className={`status-pill ${snapshotTone(snapshot)}`}
+            >
+              {repositoryOverviewStatus(snapshot)}
+            </span>
+            <span className="status-pill neutral">
+              <Icon name="branch" size={12} />
+              {snapshot?.branch ?? "detached"}
+            </span>
+            {snapshot?.behind ? (
+              <span className="status-pill blue">
+                <Icon name="arrowDown" size={12} />
+                本地引用显示落后 {snapshot.behind}
+              </span>
+            ) : null}
+            <span className="status-pill neutral">
+              Workspace
+            </span>
+          </div>
+        </div>
+        <div className="repository-hero-actions">
+          <button
+            aria-busy={directoryOpening}
+            className="button repository-hero-action"
+            disabled={!repositoryPath || directoryOpening}
+            onClick={onOpenDirectory}
+            type="button"
+          >
+            <Icon name="folder" />
+            {directoryOpening ? "打开中…" : "打开目录"}
+          </button>
+          <button
+            className="button primary repository-hero-action"
+            onClick={() => onOpenTab("changes")}
+            type="button"
+          >
+            <Icon name="fileCode" />
+            {changes > 0 ? "查看变更" : "查看状态"}
+          </button>
+        </div>
+      </section>
+
+      <section className="metric-grid repository-metric-grid">
+        <article className="metric-card tone-yellow">
+          <div className="metric-label">
+            <span>工作区变更</span>
+            <span className="metric-icon">
+              <Icon name="fileCode" />
+            </span>
+          </div>
+          <strong className="metric-value">{changes}</strong>
+          <span className="metric-foot">
+            {changeFoot}
+          </span>
         </article>
-        <article className="repository-health-card">
-          <span>工作区变更</span>
-          <strong>{changes}</strong>
-          <small title={workspaceChangeSummary(snapshot)}>
-            {workspaceChangeSummary(snapshot)}
-          </small>
-        </article>
-        <article className="repository-health-card">
-          <span>远程同步</span>
-          <strong>
-            ↑{snapshot?.ahead ?? 0} ↓{snapshot?.behind ?? 0}
+        <article className="metric-card tone-green">
+          <div className="metric-label">
+            <span>领先远程</span>
+            <span className="metric-icon">
+              <Icon name="arrowUp" />
+            </span>
+          </div>
+          <strong className="metric-value">
+            {snapshot?.ahead ?? 0}
           </strong>
-          <small>刷新状态不执行 Fetch</small>
+          <span className="metric-foot">{branchFoot}</span>
         </article>
-        <article className="repository-health-card">
-          <span>Worktrees</span>
-          <strong>{worktreeCount}</strong>
-          <small>共享同一个 commonDir</small>
+        <article className="metric-card tone-blue">
+          <div className="metric-label">
+            <span>落后远程</span>
+            <span className="metric-icon">
+              <Icon name="arrowDown" />
+            </span>
+          </div>
+          <strong className="metric-value">
+            {snapshot?.behind ?? 0}
+          </strong>
+          <span className="metric-foot">{upstreamFoot}</span>
+        </article>
+        <article className="metric-card tone-purple">
+          <div className="metric-label">
+            <span>Worktrees</span>
+            <span className="metric-icon">
+              <Icon name="worktree" />
+            </span>
+          </div>
+          <strong className="metric-value">
+            {worktreeCount}
+          </strong>
+          <span className="metric-foot">
+            共享同一个 commonDir
+          </span>
         </article>
       </section>
 
-      <section className="repository-overview-grid">
+      <section className="dashboard-grid repository-dashboard">
         <article className="panel">
           <header className="panel-header">
             <div className="panel-title">
-              <Icon name="files" />
-              工作区状态
+              <Icon name="history" />
+              最近提交
             </div>
-          </header>
-          <div className="repository-overview-summary">
-            <span
-              className={`empty-state-icon ${
-                changes > 0 ? "warning-icon" : ""
-              }`}
-            >
-              <Icon
-                name={changes > 0 ? "warning" : "check"}
-                size={20}
-              />
+            <span className="panel-caption">
+              {historyLoading && !latestCommit
+                ? "读取中…"
+                : commits.length
+                  ? `快照采集 ${commits.length} 条`
+                  : "暂无提交"}
             </span>
-            <div>
-              <strong>
-                {changes > 0
-                  ? `${changes} 项未提交变更`
-                  : "工作区干净"}
-              </strong>
-              <p>
-                {snapshot?.refreshedAt
-                  ? `状态更新于 ${new Date(
-                      snapshot.refreshedAt
-                    ).toLocaleString()}`
-                  : "等待首次状态刷新。"}
-              </p>
-              <button
-                className="button"
-                onClick={() => onOpenTab("changes")}
-                type="button"
-              >
-                查看变更
-              </button>
-            </div>
-          </div>
-        </article>
-
-        <article className="panel">
-          <header className="panel-header">
-            <div className="panel-title">
-              <Icon name="branch" />
-              快速入口
-            </div>
-          </header>
-          <div className="repository-quick-links">
             <button
+              className="panel-action"
               onClick={() => onOpenTab("history")}
               type="button"
             >
-              <Icon name="activity" />
-              提交历史
+              打开历史视图
             </button>
-            <button
-              onClick={() => onOpenTab("branches")}
-              type="button"
+          </header>
+          {historyLoading && !latestCommit ? (
+            <div
+              className="repository-overview-loading"
+              role="status"
             >
-              <Icon name="branch" />
-              分支列表
-            </button>
-            <button
-              onClick={() => onOpenTab("worktrees")}
-              type="button"
-            >
-              <Icon name="worktree" />
-              Worktrees
-            </button>
-          </div>
+              <Icon name="refresh" size={18} />
+              正在读取最近提交…
+            </div>
+          ) : latestCommit ? (
+            <div className="repository-overview-commit-list">
+              {commits.map((commit) => (
+                <button
+                  aria-current={
+                    controller.selectedCommitHash ===
+                    commit.hash
+                      ? "true"
+                      : undefined
+                  }
+                  className="repository-overview-commit-row"
+                  key={commit.hash}
+                  onClick={() => {
+                    void controller.selectCommit(commit.hash);
+                    onOpenTab("history");
+                  }}
+                  type="button"
+                >
+                  <span className="repository-overview-commit-graph">
+                    <span className="repository-overview-commit-node" />
+                  </span>
+                  <span className="repository-overview-commit-message">
+                    <strong>{commit.subject}</strong>
+                    <span className="repository-overview-commit-refs">
+                      {(commit.refs ?? []).length > 0
+                        ? (commit.refs ?? []).map((ref) => (
+                            <span
+                              className={`repository-overview-ref-label${
+                                ref.startsWith("origin")
+                                  ? " remote"
+                                  : ""
+                              }`}
+                              key={ref}
+                            >
+                              {ref}
+                            </span>
+                          ))
+                        : (
+                            <span className="repository-overview-ref-label">
+                              {snapshot?.branch ?? "detached"}
+                            </span>
+                          )}
+                    </span>
+                  </span>
+                  <time
+                    className="repository-overview-commit-time"
+                    dateTime={commit.authoredAt}
+                  >
+                    {formatCommitTimestamp(commit.authoredAt)}
+                  </time>
+                  <span className="repository-overview-commit-author">
+                    {commit.authorName}
+                  </span>
+                  <code
+                    className="repository-overview-commit-id"
+                    aria-label={`复制 Commit ID ${commit.hash}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void onCopyCommitId(commit.hash);
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key !== "Enter" &&
+                        event.key !== " "
+                      ) {
+                        return;
+                      }
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void onCopyCommitId(commit.hash);
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    title={`Commit ID ${commit.hash}`}
+                  >
+                    {commit.shortHash}
+                  </code>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="repository-overview-loading">
+              <Icon name="history" size={18} />
+              暂无提交历史
+            </div>
+          )}
         </article>
       </section>
     </>
@@ -450,28 +816,280 @@ function RepositoryOverview({
 }
 
 function RepositoryChanges({
+  commands,
   controller,
   mutations,
-  commitSubject,
-  commitBody,
-  onCommitSubjectChange,
-  onCommitBodyChange,
-  onCommitted
+  externalApplications,
+  commitMessage,
+  pushAfterCommit,
+  onCommitMessageChange,
+  onPushAfterCommitChange,
+  onCommitted,
+  workspaceId,
+  target
 }: {
+  commands: RepositoryCommandController;
   controller: ReturnType<typeof useRepositoryDetails>;
   mutations: ReturnType<typeof useRepositoryMutations>;
-  commitSubject: string;
-  commitBody: string;
-  onCommitSubjectChange(value: string): void;
-  onCommitBodyChange(value: string): void;
+  externalApplications: ExternalApplicationController;
+  commitMessage: string;
+  pushAfterCommit: boolean;
+  onCommitMessageChange(value: string): void;
+  onPushAfterCommitChange(value: boolean): void;
   onCommitted(): void;
+  workspaceId: string | undefined;
+  target: RepositoryTargetDto;
 }) {
   const changes = controller.changes?.snapshot.changes ?? [];
-  const selected = changes.find(
-    (change) => change.path === controller.selectedChange?.path
+  const files = useMemo(
+    () => buildDiffViewerFiles(changes),
+    [changes]
   );
+  const selectedFileKey = controller.selectedChange
+    ? `${controller.selectedChange.mode}\u0001${controller.selectedChange.path}`
+    : undefined;
+  const selectedFile =
+    files.find((file) => file.key === selectedFileKey) ??
+    files[0];
+  const selected = selectedFile?.change;
   const diff = controller.diff?.diff;
-  const lines = diff?.content.split(/\r?\n/).slice(0, 4_000) ?? [];
+  const selectedDiff =
+    selectedFile &&
+    controller.selectedChange?.path === selectedFile.path &&
+    controller.selectedChange.mode === selectedFile.mode
+      ? diff
+      : undefined;
+  const workspaceFiles = useMemo(
+    () =>
+      files.map((file) =>
+        selectedDiff &&
+        file.path === selectedDiff.path &&
+        file.mode === selectedDiff.mode
+          ? {
+              ...file,
+              additions: selectedDiff.additions,
+              deletions: selectedDiff.deletions
+            }
+          : file
+      ),
+    [
+      files,
+      selectedDiff?.additions,
+      selectedDiff?.deletions,
+      selectedDiff?.mode,
+      selectedDiff?.path
+    ]
+  );
+  const [diffViewerOpening, setDiffViewerOpening] =
+    useState(false);
+  const [diffViewerError, setDiffViewerError] = useState<
+    string | null
+  >(null);
+  const [changeFileContextMenu, setChangeFileContextMenu] =
+    useState<ChangeFileContextMenuState | null>(null);
+  const [changeFileOpenInMenuOpen, setChangeFileOpenInMenuOpen] =
+    useState(false);
+  const changeFileContextMenuRef = useRef<HTMLDivElement>(null);
+  const changeFileOpenInMenuRef =
+    useRef<HTMLDivElement>(null);
+  const changeFileOpenInCloseTimerRef =
+    useRef<number | null>(null);
+  const [
+    treeDirectoriesCollapsedPreference,
+    setTreeDirectoriesCollapsedPreference
+  ] = useState(() =>
+    readTreeDirectoriesCollapsedPreference(
+      getRendererPreferenceStorage(),
+      workspaceId
+    )
+  );
+  const treeScopeKey = controller.changes
+    ? `${workspaceId ?? ""}\u0001${controller.changes.target.repositoryId}:${controller.changes.target.worktreeId}`
+    : "";
+
+  const openSelectedDiffViewer = async () => {
+    if (!selectedDiff || diffViewerOpening) {
+      return;
+    }
+
+    setDiffViewerOpening(true);
+    setDiffViewerError(null);
+    try {
+      await window.gitnest.window.openDiffViewer({
+        target,
+        path: selectedDiff.path,
+        mode: selectedDiff.mode
+      });
+    } catch (reason) {
+      setDiffViewerError(
+        reason instanceof Error
+          ? reason.message
+          : "独立 Diff 窗口未能打开。"
+      );
+    } finally {
+      setDiffViewerOpening(false);
+    }
+  };
+
+  const openChangeFileContextMenu = (
+    event: MouseEvent<HTMLDivElement>,
+    file: DiffViewerFile
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const viewportPadding = 8;
+    const menuWidth = 222;
+    const menuHeight = 52;
+    const maxX = Math.max(
+      viewportPadding,
+      window.innerWidth - menuWidth - viewportPadding
+    );
+    const maxY = Math.max(
+      viewportPadding,
+      window.innerHeight - menuHeight - viewportPadding
+    );
+
+    setChangeFileOpenInMenuOpen(false);
+    setChangeFileContextMenu({
+      path: file.path,
+      x: Math.max(
+        viewportPadding,
+        Math.min(event.clientX, maxX)
+      ),
+      y: Math.max(
+        viewportPadding,
+        Math.min(event.clientY, maxY)
+      )
+    });
+    void controller.selectChange(file.change, file.mode);
+  };
+
+  const openChangeFileOpenInMenu = () => {
+    if (changeFileOpenInCloseTimerRef.current !== null) {
+      window.clearTimeout(
+        changeFileOpenInCloseTimerRef.current
+      );
+      changeFileOpenInCloseTimerRef.current = null;
+    }
+    setChangeFileOpenInMenuOpen(true);
+  };
+
+  const scheduleChangeFileOpenInMenuClose = () => {
+    if (changeFileOpenInCloseTimerRef.current !== null) {
+      window.clearTimeout(
+        changeFileOpenInCloseTimerRef.current
+      );
+    }
+    changeFileOpenInCloseTimerRef.current = window.setTimeout(
+      () => {
+        changeFileOpenInCloseTimerRef.current = null;
+        setChangeFileOpenInMenuOpen(false);
+      },
+      120
+    );
+  };
+
+  useEffect(() => {
+    setChangeFileContextMenu(null);
+    setChangeFileOpenInMenuOpen(false);
+  }, [treeScopeKey]);
+
+  useEffect(
+    () => () => {
+      if (changeFileOpenInCloseTimerRef.current !== null) {
+        window.clearTimeout(
+          changeFileOpenInCloseTimerRef.current
+        );
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    setTreeDirectoriesCollapsedPreference(
+      readTreeDirectoriesCollapsedPreference(
+        getRendererPreferenceStorage(),
+        workspaceId
+      )
+    );
+  }, [workspaceId]);
+
+  useEffect(() => {
+    if (!changeFileContextMenu) {
+      return;
+    }
+
+    const closeFromOutside = (
+      event: globalThis.PointerEvent
+    ) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (changeFileContextMenuRef.current?.contains(target) ||
+          changeFileOpenInMenuRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setChangeFileContextMenu(null);
+      setChangeFileOpenInMenuOpen(false);
+    };
+    const closeFromKeyboard = (
+      event: globalThis.KeyboardEvent
+    ) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setChangeFileContextMenu(null);
+        setChangeFileOpenInMenuOpen(false);
+      }
+    };
+    const closeFromViewport = () => {
+      setChangeFileContextMenu(null);
+      setChangeFileOpenInMenuOpen(false);
+    };
+    const focusFrame = window.requestAnimationFrame(() => {
+      changeFileContextMenuRef.current
+        ?.querySelector<HTMLButtonElement>("[role='menuitem']")
+        ?.focus();
+    });
+
+    document.addEventListener(
+      "pointerdown",
+      closeFromOutside
+    );
+    document.addEventListener(
+      "keydown",
+      closeFromKeyboard
+    );
+    document.addEventListener(
+      "scroll",
+      closeFromViewport,
+      true
+    );
+    window.addEventListener("blur", closeFromViewport);
+    window.addEventListener("resize", closeFromViewport);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener(
+        "pointerdown",
+        closeFromOutside
+      );
+      document.removeEventListener(
+        "keydown",
+        closeFromKeyboard
+      );
+      document.removeEventListener(
+        "scroll",
+        closeFromViewport,
+        true
+      );
+      window.removeEventListener("blur", closeFromViewport);
+      window.removeEventListener(
+        "resize",
+        closeFromViewport
+      );
+    };
+  }, [changeFileContextMenu]);
 
   if (controller.loading.changes && !controller.changes) {
     return <RepositoryLoading label="正在读取工作区变更…" />;
@@ -497,320 +1115,250 @@ function RepositoryChanges({
     );
   }
 
+  const diffPanelState: DiffPanelState | undefined =
+    controller.loading.diff && !selectedDiff
+      ? {
+          busy: true,
+          icon: "refresh",
+          message: "正在生成所选文件的文本差异。",
+          title: "读取 Diff…"
+        }
+      : controller.diffNotice === "change-removed"
+        ? {
+            icon: "eye",
+            message: "该变更在重新读取仓库状态后已不存在。",
+            title: "状态已更新"
+          }
+        : selectedDiff?.mode === "unstaged" &&
+            selectedDiff.content.length === 0
+          ? {
+              icon: "fileCode",
+              message: controller.loading.changes
+                ? "正在重新读取仓库状态…"
+                : "状态已重新读取；该文件可能只存在行尾或索引元数据变化。",
+              title: "没有文本内容差异"
+            }
+          : !selectedDiff
+            ? {
+                icon: "eye",
+                message:
+                  "当前仅显示 Git 状态；文件内容按需读取，并受输出大小上限保护。",
+                title: "只展示 Git 状态"
+              }
+            : undefined;
+
   return (
     <div className="changes-page">
-      <section className="changes-layout">
-      <div className="changes-file-pane">
-        <header className="file-pane-header">
-          <strong>变更文件</strong>
-          <span>{changes.length}</span>
-        </header>
-        <div className="change-file-list">
-          {changes.map((change) => (
-            <button
-              className={`change-file-row${
-                change.path === controller.selectedChange?.path
-                  ? " selected"
-                  : ""
-              }`}
-              aria-current={
-                change.path === controller.selectedChange?.path
-                  ? "true"
-                  : undefined
+      <DiffWorkspace
+        className="changes-layout"
+        canStageFile={(file) => canStageChange(file.change)}
+        canUnstageFile={(file) =>
+          canUnstageChange(file.change)
+        }
+        changesLoading={controller.loading.changes}
+        commit={{
+          busy: mutations.active !== null || commands.busy,
+          conflicted:
+            controller.changes?.snapshot.conflicted ?? 0,
+          message: commitMessage,
+          push: pushAfterCommit,
+          staged: controller.changes?.snapshot.staged ?? 0,
+          submitting:
+            mutations.active === "commit" ||
+            (pushAfterCommit && commands.active === "push"),
+          onMessageChange: onCommitMessageChange,
+          onPushChange: onPushAfterCommitChange,
+          onSubmit: async (message, push) => {
+            const { subject, body } =
+              parseCommitMessage(message);
+            const committed = await mutations.createCommit(
+              subject,
+              body
+            );
+            if (committed) {
+              onCommitted();
+              if (push) {
+                await commands.request({
+                  type: "push",
+                  targets: [target]
+                });
               }
-              key={`${change.kind}:${change.path}`}
-              onClick={() => void controller.selectChange(change)}
-              type="button"
-            >
-              <span className={`change-code kind-${change.kind}`}>
-                {changeCode(change)}
-              </span>
-              <span>
-                <strong>{change.path}</strong>
-                <small>
-                  {change.originalPath
-                    ? `原路径：${change.originalPath}`
-                    : changeKindLabel(change)}
-                </small>
-              </span>
-              <Icon name="chevron" size={12} />
-            </button>
-          ))}
-        </div>
-      </div>
-
-        <div className="diff-pane">
-        <header className="diff-header">
-          <div>
-            <strong>{selected?.path ?? "选择一个文件"}</strong>
-            <span>
-              {diff
-                ? `+${diff.additions} / -${diff.deletions}`
-                : "按需读取文本 Diff"}
-            </span>
-          </div>
-          {selected && (
-            <div className="diff-header-actions">
-              <div className="diff-mode-actions">
-                {selected.indexStatus !== "." &&
-                  selected.kind !== "untracked" && (
-                    <button
-                      aria-pressed={
-                        controller.selectedChange?.mode ===
-                        "staged"
-                      }
-                      className={
-                        controller.selectedChange?.mode ===
-                        "staged"
-                          ? "active"
-                          : ""
-                      }
-                      onClick={() =>
-                        void controller.selectChange(
-                          selected,
-                          "staged"
-                        )
-                      }
-                      type="button"
-                    >
-                      已暂存
-                    </button>
-                  )}
-                {selected.worktreeStatus !== "." &&
-                  selected.kind !== "untracked" && (
-                    <button
-                      aria-pressed={
-                        controller.selectedChange?.mode ===
-                        "unstaged"
-                      }
-                      className={
-                        controller.selectedChange?.mode ===
-                        "unstaged"
-                          ? "active"
-                          : ""
-                      }
-                      onClick={() =>
-                        void controller.selectChange(
-                          selected,
-                          "unstaged"
-                        )
-                      }
-                      type="button"
-                    >
-                      未暂存
-                    </button>
-                  )}
-              </div>
-              <div className="mutation-file-actions">
-                {canUnstageChange(selected) && (
-                  <button
-                    aria-busy={mutations.active === "unstage"}
-                    className="button"
-                    disabled={mutations.active !== null}
-                    onClick={() =>
-                      void mutations.unstageChange(selected)
-                    }
-                    type="button"
-                  >
-                    <Icon name="close" size={13} />
-                    {mutations.active === "unstage"
-                      ? "处理中…"
-                      : "取消暂存"}
-                  </button>
-                )}
-                {canStageChange(selected) && (
-                  <button
-                    aria-busy={mutations.active === "stage"}
-                    className="button primary"
-                    disabled={mutations.active !== null}
-                    onClick={() =>
-                      void mutations.stageChange(selected)
-                    }
-                    type="button"
-                  >
-                    <Icon name="plus" size={13} />
-                    {mutations.active === "stage"
-                      ? "处理中…"
-                      : "暂存"}
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-        </header>
-        {controller.loading.diff ? (
-          <RepositoryLoading label="正在生成 Diff…" compact />
-        ) : diff?.binary ? (
-          <div className="diff-empty">
-            <Icon name="files" size={20} />
-            <strong>二进制文件</strong>
-            <span>当前版本不在 Renderer 中加载二进制内容。</span>
-          </div>
-        ) : diff ? (
-          <div className="diff-content" role="region" aria-label="文件 Diff">
-            {lines.map((line, index) => (
-              <div
-                className={diffLineClass(line)}
-                key={`${index}:${line.slice(0, 24)}`}
-              >
-                <span>{index + 1}</span>
-                <code>{line || " "}</code>
-              </div>
-            ))}
-            {(diff.truncated ||
-              diff.content.split(/\r?\n/).length > lines.length) && (
-              <div className="diff-truncated">
-                Diff 已达到安全显示上限，其余内容未载入。
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="diff-empty">
-            <Icon name="files" size={20} />
-            <strong>选择文件查看 Diff</strong>
-            <span>读取按需执行，并受输出大小上限保护。</span>
-          </div>
-        )}
-        </div>
-      </section>
-      <CommitComposer
-        body={commitBody}
-        controller={controller}
-        mutations={mutations}
-        subject={commitSubject}
-        onBodyChange={onCommitBodyChange}
-        onCommitted={onCommitted}
-        onSubjectChange={onCommitSubjectChange}
+            }
+          }
+        }}
+        configuration={repositoryDiffWorkspaceConfiguration}
+        files={workspaceFiles}
+        mutationBusy={mutations.active !== null}
+        onFileContextMenu={openChangeFileContextMenu}
+        onSelectedFileChange={(file) =>
+          void controller.selectChange(file.change, file.mode)
+        }
+        onStageFile={(file) =>
+          mutations.stageChange(file.change)
+        }
+        onUnstageFile={(file) =>
+          mutations.unstageChange(file.change)
+        }
+        openStandalone={{
+          busy: diffViewerOpening,
+          disabled: !selectedDiff,
+          title:
+            diffViewerError ??
+            "在独立窗口中打开完整 Diff 查看器",
+          onOpen: openSelectedDiffViewer
+        }}
+        panelProps={{
+          additions: selectedDiff?.additions,
+          binary: selectedDiff?.binary,
+          className: "repository-diff-panel",
+          content: selectedDiff?.content,
+          deletions: selectedDiff?.deletions,
+          emptyPathLabel: "选择一个文件",
+          emptyStatsLabel: "按需读取文本 Diff",
+          maxLines: 4_000,
+          state: diffPanelState,
+          statsAvailable: Boolean(selectedDiff),
+          truncated: selectedDiff?.truncated
+        }}
+        selectedFileKey={selectedFileKey}
+        treePreference={{
+          initiallyCollapsed:
+            treeDirectoriesCollapsedPreference,
+          scopeKey: treeScopeKey,
+          onCollapsedPreferenceChange: (collapsed) => {
+            setTreeDirectoriesCollapsedPreference(collapsed);
+            writeTreeDirectoriesCollapsedPreference(
+              getRendererPreferenceStorage(),
+              workspaceId,
+              collapsed
+            );
+          }
+        }}
       />
+      {changeFileContextMenu && (
+        <LayerPortal>
+          <Menu
+            aria-label={`${changeFileContextMenu.path} 文件操作`}
+            className="workspace-context-menu change-file-context-menu"
+            ref={changeFileContextMenuRef}
+            style={{
+              left: changeFileContextMenu.x,
+              top: changeFileContextMenu.y
+            }}
+          >
+            <div
+              className="workspace-context-open-in"
+              onBlurCapture={scheduleChangeFileOpenInMenuClose}
+              onFocusCapture={openChangeFileOpenInMenu}
+              onPointerEnter={openChangeFileOpenInMenu}
+              onPointerLeave={scheduleChangeFileOpenInMenuClose}
+            >
+              <MenuItem
+                aria-expanded={changeFileOpenInMenuOpen}
+                aria-haspopup="menu"
+                className="workspace-context-open-in-trigger"
+                leading={<Icon name="external" size={14} />}
+                onClick={() =>
+                  setChangeFileOpenInMenuOpen((open) => !open)
+                }
+                title="选择用于打开此文件的应用"
+                trailing={<Icon name="collapse" size={14} />}
+              >
+                打开方式
+              </MenuItem>
+              {changeFileOpenInMenuOpen && (
+                <MenuPopover
+                  align="start"
+                  anchor={changeFileContextMenuRef.current}
+                  aria-label="选择用于打开此文件的应用"
+                  className="workspace-context-open-in-submenu"
+                  onBlurCapture={
+                    scheduleChangeFileOpenInMenuClose
+                  }
+                  onFocusCapture={openChangeFileOpenInMenu}
+                  onPointerEnter={openChangeFileOpenInMenu}
+                  onPointerLeave={
+                    scheduleChangeFileOpenInMenuClose
+                  }
+                  ref={changeFileOpenInMenuRef}
+                  side="right"
+                >
+                  <MenuHeading>Open in</MenuHeading>
+                  {externalApplications.profiles.length > 0 ? (
+                    externalApplications.profiles.map((profile) => (
+                      <MenuItem
+                        disabled={
+                          externalApplications.active !== null
+                        }
+                        key={profile.kind}
+                        leading={
+                          <ApplicationIcon profile={profile} />
+                        }
+                        onClick={() => {
+                          const path =
+                            changeFileContextMenu.path;
+                          setChangeFileOpenInMenuOpen(false);
+                          setChangeFileContextMenu(null);
+                          void externalApplications.openFile(
+                            profile.kind,
+                            path
+                          );
+                        }}
+                      >
+                        {profile.label}
+                      </MenuItem>
+                    ))
+                  ) : (
+                    <span className="workspace-context-open-in-empty">
+                      {externalApplications.loading
+                        ? "正在检测可用应用…"
+                        : "未检测到可用应用"}
+                    </span>
+                  )}
+                </MenuPopover>
+              )}
+            </div>
+          </Menu>
+        </LayerPortal>
+      )}
     </div>
   );
 }
 
-function CommitComposer({
-  controller,
-  mutations,
-  subject,
-  body,
-  onSubjectChange,
-  onBodyChange,
-  onCommitted
-}: {
-  controller: ReturnType<typeof useRepositoryDetails>;
-  mutations: ReturnType<typeof useRepositoryMutations>;
-  subject: string;
-  body: string;
-  onSubjectChange(value: string): void;
-  onBodyChange(value: string): void;
-  onCommitted(): void;
-}) {
-  const staged = controller.changes?.snapshot.staged ?? 0;
-  const conflicted =
-    controller.changes?.snapshot.conflicted ?? 0;
-  const busy = mutations.active !== null;
-  const canCommit =
-    staged > 0 &&
-    conflicted === 0 &&
-    Boolean(subject.trim()) &&
-    !busy;
-
-  const submit = async (
-    event: FormEvent<HTMLFormElement>
-  ) => {
-    event.preventDefault();
-    if (!canCommit) {
-      return;
-    }
-
-    const committed = await mutations.createCommit(
-      subject,
-      body
-    );
-    if (committed) {
-      onCommitted();
-    }
-  };
-
-  return (
-    <article className="panel commit-composer">
-      <header className="panel-header">
-        <div className="panel-title">
-          <Icon name="check" />
-          创建提交
-        </div>
-        <span
-          className={`status-pill ${
-            conflicted > 0
-              ? "red"
-              : staged > 0
-                ? "green"
-                : "neutral"
-          }`}
-        >
-          {conflicted > 0
-            ? `${conflicted} 个冲突`
-            : `${staged} 个已暂存`}
-        </span>
-      </header>
-      <form className="commit-form" onSubmit={submit}>
-        <label htmlFor="commit-subject">
-          提交主题
-          <span>{subject.length}/200</span>
-        </label>
-        <input
-          id="commit-subject"
-          maxLength={200}
-          onChange={(event) =>
-            onSubjectChange(event.target.value)
-          }
-          placeholder="简洁描述这次变更"
-          value={subject}
-        />
-        <label htmlFor="commit-body">
-          正文（可选）
-          <span>{body.length}/100000</span>
-        </label>
-        <textarea
-          id="commit-body"
-          maxLength={100_000}
-          onChange={(event) =>
-            onBodyChange(event.target.value)
-          }
-          placeholder="补充背景、影响或验证说明"
-          rows={4}
-          value={body}
-        />
-        <div className="commit-form-footer">
-          <p>{commitGuidance(staged, conflicted)}</p>
-          <button
-            aria-busy={mutations.active === "commit"}
-            className="button primary"
-            disabled={!canCommit}
-            type="submit"
-          >
-            <Icon
-              name={
-                mutations.active === "commit"
-                  ? "refresh"
-                  : "check"
-              }
-            />
-            {mutations.active === "commit"
-              ? "提交中…"
-              : "提交已暂存变更"}
-          </button>
-        </div>
-      </form>
-    </article>
-  );
-}
-
 function RepositoryHistory({
-  controller
+  branch,
+  controller,
+  onCopyCommitId
 }: {
+  branch: string | undefined;
   controller: ReturnType<typeof useRepositoryDetails>;
+  onCopyCommitId(hash: string): Promise<void>;
 }) {
   const commits = controller.history?.page.commits ?? [];
   const selected = controller.commit?.commit;
+  const showCommitDetail = Boolean(
+    controller.historyDetailOpen &&
+      (controller.selectedCommitHash ||
+        selected ||
+        controller.loading.commit)
+  );
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterQuery, setFilterQuery] = useState("");
+  const normalizedFilter = filterQuery.trim().toLocaleLowerCase();
+  const visibleCommits = normalizedFilter
+    ? commits.filter((item) =>
+        [
+          item.subject,
+          item.authorName,
+          item.shortHash,
+          item.hash,
+          item.authoredAt,
+          ...(item.refs ?? [])
+        ].some((value) =>
+          value.toLocaleLowerCase().includes(normalizedFilter)
+        )
+      )
+    : commits;
 
   if (controller.loading.history && commits.length === 0) {
     return <RepositoryLoading label="正在读取提交历史…" />;
@@ -835,111 +1383,214 @@ function RepositoryHistory({
   }
 
   return (
-    <section className="history-layout">
-      <div className="history-list panel">
+    <section
+      className={`history-layout${
+        showCommitDetail ? " has-detail" : ""
+      }`}
+    >
+      <div className="history-list">
         <header className="panel-header">
           <div className="panel-title">
-            <Icon name="activity" />
+            <Icon name="history" />
             提交历史
           </div>
-          <span className="panel-caption">{commits.length} 条</span>
+          <span className="panel-caption">
+            只读快照 · 最近 {commits.length} 条 HEAD 提交
+          </span>
+          {filterOpen && (
+            <input
+              aria-label="筛选提交历史"
+              autoFocus
+              className="history-filter-input"
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") {
+                  return;
+                }
+                event.preventDefault();
+                setFilterOpen(false);
+                setFilterQuery("");
+              }}
+              onChange={(event) =>
+                setFilterQuery(event.target.value)
+              }
+              placeholder="筛选提交、作者或 Hash"
+              value={filterQuery}
+            />
+          )}
+          <button
+            aria-expanded={filterOpen}
+            className="button small panel-header-action"
+            onClick={() => setFilterOpen((open) => !open)}
+            type="button"
+          >
+            <Icon name="filter" size={13} />
+            筛选
+          </button>
         </header>
-        {commits.map((item) => (
-          <button
-            aria-current={
-              item.hash === controller.selectedCommitHash
-                ? "true"
-                : undefined
-            }
-            className={`commit-row${
-              item.hash === controller.selectedCommitHash
-                ? " selected"
-                : ""
-            }`}
-            key={item.hash}
-            onClick={() => void controller.selectCommit(item.hash)}
-            type="button"
-          >
-            <span className="commit-node" />
-            <span>
-              <strong>{item.subject}</strong>
-              <small>
-                {item.authorName} ·{" "}
-                {new Date(item.authoredAt).toLocaleString()}
-              </small>
-            </span>
-            <code>{item.shortHash}</code>
-          </button>
-        ))}
-        {controller.history?.page.nextOffset !== undefined && (
-          <button
-            aria-busy={controller.loading.history}
-            className="load-more-button"
-            disabled={controller.loading.history}
-            onClick={() => void controller.loadMoreHistory()}
-            type="button"
-          >
-            {controller.loading.history ? "加载中…" : "加载更多"}
-          </button>
-        )}
+        <div className="commit-list">
+          {visibleCommits.map((item, index) => (
+            <div
+              aria-current={
+                controller.historyDetailOpen &&
+                item.hash === controller.selectedCommitHash
+                  ? "true"
+                  : undefined
+              }
+              className={`commit-row${
+                controller.historyDetailOpen &&
+                item.hash === controller.selectedCommitHash
+                  ? " selected"
+                  : ""
+              }`}
+              key={item.hash}
+              onClick={() =>
+                void controller.selectCommit(item.hash)
+              }
+              onKeyDown={(event) => {
+                if (
+                  event.key !== "Enter" &&
+                  event.key !== " "
+                ) {
+                  return;
+                }
+                event.preventDefault();
+                void controller.selectCommit(item.hash);
+              }}
+              role="button"
+              tabIndex={0}
+            >
+              <span
+                className={`commit-graph ${
+                  index === 2 ? "branch " : ""
+                }lane-${index % 3}`}
+              >
+                <span className="commit-node" />
+              </span>
+              <span className="commit-message">
+                <strong className="commit-subject">
+                  {item.subject}
+                </strong>
+                <span className="commit-meta">
+                  {(item.refs ?? []).length > 0
+                    ? (item.refs ?? []).map((ref) => (
+                        <span
+                          className={`ref-label${
+                            ref.startsWith("origin")
+                              ? " remote"
+                              : ""
+                          }`}
+                          key={ref}
+                        >
+                          {ref}
+                        </span>
+                      ))
+                    : (
+                        <span className="ref-label">
+                          {branch ?? "detached"}
+                        </span>
+                      )}
+                </span>
+              </span>
+              <time
+                className="commit-time"
+                dateTime={item.authoredAt}
+              >
+                {formatCommitTimestamp(item.authoredAt)}
+              </time>
+              <span className="commit-author">
+                {item.authorName}
+              </span>
+                <code
+                  className="commit-id"
+                  aria-label={`复制 Commit ID ${item.hash}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void onCopyCommitId(item.hash);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void onCopyCommitId(item.hash);
+                }}
+                role="button"
+                tabIndex={0}
+                title={`点击复制 Commit ID ${item.hash}`}
+              >
+                {item.shortHash}
+              </code>
+            </div>
+          ))}
+          {visibleCommits.length === 0 && (
+            <div className="history-filter-empty">
+              <Icon name="search" size={18} />
+              <strong>没有匹配的提交</strong>
+              <span>可修改筛选关键词后重试。</span>
+            </div>
+          )}
+          {controller.history?.page.nextOffset !== undefined && (
+            <button
+              aria-busy={controller.loading.history}
+              className="load-more-button"
+              disabled={controller.loading.history}
+              onClick={() => void controller.loadMoreHistory()}
+              type="button"
+            >
+              {controller.loading.history
+                ? "加载中…"
+                : "加载更多"}
+            </button>
+          )}
+        </div>
       </div>
 
-      <article className="commit-detail panel">
-        <header className="panel-header">
-          <div className="panel-title">
-            <Icon name="files" />
-            提交详情
-          </div>
-        </header>
-        {controller.loading.commit ? (
-          <RepositoryLoading label="正在读取提交详情…" compact />
-        ) : selected ? (
-          <div className="commit-detail-body">
-            <h2>{selected.subject}</h2>
-            <div className="commit-detail-meta">
-              <span>{selected.authorName}</span>
-              <code>{selected.shortHash}</code>
-              <span>
-                {new Date(selected.authoredAt).toLocaleString()}
-              </span>
+      {showCommitDetail && (
+        <article
+          aria-labelledby="historyCommitDetailTitle"
+          className="commit-detail history-commit-detail panel"
+        >
+          <header className="panel-header">
+            <div
+              className="panel-title"
+              id="historyCommitDetailTitle"
+            >
+              <Icon name="commit" />
+              提交详情
             </div>
-            {selected.refs.length > 0 && (
-              <div className="commit-refs">
-                {selected.refs.map((ref) => (
-                  <span key={ref}>{ref}</span>
-                ))}
+          </header>
+          {controller.loading.commit ? (
+            <RepositoryLoading label="正在读取提交详情…" compact />
+          ) : selected ? (
+            <div className="commit-detail-body">
+              <h2>{selected.subject}</h2>
+              <div className="commit-detail-meta">
+                <span>{selected.authorName}</span>
+                <code>{selected.hash}</code>
+                <span>
+                  {formatCommitTimestamp(selected.authoredAt)}
+                </span>
               </div>
-            )}
-            <pre>{selected.body}</pre>
-            <div className="commit-stat-summary">
-              <span>{selected.files.length} 个文件</span>
-              <span className="text-success">
-                +{selected.additions}
-              </span>
-              <span className="text-danger">
-                -{selected.deletions}
-              </span>
-            </div>
-            <div className="commit-file-list">
-              {selected.files.slice(0, 100).map((file) => (
-                <div key={file.path}>
-                  <span title={file.path}>{file.path}</span>
-                  <code>
-                    {file.binary
-                      ? "binary"
-                      : `+${file.additions ?? 0} -${file.deletions ?? 0}`}
-                  </code>
+              {selected.refs.length > 0 && (
+                <div className="commit-refs">
+                  {selected.refs.map((ref) => (
+                    <span key={ref}>{ref}</span>
+                  ))}
                 </div>
-              ))}
+              )}
+              <p className="selected-commit-body">
+                {selected.body}
+              </p>
             </div>
-          </div>
-        ) : (
-          <div className="diff-empty">
-            <Icon name="activity" size={20} />
-            <strong>选择提交查看详情</strong>
-          </div>
-        )}
-      </article>
+          ) : (
+            <div className="diff-empty">
+              <Icon name="activity" size={20} />
+              <strong>选择提交查看详情</strong>
+            </div>
+          )}
+        </article>
+      )}
     </section>
   );
 }
@@ -947,23 +1598,80 @@ function RepositoryHistory({
 function RepositoryBranches({
   controller,
   commands,
+  snapshot,
   target,
   worktreePath
 }: {
   controller: ReturnType<typeof useRepositoryDetails>;
   commands: RepositoryCommandController;
+  snapshot: RepositoryStatusSnapshotDto | undefined;
   target: RepositoryTargetDto;
   worktreePath: string | undefined;
 }) {
   const branches = controller.branches?.branches ?? [];
+  const [createFormOpen, setCreateFormOpen] = useState(false);
   const [newBranch, setNewBranch] = useState("");
   const [renamingBranch, setRenamingBranch] =
     useState<string | null>(null);
   const [renamedBranch, setRenamedBranch] = useState("");
+  const [branchMenu, setBranchMenu] =
+    useState<BranchMenuState | null>(null);
+  const branchMenuRef = useRef<HTMLDivElement>(null);
   const localCount = branches.filter(
     (branch) => !branch.remote
   ).length;
-  const remoteCount = branches.length - localCount;
+
+  useEffect(() => {
+    if (!branchMenu) {
+      return;
+    }
+
+    const close = () => setBranchMenu(null);
+    const handlePointerDown = (event: PointerEvent) => {
+      const eventTarget = event.target;
+      if (
+        eventTarget instanceof Element &&
+        eventTarget.closest("[data-branch-menu-trigger]")
+      ) {
+        return;
+      }
+      if (
+        eventTarget instanceof Node &&
+        branchMenuRef.current?.contains(eventTarget)
+      ) {
+        return;
+      }
+      close();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+      }
+    };
+    const focusFrame = window.requestAnimationFrame(() => {
+      branchMenuRef.current
+        ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
+        ?.focus({ preventScroll: true });
+    });
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("blur", close);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener(
+        "pointerdown",
+        handlePointerDown
+      );
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [branchMenu]);
 
   const createBranch = (event: FormEvent) => {
     event.preventDefault();
@@ -980,6 +1688,7 @@ function RepositoryBranches({
       .then((accepted) => {
         if (accepted) {
           setNewBranch("");
+          setCreateFormOpen(false);
         }
       });
   };
@@ -1020,64 +1729,98 @@ function RepositoryBranches({
     return <RepositoryReadFailure label="分支列表暂时不可用" />;
   }
 
+  const branchMenuBranch = branchMenu
+    ? branches.find(
+        (branch) =>
+          !branch.remote &&
+          branch.name === branchMenu.branchName
+      )
+    : undefined;
+  const branchMenuOccupiedElsewhere = branchMenuBranch
+    ? branchOccupiedElsewhere(
+        branchMenuBranch.worktreePath,
+        worktreePath
+      )
+    : false;
+
   return (
-    <article className="panel branches-panel">
-      <header className="panel-header">
+    <div className="repository-branches-page">
+      <header className="panel-header sticky-panel-header">
         <div className="panel-title">
           <Icon name="branch" />
-          分支
+          分支管理
         </div>
         <span className="panel-caption">
-          {localCount} 本地 · {remoteCount} 远程
+          快照采集当前本地分支 {localCount} 条
         </span>
+        <button
+          aria-controls="new-branch-form"
+          aria-expanded={createFormOpen}
+          className="button branch-header-action"
+          onClick={() => setCreateFormOpen((open) => !open)}
+          type="button"
+        >
+          <Icon
+            name={createFormOpen ? "close" : "plus"}
+            size={13}
+          />
+          {createFormOpen ? "收起" : "新建分支"}
+        </button>
       </header>
-      <div className="branch-management-toolbar">
-        <form onSubmit={createBranch}>
-          <label htmlFor="new-branch-name">从当前 HEAD 创建分支</label>
-          <div>
-            <input
-              id="new-branch-name"
-              maxLength={255}
-              onChange={(event) =>
-                setNewBranch(event.target.value)
-              }
-              placeholder="例如 feature/safe-sync"
-              spellCheck={false}
-              value={newBranch}
-            />
-            <button
-              aria-busy={commands.active === "create-branch"}
-              className="button primary"
-              disabled={
-                commands.busy || !newBranch.trim()
-              }
-              type="submit"
-            >
-              <Icon
-                name={
-                  commands.active === "create-branch"
-                    ? "refresh"
-                    : "plus"
+      {createFormOpen && (
+        <div className="branch-management-toolbar">
+          <form id="new-branch-form" onSubmit={createBranch}>
+            <label htmlFor="new-branch-name">
+              从当前 HEAD 创建分支
+            </label>
+            <div>
+              <input
+                id="new-branch-name"
+                maxLength={255}
+                onChange={(event) =>
+                  setNewBranch(event.target.value)
                 }
+                placeholder="例如 feature/safe-sync"
+                spellCheck={false}
+                value={newBranch}
               />
-              {commands.active === "create-branch"
-                ? "预检中…"
-                : "创建"}
-            </button>
-          </div>
-        </form>
-        <p>
-          分支写操作都会先展示目标、路径与引用影响；GitNest
-          不会自动 Stash。
-        </p>
-      </div>
+              <button
+                aria-busy={commands.active === "create-branch"}
+                className="button primary"
+                disabled={
+                  commands.busy || !newBranch.trim()
+                }
+                type="submit"
+              >
+                <Icon
+                  name={
+                    commands.active === "create-branch"
+                      ? "refresh"
+                      : "plus"
+                  }
+                />
+                {commands.active === "create-branch"
+                  ? "预检中…"
+                  : "创建"}
+              </button>
+            </div>
+          </form>
+          <p>
+            分支写操作都会先展示目标、路径与引用影响；GitNest
+            不会自动 Stash。
+          </p>
+        </div>
+      )}
       <div className="branches-table" role="table">
         <div className="branches-row branches-head" role="row">
-          <span role="columnheader">名称</span>
+          <span role="columnheader">分支</span>
           <span role="columnheader">类型</span>
           <span role="columnheader">上游</span>
-          <span role="columnheader">Worktree</span>
-          <span role="columnheader">操作</span>
+          <span role="columnheader">同步</span>
+          <span role="columnheader">更新</span>
+          <span role="columnheader">
+            <span className="visually-hidden">操作</span>
+          </span>
         </div>
         {branches.map((branch) => {
           const occupiedElsewhere =
@@ -1096,27 +1839,56 @@ function RepositoryBranches({
               }`}
               key={branch.fullName}
               role="row"
-            >
-              <span role="cell">
-                <Icon name="branch" size={13} />
-                <strong>{branch.name}</strong>
-                {branch.current && (
-                  <span className="status-pill green">
-                    当前
-                  </span>
-                )}
+              >
+              <span className="branch-name-column" role="cell">
+                <span
+                  className={`branch-name-cell${
+                    branch.current ? " current" : ""
+                  }`}
+                >
+                  {branch.current ? (
+                    <span
+                      aria-hidden="true"
+                      className="branch-current-dot"
+                    />
+                  ) : (
+                    <Icon name="branch" size={14} />
+                  )}
+                  <span title={branch.name}>{branch.name}</span>
+                </span>
               </span>
               <span role="cell">
-                {branch.remote ? "远程" : "本地"}
-              </span>
-              <span role="cell">
-                {branch.upstream ?? "—"}
+                <span
+                  className={`status-pill ${
+                    branch.remote ? "blue" : "neutral"
+                  }`}
+                >
+                  {branch.remote ? "远程" : "本地"}
+                </span>
               </span>
               <span
                 role="cell"
-                title={branch.worktreePath}
+                title={branch.upstream ?? undefined}
               >
-                {branch.worktreePath ?? "—"}
+                {branch.upstream ?? "—"}
+              </span>
+              <span
+                className="branch-sync"
+                role="cell"
+                title={
+                  branch.current && snapshot?.upstream
+                    ? `领先 ${snapshot.ahead}，落后 ${snapshot.behind}`
+                    : undefined
+                }
+              >
+                {branchSyncLabel(branch.current, snapshot)}
+              </span>
+              <span
+                className="branch-updated"
+                role="cell"
+                title={branch.updatedAt}
+              >
+                {formatBranchUpdatedAt(branch.updatedAt)}
               </span>
               <span className="branch-row-actions" role="cell">
                 {branch.remote ? (
@@ -1160,93 +1932,164 @@ function RepositoryBranches({
                     >
                       取消
                     </button>
-                  </form>
-                ) : (
-                  <>
+                    </form>
+                  ) : (
                     <button
-                      className="mini-action"
-                      disabled={
-                        commands.busy ||
-                        branch.current ||
-                        occupiedElsewhere
+                      aria-expanded={
+                        branchMenu?.branchName === branch.name
                       }
-                      onClick={() =>
-                        void commands.request({
-                          type: "switch-branch",
-                          target,
-                          branch: branch.name
-                        })
-                      }
-                      title={
-                        occupiedElsewhere
-                          ? "该分支已被其他 Worktree 检出"
-                          : branch.current
-                            ? "当前分支"
-                            : "切换前执行脏状态与 Worktree 占用预检"
-                      }
-                      type="button"
-                    >
-                      {branch.current ? "当前" : "切换"}
-                    </button>
-                    <button
-                      className="mini-action"
-                      disabled={
-                        commands.busy || occupiedElsewhere
-                      }
-                      onClick={() => {
-                        setRenamingBranch(branch.name);
-                        setRenamedBranch(branch.name);
+                      aria-haspopup="menu"
+                      aria-label={`打开 ${branch.name} 操作`}
+                      className="icon-button branch-row-menu-trigger"
+                      data-branch-menu-trigger
+                      onClick={(event) => {
+                        if (
+                          branchMenu?.branchName === branch.name
+                        ) {
+                          setBranchMenu(null);
+                          return;
+                        }
+                        setBranchMenu({
+                          anchor: event.currentTarget,
+                          branchName: branch.name,
+                        });
                       }}
-                      title={
-                        occupiedElsewhere
-                          ? "该分支已被其他 Worktree 检出"
-                          : "重命名本地分支"
-                      }
+                      title="分支操作"
                       type="button"
                     >
-                      重命名
+                      <Icon name="more" size={14} />
                     </button>
-                    <button
-                      className="mini-action danger"
-                      disabled={
-                        commands.busy ||
-                        branch.current ||
-                        occupiedElsewhere
-                      }
-                      onClick={() =>
-                        void commands.request({
-                          type: "delete-branch",
-                          target,
-                          branch: branch.name
-                        })
-                      }
-                      title={
-                        branch.current
-                          ? "不能删除当前分支"
-                          : occupiedElsewhere
-                            ? "该分支已被其他 Worktree 检出"
-                            : "仅允许删除已合并的本地分支"
-                      }
-                      type="button"
-                    >
-                      删除
-                    </button>
-                  </>
-                )}
+                  )}
               </span>
             </div>
           );
         })}
         {branches.length === 0 && (
-          <div className="branches-empty">
+          <div className="branches-empty" role="row">
             <Icon name="branch" size={18} />
             <strong>暂无分支</strong>
             <span>空仓库在首次提交后会显示本地分支。</span>
           </div>
         )}
       </div>
-    </article>
+      {branchMenu && branchMenuBranch && (
+        <MenuPopover
+          align="end"
+          anchor={branchMenu.anchor}
+          aria-label={`${branchMenuBranch.name} 分支操作`}
+          className="branch-row-floating-menu"
+          ref={branchMenuRef}
+          side="bottom"
+        >
+            <MenuItem
+              disabled={
+                commands.busy ||
+                branchMenuBranch.current ||
+                branchMenuOccupiedElsewhere
+              }
+              leading={<Icon name="branch" size={14} />}
+              onClick={() => {
+                setBranchMenu(null);
+                void commands.request({
+                  type: "switch-branch",
+                  target,
+                  branch: branchMenuBranch.name
+                });
+              }}
+              title={
+                branchMenuOccupiedElsewhere
+                  ? "该分支已被其他 Worktree 检出"
+                  : branchMenuBranch.current
+                    ? "当前分支"
+                    : "切换前执行脏状态与 Worktree 占用预检"
+              }
+            >
+              切换
+            </MenuItem>
+            <MenuItem
+              disabled={
+                commands.busy || branchMenuOccupiedElsewhere
+              }
+              leading={<Icon name="settings" size={14} />}
+              onClick={() => {
+                setBranchMenu(null);
+                setRenamingBranch(branchMenuBranch.name);
+                setRenamedBranch(branchMenuBranch.name);
+              }}
+              title={
+                branchMenuOccupiedElsewhere
+                  ? "该分支已被其他 Worktree 检出"
+                  : "重命名本地分支"
+              }
+            >
+              重命名
+            </MenuItem>
+            <MenuItem
+              disabled={
+                commands.busy ||
+                branchMenuBranch.current ||
+                branchMenuOccupiedElsewhere
+              }
+              leading={<Icon name="warning" size={14} />}
+              onClick={() => {
+                setBranchMenu(null);
+                void commands.request({
+                  type: "delete-branch",
+                  target,
+                  branch: branchMenuBranch.name
+                });
+              }}
+              title={
+                branchMenuBranch.current
+                  ? "不能删除当前分支"
+                  : branchMenuOccupiedElsewhere
+                    ? "该分支已被其他 Worktree 检出"
+                    : "仅允许删除已合并的本地分支"
+              }
+              tone="danger"
+            >
+              删除
+            </MenuItem>
+        </MenuPopover>
+      )}
+    </div>
   );
+}
+
+function branchSyncLabel(
+  current: boolean,
+  snapshot: RepositoryStatusSnapshotDto | undefined
+): string {
+  if (!current || !snapshot?.upstream) {
+    return "—";
+  }
+
+  const parts = [
+    snapshot.ahead > 0 ? `↑ ${snapshot.ahead}` : "",
+    snapshot.behind > 0 ? `↓ ${snapshot.behind}` : ""
+  ].filter(Boolean);
+
+  return parts.join(" ") || "已同步";
+}
+
+function formatBranchUpdatedAt(value: string | undefined): string {
+  if (!value) {
+    return "—";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(date);
 }
 
 function branchOccupiedElsewhere(
@@ -1310,11 +2153,6 @@ function RepositoryReadFailure({
   );
 }
 
-function preferredChangeCount(change: ChangedPathDto): number {
-  return Number(change.indexStatus !== ".") +
-    Number(change.worktreeStatus !== ".");
-}
-
 function workspaceChangeSummary(
   snapshot: RepositoryStatusSnapshotDto | undefined
 ): string {
@@ -1331,60 +2169,25 @@ function workspaceChangeSummary(
   return parts.length > 0 ? parts.join(" · ") : "无文件级变更";
 }
 
-function commitGuidance(
-  staged: number,
-  conflicted: number
+function repositoryOverviewStatus(
+  snapshot: RepositoryStatusSnapshotDto | undefined
 ): string {
-  if (conflicted > 0) {
-    return "请先解决并暂存全部冲突，再创建提交。";
+  if (!snapshot) {
+    return "等待状态";
   }
-  if (staged === 0) {
-    return "先从上方选择文件并执行暂存。";
+  if (snapshot.error) {
+    return "读取失败";
   }
-  return "将提交当前 Worktree 的全部已暂存变更；Git Hooks 保持启用。";
-}
-
-function changeCode(change: ChangedPathDto): string {
-  if (change.kind === "untracked") {
-    return "?";
+  if (snapshot.refreshPending) {
+    return "刷新中";
   }
-  if (change.kind === "unmerged") {
-    return "!";
+  if (snapshot.conflicted) {
+    return `${snapshot.conflicted} 个冲突需要解决`;
   }
-  return preferredChangeCount(change) > 1
-    ? `${change.indexStatus}${change.worktreeStatus}`
-    : change.indexStatus !== "."
-      ? change.indexStatus
-      : change.worktreeStatus;
-}
-
-function changeKindLabel(change: ChangedPathDto): string {
-  return {
-    ordinary: "已修改",
-    renamed: "已重命名",
-    unmerged: "存在冲突",
-    untracked: "未跟踪"
-  }[change.kind];
-}
-
-function diffLineClass(line: string): string {
-  if (line.startsWith("+") && !line.startsWith("+++")) {
-    return "diff-line added";
-  }
-  if (line.startsWith("-") && !line.startsWith("---")) {
-    return "diff-line removed";
-  }
-  if (line.startsWith("@@")) {
-    return "diff-line hunk";
-  }
-  if (
-    line.startsWith("diff ") ||
-    line.startsWith("---") ||
-    line.startsWith("+++")
-  ) {
-    return "diff-line header";
-  }
-  return "diff-line";
+  const changes = getSnapshotChangeCount(snapshot);
+  return changes > 0
+    ? `${changes} 项未提交变更`
+    : "工作区干净";
 }
 
 function snapshotTone(
@@ -1422,4 +2225,41 @@ function snapshotStatus(
   }
   const changes = getSnapshotChangeCount(snapshot);
   return changes > 0 ? `${changes} 项变更` : "工作区干净";
+}
+
+function formatDirectoryOpenError(
+  error: GitReadErrorDto
+): string {
+  if (error.code === "DIRECTORY_UNAVAILABLE") {
+    return "当前工作目录不可用，可能已被移动、删除或无访问权限。";
+  }
+
+  if (error.code === "INVALID_REQUEST") {
+    return "当前仓库目录信息无效，请重新选择仓库后重试。";
+  }
+
+  return "无法打开当前工作目录，请检查目录是否存在且有访问权限。";
+}
+
+function formatDirectoryOpenFailure(reason: unknown): string {
+  const message =
+    reason instanceof Error ? reason.message : "";
+
+  if (
+    /openDirectory is not a function|no handler registered/i.test(
+      message
+    )
+  ) {
+    return "当前应用未加载目录打开能力，请重启 GitNest 后重试。";
+  }
+
+  if (/permission|access denied/i.test(message)) {
+    return "当前工作目录无访问权限，请检查目录权限后重试。";
+  }
+
+  if (/not exist|cannot find|path not found/i.test(message)) {
+    return "当前工作目录不存在，可能已被移动或删除。";
+  }
+
+  return "无法打开当前工作目录，请检查目录是否存在且有访问权限。";
 }

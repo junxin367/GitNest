@@ -26,7 +26,8 @@ export function parseCommitHistory(output: string): CommitSummary[] {
         authorEmail = "",
         authoredAt = "",
         subject = "",
-        parents = ""
+        parents = "",
+        decorations = ""
       ] = fields;
 
       return {
@@ -36,7 +37,11 @@ export function parseCommitHistory(output: string): CommitSummary[] {
         authorEmail,
         authoredAt,
         subject,
-        parentHashes: parents ? parents.split(" ") : []
+        parentHashes: parents ? parents.split(" ") : [],
+        refs: decorations
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean)
       };
     });
 }

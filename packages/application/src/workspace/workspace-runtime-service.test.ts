@@ -9,15 +9,16 @@ import {
   type RepositoryInspection,
   type RepositorySnapshot
 } from "@gitnest/git-core";
-import type {
-  RepositorySnapshotStore,
-  RepositoryStatusSnapshot,
-  RepositoryTarget,
-  Workspace,
-  WorkspaceWatchEvent,
-  WorkspaceWatchHandle,
-  WorkspaceWatcher,
-  WorkspaceWatchRegistration
+import {
+  listWorkspaceTargets,
+  type RepositorySnapshotStore,
+  type RepositoryStatusSnapshot,
+  type RepositoryTarget,
+  type Workspace,
+  type WorkspaceWatchEvent,
+  type WorkspaceWatchHandle,
+  type WorkspaceWatcher,
+  type WorkspaceWatchRegistration
 } from "@gitnest/workspace-core";
 
 import {
@@ -104,6 +105,225 @@ describe("WorkspaceRuntimeService", () => {
 
     unsubscribeThrowingListener();
     await runtime.dispose();
+  });
+
+  it("deduplicates nested Git watches, routes linked metadata, and ignores transient Git locks", async () => {
+    const workspace = addLinkedWorktree(createWorkspace(1));
+    const gitClient = new TrackingGitClient();
+    const watcher = new FakeWatcher();
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      gitClient,
+      new MemorySnapshotStore(),
+      watcher,
+      {
+        autoRefresh: false,
+        currentTargetDebounceMs: 1,
+        backgroundTargetDebounceMs: 1,
+        selectedTargetPollingIntervalMs: 0
+      }
+    );
+
+    await runtime.requestWorkspaceRefresh("manual");
+    await waitForState(
+      runtime,
+      (state) =>
+        state.monitor.mode === "watching" &&
+        state.operations.some(
+          (operation) =>
+            operation.kind === "status" &&
+            operation.state === "succeeded"
+        )
+    );
+
+    expect(
+      watcher.registrations.map(({ path }) => path).sort()
+    ).toEqual(
+      [
+        "C:\\root\\repository-0",
+        "C:\\root\\repository-0-linked"
+      ].sort()
+    );
+
+    gitClient.calls.length = 0;
+    const primary = workspace.selectedTarget as RepositoryTarget;
+    const linkedGitDir =
+      "C:\\root\\repository-0\\.git\\worktrees\\repository-0-linked";
+
+    watcher.emitPath(`${linkedGitDir}\\index.lock`, primary);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(gitClient.calls).toHaveLength(0);
+
+    watcher.emitPath(`${linkedGitDir}\\index`, primary);
+    await waitForCondition(() => gitClient.calls.length === 1);
+    expect(gitClient.calls[0]).toBe(
+      "C:\\root\\repository-0-linked"
+    );
+
+    await runtime.dispose();
+  });
+
+  it("coalesces watcher events that arrive during an in-flight refresh into one trailing refresh", async () => {
+    const workspace = createWorkspace(1);
+    const gitClient = new TrackingGitClient();
+    const watcher = new FakeWatcher();
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      gitClient,
+      new MemorySnapshotStore(),
+      watcher,
+      {
+        autoRefresh: false,
+        currentTargetDebounceMs: 1,
+        selectedTargetPollingIntervalMs: 0
+      }
+    );
+    const target = workspace.selectedTarget as RepositoryTarget;
+
+    await runtime.requestWorkspaceRefresh("manual");
+    const initial = await waitForState(
+      runtime,
+      (state) =>
+        state.monitor.mode === "watching" &&
+        state.operations.some(
+          (operation) =>
+            operation.kind === "status" &&
+            operation.state === "succeeded"
+        )
+    );
+    const initialStatusOperations = initial.operations.filter(
+      (operation) => operation.kind === "status"
+    ).length;
+    gitClient.calls.length = 0;
+
+    watcher.emit(target);
+    await waitForCondition(() => gitClient.calls.length === 1);
+    for (let index = 0; index < 6; index += 1) {
+      watcher.emit(target);
+    }
+
+    await waitForCondition(() => gitClient.calls.length === 2);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const completed = await runtime.getState();
+
+    expect(gitClient.calls).toHaveLength(2);
+    expect(
+      completed.operations.filter(
+        (operation) => operation.kind === "status"
+      )
+    ).toHaveLength(initialStatusOperations + 2);
+    await runtime.dispose();
+  });
+
+  it("serializes whole-snapshot persistence so an older save cannot overwrite a newer state", async () => {
+    const workspace = createWorkspace(2);
+    const snapshotStore = new TrackingSnapshotStore();
+    const watcher = new FakeWatcher();
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      snapshotStore,
+      watcher,
+      {
+        autoRefresh: false,
+        currentTargetDebounceMs: 1,
+        backgroundTargetDebounceMs: 1,
+        selectedTargetPollingIntervalMs: 0
+      }
+    );
+
+    await runtime.requestWorkspaceRefresh("manual");
+    await waitForState(
+      runtime,
+      (state) =>
+        state.monitor.mode === "watching" &&
+        state.operations.some(
+          (operation) =>
+            operation.kind === "status" &&
+            operation.state === "succeeded"
+        )
+    );
+    snapshotStore.reset();
+
+    const targets = listWorkspaceTargets(workspace);
+    watcher.emit(targets[0] as RepositoryTarget);
+    watcher.emit(targets[1] as RepositoryTarget);
+    await waitForCondition(() => snapshotStore.saveCalls >= 2);
+    await runtime.dispose();
+
+    expect(snapshotStore.maxActive).toBe(1);
+  });
+
+  it("waits for an in-flight status read before starting a mutation on the same Worktree", async () => {
+    const workspace = createWorkspace(1);
+    let releaseFirstRead: (() => void) | undefined;
+    const firstRead = new Promise<void>((resolve) => {
+      releaseFirstRead = resolve;
+    });
+    const gitClient = new TrackingGitClient(
+      async (callIndex) => {
+        if (callIndex === 0) {
+          await firstRead;
+        }
+      }
+    );
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      gitClient,
+      new MemorySnapshotStore(),
+      new FakeWatcher(),
+      {
+        autoRefresh: false,
+        selectedTargetPollingIntervalMs: 0
+      }
+    );
+    const target = workspace.selectedTarget as RepositoryTarget;
+
+    await runtime.requestWorkspaceRefresh("manual");
+    await waitForCondition(() => gitClient.calls.length === 1);
+    let mutationStarted = false;
+    const mutation = runtime.runWorktreeMutation(
+      target,
+      "stage",
+      async () => {
+        mutationStarted = true;
+      }
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(mutationStarted).toBe(false);
+    releaseFirstRead?.();
+    await mutation;
+    expect(mutationStarted).toBe(true);
+    await runtime.dispose();
+  });
+
+  it("closes a stale watcher when a newer monitoring restart wins the race", async () => {
+    const workspace = createWorkspace(1);
+    const watcher = new RacingWatcher();
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      watcher,
+      {
+        autoRefresh: false,
+        selectedTargetPollingIntervalMs: 0
+      }
+    );
+
+    await runtime.rescan();
+    await waitForCondition(() => watcher.watchCalls === 1);
+    await runtime.rescan();
+    await waitForCondition(
+      () => watcher.watchCalls === 2 && watcher.activeHandles === 1
+    );
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(watcher.activeHandles).toBe(1);
+    expect(watcher.closedHandles).toBe(1);
+    await runtime.dispose();
+    expect(watcher.activeHandles).toBe(0);
   });
 
   it("recovers active persisted operations as interrupted without inventing a Git result", async () => {
@@ -776,6 +996,10 @@ class FakeConfiguration implements WorkspaceConfigurationService {
     return structuredClone(this.#workspace);
   }
 
+  async removeEntry(): Promise<Workspace> {
+    return structuredClone(this.#workspace);
+  }
+
   async setGroupCollapsed(): Promise<Workspace> {
     return structuredClone(this.#workspace);
   }
@@ -800,6 +1024,13 @@ class TrackingGitClient implements GitClient {
   maxActive = 0;
   calls: string[] = [];
 
+  constructor(
+    readonly beforeRead?: (
+      callIndex: number,
+      path: string
+    ) => Promise<void>
+  ) {}
+
   async getEnvironment(
     _options?: GitReadOptions
   ): Promise<GitEnvironment> {
@@ -811,7 +1042,9 @@ class TrackingGitClient implements GitClient {
   ): Promise<RepositorySnapshot> {
     this.active += 1;
     this.maxActive = Math.max(this.maxActive, this.active);
+    const callIndex = this.calls.length;
     this.calls.push(path);
+    await this.beforeRead?.(callIndex, path);
     await new Promise((resolve) => setTimeout(resolve, 25));
     this.active -= 1;
     return {
@@ -872,6 +1105,32 @@ class MemorySnapshotStore implements RepositorySnapshotStore {
   }
 }
 
+class TrackingSnapshotStore
+  implements RepositorySnapshotStore
+{
+  active = 0;
+  maxActive = 0;
+  saveCalls = 0;
+
+  async load(): Promise<RepositoryStatusSnapshot[]> {
+    return [];
+  }
+
+  async save(): Promise<void> {
+    this.active += 1;
+    this.maxActive = Math.max(this.maxActive, this.active);
+    this.saveCalls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    this.active -= 1;
+  }
+
+  reset(): void {
+    this.active = 0;
+    this.maxActive = 0;
+    this.saveCalls = 0;
+  }
+}
+
 class MemoryOperationStore
   implements WorkspaceOperationStore
 {
@@ -914,6 +1173,10 @@ class FakeWatcher implements WorkspaceWatcher {
     };
   }
 
+  get registrations(): WorkspaceWatchRegistration[] {
+    return structuredClone(this.#registrations);
+  }
+
   emit(target: RepositoryTarget): void {
     const registration = this.#registrations.find(
       (candidate) =>
@@ -927,6 +1190,35 @@ class FakeWatcher implements WorkspaceWatcher {
         target
       });
     }
+  }
+
+  emitPath(path: string, target: RepositoryTarget): void {
+    this.#onChange?.({ path, target });
+  }
+}
+
+class RacingWatcher implements WorkspaceWatcher {
+  watchCalls = 0;
+  activeHandles = 0;
+  closedHandles = 0;
+
+  async watch(): Promise<WorkspaceWatchHandle> {
+    this.watchCalls += 1;
+    const call = this.watchCalls;
+    if (call === 1) {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    this.activeHandles += 1;
+    let closed = false;
+    return {
+      close: () => {
+        if (!closed) {
+          closed = true;
+          this.activeHandles -= 1;
+          this.closedHandles += 1;
+        }
+      }
+    };
   }
 }
 
@@ -1069,4 +1361,16 @@ async function waitForState(
       }
     });
   });
+}
+
+async function waitForCondition(
+  predicate: () => boolean
+): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > 3_000) {
+      throw new Error("Timed out waiting for condition.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }

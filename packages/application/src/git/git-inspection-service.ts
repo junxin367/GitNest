@@ -8,6 +8,7 @@ import type {
   InspectRepositoryOptions,
   ReadCommitHistoryOptions,
   ReadRepositoryDiffOptions,
+  ReadRepositorySnapshotOptions,
   RepositoryDiff,
   RepositoryInspection,
   RepositorySnapshot
@@ -33,7 +34,7 @@ export class GitInspectionService {
 
   readRepositorySnapshot(
     path: string,
-    options?: GitReadOptions
+    options?: ReadRepositorySnapshotOptions
   ): Promise<RepositorySnapshot> {
     return this.#gitClient.readRepositorySnapshot(path, options);
   }

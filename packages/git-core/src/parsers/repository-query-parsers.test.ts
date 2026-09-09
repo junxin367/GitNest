@@ -97,4 +97,23 @@ describe("repository query parsers", () => {
       deletions: 1
     });
   });
+
+  it("uses the destination path from a NUL-delimited rename record", () => {
+    const stats = parseCommitNumstat(
+      "1\t0\t\0before name.txt\0after name.txt\0"
+    );
+
+    expect(stats).toEqual({
+      files: [
+        {
+          path: "after name.txt",
+          additions: 1,
+          deletions: 0,
+          binary: false
+        }
+      ],
+      additions: 1,
+      deletions: 0
+    });
+  });
 });

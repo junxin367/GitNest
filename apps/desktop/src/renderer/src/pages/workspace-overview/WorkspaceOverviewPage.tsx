@@ -23,6 +23,7 @@ import {
 } from "../../entities/workspace/model";
 import type { IconName } from "../../shared/ui/Icon";
 import { Icon } from "../../shared/ui/Icon";
+import { Toast, ToastViewport } from "../../shared/ui/Toast";
 
 type LocalWorkspaceOperation =
   | "loading"
@@ -81,15 +82,31 @@ export function WorkspaceOverviewPage({
         : [],
     [snapshots, targets, workspace]
   );
-  const changedCount = snapshots.filter(
+  const dirtyRepositoryCount = snapshots.filter(
     (snapshot) => getSnapshotChangeCount(snapshot) > 0
   ).length;
-  const syncCount = snapshots.filter(
-    (snapshot) => snapshot.ahead > 0 || snapshot.behind > 0
+  const totalChangeCount = snapshots.reduce(
+    (total, snapshot) => total + getSnapshotChangeCount(snapshot),
+    0
+  );
+  const untrackedCount = snapshots.reduce(
+    (total, snapshot) => total + snapshot.untracked,
+    0
+  );
+  const behindRepositoryCount = snapshots.filter(
+    (snapshot) => snapshot.behind > 0
   ).length;
+  const behindCommitCount = snapshots.reduce(
+    (total, snapshot) => total + snapshot.behind,
+    0
+  );
   const freshCount = snapshots.filter(
     (snapshot) => !snapshot.stale && !snapshot.error
   ).length;
+  const prunableWorktreeCount =
+    workspace?.worktrees.filter((worktree) => worktree.isPrunable).length ?? 0;
+  const detachedWorktreeCount =
+    workspace?.worktrees.filter((worktree) => worktree.isDetached).length ?? 0;
   const metrics: Array<{
     label: string;
     value: string;
@@ -109,28 +126,28 @@ export function WorkspaceOverviewPage({
     },
     {
       label: "未提交变更",
-      value: String(changedCount),
+      value: String(totalChangeCount),
       foot:
-        changedCount > 0
-          ? "包含 staged、unstaged、untracked 或冲突"
+        dirtyRepositoryCount > 0
+          ? `${dirtyRepositoryCount} 个仓库 · ${untrackedCount} 个未跟踪文件`
           : "当前缓存中没有待处理变更",
-      icon: "files",
+      icon: "fileCode",
       tone: "yellow"
     },
     {
-      label: "需要同步",
-      value: String(syncCount),
+      label: "本地引用显示落后",
+      value: String(behindRepositoryCount),
       foot:
-        syncCount > 0
-          ? "存在 ahead 或 behind 的仓库"
+        behindRepositoryCount > 0
+          ? `累计 ${behindCommitCount} 个提交 · 未 Fetch`
           : "状态刷新不执行 Fetch",
-      icon: "download",
+      icon: "arrowDown",
       tone: "accent"
     },
     {
       label: "Worktrees",
       value: String(workspace?.worktrees.length ?? 0),
-      foot: "按 commonDir 关联本地实例",
+      foot: `${prunableWorktreeCount} 个可清理 · ${detachedWorktreeCount} 个 detached`,
       icon: "worktree",
       tone: "purple"
     }
@@ -309,29 +326,19 @@ export function WorkspaceOverviewPage({
         </form>
       )}
 
-      {(error || notice) && (
-        <div
-          className={`workspace-feedback ${
-            error ? "error" : "success"
-          }`}
-          role={error ? "alert" : "status"}
-        >
-          <Icon name={error ? "warning" : "check"} />
-          <div>
-            <strong>{error ? "Workspace 操作未完成" : "操作完成"}</strong>
-            <span>{error?.message ?? notice}</span>
-          </div>
-          <button
-            aria-label="关闭提示"
-            className="icon-button"
-            onClick={onClearFeedback}
-            title="关闭提示"
-            type="button"
-          >
-            <Icon name="close" />
-          </button>
-        </div>
-      )}
+      <ToastViewport>
+        {(error || notice) && (
+          <Toast
+            closeLabel="关闭 Workspace 提示"
+            icon={error ? "warning" : "check"}
+            key="workspace-toast"
+            message={error?.message ?? notice ?? ""}
+            onClose={onClearFeedback}
+            title={error ? "Workspace 操作未完成" : "操作完成"}
+            tone={error ? "error" : "success"}
+          />
+        )}
+      </ToastViewport>
 
       <section className="metric-grid" aria-label="Workspace 指标">
         {metrics.map((metric) => (
@@ -380,7 +387,7 @@ export function WorkspaceOverviewPage({
                   <span>仓库</span>
                   <span>分支</span>
                   <span>工作区</span>
-                  <span>同步</span>
+                  <span>远程同步</span>
                 </div>
                 {statusRows.map(
                   ({ target, repository, worktree, snapshot }) => {
@@ -422,14 +429,24 @@ export function WorkspaceOverviewPage({
                             >
                               <Icon name="repository" size={13} />
                             </span>
-                            <span title={worktree?.path}>
+                            <span
+                              className="table-name-copy"
+                              title={name}
+                            >
                               {name}
-                              <small>
+                              <small
+                                title={worktree?.path ?? "路径不可用"}
+                              >
                                 {worktree?.path ?? "路径不可用"}
                               </small>
                             </span>
                           </span>
-                          <span>{branch}</span>
+                          <span
+                            className="repository-status-branch"
+                            title={branch}
+                          >
+                            {branch}
+                          </span>
                           <span>
                             <span
                               className={`status-pill ${snapshotPillTone(snapshot)}`}
@@ -437,7 +454,12 @@ export function WorkspaceOverviewPage({
                               {state}
                             </span>
                           </span>
-                          <span>{sync}</span>
+                          <span
+                            className="repository-status-sync"
+                            title={sync}
+                          >
+                            {sync}
+                          </span>
                         </button>
                       </div>
                     );

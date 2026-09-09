@@ -1,0 +1,209 @@
+.gn-input-field {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.gn-input-field[data-full-width="true"] {
+  width: 100%;
+}
+
+.gn-input-field__label {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+
+.gn-input {
+  --gn-input-size-small: 32px;
+  --gn-input-size-medium: 35px;
+  --gn-input-size-large: 40px;
+  --gn-input-height: var(--gn-input-size-medium);
+  --gn-input-padding: var(--space-3);
+  --gn-input-icon-size: var(--icon-small);
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  height: var(--gn-input-height);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-regular);
+  transition:
+    background-color var(--motion-micro) ease,
+    border-color var(--motion-micro) ease,
+    box-shadow var(--motion-micro) ease;
+}
+
+.gn-input[data-size="small"] {
+  --gn-input-height: var(--gn-input-size-small);
+  --gn-input-padding: var(--space-2);
+  --gn-input-icon-size: 14px;
+}
+
+.gn-input[data-size="large"] {
+  --gn-input-height: var(--gn-input-size-large);
+  --gn-input-padding: var(--space-4);
+  --gn-input-icon-size: var(--icon-regular);
+  font-size: var(--font-size-emphasis);
+}
+
+.gn-input[data-full-width="true"] {
+  width: 100%;
+}
+
+.gn-input:hover {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+}
+
+.gn-input:focus-within,
+.gn-input[data-focused="true"] {
+  border-color: var(--color-focus);
+  box-shadow: none;
+}
+
+.gn-input[data-state="error"] {
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red-soft) 48%, var(--surface-2));
+}
+
+.gn-input[data-disabled="true"] {
+  color: var(--color-text-disabled);
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.gn-input[data-multiline="true"] {
+  height: auto;
+  min-height: var(--gn-input-height);
+  align-items: stretch;
+}
+
+.gn-input__leading {
+  display: grid;
+  flex: 0 0 var(--gn-input-icon-size);
+  place-items: center;
+  width: var(--gn-input-icon-size);
+  height: var(--gn-input-icon-size);
+  margin-left: var(--gn-input-padding);
+  color: var(--muted);
+  line-height: 0;
+}
+
+.gn-input__leading > .icon {
+  width: 100%;
+  height: 100%;
+}
+
+.gn-input__control {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+}
+
+.gn-input[data-has-leading="false"] .gn-input__control {
+  padding-inline-start: 4px;
+}
+
+.gn-input[data-has-trailing="false"] .gn-input__control {
+  padding-inline-end: 4px;
+}
+
+.gn-input__control::placeholder {
+  color: var(--muted);
+}
+
+.gn-input__control:focus,
+.gn-input__control:focus-visible {
+  outline: 0;
+  box-shadow: none;
+}
+
+.gn-input[data-multiline="true"] .gn-input__control {
+  height: auto;
+  min-height: calc(var(--gn-input-height) - var(--space-3));
+  padding-block: var(--space-3);
+  resize: vertical;
+  line-height: var(--line-height-body);
+}
+
+.gn-input__trailing {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1);
+  padding-right: var(--gn-input-padding);
+}
+
+.gn-input__action,
+.gn-input__clear {
+  display: grid;
+  flex: 0 0 var(--gn-input-icon-size);
+  place-items: center;
+  width: var(--gn-input-icon-size);
+  height: var(--gn-input-icon-size);
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-small);
+  cursor: pointer;
+}
+
+.gn-input__action > .icon,
+.gn-input__clear > .icon {
+  width: 100%;
+  height: 100%;
+}
+
+.gn-input__action:hover,
+.gn-input__action:focus-visible {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.gn-input__trailing > kbd,
+.gn-input__trailing > .gn-input__count {
+  display: inline-grid;
+  place-items: center;
+  min-width: var(--control-compact);
+  height: var(--space-6);
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.gn-input__trailing > kbd {
+  background: transparent;
+}
+
+.gn-input__clear:hover,
+.gn-input__clear:focus-visible {
+  color: var(--text);
+  background: transparent;
+}
+
+.gn-input-field__help {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+
+.gn-input-field__help[data-state="error"] {
+  color: var(--red);
+}

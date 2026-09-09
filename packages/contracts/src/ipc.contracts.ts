@@ -18,9 +18,15 @@ import type {
   RepositoryInspectionRequest
 } from "./git.contracts";
 import type {
+  ExternalApplicationOpenedDto,
+  ExternalApplicationProfileDto,
   ExternalTerminalOpenedDto,
   ExternalTerminalProfileDto,
+  OpenDirectoryRequest,
+  OpenDiffViewerRequest,
+  OpenExternalApplicationRequest,
   OpenExternalTerminalRequest,
+  OpenFileLocationRequest,
   RuntimeInfo
 } from "./system.contracts";
 import type {
@@ -46,6 +52,7 @@ import type {
 } from "./repository.contracts";
 import type {
   AddWorkspaceEntryRequest,
+  RemoveWorkspaceEntryRequest,
   SelectRepositoryTargetRequest,
   SelectWorkspaceEntryRequest,
   SetWorkspaceGroupCollapsedRequest,
@@ -74,6 +81,14 @@ interface IpcContract<
 
 export interface IpcContractMap {
   [IPC_CHANNELS.systemGetRuntimeInfo]: IpcContract<[], RuntimeInfo>;
+  [IPC_CHANNELS.systemListExternalApplications]: IpcContract<
+    [],
+    GitReadResult<ExternalApplicationProfileDto[]>
+  >;
+  [IPC_CHANNELS.systemOpenExternalApplication]: IpcContract<
+    [request: OpenExternalApplicationRequest],
+    GitReadResult<ExternalApplicationOpenedDto>
+  >;
   [IPC_CHANNELS.systemListExternalTerminals]: IpcContract<
     [],
     GitReadResult<ExternalTerminalProfileDto[]>
@@ -81,6 +96,14 @@ export interface IpcContractMap {
   [IPC_CHANNELS.systemOpenExternalTerminal]: IpcContract<
     [request: OpenExternalTerminalRequest],
     GitReadResult<ExternalTerminalOpenedDto>
+  >;
+  [IPC_CHANNELS.systemOpenDirectory]: IpcContract<
+    [request: OpenDirectoryRequest],
+    GitReadResult<void>
+  >;
+  [IPC_CHANNELS.systemOpenFileLocation]: IpcContract<
+    [request: OpenFileLocationRequest],
+    GitReadResult<void>
   >;
   [IPC_CHANNELS.accountList]: IpcContract<
     [],
@@ -113,6 +136,10 @@ export interface IpcContractMap {
   [IPC_CHANNELS.windowMinimize]: IpcContract<[], void>;
   [IPC_CHANNELS.windowToggleMaximize]: IpcContract<[], boolean>;
   [IPC_CHANNELS.windowClose]: IpcContract<[], void>;
+  [IPC_CHANNELS.windowOpenDiffViewer]: IpcContract<
+    [request: OpenDiffViewerRequest],
+    void
+  >;
   [IPC_CHANNELS.gitGetEnvironment]: IpcContract<
     [],
     GitReadResult<GitEnvironmentDto>
@@ -143,6 +170,10 @@ export interface IpcContractMap {
   >;
   [IPC_CHANNELS.workspaceUpdateEntry]: IpcContract<
     [request: UpdateWorkspaceEntryRequest],
+    WorkspaceResult<WorkspaceDetailsDto>
+  >;
+  [IPC_CHANNELS.workspaceRemoveEntry]: IpcContract<
+    [request: RemoveWorkspaceEntryRequest],
     WorkspaceResult<WorkspaceDetailsDto>
   >;
   [IPC_CHANNELS.workspaceSetGroupCollapsed]: IpcContract<

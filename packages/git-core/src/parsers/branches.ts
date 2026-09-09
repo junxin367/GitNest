@@ -25,7 +25,8 @@ export function parseBranches(output: string): Branch[] {
         head = "",
         upstream = "",
         current = "",
-        worktreePath = ""
+        worktreePath = "",
+        updatedAt = ""
       ] = fields;
       const remote = fullName.startsWith("refs/remotes/");
 
@@ -36,7 +37,8 @@ export function parseBranches(output: string): Branch[] {
         ...(upstream ? { upstream } : {}),
         current: current === "*",
         remote,
-        ...(worktreePath ? { worktreePath } : {})
+        ...(worktreePath ? { worktreePath } : {}),
+        ...(updatedAt ? { updatedAt } : {})
       };
     })
     .filter(

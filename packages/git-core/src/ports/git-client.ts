@@ -20,6 +20,11 @@ export interface InspectRepositoryOptions extends GitReadOptions {
   historyLimit?: number;
 }
 
+export interface ReadRepositorySnapshotOptions
+  extends GitReadOptions {
+  includeChangeStats?: boolean;
+}
+
 export interface ReadRepositoryDiffOptions extends GitReadOptions {
   path: string;
   mode: RepositoryDiffMode;
@@ -35,7 +40,7 @@ export interface GitClient {
   getEnvironment(options?: GitReadOptions): Promise<GitEnvironment>;
   readRepositorySnapshot(
     path: string,
-    options?: GitReadOptions
+    options?: ReadRepositorySnapshotOptions
   ): Promise<RepositorySnapshot>;
   readRepositoryDiff(
     path: string,

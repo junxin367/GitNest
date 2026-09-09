@@ -1,0 +1,101 @@
+.gn-diff-search-popover {
+  position: relative;
+  z-index: 200;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px;
+  width: min(360px, 100%);
+  min-height: var(--control-compact);
+  padding: 2px var(--space-1);
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 94%, var(--canvas));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-regular);
+  box-shadow: var(--shadow-popover);
+  transition:
+    border-color var(--motion-micro) ease,
+    box-shadow var(--motion-micro) ease;
+}
+
+.gn-diff-search-popover[hidden] {
+  display: none;
+}
+
+.gn-diff-search-popover:focus-within {
+  border-color: color-mix(in srgb, var(--color-focus) 64%, var(--border));
+}
+
+.gn-diff-search-popover__field {
+  min-width: 0;
+}
+
+.gn-diff-search-popover__field > .gn-input {
+  --gn-input-height: 28px;
+  --gn-input-padding: 2px;
+  --gn-input-icon-size: 14px;
+  gap: var(--space-1);
+  min-width: 0;
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--radius-small);
+}
+
+.gn-diff-search-popover__field > .gn-input:hover,
+.gn-diff-search-popover__field > .gn-input:focus-within,
+.gn-diff-search-popover__field > .gn-input[data-focused="true"] {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.gn-diff-search-popover__field .gn-input__leading {
+  margin-left: 0;
+}
+
+.gn-diff-search-popover__field .gn-input__trailing {
+  gap: 0;
+  padding-right: 0;
+}
+
+.gn-diff-search-popover__count {
+  min-width: 36px;
+  height: auto !important;
+  padding: 0 2px !important;
+  color: var(--muted) !important;
+  background: transparent !important;
+  border: 0 !important;
+  font-family: var(--font-mono) !important;
+  font-size: var(--font-size-caption) !important;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.gn-diff-search-popover__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0;
+}
+
+.gn-diff-search-popover__action.gn-button {
+  --gn-button-height: 28px;
+  --gn-button-icon-size: 13px;
+  width: 24px;
+  min-width: 24px;
+  height: 28px;
+  padding: 0;
+  border-radius: var(--radius-small);
+}
+
+.gn-diff-search-popover__action.gn-button:disabled {
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+  opacity: 0.55;
+}
+
+.gn-diff-search-popover__action.gn-button:focus-visible {
+  outline-offset: 1px;
+}

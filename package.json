@@ -19,6 +19,7 @@
     "smoke:m3-01": "pnpm build && node scripts/gn-m3-01-electron-smoke.mjs",
     "smoke:m3-02": "pnpm build && node scripts/gn-m3-02-electron-smoke.mjs",
     "assets:icon": "node scripts/generate-app-icon.mjs",
+    "assets:open-in-icons": "pnpm --filter @gitnest/desktop exec electron ../../scripts/generate-open-in-icons.cjs",
     "dist:win": "node scripts/build-windows-release.mjs",
     "audit:win": "node scripts/audit-windows-release.mjs",
     "smoke:m3-03": "node scripts/gn-m3-03-package-smoke.mjs"

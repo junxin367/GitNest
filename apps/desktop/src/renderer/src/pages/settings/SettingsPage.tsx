@@ -17,6 +17,8 @@ import type {
 
 import type { AccountController } from "../../features/account-manage/useAccounts";
 import { Icon } from "../../shared/ui/Icon";
+import { LayerPortal } from "../../shared/ui/LayerPortal";
+import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
 
 interface SettingsPageProps {
@@ -102,38 +104,28 @@ export function SettingsPage({
         </div>
       </section>
 
-      {(accounts.notice ||
-        (accounts.error && accounts.overview)) && (
-        <div
-          className={`workspace-feedback ${
-            accounts.error ? "error" : "success"
-          }`}
-          role={accounts.error ? "alert" : "status"}
-        >
-          <Icon
-            name={accounts.error ? "warning" : "check"}
-          />
-          <div>
-            <strong>
-              {accounts.error
+      <ToastViewport>
+        {(accounts.notice ||
+          (accounts.error && accounts.overview)) && (
+          <Toast
+            closeLabel="关闭账号提示"
+            icon={accounts.error ? "warning" : "check"}
+            key="account-feedback"
+            message={
+              accounts.error?.message ??
+              accounts.notice ??
+              ""
+            }
+            onClose={accounts.clearFeedback}
+            title={
+              accounts.error
                 ? "账号操作未完成"
-                : "账号操作完成"}
-            </strong>
-            <span>
-              {accounts.error?.message ?? accounts.notice}
-            </span>
-          </div>
-          <button
-            aria-label="关闭账号提示"
-            className="icon-button"
-            onClick={accounts.clearFeedback}
-            title="关闭账号提示"
-            type="button"
-          >
-            <Icon name="close" />
-          </button>
-        </div>
-      )}
+                : "账号操作完成"
+            }
+            tone={accounts.error ? "error" : "success"}
+          />
+        )}
+      </ToastViewport>
 
       <section className="settings-grid">
         <article className="panel account-create-panel">
@@ -500,8 +492,9 @@ function AccountRemovalDialog({
   }
 
   return (
-    <div className="command-dialog-backdrop">
-      <section
+    <LayerPortal>
+      <div className="command-dialog-backdrop">
+        <section
         aria-describedby="account-removal-description"
         aria-labelledby="account-removal-title"
         aria-modal="true"
@@ -580,8 +573,9 @@ function AccountRemovalDialog({
             </button>
           </div>
         </footer>
-      </section>
-    </div>
+        </section>
+      </div>
+    </LayerPortal>
   );
 }
 

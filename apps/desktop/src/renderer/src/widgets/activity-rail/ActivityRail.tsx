@@ -3,75 +3,133 @@ import { Icon } from "../../shared/ui/Icon";
 import type { AppView } from "../../app/navigation";
 
 const primaryItems: Array<{
-  id: Exclude<AppView, "settings">;
+  id: "workspace" | "operations";
   label: string;
   icon: IconName;
 }> = [
   { id: "workspace", label: "Workspace 总览", icon: "grid" },
-  { id: "repository", label: "当前仓库", icon: "repository" },
   { id: "operations", label: "操作中心", icon: "operations" }
 ];
 
 interface ActivityRailProps {
   activeView: AppView;
-  hasRepository: boolean;
+  operationAttentionCount: number;
+  searchOpen: boolean;
+  sidebarCollapsed: boolean;
+  terminalDisabled: boolean;
+  terminalTitle: string;
+  theme: "dark" | "light";
   onNavigate(view: AppView): void;
+  onOpenSearch(): void;
+  onOpenTerminal(): void;
+  onToggleSidebar(): void;
+  onToggleTheme(): void;
 }
 
 export function ActivityRail({
   activeView,
-  hasRepository,
-  onNavigate
+  operationAttentionCount,
+  searchOpen,
+  sidebarCollapsed,
+  terminalDisabled,
+  terminalTitle,
+  theme,
+  onNavigate,
+  onOpenSearch,
+  onOpenTerminal,
+  onToggleSidebar,
+  onToggleTheme
 }: ActivityRailProps) {
   return (
     <nav className="activity-rail" aria-label="主导航">
-      <div className="rail-brand" aria-hidden="true">
-        <Icon name="layers" size={19} />
-      </div>
-
-      <div className="rail-group">
-        {primaryItems.map((item) => (
-          <button
-            aria-current={
-              item.id === activeView ? "page" : undefined
-            }
-            aria-label={item.label}
-            className={`rail-button${
-              item.id === activeView ? " active" : ""
-            }`}
-            disabled={
-              item.id === "repository" && !hasRepository
-            }
-            key={item.label}
-            onClick={() => onNavigate(item.id)}
-            title={
-              item.id === "repository" && !hasRepository
-                ? "请先从 Workspace 选择一个仓库"
-                : item.label
-            }
-            type="button"
-          >
-            <Icon name={item.icon} size={18} />
-          </button>
-        ))}
-      </div>
-
-      <div className="rail-group rail-group-bottom">
-        <button
-          aria-label="设置"
-          aria-current={
-            activeView === "settings" ? "page" : undefined
+      <button
+        aria-label={
+          sidebarCollapsed ? "展开仓库目录" : "折叠仓库目录"
+        }
+        aria-pressed={sidebarCollapsed}
+        className="rail-button"
+        onClick={onToggleSidebar}
+        title={
+          sidebarCollapsed ? "展开仓库目录" : "折叠仓库目录"
+        }
+        type="button"
+      >
+        <Icon
+          name={
+            sidebarCollapsed ? "sidebarExpand" : "sidebarCollapse"
           }
+          size={20}
+        />
+      </button>
+      <div className="rail-divider" aria-hidden="true" />
+      {primaryItems.map((item) => (
+        <button
+          aria-current={item.id === activeView ? "page" : undefined}
+          aria-label={item.label}
           className={`rail-button${
-            activeView === "settings" ? " active" : ""
+            item.id === activeView ? " active" : ""
           }`}
-          onClick={() => onNavigate("settings")}
-          title="设置"
+          key={item.id}
+          onClick={() => onNavigate(item.id)}
+          title={item.label}
           type="button"
         >
-          <Icon name="settings" size={18} />
+          <Icon name={item.icon} size={20} />
+          {item.id === "operations" && operationAttentionCount > 0 ? (
+            <span className="rail-badge">
+              {operationAttentionCount > 99
+                ? "99+"
+                : operationAttentionCount}
+            </span>
+          ) : null}
         </button>
-      </div>
+      ))}
+      <button
+        aria-label="全局搜索"
+        aria-pressed={searchOpen}
+        className={`rail-button${searchOpen ? " active" : ""}`}
+        onClick={onOpenSearch}
+        title="全局搜索"
+        type="button"
+      >
+        <Icon name="search" size={20} />
+      </button>
+      <div className="rail-spacer" />
+      <button
+        aria-label="打开终端"
+        className="rail-button"
+        disabled={terminalDisabled}
+        onClick={onOpenTerminal}
+        title={terminalTitle}
+        type="button"
+      >
+        <Icon name="terminal" size={20} />
+      </button>
+      <button
+        aria-label={
+          theme === "dark" ? "切换浅色主题" : "切换深色主题"
+        }
+        className="rail-button"
+        onClick={onToggleTheme}
+        title={
+          theme === "dark" ? "切换浅色主题" : "切换深色主题"
+        }
+        type="button"
+      >
+        <Icon name={theme === "dark" ? "sun" : "moon"} size={20} />
+      </button>
+      <button
+        aria-label="设置"
+        aria-current={activeView === "settings" ? "page" : undefined}
+        className={`rail-button${
+          activeView === "settings" ? " active" : ""
+        }`}
+        onClick={() => onNavigate("settings")}
+        title="设置"
+        type="button"
+      >
+        <Icon name="settings" size={20} />
+      </button>
     </nav>
   );
 }

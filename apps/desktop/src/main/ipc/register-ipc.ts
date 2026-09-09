@@ -2,14 +2,18 @@ import {
   app,
   BrowserWindow,
   ipcMain,
+  shell,
   type IpcMainInvokeEvent
 } from "electron";
+import { stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import {
+  dirname,
   isAbsolute,
   normalize,
   relative,
-  resolve
+  resolve,
+  sep
 } from "node:path";
 
 import {
@@ -22,10 +26,16 @@ import {
   type GitReadErrorDto,
   type GitReadResult,
   type AddWorkspaceEntryRequest,
+  type ExternalApplicationKindDto,
   type IpcArguments,
   type IpcChannel,
   type IpcResult,
+  type OpenDirectoryRequest,
+  type OpenDiffViewerRequest,
+  type OpenExternalApplicationRequest,
   type OpenExternalTerminalRequest,
+  type OpenFileLocationRequest,
+  type RemoveWorkspaceEntryRequest,
   type RemoveAccountRequest,
   type RepositoryInspectionRequest,
   type RepositoryCommitRequest,
@@ -39,6 +49,7 @@ import {
   type RuntimeInfo,
   type RuntimePlatform,
   type SaveAccountRequest,
+  type RepositoryTargetDto,
   type SelectRepositoryTargetRequest,
   type SelectWorkspaceEntryRequest,
   type SetWorkspaceGroupCollapsedRequest,
@@ -59,6 +70,7 @@ import {
   selectWorkspaceDirectory,
   selectWorktreeDirectory
 } from "../adapters/dialog.adapter";
+import { openDiffViewerWindow } from "../windows/diff-viewer-window";
 
 let registered = false;
 const MAX_MUTATION_PATHS = 200;
@@ -75,6 +87,15 @@ const EXTERNAL_TERMINAL_KINDS = new Set([
   "windows-terminal",
   "powershell",
   "cmd",
+  "git-bash"
+]);
+const EXTERNAL_APPLICATION_KINDS = new Set([
+  "vscode",
+  "cursor",
+  "intellij-idea",
+  "sublime-text",
+  "file-explorer",
+  "terminal",
   "git-bash"
 ]);
 const ACCOUNT_PROVIDERS = new Set([
@@ -113,6 +134,35 @@ export function registerIpcHandlers(
   );
 
   registerHandler(
+    IPC_CHANNELS.systemListExternalApplications,
+    () =>
+      captureGitRead(async () =>
+        (
+          await services.externalApplication.listAvailable()
+        ).map((profile) => ({
+          kind: profile.kind,
+          label: profile.label,
+          ...(profile.iconDataUrl
+            ? { iconDataUrl: profile.iconDataUrl }
+            : {})
+        }))
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.systemOpenExternalApplication,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input =
+          validateOpenExternalApplicationRequest(request);
+        return services.externalApplication.open(
+          input.context,
+          input.kind
+        );
+      })
+  );
+
+  registerHandler(
     IPC_CHANNELS.systemListExternalTerminals,
     () =>
       captureGitRead(async () =>
@@ -135,6 +185,106 @@ export function registerIpcHandlers(
           input.target,
           input.kind
         );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.systemOpenDirectory,
+    (_event, request) =>
+      captureGitRead(async () => {
+        const input = validateOpenDirectoryRequest(request);
+        const workspace = await services.workspace.getCurrent();
+        const worktree = workspace.worktrees.find(
+          (candidate) =>
+            candidate.repositoryId ===
+              input.target.repositoryId &&
+            candidate.id === input.target.worktreeId
+        );
+
+        if (!worktree) {
+          throw new GitError(
+            "DIRECTORY_UNAVAILABLE",
+            "The requested Worktree directory is unavailable."
+          );
+        }
+
+        const openError = await shell.openPath(
+          worktree.path
+        );
+        if (openError) {
+          throw new GitError(
+            "DIRECTORY_UNAVAILABLE",
+            openError
+          );
+        }
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.systemOpenFileLocation,
+    (_event, request) =>
+      captureGitRead(async () => {
+        const input =
+          validateOpenFileLocationRequest(request);
+        const workspace = await services.workspace.getCurrent();
+        const worktree = workspace.worktrees.find(
+          (candidate) =>
+            candidate.repositoryId ===
+              input.target.repositoryId &&
+            candidate.id === input.target.worktreeId
+        );
+
+        if (!worktree) {
+          throw new GitError(
+            "DIRECTORY_UNAVAILABLE",
+            "The requested Worktree directory is unavailable."
+          );
+        }
+
+        const rootPath = resolve(worktree.path);
+        const filePath = resolve(rootPath, input.path);
+        const pathFromRoot = relative(rootPath, filePath);
+        if (
+          !pathFromRoot ||
+          pathFromRoot === ".." ||
+          pathFromRoot.startsWith(`..${sep}`) ||
+          isAbsolute(pathFromRoot)
+        ) {
+          throw new GitError(
+            "INVALID_REQUEST",
+            "File locations must stay inside the selected Worktree."
+          );
+        }
+
+        let fileExists = true;
+        try {
+          await stat(filePath);
+        } catch (error) {
+          if (!isMissingFilesystemPath(error)) {
+            throw new GitError(
+              "DIRECTORY_UNAVAILABLE",
+              "The requested file location is unavailable."
+            );
+          }
+          fileExists = false;
+        }
+
+        if (fileExists) {
+          shell.showItemInFolder(filePath);
+          return;
+        }
+
+        const parentPath = dirname(filePath);
+        let openError = await shell.openPath(parentPath);
+        if (openError && parentPath !== rootPath) {
+          openError = await shell.openPath(rootPath);
+        }
+        if (openError) {
+          throw new GitError(
+            "DIRECTORY_UNAVAILABLE",
+            openError
+          );
+        }
       })
   );
 
@@ -230,6 +380,14 @@ export function registerIpcHandlers(
     getSenderWindow(event).close();
   });
 
+  registerHandler(
+    IPC_CHANNELS.windowOpenDiffViewer,
+    (_event, request): Promise<void> =>
+      openDiffViewerWindow(
+        validateOpenDiffViewerRequest(request)
+      )
+  );
+
   registerHandler(IPC_CHANNELS.gitGetEnvironment, () =>
     captureGitRead(() => services.gitInspection.getEnvironment())
   );
@@ -284,6 +442,16 @@ export function registerIpcHandlers(
       captureWorkspace(() =>
         services.workspace.updateEntry(
           validateUpdateWorkspaceEntryRequest(request)
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.workspaceRemoveEntry,
+    (_event, request) =>
+      captureWorkspace(() =>
+        services.workspace.removeEntry(
+          validateRemoveWorkspaceEntryRequest(request)
         )
       )
   );
@@ -566,6 +734,18 @@ async function captureGitRead<Value>(
   }
 }
 
+function isMissingFilesystemPath(error: unknown): boolean {
+  const code =
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string"
+      ? error.code
+      : "";
+
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
 async function captureWorkspace<Value>(
   action: () => Promise<Value>
 ): Promise<WorkspaceResult<Value>> {
@@ -733,6 +913,48 @@ function validateUpdateWorkspaceEntryRequest(
     ...(displayName === undefined ? {} : { displayName }),
     ...(order === undefined ? {} : { order })
   };
+}
+
+function validateRemoveWorkspaceEntryRequest(
+  request: unknown
+): RemoveWorkspaceEntryRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("entryId" in request) ||
+    typeof request.entryId !== "string"
+  ) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "Removing a Workspace entry requires an entry id."
+    );
+  }
+
+  if ("target" in request && request.target !== undefined) {
+    if (
+      !request.target ||
+      typeof request.target !== "object" ||
+      !("repositoryId" in request.target) ||
+      typeof request.target.repositoryId !== "string" ||
+      !("worktreeId" in request.target) ||
+      typeof request.target.worktreeId !== "string"
+    ) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "Removing a repository requires a repository and worktree id."
+      );
+    }
+
+    return {
+      entryId: request.entryId,
+      target: {
+        repositoryId: request.target.repositoryId,
+        worktreeId: request.target.worktreeId
+      } satisfies RepositoryTargetDto
+    };
+  }
+
+  return { entryId: request.entryId };
 }
 
 function validateSetGroupCollapsedRequest(
@@ -1127,6 +1349,154 @@ export function validateOpenExternalTerminalRequest(
     target: validateRepositoryTarget(request.target),
     kind: request.kind as OpenExternalTerminalRequest["kind"]
   };
+}
+
+export function validateOpenExternalApplicationRequest(
+  request: unknown
+): OpenExternalApplicationRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("context" in request) ||
+    !request.context ||
+    typeof request.context !== "object" ||
+    !("scope" in request.context) ||
+    typeof request.context.scope !== "string" ||
+    !("kind" in request) ||
+    typeof request.kind !== "string" ||
+    !EXTERNAL_APPLICATION_KINDS.has(request.kind)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Opening an external application requires a supported context and application kind."
+    );
+  }
+
+  const context =
+    request.context.scope === "workspace"
+      ? { scope: "workspace" as const }
+      : request.context.scope === "repository" &&
+          "target" in request.context
+        ? {
+            scope: "repository" as const,
+            target: validateRepositoryTarget(
+              request.context.target
+            )
+          }
+        : request.context.scope === "file" &&
+            "target" in request.context &&
+            "path" in request.context
+          ? {
+              scope: "file" as const,
+              target: validateRepositoryTarget(
+                request.context.target
+              ),
+              path: validateRelativeWorktreeFilePath(
+                request.context.path
+              )
+            }
+        : undefined;
+  if (!context) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "External applications support only Workspace, repository, and file contexts."
+    );
+  }
+
+  return {
+    context,
+    kind: request.kind as ExternalApplicationKindDto
+  };
+}
+
+export function validateOpenDirectoryRequest(
+  request: unknown
+): OpenDirectoryRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("target" in request)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Opening a directory requires a repository target."
+    );
+  }
+
+  return {
+    target: validateRepositoryTarget(request.target)
+  };
+}
+
+export function validateOpenFileLocationRequest(
+  request: unknown
+): OpenFileLocationRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("target" in request) ||
+    !("path" in request)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Opening a file location requires an exact relative path inside the Worktree."
+    );
+  }
+
+  return {
+    target: validateRepositoryTarget(request.target),
+    path: validateRelativeWorktreeFilePath(request.path)
+  };
+}
+
+export function validateOpenDiffViewerRequest(
+  request: unknown
+): OpenDiffViewerRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("target" in request) ||
+    !("path" in request) ||
+    !("mode" in request) ||
+    !["unstaged", "staged", "untracked"].includes(
+      String(request.mode)
+    )
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Opening the Diff viewer requires a target, relative path, and supported mode."
+    );
+  }
+
+  return {
+    target: validateRepositoryTarget(request.target),
+    path: validateRelativeWorktreeFilePath(request.path),
+    mode: request.mode as OpenDiffViewerRequest["mode"]
+  };
+}
+
+function validateRelativeWorktreeFilePath(path: unknown): string {
+  if (
+    typeof path !== "string" ||
+    !path ||
+    path.length > MAX_MUTATION_PATH_LENGTH ||
+    path === "." ||
+    path.includes("\0") ||
+    isAbsolute(path) ||
+    /^[a-zA-Z]:/.test(path) ||
+    path.startsWith("/") ||
+    path.startsWith("\\") ||
+    path
+      .split(/[\\/]+/)
+      .some((segment) => segment === ".." || segment === ".")
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Opening a file location requires an exact relative path inside the Worktree."
+    );
+  }
+
+  return path;
 }
 
 export function validateSaveAccountRequest(

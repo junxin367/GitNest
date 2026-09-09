@@ -6,9 +6,36 @@ export const STATUS_ARGUMENTS = [
   "--untracked-files=all"
 ] as const;
 
+export const UNSTAGED_DIFF_PATH_ARGUMENTS = [
+  "-c",
+  "diff.autoRefreshIndex=false",
+  "--literal-pathspecs",
+  "diff",
+  "--no-ext-diff",
+  "--no-textconv",
+  "--numstat",
+  "--find-renames",
+  "-z",
+  "--"
+] as const;
+
+export const STAGED_DIFF_STAT_ARGUMENTS = [
+  "-c",
+  "diff.autoRefreshIndex=false",
+  "--literal-pathspecs",
+  "diff",
+  "--cached",
+  "--no-ext-diff",
+  "--no-textconv",
+  "--numstat",
+  "--find-renames",
+  "-z",
+  "--"
+] as const;
+
 export const BRANCH_ARGUMENTS = [
   "for-each-ref",
-  "--format=%(refname)%1f%(refname:short)%1f%(objectname)%1f%(upstream:short)%1f%(HEAD)%1f%(worktreepath)%1e",
+  "--format=%(refname)%1f%(refname:short)%1f%(objectname)%1f%(upstream:short)%1f%(HEAD)%1f%(worktreepath)%1f%(authordate:iso-strict)%1e",
   "refs/heads",
   "refs/remotes"
 ] as const;
@@ -25,7 +52,8 @@ export function historyArguments(limit: number): string[] {
     "log",
     `--max-count=${limit}`,
     "--date=iso-strict",
-    "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P%x1e"
+    "--decorate=short",
+    "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P%x1f%D%x1e"
   ];
 }
 
@@ -38,7 +66,8 @@ export function historyPageArguments(
     `--max-count=${limit}`,
     `--skip=${offset}`,
     "--date=iso-strict",
-    "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P%x1e"
+    "--decorate=short",
+    "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P%x1f%D%x1e"
   ];
 }
 

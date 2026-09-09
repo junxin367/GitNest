@@ -8,6 +8,7 @@ import type {
   AccountOverviewDto,
   GitEnvironmentDto,
   GitReadErrorDto,
+  RepositoryCommitDto,
   RepositoryStatusSnapshotDto,
   RuntimeInfo,
   UpdateWorkspaceEntryRequest,
@@ -23,10 +24,13 @@ import {
   getSnapshotChangeCount,
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
+import { copyTextToClipboard } from "../../shared/lib/copyTextToClipboard";
+import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
 import { Icon } from "../../shared/ui/Icon";
 
 interface DetailInspectorProps {
   accountOverview: AccountOverviewDto | null;
+  commit: RepositoryCommitDto["commit"] | null;
   gitEnvironment: GitEnvironmentDto | null;
   gitError: GitReadErrorDto | null;
   runtimeInfo: RuntimeInfo | null;
@@ -39,11 +43,12 @@ interface DetailInspectorProps {
   onOpenSettings(): void;
   onUpdateEntry(
     request: UpdateWorkspaceEntryRequest
-  ): Promise<void>;
+  ): Promise<boolean>;
 }
 
 export function DetailInspector({
   accountOverview,
+  commit,
   gitEnvironment,
   gitError,
   runtimeInfo,
@@ -71,6 +76,9 @@ export function DetailInspector({
     workspace?.selectedTarget
   );
   const [displayName, setDisplayName] = useState("");
+  const [commitNotice, setCommitNotice] = useState<string | null>(
+    null
+  );
   const repositoryAccountBinding =
     workspace?.selectedTarget
       ? accountOverview?.bindings.find(
@@ -114,6 +122,10 @@ export function DetailInspector({
     setDisplayName(selectedEntry?.displayName ?? "");
   }, [selectedEntry?.displayName, selectedEntry?.id]);
 
+  useEffect(() => {
+    setCommitNotice(null);
+  }, [commit?.hash]);
+
   const saveDisplayName = (event: FormEvent) => {
     event.preventDefault();
 
@@ -124,6 +136,153 @@ export function DetailInspector({
       });
     }
   };
+
+  if (commit) {
+    const commitRefs = commit.refs ?? [];
+    return (
+      <aside className="inspector commit-inspector">
+        <header className="inspector-head">
+          <div className="inspector-title">
+            <Icon name="commit" />
+            提交详情
+          </div>
+          <button
+            aria-label="折叠详情面板"
+            className="icon-button"
+            onClick={onClose}
+            title="折叠详情面板"
+            type="button"
+          >
+            <Icon name="close" />
+          </button>
+        </header>
+
+        <section className="inspector-section history-commit-summary">
+          <h2 className="selected-commit-title">
+            {commit.subject}
+          </h2>
+          <div className="commit-detail-meta">
+            <span>{commit.authorName}</span>
+            <code>{commit.hash}</code>
+            <span>
+              {formatCommitTimestamp(commit.authoredAt)}
+            </span>
+          </div>
+          {commitRefs.length > 0 && (
+            <div className="commit-refs">
+              {commitRefs.map((ref) => (
+                <span key={ref}>{ref}</span>
+              ))}
+            </div>
+          )}
+          <p className="selected-commit-body">
+            {commit.body}
+          </p>
+        </section>
+
+        <section className="inspector-section">
+          <div className="inspector-section-title">
+            提交信息
+          </div>
+          <dl className="detail-list commit-detail-list">
+            <DetailRow
+              label="Commit"
+              value={commit.hash}
+            />
+            <DetailRow
+              label="分支"
+              value={commitRefs.join(", ") || "—"}
+            />
+            <DetailRow
+              label="作者"
+              value={commit.authorName}
+            />
+            <DetailRow
+              label="提交时间"
+              value={formatCommitTimestamp(commit.authoredAt)}
+            />
+          </dl>
+        </section>
+
+        <section className="inspector-section">
+          <div className="inspector-section-title">
+            采集范围
+          </div>
+          <p className="selected-commit-body">
+            当前页面展示提交的哈希、主题、作者、时间和文件变更统计。
+          </p>
+        </section>
+
+        <section className="inspector-section">
+          <div className="inspector-section-title">
+            快捷操作
+          </div>
+          <div className="quick-grid">
+            <button
+              className="quick-button"
+              onClick={() => {
+                void copyTextToClipboard(commit.hash)
+                  .then(() =>
+                    setCommitNotice("Commit ID 已复制。")
+                  )
+                  .catch(() =>
+                    setCommitNotice(
+                      "当前环境不允许访问剪贴板，请手动复制。"
+                    )
+                  );
+              }}
+              type="button"
+            >
+              <Icon name="copy" />
+              复制 ID
+            </button>
+            <button
+              className="quick-button"
+              onClick={() =>
+                setCommitNotice(
+                  "远程查看暂未接入，当前仅展示本地提交快照。"
+                )
+              }
+              type="button"
+            >
+              <Icon name="external" />
+              远程查看
+            </button>
+            <button
+              className="quick-button"
+              onClick={() =>
+                setCommitNotice(
+                  "Cherry-pick 暂未接入，当前不会修改仓库。"
+                )
+              }
+              type="button"
+            >
+              <Icon name="commit" />
+              Cherry-pick
+            </button>
+            <button
+              className="quick-button"
+              onClick={() =>
+                setCommitNotice(
+                  "创建分支入口已保留，请从分支页面选择提交起点。"
+                )
+              }
+              type="button"
+            >
+              <Icon name="branch" />
+              创建分支
+            </button>
+          </div>
+          {commitNotice && (
+            <div className="inspector-note commit-action-notice">
+              <Icon name="activity" size={15} />
+              <p>{commitNotice}</p>
+            </div>
+          )}
+        </section>
+      </aside>
+    );
+  }
 
   return (
     <aside className="inspector">

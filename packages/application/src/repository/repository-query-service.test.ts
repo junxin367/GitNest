@@ -11,6 +11,7 @@ import {
   type InspectRepositoryOptions,
   type ReadCommitHistoryOptions,
   type ReadRepositoryDiffOptions,
+  type ReadRepositorySnapshotOptions,
   type RepositoryDiff,
   type RepositoryInspection,
   type RepositorySnapshot
@@ -29,6 +30,21 @@ const TARGET: RepositoryTarget = {
 const WORKTREE_PATH = "C:\\workspace\\repository";
 
 describe("RepositoryQueryService", () => {
+  it("requests per-file stats for the repository changes query", async () => {
+    const gitClient = new FakeGitClient();
+    const service = createService(gitClient);
+
+    await service.getChanges("changes_with_stats", TARGET);
+
+    expect(gitClient.snapshotCalls).toEqual([
+      {
+        repositoryPath: WORKTREE_PATH,
+        includeChangeStats: true,
+        signal: expect.any(AbortSignal)
+      }
+    ]);
+  });
+
   it("resolves registered targets inside Main and never accepts a renderer path", async () => {
     const gitClient = new FakeGitClient();
     const service = createService(gitClient);
@@ -117,6 +133,7 @@ describe("RepositoryQueryService", () => {
 class FakeGitClient implements GitClient {
   readonly snapshotCalls: Array<{
     repositoryPath: string;
+    includeChangeStats: boolean | undefined;
     signal: AbortSignal;
   }> = [];
   readonly diffCalls: Array<{
@@ -145,10 +162,14 @@ class FakeGitClient implements GitClient {
 
   readRepositorySnapshot(
     repositoryPath: string,
-    options?: GitReadOptions
+    options?: ReadRepositorySnapshotOptions
   ): Promise<RepositorySnapshot> {
     const signal = options?.signal ?? new AbortController().signal;
-    this.snapshotCalls.push({ repositoryPath, signal });
+    this.snapshotCalls.push({
+      repositoryPath,
+      includeChangeStats: options?.includeChangeStats,
+      signal
+    });
     this.#markSnapshotStarted();
 
     if (this.#blockSnapshots) {

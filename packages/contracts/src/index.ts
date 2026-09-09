@@ -18,6 +18,7 @@ export type {
 export type {
   BranchDto,
   ChangedPathDto,
+  ChangedPathStatsDto,
   CommitSummaryDto,
   GitEnvironmentDto,
   GitReadErrorCode,
@@ -62,11 +63,19 @@ export type {
   IpcResult
 } from "./ipc.contracts";
 export type {
+  ExternalApplicationKindDto,
+  ExternalApplicationOpenedDto,
+  ExternalApplicationProfileDto,
   ExternalTerminalKindDto,
   ExternalTerminalOpenedDto,
   ExternalTerminalProfileDto,
+  OpenExternalApplicationContextDto,
+  OpenExternalApplicationRequest,
+  OpenDirectoryRequest,
+  OpenDiffViewerRequest,
   GitNestBridge,
   OpenExternalTerminalRequest,
+  OpenFileLocationRequest,
   RuntimeInfo,
   RuntimePlatform
 } from "./system.contracts";
@@ -77,6 +86,7 @@ export type {
   RepositoryGroupDto,
   RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
+  RemoveWorkspaceEntryRequest,
   SelectRepositoryTargetRequest,
   SelectWorkspaceEntryRequest,
   SetWorkspaceGroupCollapsedRequest,

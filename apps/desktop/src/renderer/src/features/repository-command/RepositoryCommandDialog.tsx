@@ -10,6 +10,7 @@ import type {
 
 import { resolveWorkspaceTarget } from "../../entities/workspace/model";
 import { Icon } from "../../shared/ui/Icon";
+import { LayerPortal } from "../../shared/ui/LayerPortal";
 import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
 import {
   repositoryCommandLabel,
@@ -49,8 +50,9 @@ export function RepositoryCommandDialog({
   }, [busy, onCancel]);
 
   return (
-    <div className="command-dialog-backdrop">
-      <section
+    <LayerPortal>
+      <div className="command-dialog-backdrop">
+        <section
         aria-describedby="command-dialog-description"
         aria-labelledby="command-dialog-title"
         aria-modal="true"
@@ -182,8 +184,9 @@ export function RepositoryCommandDialog({
             </button>
           </div>
         </footer>
-      </section>
-    </div>
+        </section>
+      </div>
+    </LayerPortal>
   );
 }
 

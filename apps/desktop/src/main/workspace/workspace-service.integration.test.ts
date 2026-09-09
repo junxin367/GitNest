@@ -166,6 +166,98 @@ describe("WorkspaceService integration", () => {
     });
   });
 
+  it("removes an entry from Workspace without deleting its directory", async () => {
+    const localFixture = await createWorkspaceFixture();
+    const localAppData =
+      await createTemporaryDirectoryFixture(
+        "remove-entry-app-data"
+      );
+    const localStorePath = join(
+      localAppData.path,
+      "default.workspace.json"
+    );
+    let localTick = 0;
+    const localService = new WorkspaceService(
+      new GitCliClient(),
+      new NodeWorkspaceFileSystem(),
+      new JsonWorkspaceStore(localStorePath),
+      {
+        clock: () =>
+          `2026-09-04T11:${String(localTick++).padStart(2, "0")}:00.000Z`
+      }
+    );
+
+    try {
+      const meta = await localService.addEntry({
+        path: localFixture.metaRootPath,
+        source: "picker"
+      });
+      const metaEntry = meta.workspace.entries[0];
+      const nestedTarget = metaEntry?.groups
+        .find((group) => group.name === "svr")
+        ?.targets[0];
+
+      if (!nestedTarget || !metaEntry) {
+        throw new Error("Workspace fixture did not contain a nested repository.");
+      }
+      const withoutNested = await localService.removeEntry({
+        entryId: metaEntry.id,
+        target: nestedTarget
+      });
+      expect(
+        withoutNested.entries
+          .find((entry) => entry.id === metaEntry?.id)
+          ?.groups.some((group) =>
+            group.targets.some(
+              (target) =>
+                target.repositoryId ===
+                  nestedTarget?.repositoryId &&
+                target.worktreeId === nestedTarget?.worktreeId
+            )
+          )
+      ).toBe(false);
+      await expect(
+        access(localFixture.nestedRepositoryPath)
+      ).resolves.toBeUndefined();
+
+      const standalone = await localService.addEntry({
+        path: localFixture.standaloneRepositoryPath,
+        source: "manual"
+      });
+      const standaloneEntry = standalone.workspace.entries.find(
+        (entry) =>
+          entry.path === localFixture.standaloneRepositoryPath
+      );
+
+      expect(standaloneEntry).toBeDefined();
+      const removed = await localService.removeEntry({
+        entryId: standaloneEntry?.id as string
+      });
+
+      expect(
+        removed.entries.some(
+          (entry) => entry.id === standaloneEntry?.id
+        )
+      ).toBe(false);
+      await expect(
+        access(localFixture.standaloneRepositoryPath)
+      ).resolves.toBeUndefined();
+
+      const remaining = removed.entries.find(
+        (entry) => entry.id === metaEntry?.id
+      );
+      expect(remaining).toBeDefined();
+      const empty = await localService.removeEntry({
+        entryId: remaining?.id as string
+      });
+      expect(empty.entries).toHaveLength(0);
+      await expect(access(localFixture.metaRootPath)).resolves.toBeUndefined();
+    } finally {
+      await localFixture.dispose();
+      await localAppData.dispose();
+    }
+  }, 15_000);
+
   it("preserves the last known topology while a root is offline and recovers after it returns", async () => {
     const offlineFixture = await createWorkspaceFixture();
     const offlineAppData =

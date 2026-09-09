@@ -104,9 +104,10 @@ describe("GitCliClient integration", () => {
     );
   });
 
-  it("reads a lightweight repository snapshot", async () => {
+  it("reads a repository snapshot with change stats", async () => {
     const snapshot = await client.readRepositorySnapshot(
-      fixture.repositoryPath
+      fixture.repositoryPath,
+      { includeChangeStats: true }
     );
 
     expect(snapshot).toMatchObject({
@@ -116,6 +117,191 @@ describe("GitCliClient integration", () => {
       untracked: 1,
       conflicted: 0
     });
+    expect(snapshot.changes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "README.md",
+          unstagedStats: {
+            additions: 2,
+            deletions: 0
+          }
+        }),
+        expect.objectContaining({
+          path: "staged file.txt",
+          stagedStats: {
+            additions: 1,
+            deletions: 0
+          }
+        }),
+        expect.objectContaining({
+          path: "未跟踪 file.txt",
+          untrackedStats: {
+            additions: 1,
+            deletions: 0
+          }
+        })
+      ])
+    );
+  });
+
+  it("keeps lightweight snapshots free of per-file stats by default", async () => {
+    const snapshot = await client.readRepositorySnapshot(
+      fixture.repositoryPath
+    );
+
+    for (const change of snapshot.changes) {
+      expect(change).not.toHaveProperty("stagedStats");
+      expect(change).not.toHaveProperty("unstagedStats");
+      expect(change).not.toHaveProperty("untrackedStats");
+    }
+  });
+
+  it("reports only changed lines for a staged rename", async () => {
+    const renamedFixture =
+      await createTemporaryDirectoryFixture("renamed-stats");
+    const originalContent = `${Array.from(
+      { length: 20 },
+      (_, index) => `line ${index + 1}`
+    ).join("\n")}\n`;
+
+    try {
+      await runGit(renamedFixture.path, [
+        "init",
+        "--initial-branch=main",
+        "."
+      ]);
+      await runGit(renamedFixture.path, [
+        "config",
+        "user.name",
+        "GitNest Tests"
+      ]);
+      await runGit(renamedFixture.path, [
+        "config",
+        "user.email",
+        "gitnest@example.invalid"
+      ]);
+      await writeFile(
+        join(renamedFixture.path, "before.txt"),
+        originalContent,
+        "utf8"
+      );
+      await runGit(renamedFixture.path, ["add", "before.txt"]);
+      await runGit(renamedFixture.path, [
+        "commit",
+        "-m",
+        "Initial rename fixture"
+      ]);
+      await runGit(renamedFixture.path, [
+        "mv",
+        "before.txt",
+        "after.txt"
+      ]);
+      await writeFile(
+        join(renamedFixture.path, "after.txt"),
+        `${originalContent}added line\n`,
+        "utf8"
+      );
+      await runGit(renamedFixture.path, ["add", "after.txt"]);
+
+      const snapshot = await client.readRepositorySnapshot(
+        renamedFixture.path,
+        { includeChangeStats: true }
+      );
+
+      expect(snapshot.changes).toEqual([
+        expect.objectContaining({
+          path: "after.txt",
+          originalPath: "before.txt",
+          kind: "renamed",
+          stagedStats: {
+            additions: 1,
+            deletions: 0
+          }
+        })
+      ]);
+    } finally {
+      await renamedFixture.dispose();
+    }
+  });
+
+  it("filters mixed-line-ending stat changes while retaining real edits", async () => {
+    const normalizedFixture =
+      await createTemporaryDirectoryFixture(
+        "normalized-status"
+      );
+
+    try {
+      await runGit(normalizedFixture.path, [
+        "init",
+        "--initial-branch=main",
+        "."
+      ]);
+      await runGit(normalizedFixture.path, [
+        "config",
+        "core.autocrlf",
+        "true"
+      ]);
+      await runGit(normalizedFixture.path, [
+        "config",
+        "user.name",
+        "GitNest Tests"
+      ]);
+      await runGit(normalizedFixture.path, [
+        "config",
+        "user.email",
+        "gitnest@example.invalid"
+      ]);
+      const filePath = join(
+        normalizedFixture.path,
+        "MixedLineEndings.java"
+      );
+      await writeFile(
+        filePath,
+        "first line\nsecond line\nthird line\n",
+        "utf8"
+      );
+      await runGit(normalizedFixture.path, ["add", "--all"]);
+      await runGit(normalizedFixture.path, [
+        "commit",
+        "-m",
+        "Initial normalized file"
+      ]);
+
+      await writeFile(
+        filePath,
+        "first line\r\nsecond line\nthird line\r\n",
+        "utf8"
+      );
+
+      await expect(
+        client.readRepositorySnapshot(normalizedFixture.path)
+      ).resolves.toMatchObject({
+        staged: 0,
+        unstaged: 0,
+        changes: []
+      });
+
+      await writeFile(
+        filePath,
+        "first line\r\nchanged line\nthird line\r\n",
+        "utf8"
+      );
+
+      await expect(
+        client.readRepositorySnapshot(normalizedFixture.path)
+      ).resolves.toMatchObject({
+        staged: 0,
+        unstaged: 1,
+        changes: [
+          expect.objectContaining({
+            path: "MixedLineEndings.java",
+            worktreeStatus: "M"
+          })
+        ]
+      });
+    } finally {
+      await normalizedFixture.dispose();
+    }
   });
 
   it("reads staged, unstaged, and untracked diffs through bounded pathspec commands", async () => {
@@ -217,6 +403,21 @@ describe("GitCliClient integration", () => {
       join(fixture.repositoryPath, "binary file.bin"),
       Buffer.from([0, 1, 2, 255])
     );
+
+    const snapshot = await client.readRepositorySnapshot(
+      fixture.repositoryPath,
+      { includeChangeStats: true }
+    );
+    expect(
+      snapshot.changes.find(
+        (change) => change.path === "binary file.bin"
+      )
+    ).toMatchObject({
+      untrackedStats: {
+        additions: 0,
+        deletions: 0
+      }
+    });
 
     await expect(
       client.readRepositoryDiff(fixture.repositoryPath, {

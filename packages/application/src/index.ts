@@ -21,6 +21,15 @@ export {
   type SaveAccountInput
 } from "./account/account-service";
 export { GitInspectionService } from "./git/git-inspection-service";
+export {
+  ExternalApplicationService,
+  type ExternalApplicationContext,
+  type ExternalApplicationKind,
+  type ExternalApplicationOpened,
+  type ExternalApplicationPort,
+  type ExternalApplicationProfile,
+  type ExternalApplicationWorkspace
+} from "./external-application/external-application-service";
 export { ConcurrencyLimiter } from "./operations/concurrency-limiter";
 export {
   RepositoryCommandService,
@@ -74,6 +83,7 @@ export {
   WorkspaceService,
   type AddWorkspaceEntryInput,
   type AddWorkspaceEntrySource,
+  type RemoveWorkspaceEntryInput,
   type SetWorkspaceGroupCollapsedInput,
   type UpdateWorkspaceEntryInput,
   type WorkspaceMutationResult

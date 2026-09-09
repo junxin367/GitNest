@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { parseStatusPorcelainV2 } from "./status-porcelain-v2";
+import {
+  parseStatusPorcelainV2,
+  reconcileStatOnlyUnstagedChanges
+} from "./status-porcelain-v2";
 
 describe("parseStatusPorcelainV2", () => {
   it("parses branch metadata and all change classes", () => {
@@ -54,5 +57,64 @@ describe("parseStatusPorcelainV2", () => {
 
     expect(snapshot.head).toBe("");
     expect(snapshot.branch).toBeUndefined();
+  });
+
+  it("removes only ordinary stat-only worktree modifications and recomputes counts", () => {
+    const snapshot = parseStatusPorcelainV2(
+      [
+        "# branch.oid abcdef123456",
+        "# branch.head main",
+        "1 .M N... 100644 100644 100644 aaaaaaa bbbbbbb stat-only.java",
+        "1 MM N... 100644 100644 100644 aaaaaaa bbbbbbb staged-and-stat-only.java",
+        "1 .M N... 100644 100644 100644 aaaaaaa bbbbbbb real-edit.java",
+        "1 .D N... 100644 100644 000000 aaaaaaa 0000000 deleted.java",
+        "2 R. N... 100644 100644 100644 aaaaaaa bbbbbbb R100 renamed.java",
+        "old-name.java",
+        "? untracked.java",
+        "u UU N... 100644 100644 100644 100644 aaaaaaa bbbbbbb ccccccc conflict.java",
+        ""
+      ].join("\0"),
+      "2026-09-08T00:00:00.000Z"
+    );
+
+    const reconciled = reconcileStatOnlyUnstagedChanges(
+      snapshot,
+      ["real-edit.java"]
+    );
+
+    expect(reconciled).toMatchObject({
+      staged: 2,
+      unstaged: 2,
+      untracked: 1,
+      conflicted: 1,
+      refreshedAt: "2026-09-08T00:00:00.000Z"
+    });
+    expect(reconciled.changes).toEqual([
+      expect.objectContaining({
+        path: "staged-and-stat-only.java",
+        indexStatus: "M",
+        worktreeStatus: "."
+      }),
+      expect.objectContaining({
+        path: "real-edit.java",
+        worktreeStatus: "M"
+      }),
+      expect.objectContaining({
+        path: "deleted.java",
+        worktreeStatus: "D"
+      }),
+      expect.objectContaining({
+        kind: "renamed",
+        path: "renamed.java"
+      }),
+      expect.objectContaining({
+        kind: "untracked",
+        path: "untracked.java"
+      }),
+      expect.objectContaining({
+        kind: "unmerged",
+        path: "conflict.java"
+      })
+    ]);
   });
 });

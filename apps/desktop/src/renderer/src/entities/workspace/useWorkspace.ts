@@ -7,6 +7,7 @@ import {
 
 import type {
   AddWorkspaceEntryRequest,
+  RemoveWorkspaceEntryRequest,
   RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
   UpdateWorkspaceEntryRequest,
@@ -39,6 +40,11 @@ export interface WorkspaceController {
   addManualPath(path: string): Promise<boolean>;
   addDroppedFiles(files: File[]): Promise<void>;
   refresh(): Promise<void>;
+  rescan(): Promise<boolean>;
+  removeEntry(
+    entryId: string,
+    target?: RepositoryTargetDto
+  ): Promise<boolean>;
   selectEntry(entryId: string): Promise<void>;
   selectTarget(target: RepositoryTargetDto): Promise<void>;
   setGroupCollapsed(
@@ -46,7 +52,7 @@ export interface WorkspaceController {
     groupId: string,
     collapsed: boolean
   ): Promise<void>;
-  updateEntry(request: UpdateWorkspaceEntryRequest): Promise<void>;
+  updateEntry(request: UpdateWorkspaceEntryRequest): Promise<boolean>;
   clearFeedback(): void;
 }
 
@@ -273,6 +279,68 @@ export function useWorkspace(): WorkspaceController {
     }
   }, [setUnexpectedError]);
 
+  const rescan = useCallback(async (): Promise<boolean> => {
+    setOperation("scanning");
+    setError(null);
+    setNotice(null);
+
+    try {
+      const result = await window.gitnest.workspace.rescan();
+
+      if (result.ok) {
+        setWorkspace(result.value);
+        setNotice("Workspace 重新扫描已完成。");
+        return true;
+      }
+
+      setError(result.error);
+      return false;
+    } catch (reason) {
+      setUnexpectedError(reason);
+      return false;
+    } finally {
+      setOperation(null);
+    }
+  }, [setUnexpectedError, setWorkspace]);
+
+  const removeEntry = useCallback(
+    async (
+      entryId: string,
+      target?: RepositoryTargetDto
+    ): Promise<boolean> => {
+      setOperation("saving");
+      setError(null);
+      setNotice(null);
+
+      const request: RemoveWorkspaceEntryRequest = {
+        entryId,
+        ...(target ? { target } : {})
+      };
+
+      try {
+        const result =
+          await window.gitnest.workspace.removeEntry(request);
+
+        if (result.ok) {
+          setWorkspace(result.value);
+          setNotice(
+            "已移出 Workspace；磁盘上的仓库文件未被删除。"
+          );
+          return true;
+        }
+
+        setError(result.error);
+        return false;
+      } catch (reason) {
+        setUnexpectedError(reason);
+        return false;
+      } finally {
+        setOperation(null);
+      }
+    },
+    [setUnexpectedError, setWorkspace]
+  );
+
   const selectEntry = useCallback(
     async (entryId: string) => {
       if (workspace?.selectedEntryId === entryId) {
@@ -347,7 +415,9 @@ export function useWorkspace(): WorkspaceController {
   );
 
   const updateEntry = useCallback(
-    async (request: UpdateWorkspaceEntryRequest) => {
+    async (
+      request: UpdateWorkspaceEntryRequest
+    ): Promise<boolean> => {
       setOperation("saving");
       setError(null);
 
@@ -357,11 +427,14 @@ export function useWorkspace(): WorkspaceController {
         if (result.ok) {
           setWorkspace(result.value);
           setNotice("顶层条目设置已保存。");
+          return true;
         } else {
           setError(result.error);
+          return false;
         }
       } catch (reason) {
         setUnexpectedError(reason);
+        return false;
       } finally {
         setOperation(null);
       }
@@ -388,6 +461,8 @@ export function useWorkspace(): WorkspaceController {
       addManualPath,
       addDroppedFiles,
       refresh,
+      rescan,
+      removeEntry,
       selectEntry,
       selectTarget,
       setGroupCollapsed,
@@ -406,6 +481,8 @@ export function useWorkspace(): WorkspaceController {
       addManualPath,
       addDroppedFiles,
       refresh,
+      rescan,
+      removeEntry,
       selectEntry,
       selectTarget,
       setGroupCollapsed,

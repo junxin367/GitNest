@@ -1,0 +1,2476 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GitNest Diff Viewer</title>
+  <link rel="stylesheet" href="./button.css" />
+  <link rel="stylesheet" href="./input.css" />
+  <link rel="stylesheet" href="./diff-search-popover.css" />
+  <style>
+    :root {
+      color-scheme: dark;
+      --font-size-caption: 12px;
+      --font-size-emphasis: 16px;
+      --line-height-body: 1.5;
+      --font-weight-semibold: 600;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 24px;
+      --space-6: 32px;
+      --radius-small: 4px;
+      --radius-regular: 8px;
+      --radius-large: 12px;
+      --control-compact: 32px;
+      --icon-small: 16px;
+      --icon-regular: 20px;
+      --motion-micro: 180ms;
+      --color-text-disabled: #657486;
+      --color-focus: #7de3d7;
+      --canvas: #090d12;
+      --surface: #101721;
+      --surface-2: #151e2a;
+      --surface-3: #1a2532;
+      --surface-hover: #1d2937;
+      --border: #2a3747;
+      --border-soft: #202b38;
+      --text: #ecf2f8;
+      --text-soft: #b9c5d2;
+      --muted: #7f8c9b;
+      --accent: #61a8ff;
+      --accent-soft: rgba(97, 168, 255, 0.14);
+      --green: #52d49a;
+      --green-soft: rgba(50, 190, 125, 0.14);
+      --green-gutter: rgba(50, 190, 125, 0.2);
+      --red: #ff7c86;
+      --red-soft: rgba(238, 83, 96, 0.14);
+      --red-gutter: rgba(238, 83, 96, 0.2);
+      --yellow: #f2c766;
+      --purple: #b69cff;
+      --code-bg: #0c1219;
+      --code-border: #1c2733;
+      --selection: rgba(97, 168, 255, 0.22);
+      --shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
+      --shadow-popover: 0 14px 38px rgba(0, 0, 0, 0.28);
+      --font-sans: Inter, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+      --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      color: var(--text);
+      background: var(--canvas);
+      font-family: var(--font-sans);
+      font-size: 13px;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      color: inherit;
+      touch-action: manipulation;
+    }
+
+    button,
+    a {
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    button:focus-visible,
+    a:focus-visible,
+    input:focus-visible {
+      outline: 1px solid var(--color-focus);
+      outline-offset: 2px;
+    }
+
+    .icon {
+      display: block;
+      flex: 0 0 auto;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 1.8;
+    }
+
+    .app {
+      display: grid;
+      grid-template-rows: 42px minmax(0, 1fr) 24px;
+      width: 100vw;
+      height: 100vh;
+      min-width: 920px;
+      background: var(--canvas);
+    }
+
+    .titlebar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      padding: 0 14px;
+      background: #080c11;
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      font-weight: 650;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      color: #081019;
+      background: linear-gradient(145deg, #7dc0ff, #4d93ed);
+      border-radius: 7px;
+      box-shadow: 0 5px 16px rgba(52, 126, 220, 0.3);
+    }
+
+    .title-separator {
+      width: 1px;
+      height: 18px;
+      background: var(--border);
+    }
+
+    .title-context {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      color: var(--text-soft);
+    }
+
+    .title-context strong {
+      overflow: hidden;
+      font-family: var(--font-mono);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      padding: 0 12px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .toolbar-divider {
+      width: 1px;
+      height: 22px;
+      margin: 0 2px;
+      background: var(--border);
+    }
+
+    .toolbar-spacer {
+      flex: 1;
+      min-width: 10px;
+    }
+
+    .segmented {
+      display: flex;
+      align-items: center;
+      padding: 2px;
+      background: var(--canvas);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .segmented .gn-button[data-variant="toolbar"] {
+      border-radius: calc(var(--radius-regular) - 2px);
+    }
+
+    .hunk-navigation {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+    }
+
+    .diff-search-placement {
+      position: absolute;
+      top: 52px;
+      right: 12px;
+      width: min(360px, calc(100% - 24px));
+    }
+
+    .search-count {
+      min-width: 42px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 286px minmax(0, 1fr);
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .content {
+      display: grid;
+      grid-template-rows: 48px minmax(0, 1fr);
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .sidebar {
+      display: grid;
+      grid-template-rows: 48px minmax(0, 1fr);
+      min-width: 0;
+      min-height: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+    }
+
+    .sidebar-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      padding: 0 12px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sidebar-head strong {
+      flex: 0 0 4em;
+      min-width: 4em;
+      overflow: hidden;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .sidebar-tools {
+      display: flex;
+      flex: 1 1 auto;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .file-filter-mount {
+      flex: 1 1 132px;
+      width: 132px;
+      max-width: 152px;
+      min-width: 96px;
+    }
+
+    .file-filter-mount > .gn-input-field {
+      width: 100%;
+    }
+
+    .file-filter-mount .gn-input {
+      min-width: 0;
+      background: var(--surface-2);
+      border-color: var(--border-soft);
+      font-size: var(--font-size-caption);
+    }
+
+    .file-filter-mount .gn-input__clear[hidden] {
+      display: none;
+    }
+
+    .file-view-menu {
+      position: relative;
+      display: flex;
+      flex: 0 0 var(--control-compact);
+      align-items: center;
+    }
+
+    .file-view-menu > .gn-button[aria-expanded="true"] {
+      color: var(--text);
+      background: var(--surface-hover);
+      border-color: var(--border);
+    }
+
+    .menu-surface {
+      z-index: 200;
+      display: grid;
+      width: 222px;
+      padding: var(--space-2);
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-large);
+      box-shadow: var(--shadow-popover);
+    }
+
+    .menu-surface[hidden] {
+      display: none;
+    }
+
+    .file-view-popover {
+      width: 184px;
+    }
+
+    .menu-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      align-items: center;
+      gap: var(--space-2);
+      width: 100%;
+      min-height: 34px;
+      padding: 0 var(--space-2);
+      color: var(--text-soft);
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-regular);
+      cursor: pointer;
+      font-size: var(--font-size-caption);
+      line-height: 1;
+    }
+
+    .menu-item[data-has-leading="true"] {
+      grid-template-columns: 22px minmax(0, 1fr);
+    }
+
+    .menu-item:hover:not(:disabled),
+    .menu-item:focus-visible:not(:disabled) {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .menu-item:disabled {
+      color: var(--color-text-disabled);
+      cursor: not-allowed;
+      opacity: 0.72;
+    }
+
+    .menu-item-leading {
+      display: grid;
+      place-items: center;
+      width: 22px;
+      min-width: 0;
+      line-height: 0;
+    }
+
+    .menu-item-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-list {
+      min-height: 0;
+      overflow: auto;
+      padding: 0;
+    }
+
+    .file-group {
+      min-width: 0;
+    }
+
+    .file-group-title {
+      display: grid;
+      grid-template-columns: 16px minmax(0, 1fr) auto;
+      align-items: center;
+      width: 100%;
+      height: 28px;
+      padding: 0 12px;
+      color: var(--muted);
+      text-align: left;
+      background: var(--surface);
+      border: 0;
+      border-bottom: 1px solid var(--border-soft);
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: 0.02em;
+    }
+
+    .file-group-title:hover {
+      color: var(--text-soft);
+      background: var(--surface-hover);
+    }
+
+    .file-group-title .group-count {
+      padding: 0 7px;
+      background: var(--surface-3);
+      border-radius: 999px;
+      font-family: var(--font-mono);
+    }
+
+    .file-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) var(--control-compact);
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      min-height: 44px;
+      padding: 4px 8px 4px 12px;
+      color: var(--text-soft);
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .file-item:hover {
+      background: var(--surface-hover);
+    }
+
+    .file-item.active {
+      color: var(--text);
+      background: var(--accent-soft);
+      box-shadow: inset 2px 0 0 var(--accent);
+    }
+
+    .file-select {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+      padding: 0;
+      color: inherit;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      cursor: pointer;
+    }
+
+    .file-select .file-name,
+    .file-select .file-dir {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-select .file-name {
+      direction: rtl;
+      color: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      text-align: left;
+    }
+
+    .file-meta {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .file-status {
+      display: grid;
+      place-items: center;
+      width: 14px;
+      height: 14px;
+      color: var(--yellow);
+      background: rgba(242, 199, 102, 0.12);
+      border-radius: 3px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 700;
+    }
+
+    .file-status.untracked {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .file-dir {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-change-stats {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 8px;
+      margin-left: 4px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .file-change-stats .additions {
+      color: var(--green);
+    }
+
+    .file-change-stats .deletions {
+      color: var(--red);
+    }
+
+    .stage-toggle {
+      color: var(--muted);
+    }
+
+    .stage-toggle:hover:not(:disabled) {
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+    }
+
+    .file-tree-directory {
+      display: grid;
+      grid-template-columns: 16px 16px minmax(0, 1fr);
+      align-items: center;
+      gap: var(--space-1);
+      width: 100%;
+      min-width: 0;
+      min-height: var(--control-compact);
+      padding-top: 0;
+      padding-right: var(--space-2);
+      padding-bottom: 0;
+      color: var(--muted);
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--border-soft);
+      cursor: pointer;
+      font-size: var(--font-size-caption);
+      font-weight: 500;
+    }
+
+    .file-tree-directory:hover {
+      color: var(--text-soft);
+      background: var(--surface-hover);
+    }
+
+    .file-tree-directory-chevron,
+    .file-tree-directory-folder {
+      display: grid;
+      place-items: center;
+      line-height: 0;
+    }
+
+    .file-tree-directory-chevron {
+      transition: transform var(--motion-micro) ease;
+    }
+
+    .file-tree-directory:not(.collapsed) .file-tree-directory-chevron {
+      transform: rotate(90deg);
+    }
+
+    .file-tree-directory-folder {
+      color: var(--accent);
+    }
+
+    .file-tree-directory-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .main {
+      position: relative;
+      display: grid;
+      grid-template-rows: 44px minmax(0, 1fr);
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--code-bg);
+    }
+
+    .file-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+      overflow: hidden;
+      padding: 0 12px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .file-heading {
+      display: flex;
+      flex: 1 1 auto;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .file-path-copy-button {
+      flex: 0 0 var(--control-compact);
+    }
+
+    .file-path-copy-button.copied {
+      color: var(--green);
+      background: var(--green-soft);
+      border-color: color-mix(in srgb, var(--green) 28%, transparent);
+    }
+
+    .file-path-copy-button.failed {
+      color: var(--red);
+      background: var(--red-soft);
+      border-color: color-mix(in srgb, var(--red) 28%, transparent);
+    }
+
+    .file-heading-path {
+      display: -webkit-box;
+      flex: 1 1 auto;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      color: var(--text-soft);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: normal;
+      word-break: break-word;
+      line-height: 1.35;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+
+    .diff-change-summary {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 10px;
+      min-height: 24px;
+      font-size: 11px;
+      white-space: nowrap;
+      font-family: var(--font-mono);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .diff-change-summary strong {
+      color: var(--green);
+      font-weight: 700;
+    }
+
+    .diff-change-summary em {
+      color: var(--red);
+      font-style: normal;
+      font-weight: 700;
+    }
+
+    .diff-viewport {
+      position: relative;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      overflow-x: auto;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+      background: var(--code-bg);
+    }
+
+    .diff-table {
+      min-width: 100%;
+      width: max-content;
+      padding: 8px 0 24px;
+      color: #c8d3df;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 20px;
+    }
+
+    .diff-table.split {
+      min-width: max(100%, 1040px);
+    }
+
+    .diff-table.split-panes {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      width: 100%;
+      min-width: 0;
+      padding: 0;
+    }
+
+    .diff-viewport.split-nowrap {
+      overflow: hidden;
+    }
+
+    .diff-viewport.split-nowrap #diffMount {
+      height: 100%;
+      min-height: 0;
+    }
+
+    .split-shell {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .split-scroll-region {
+      min-width: 0;
+      min-height: 0;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+
+    .split-pane {
+      min-width: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      overscroll-behavior-inline: contain;
+      scrollbar-width: none;
+    }
+
+    .split-pane::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+    }
+
+    .split-pane + .split-pane {
+      border-left: 1px solid var(--border);
+    }
+
+    .split-pane-content {
+      width: max-content;
+      min-width: 100%;
+      padding: 8px 0 24px;
+    }
+
+    .split-pane-row {
+      display: grid;
+      grid-template-columns: 48px 22px minmax(420px, 1fr);
+      width: 100%;
+      min-width: 520px;
+      min-height: 20px;
+    }
+
+    .split-scrollbar {
+      width: 100%;
+      min-width: 0;
+      height: 14px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      background: var(--surface-2);
+      border-top: 1px solid var(--border-soft);
+      outline: none;
+    }
+
+    .split-scrollbar:focus-visible {
+      box-shadow: inset 0 0 0 1px var(--color-focus);
+    }
+
+    .split-scrollbar-track {
+      height: 1px;
+    }
+
+    .diff-table.unified {
+      min-width: max(100%, 760px);
+    }
+
+    .split-row {
+      display: grid;
+      grid-template-columns:
+        48px 22px minmax(420px, 1fr)
+        48px 22px minmax(420px, 1fr);
+      min-height: 20px;
+    }
+
+    .unified-row {
+      display: grid;
+      grid-template-columns: 48px 48px 22px minmax(610px, 1fr);
+      min-height: 20px;
+    }
+
+    .split-pane-row:hover .code-cell,
+    .split-row:hover .code-cell,
+    .unified-row:hover .code-cell {
+      filter: brightness(1.08);
+    }
+
+    .line-number {
+      padding: 0 8px 0 4px;
+      color: #596777;
+      background: #0b1118;
+      border-right: 1px solid var(--code-border);
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+      user-select: none;
+    }
+
+    .change-marker {
+      color: var(--muted);
+      background: #0d141c;
+      text-align: center;
+      user-select: none;
+    }
+
+    .code-cell {
+      min-width: 0;
+      padding: 0 12px;
+      background: var(--code-bg);
+      border-right: 1px solid var(--code-border);
+    }
+
+    .code {
+      display: block;
+      min-height: 20px;
+      white-space: pre;
+      tab-size: 2;
+    }
+
+    body.wrap-lines .diff-table {
+      width: 100%;
+    }
+
+    body.wrap-lines .diff-table.split,
+    body.wrap-lines .diff-table.unified {
+      min-width: 100%;
+    }
+
+    body.wrap-lines .split-row {
+      grid-template-columns:
+        48px 22px minmax(0, 1fr)
+        48px 22px minmax(0, 1fr);
+    }
+
+    body.wrap-lines .unified-row {
+      grid-template-columns: 48px 48px 22px minmax(0, 1fr);
+    }
+
+    body.wrap-lines .code {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .line-number.cell-delete,
+    .change-marker.cell-delete {
+      color: color-mix(in srgb, var(--red) 76%, var(--muted));
+      background: var(--red-gutter);
+    }
+
+    .code-cell.cell-delete {
+      background: var(--red-soft);
+    }
+
+    .line-number.cell-add,
+    .change-marker.cell-add {
+      color: color-mix(in srgb, var(--green) 76%, var(--muted));
+      background: var(--green-gutter);
+    }
+
+    .code-cell.cell-add {
+      background: var(--green-soft);
+    }
+
+    .line-number.empty-side,
+    .change-marker.empty-side,
+    .code-cell.empty-side {
+      background:
+        repeating-linear-gradient(
+          -45deg,
+          rgba(255, 255, 255, 0.012),
+          rgba(255, 255, 255, 0.012) 4px,
+          transparent 4px,
+          transparent 8px
+        );
+    }
+
+    .hunk-row {
+      display: grid;
+      grid-template-columns: 1fr;
+      min-height: 30px;
+      margin: 8px 0 3px;
+      scroll-margin-top: 14px;
+    }
+
+    .hunk-row:first-child {
+      margin-top: 0;
+    }
+
+    .hunk-content {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px;
+      color: color-mix(in srgb, var(--accent) 74%, var(--text-soft));
+      background: rgba(50, 106, 169, 0.2);
+      border-top: 1px solid rgba(97, 168, 255, 0.14);
+      border-bottom: 1px solid rgba(97, 168, 255, 0.14);
+    }
+
+    .hunk-row.current .hunk-content {
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+
+    .syntax-comment {
+      color: #758699;
+      font-style: italic;
+    }
+
+    .syntax-string {
+      color: #cfb780;
+    }
+
+    .syntax-keyword {
+      color: #be9cf4;
+    }
+
+    mark.search-hit {
+      padding: 0;
+      color: inherit;
+      background: rgba(242, 199, 102, 0.38);
+      border-radius: 2px;
+    }
+
+    mark.search-hit.current {
+      color: #17120a;
+      background: var(--yellow);
+      box-shadow: 0 0 0 1px rgba(255, 230, 145, 0.72);
+    }
+
+    .notice {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      z-index: 5;
+      max-width: min(560px, calc(100% - 32px));
+      padding: 9px 12px;
+      color: var(--text);
+      background: color-mix(in srgb, var(--surface-3) 94%, black);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, -8px);
+      transition: opacity 160ms ease, transform 160ms ease;
+    }
+
+    .notice.show {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+
+    .empty-state {
+      display: grid;
+      place-items: center;
+      min-height: 100%;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .empty-state strong {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--text-soft);
+    }
+
+    .statusbar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+      padding: 0 10px;
+      color: var(--muted);
+      background: #080c11;
+      border-top: 1px solid var(--border-soft);
+      font-size: 10px;
+    }
+
+    .statusbar span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .statusbar .status-spacer {
+      flex: 1;
+    }
+
+    kbd {
+      padding: 1px 4px;
+      color: var(--text-soft);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-bottom-color: #36465a;
+      border-radius: 4px;
+      font-family: var(--font-sans);
+      font-size: 9px;
+    }
+
+    @media (max-width: 1100px) {
+      .workspace {
+        grid-template-columns: 248px minmax(0, 1fr);
+      }
+
+      .wrap-button .gn-button__label {
+        display: none;
+      }
+
+      .wrap-button {
+        width: var(--control-compact);
+        min-width: var(--control-compact);
+        padding: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="titlebar">
+      <div class="brand">
+        <span class="brand-mark" id="brandIcon"></span>
+        <span>GitNest Diff</span>
+      </div>
+      <span class="title-separator" aria-hidden="true"></span>
+      <div class="title-context">
+        <strong id="repositoryName">core/test</strong>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <strong>文件变更</strong>
+          <div class="sidebar-tools">
+            <div class="file-filter-mount" id="fileFilterMount"></div>
+            <div class="file-view-menu" id="fileViewMenu">
+              <span id="fileViewMenuButtonMount"></span>
+              <div class="file-view-popover menu-surface" id="fileViewPopover" role="menu" aria-label="变更文件视图" hidden>
+                <button class="menu-item" id="toggleFileViewButton" type="button" role="menuitem" data-has-leading="true">
+                  <span class="menu-item-leading" id="fileViewModeIcon"></span>
+                  <span class="menu-item-label" id="fileViewModeLabel">以树形式查看</span>
+                </button>
+                <button class="menu-item" id="toggleTreeDirectoriesButton" type="button" role="menuitem" data-has-leading="true" disabled>
+                  <span class="menu-item-leading" id="treeDirectoriesIcon"></span>
+                  <span class="menu-item-label" id="treeDirectoriesLabel">收起目录</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="file-list" id="fileList"></div>
+      </aside>
+
+      <div class="content">
+        <div class="toolbar" role="toolbar" aria-label="Diff 查看工具">
+          <div class="toolbar-spacer"></div>
+          <div class="segmented" id="diffLayoutControls" role="group" aria-label="Diff 布局"></div>
+          <span id="wrapButtonMount"></span>
+          <span class="toolbar-divider" aria-hidden="true"></span>
+          <div class="hunk-navigation" role="group" aria-label="变更导航">
+            <span id="previousHunkButtonMount"></span>
+            <span class="search-count" id="hunkCount">1 / 1</span>
+            <span id="nextHunkButtonMount"></span>
+          </div>
+        </div>
+
+        <main class="main">
+          <header class="file-header">
+            <div class="file-heading">
+              <span id="filePathCopyButtonMount"></span>
+              <span class="file-heading-path" id="filePath"></span>
+            </div>
+            <span class="diff-change-summary" id="fileDiffSummary" aria-label="新增 0 行，删除 0 行">
+              <strong>+0</strong>
+              <em>-0</em>
+            </span>
+          </header>
+          <div id="diffSearchMount"></div>
+          <div class="diff-viewport" id="diffViewport" role="region" aria-label="文件 Diff" tabindex="0">
+            <div class="notice" id="notice" role="status"></div>
+            <div id="diffMount"></div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <footer class="statusbar">
+      <span id="statusLanguage">Java</span>
+      <span>UTF-8</span>
+      <span>LF</span>
+      <span class="status-spacer"></span>
+      <span><kbd>Ctrl F</kbd> 搜索</span>
+      <span><kbd>Enter</kbd> 下一匹配</span>
+      <span><kbd>Esc</kbd> 关闭搜索</span>
+    </footer>
+  </div>
+
+  <script src="./button.js"></script>
+  <script src="./input.js"></script>
+  <script src="./diff-search-popover.js"></script>
+  <script src="./dropdown.js"></script>
+  <script>
+    const iconPaths = {
+      arrowUp: '<path d="m6 15 6-6 6 6"/>',
+      arrowDown: '<path d="m6 9 6 6 6-6"/>',
+      check: '<path d="m5 12 4 4L19 6"/>',
+      chevronRight: '<path d="m9 18 6-6-6-6"/>',
+      diff: '<path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><path d="M18 21V9"/><circle cx="18" cy="6" r="3"/><path d="M6 8h7a5 5 0 0 1 5 5"/>',
+      file: '<path d="M6 2h8l4 4v16H6z"/><path d="M14 2v5h5"/>',
+      folder: '<path d="M3 6h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+      more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+      plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+      search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+      wrap: '<path d="M4 6h11"/><path d="M4 10h13a3 3 0 0 1 0 6h-3"/><path d="m16 13-3 3 3 3"/><path d="M4 16h5"/>',
+      x: '<path d="m6 6 12 12"/><path d="m18 6-12 12"/>'
+    };
+
+    const icon = (name, size = 16) =>
+      `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">${iconPaths[name]}</svg>`;
+
+    const createButton = (options = {}) =>
+      window.GitNestButton.create({
+        type: "button",
+        ...options
+      });
+
+    const renderButton = (options = {}) =>
+      window.GitNestButton.render({
+        type: "button",
+        ...options
+      });
+
+    function replaceControlMount(mountId, control) {
+      document.getElementById(mountId).replaceWith(control);
+    }
+
+    function mountToolbarControls() {
+      document.getElementById("diffLayoutControls").replaceChildren(
+        createButton({
+          label: "并排",
+          size: "small",
+          variant: "toolbar",
+          attributes: 'id="splitButton" aria-pressed="false"'
+        }),
+        createButton({
+          label: "统一",
+          size: "small",
+          variant: "toolbar",
+          selected: true,
+          attributes: 'id="unifiedButton" aria-pressed="true"'
+        })
+      );
+
+      replaceControlMount(
+        "wrapButtonMount",
+        createButton({
+          label: "自动换行",
+          ariaLabel: "自动换行",
+          size: "small",
+          variant: "toolbar",
+          icon: icon("wrap", 14),
+          className: "wrap-button",
+          attributes: 'id="wrapButton" aria-pressed="false"'
+        })
+      );
+
+      replaceControlMount(
+        "previousHunkButtonMount",
+        createButton({
+          label: "上一处变更",
+          ariaLabel: "上一处变更",
+          title: "上一处变更",
+          size: "small",
+          variant: "icon",
+          icon: icon("arrowUp", 14),
+          attributes: 'id="previousHunkButton"'
+        })
+      );
+
+      replaceControlMount(
+        "nextHunkButtonMount",
+        createButton({
+          label: "下一处变更",
+          ariaLabel: "下一处变更",
+          title: "下一处变更",
+          size: "small",
+          variant: "icon",
+          icon: icon("arrowDown", 14),
+          attributes: 'id="nextHunkButton"'
+        })
+      );
+    }
+
+    function mountSidebarControls() {
+      document.getElementById("fileFilterMount").replaceChildren(
+        window.GitNestInput.create({
+          id: "fileFilter",
+          type: "text",
+          size: "small",
+          fullWidth: true,
+          autocomplete: "off",
+          spellcheck: false,
+          placeholder: "筛选变更…",
+          ariaLabel: "筛选变更文件",
+          leadingIcon: icon("search", 14),
+          clearButton: {
+            icon: icon("x", 12),
+            ariaLabel: "清除变更筛选",
+            title: "清除变更筛选",
+            attributes: 'id="fileFilterClear" hidden'
+          }
+        })
+      );
+
+      replaceControlMount(
+        "fileViewMenuButtonMount",
+        createButton({
+          label: "变更文件视图",
+          ariaLabel: "打开变更文件视图菜单",
+          title: "变更文件视图",
+          size: "small",
+          variant: "icon",
+          icon: icon("more", 14),
+          attributes: 'id="fileViewMenuButton" aria-haspopup="menu" aria-expanded="false" aria-controls="fileViewPopover"'
+        })
+      );
+    }
+
+    function mountFileHeaderControls() {
+      replaceControlMount(
+        "filePathCopyButtonMount",
+        createButton({
+          label: "复制文件路径",
+          ariaLabel: "复制文件路径",
+          title: "复制完整文件路径",
+          size: "small",
+          variant: "icon",
+          icon: icon("file", 14),
+          className: "file-path-copy-button",
+          attributes: 'id="filePathCopyButton"'
+        })
+      );
+    }
+
+    let diffSearchPopover = null;
+
+    function mountDiffSearchControls() {
+      diffSearchPopover = window.GitNestDiffSearchPopover.create({
+        id: "diffSearchPanel",
+        inputId: "diffSearch",
+        countId: "searchCount",
+        previousButtonId: "previousMatchButton",
+        nextButtonId: "nextMatchButton",
+        closeButtonId: "closeSearchButton",
+        className: "diff-search-placement",
+        open: false,
+        icons: {
+          search: icon("search", 14),
+          previous: icon("arrowUp", 13),
+          next: icon("arrowDown", 13),
+          close: icon("x", 13)
+        },
+        onInput: () => updateSearch(),
+        onPrevious: () => moveSearchMatch(-1),
+        onNext: () => moveSearchMatch(1),
+        onClose: () => closeSearch()
+      });
+      document
+        .getElementById("diffSearchMount")
+        .replaceWith(diffSearchPopover.element);
+    }
+
+    mountToolbarControls();
+    mountSidebarControls();
+    mountFileHeaderControls();
+    mountDiffSearchControls();
+
+    const repositories = {
+      core: {
+        id: "core",
+        name: "core",
+        branch: "test",
+        files: [
+          {
+            path: "src/main/java/com/faisco/core/config/CoreApplicationConfig.java",
+            status: "modified",
+            staged: true,
+            language: "Java",
+            rows: [
+              { kind: "hunk", text: "@@ -18,8 +18,13 @@ public class CoreApplicationConfig {" },
+              { kind: "context", oldNo: 18, newNo: 18, text: "    private final WorkspaceProperties properties;" },
+              { kind: "pair", oldNo: 19, newNo: 19, oldText: "    private final boolean includeDiffSearch = false;", newText: "    private final boolean includeDiffSearch = true;" },
+              { kind: "add", newNo: 20, text: "    private final DiffViewerProperties diffViewerProperties;" },
+              { kind: "context", oldNo: 20, newNo: 21, text: "" },
+              { kind: "context", oldNo: 21, newNo: 22, text: "    @Bean" },
+              { kind: "pair", oldNo: 22, newNo: 23, oldText: "    public WorkspaceService workspaceService() {", newText: "    public WorkspaceService workspaceService(DiffRenderer renderer) {" },
+              { kind: "context", oldNo: 23, newNo: 24, text: "        return new WorkspaceService(" },
+              { kind: "add", newNo: 25, text: "            renderer," },
+              { kind: "context", oldNo: 24, newNo: 26, text: "            properties" },
+              { kind: "context", oldNo: 25, newNo: 27, text: "        );" },
+              { kind: "context", oldNo: 26, newNo: 28, text: "    }" },
+              { kind: "hunk", text: "@@ -42,4 +47,9 @@ public class CoreApplicationConfig {" },
+              { kind: "context", oldNo: 42, newNo: 47, text: "        return properties.getWorkspaceRoot();" },
+              { kind: "add", newNo: 48, text: "    }" },
+              { kind: "add", newNo: 49, text: "" },
+              { kind: "add", newNo: 50, text: "    public boolean isStandaloneDiffEnabled() {" },
+              { kind: "add", newNo: 51, text: "        return diffViewerProperties.isEnabled();" },
+              { kind: "context", oldNo: 43, newNo: 52, text: "    }" }
+            ]
+          },
+          {
+            path: "src/main/java/com/faisco/core/service/WorkspaceStateService.java",
+            status: "modified",
+            staged: false,
+            language: "Java",
+            rows: [
+              { kind: "hunk", text: "@@ -56,10 +56,17 @@ public final class WorkspaceStateService {" },
+              { kind: "context", oldNo: 56, newNo: 56, text: "    public WorkspaceSnapshot collect(Path root) {" },
+              { kind: "delete", oldNo: 57, text: "        GitStatus status = gitClient.status(root);" },
+              { kind: "add", newNo: 57, text: "        requireReadableDirectory(root);" },
+              { kind: "add", newNo: 58, text: "        GitStatus status = gitClient.status(root);" },
+              { kind: "add", newNo: 59, text: "        List<ChangedFile> changedFiles = status.changedFiles();" },
+              { kind: "context", oldNo: 58, newNo: 60, text: "" },
+              { kind: "pair", oldNo: 59, newNo: 61, oldText: "        return new WorkspaceSnapshot(status.branch(), status.count());", newText: "        return new WorkspaceSnapshot(status.branch(), changedFiles);" },
+              { kind: "context", oldNo: 60, newNo: 62, text: "    }" },
+              { kind: "add", newNo: 63, text: "" },
+              { kind: "add", newNo: 64, text: "    private void requireReadableDirectory(Path root) {" },
+              { kind: "add", newNo: 65, text: "        if (!Files.isReadable(root)) {" },
+              { kind: "add", newNo: 66, text: '            throw new IllegalArgumentException("Workspace is not readable");' },
+              { kind: "add", newNo: 67, text: "        }" },
+              { kind: "add", newNo: 68, text: "    }" },
+              { kind: "hunk", text: "@@ -91,6 +98,8 @@ private WorkspaceSnapshot emptySnapshot(Path root) {" },
+              { kind: "context", oldNo: 91, newNo: 98, text: "        return WorkspaceSnapshot.builder()" },
+              { kind: "add", newNo: 99, text: "            .root(root)" },
+              { kind: "add", newNo: 100, text: "            .collectedAt(clock.instant())" },
+              { kind: "context", oldNo: 92, newNo: 101, text: "            .build();" }
+            ]
+          },
+          {
+            path: "src/test/java/com/faisco/core/service/WorkspaceStateServiceTest.java",
+            status: "modified",
+            staged: false,
+            language: "Java",
+            rows: [
+              { kind: "hunk", text: "@@ -34,7 +34,17 @@ class WorkspaceStateServiceTest {" },
+              { kind: "context", oldNo: 34, newNo: 34, text: "    @Test" },
+              { kind: "pair", oldNo: 35, newNo: 35, oldText: "    void returnsRepositoryStatus() {", newText: "    void returnsChangedFilesWithRepositoryStatus() {" },
+              { kind: "context", oldNo: 36, newNo: 36, text: "        WorkspaceSnapshot snapshot = service.collect(workspace);" },
+              { kind: "context", oldNo: 37, newNo: 37, text: "" },
+              { kind: "delete", oldNo: 38, text: "        assertThat(snapshot.changeCount()).isEqualTo(2);" },
+              { kind: "add", newNo: 38, text: "        assertThat(snapshot.changedFiles()).hasSize(2);" },
+              { kind: "add", newNo: 39, text: "        assertThat(snapshot.changedFiles())" },
+              { kind: "add", newNo: 40, text: "            .extracting(ChangedFile::path)" },
+              { kind: "add", newNo: 41, text: '            .containsExactly("README.md", "src/App.java");' },
+              { kind: "context", oldNo: 39, newNo: 42, text: "    }" },
+              { kind: "context", oldNo: 40, newNo: 43, text: "" },
+              { kind: "context", oldNo: 41, newNo: 44, text: "    @Test" },
+              { kind: "context", oldNo: 42, newNo: 45, text: "    void returnsEmptySnapshotForCleanWorkspace() {" },
+              { kind: "context", oldNo: 43, newNo: 46, text: "        given(gitClient.status(workspace)).willReturn(cleanStatus);" },
+              { kind: "context", oldNo: 44, newNo: 47, text: "" },
+              { kind: "context", oldNo: 45, newNo: 48, text: "        WorkspaceSnapshot snapshot = service.collect(workspace);" },
+              { kind: "context", oldNo: 46, newNo: 49, text: "        assertThat(snapshot.changedFiles()).isEmpty();" },
+              { kind: "context", oldNo: 47, newNo: 50, text: "    }" },
+              { kind: "hunk", text: "@@ -52,4 +62,10 @@ class WorkspaceStateServiceTest {" },
+              { kind: "add", newNo: 62, text: "    @Test" },
+              { kind: "add", newNo: 63, text: "    void rejectsUnreadableWorkspace() {" },
+              { kind: "add", newNo: 64, text: "        given(fileSystem.isReadable(workspace)).willReturn(false);" },
+              { kind: "add", newNo: 65, text: "" },
+              { kind: "add", newNo: 66, text: "        assertThatThrownBy(() -> service.collect(workspace))" },
+              { kind: "add", newNo: 67, text: "            .isInstanceOf(IllegalArgumentException.class);" },
+              { kind: "add", newNo: 68, text: "    }" }
+            ]
+          },
+          {
+            path: "docs/git-status-test-cases.md",
+            status: "untracked",
+            staged: false,
+            language: "Markdown",
+            rows: [
+              { kind: "hunk", text: "@@ -0,0 +1,14 @@" },
+              { kind: "add", newNo: 1, text: "# Git 状态测试场景" },
+              { kind: "add", newNo: 2, text: "" },
+              { kind: "add", newNo: 3, text: "独立 Diff 查看器覆盖以下工作区状态：" },
+              { kind: "add", newNo: 4, text: "" },
+              { kind: "add", newNo: 5, text: "- 已暂存文件" },
+              { kind: "add", newNo: 6, text: "- 未暂存文件" },
+              { kind: "add", newNo: 7, text: "- 未跟踪文件" },
+              { kind: "add", newNo: 8, text: "- 同一文件中的多处变更" },
+              { kind: "add", newNo: 9, text: "" },
+              { kind: "add", newNo: 10, text: "## 查看能力" },
+              { kind: "add", newNo: 11, text: "" },
+              { kind: "add", newNo: 12, text: "支持并排与统一视图切换。" },
+              { kind: "add", newNo: 13, text: "支持搜索、变更导航与自动换行。" },
+              { kind: "add", newNo: 14, text: "当前页面使用内置数据演示交互。" }
+            ]
+          }
+        ]
+      },
+      scportal: {
+        id: "scportal",
+        name: "scportal",
+        branch: "test",
+        files: [
+          {
+            path: ".zeroone/summaries/scportal-local-backend-startup-summary.md",
+            status: "untracked",
+            staged: false,
+            language: "Markdown",
+            rows: [
+              { kind: "hunk", text: "@@ -0,0 +1,11 @@" },
+              { kind: "add", newNo: 1, text: "# scportal 本地后端启动摘要" },
+              { kind: "add", newNo: 2, text: "" },
+              { kind: "add", newNo: 3, text: "## 环境" },
+              { kind: "add", newNo: 4, text: "" },
+              { kind: "add", newNo: 5, text: "- Java 17" },
+              { kind: "add", newNo: 6, text: "- Spring Boot 3" },
+              { kind: "add", newNo: 7, text: "- MySQL 8" },
+              { kind: "add", newNo: 8, text: "" },
+              { kind: "add", newNo: 9, text: "## 启动" },
+              { kind: "add", newNo: 10, text: "" },
+              { kind: "add", newNo: 11, text: "运行本地启动配置并检查健康状态。" }
+            ]
+          }
+        ]
+      }
+    };
+
+    const params = new URLSearchParams(window.location.search);
+    const requestedRepoId = params.get("repo") || "core";
+    const repository = repositories[requestedRepoId] || repositories.core;
+    const requestedFilePath = params.get("file") || "";
+    const requestedFile = repository.files.find((file) => file.path === requestedFilePath);
+
+    const state = {
+      selectedPath: requestedFile?.path || repository.files[0]?.path || "",
+      view: "unified",
+      wrap: false,
+      searchOpen: false,
+      searchQuery: "",
+      searchMatches: [],
+      activeMatch: 0,
+      activeHunk: 0,
+      fileFilter: "",
+      fileViewMode: "list",
+      collapsedFileGroups: new Set(),
+      collapsedTreeDirectories: new Set(),
+      notice: !repositories[requestedRepoId]
+        ? `未找到仓库“${requestedRepoId}”，已打开 core。`
+        : requestedFilePath && !requestedFile
+          ? "未找到请求的文件，已打开第一个变更文件。"
+          : ""
+    };
+
+    const elements = {
+      repositoryName: document.getElementById("repositoryName"),
+      fileList: document.getElementById("fileList"),
+      fileFilter: document.getElementById("fileFilter"),
+      fileFilterClear: document.getElementById("fileFilterClear"),
+      fileViewMenuButton: document.getElementById("fileViewMenuButton"),
+      fileViewPopover: document.getElementById("fileViewPopover"),
+      toggleFileViewButton: document.getElementById("toggleFileViewButton"),
+      toggleTreeDirectoriesButton: document.getElementById("toggleTreeDirectoriesButton"),
+      fileViewModeIcon: document.getElementById("fileViewModeIcon"),
+      fileViewModeLabel: document.getElementById("fileViewModeLabel"),
+      treeDirectoriesIcon: document.getElementById("treeDirectoriesIcon"),
+      treeDirectoriesLabel: document.getElementById("treeDirectoriesLabel"),
+      filePathCopyButton: document.getElementById("filePathCopyButton"),
+      fileIcon: document.querySelector("#filePathCopyButton .gn-button__icon"),
+      filePath: document.getElementById("filePath"),
+      fileDiffSummary: document.getElementById("fileDiffSummary"),
+      statusLanguage: document.getElementById("statusLanguage"),
+      diffMount: document.getElementById("diffMount"),
+      diffViewport: document.getElementById("diffViewport"),
+      notice: document.getElementById("notice"),
+      splitButton: document.getElementById("splitButton"),
+      unifiedButton: document.getElementById("unifiedButton"),
+      wrapButton: document.getElementById("wrapButton"),
+      diffSearch: diffSearchPopover.input,
+      hunkCount: document.getElementById("hunkCount"),
+      previousHunkButton: document.getElementById("previousHunkButton"),
+      nextHunkButton: document.getElementById("nextHunkButton")
+    };
+    const dropdownManager = window.GitNestDropdown.createDropdownManager();
+    const fileViewDropdown = dropdownManager.register({
+      id: "file-view",
+      trigger: elements.fileViewMenuButton,
+      menu: elements.fileViewPopover,
+      autoToggle: true,
+      placement: {
+        side: "bottom",
+        align: "end",
+        gap: 6,
+        viewportPadding: 8
+      }
+    });
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function filteredFiles() {
+      const query = state.fileFilter.trim().toLocaleLowerCase();
+      if (!query) return repository.files;
+      return repository.files.filter((file) =>
+        [
+          file.path,
+          fileName(file.path),
+          fileDirectory(file.path),
+          file.status,
+          fileStatusLabel(file),
+          file.staged ? "staged 已暂存" : "unstaged 未暂存"
+        ].some((value) => String(value).toLocaleLowerCase().includes(query))
+      );
+    }
+
+    function currentFile() {
+      const files = filteredFiles();
+      return files.find((file) => file.path === state.selectedPath) || files[0];
+    }
+
+    function fileName(path) {
+      return String(path).split(/[\\/]/).pop() || path;
+    }
+
+    function fileDirectory(path) {
+      const parts = String(path).split(/[\\/]/);
+      parts.pop();
+      return parts.join("/") || ".";
+    }
+
+    function fileStatusLabel(file) {
+      if (file.status === "untracked") return "未跟踪";
+      return file.staged ? "已暂存" : "未暂存";
+    }
+
+    function fileStats(file) {
+      return file.rows.reduce((stats, row) => {
+        if (row.kind === "pair") {
+          stats.additions += 1;
+          stats.deletions += 1;
+        } else if (row.kind === "add") {
+          stats.additions += 1;
+        } else if (row.kind === "delete") {
+          stats.deletions += 1;
+        } else if (row.kind === "hunk") {
+          stats.hunks += 1;
+        }
+        return stats;
+      }, { additions: 0, deletions: 0, hunks: 0 });
+    }
+
+    function searchableEntries(file) {
+      const entries = [];
+      file.rows.forEach((row, rowIndex) => {
+        if (row.kind === "hunk") {
+          entries.push({ key: `${rowIndex}:hunk`, text: row.text });
+        } else if (row.kind === "pair") {
+          entries.push({ key: `${rowIndex}:old`, text: row.oldText });
+          entries.push({ key: `${rowIndex}:new`, text: row.newText });
+        } else {
+          entries.push({ key: `${rowIndex}:${row.kind}`, text: row.text });
+        }
+      });
+      return entries;
+    }
+
+    function collectSearchMatches(file) {
+      const query = state.searchQuery.trim().toLocaleLowerCase();
+      if (!query) return [];
+
+      let id = 0;
+      return searchableEntries(file).flatMap((entry) => {
+        const normalized = entry.text.toLocaleLowerCase();
+        const matches = [];
+        let start = normalized.indexOf(query);
+        while (start >= 0) {
+          matches.push({
+            id: id++,
+            key: entry.key,
+            start,
+            end: start + query.length
+          });
+          start = normalized.indexOf(query, start + query.length);
+        }
+        return matches;
+      });
+    }
+
+    function syntaxMarkup(value) {
+      const text = String(value || "");
+      const trimmed = text.trimStart();
+      if (trimmed.startsWith("//") || trimmed.startsWith("#")) {
+        return `<span class="syntax-comment">${escapeHtml(text)}</span>`;
+      }
+
+      const tokens = [];
+      const pattern = /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|\b(public|private|protected|class|return|new|final|void|boolean|if|throw|extends|implements|static)\b/g;
+      let cursor = 0;
+      let match;
+      while ((match = pattern.exec(text))) {
+        tokens.push(escapeHtml(text.slice(cursor, match.index)));
+        tokens.push(
+          match[1]
+            ? `<span class="syntax-string">${escapeHtml(match[0])}</span>`
+            : `<span class="syntax-keyword">${escapeHtml(match[0])}</span>`
+        );
+        cursor = match.index + match[0].length;
+      }
+      tokens.push(escapeHtml(text.slice(cursor)));
+      return tokens.join("");
+    }
+
+    function textMarkup(value, key) {
+      const text = String(value || "");
+      const matches = state.searchMatches.filter((match) => match.key === key);
+      if (!matches.length) return syntaxMarkup(text);
+
+      let cursor = 0;
+      const parts = [];
+      matches.forEach((match) => {
+        parts.push(syntaxMarkup(text.slice(cursor, match.start)));
+        parts.push(
+          `<mark class="search-hit${match.id === state.activeMatch ? " current" : ""}" data-match-id="${match.id}">${escapeHtml(text.slice(match.start, match.end))}</mark>`
+        );
+        cursor = match.end;
+      });
+      parts.push(syntaxMarkup(text.slice(cursor)));
+      return parts.join("");
+    }
+
+    function emptySplitCells() {
+      return `
+        <span class="line-number empty-side"></span>
+        <span class="change-marker empty-side"></span>
+        <span class="code-cell empty-side"><span class="code"></span></span>
+      `;
+    }
+
+    function splitCell(type, lineNumber, text, key) {
+      const marker = type === "delete" ? "−" : type === "add" ? "+" : "";
+      const className = type === "delete"
+        ? "cell-delete"
+        : type === "add"
+          ? "cell-add"
+          : "";
+      return `
+        <span class="line-number ${className}">${lineNumber ?? ""}</span>
+        <span class="change-marker ${className}">${marker}</span>
+        <span class="code-cell ${className}"><span class="code">${textMarkup(text, key)}</span></span>
+      `;
+    }
+
+    function renderSplitRow(row, rowIndex) {
+      if (row.kind === "hunk") {
+        return renderHunk(row, rowIndex);
+      }
+      if (row.kind === "context") {
+        return `
+          <div class="split-row">
+            ${splitCell("context", row.oldNo, row.text, `${rowIndex}:context`)}
+            ${splitCell("context", row.newNo, row.text, `${rowIndex}:context`)}
+          </div>
+        `;
+      }
+      if (row.kind === "pair") {
+        return `
+          <div class="split-row">
+            ${splitCell("delete", row.oldNo, row.oldText, `${rowIndex}:old`)}
+            ${splitCell("add", row.newNo, row.newText, `${rowIndex}:new`)}
+          </div>
+        `;
+      }
+      if (row.kind === "delete") {
+        return `
+          <div class="split-row">
+            ${splitCell("delete", row.oldNo, row.text, `${rowIndex}:delete`)}
+            ${emptySplitCells()}
+          </div>
+        `;
+      }
+      return `
+        <div class="split-row">
+          ${emptySplitCells()}
+          ${splitCell("add", row.newNo, row.text, `${rowIndex}:add`)}
+        </div>
+      `;
+    }
+
+    function renderSplitPaneRow(row, rowIndex, side) {
+      if (row.kind === "hunk") {
+        return renderHunk(row, rowIndex);
+      }
+
+      let cellMarkup = emptySplitCells();
+      if (row.kind === "context") {
+        cellMarkup = splitCell(
+          "context",
+          side === "old" ? row.oldNo : row.newNo,
+          row.text,
+          `${rowIndex}:context`
+        );
+      } else if (row.kind === "pair") {
+        cellMarkup = side === "old"
+          ? splitCell("delete", row.oldNo, row.oldText, `${rowIndex}:old`)
+          : splitCell("add", row.newNo, row.newText, `${rowIndex}:new`);
+      } else if (row.kind === "delete" && side === "old") {
+        cellMarkup = splitCell("delete", row.oldNo, row.text, `${rowIndex}:delete`);
+      } else if (row.kind === "add" && side === "new") {
+        cellMarkup = splitCell("add", row.newNo, row.text, `${rowIndex}:add`);
+      }
+
+      return `<div class="split-pane-row">${cellMarkup}</div>`;
+    }
+
+    function renderSplitPanes(file) {
+      const renderPane = (side, label) => `
+        <div class="split-pane ${side}" aria-label="${label}">
+          <div class="split-pane-content">
+            ${file.rows
+              .map((row, rowIndex) => renderSplitPaneRow(row, rowIndex, side))
+              .join("")}
+          </div>
+        </div>
+      `;
+
+      return `
+        <div class="split-shell">
+          <div class="split-scroll-region">
+            <div class="diff-table split split-panes">
+              ${renderPane("old", "原文件")}
+              ${renderPane("new", "新文件")}
+            </div>
+          </div>
+          <div class="split-scrollbar" tabindex="0" aria-label="并排 Diff 水平滚动">
+            <div class="split-scrollbar-track"></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function updateSplitScrollMetrics() {
+      const panes = Array.from(elements.diffMount.querySelectorAll(".split-pane"));
+      const contents = Array.from(elements.diffMount.querySelectorAll(".split-pane-content"));
+      const scrollbar = elements.diffMount.querySelector(".split-scrollbar");
+      const track = elements.diffMount.querySelector(".split-scrollbar-track");
+      if (panes.length !== 2 || contents.length !== 2 || !scrollbar || !track) return;
+
+      contents.forEach((content) => content.style.removeProperty("min-width"));
+      const paneWidth = Math.min(...panes.map((pane) => pane.clientWidth));
+      const contentWidth = Math.max(
+        paneWidth,
+        ...panes.map((pane) => pane.scrollWidth)
+      );
+      contents.forEach((content) => {
+        content.style.minWidth = `${contentWidth}px`;
+      });
+      track.style.width = `${
+        contentWidth + Math.max(0, scrollbar.clientWidth - paneWidth)
+      }px`;
+    }
+
+    function syncSplitScroll(source, scrollLeft) {
+      [
+        ...elements.diffMount.querySelectorAll(".split-pane"),
+        elements.diffMount.querySelector(".split-scrollbar")
+      ].forEach((element) => {
+        if (element && element !== source && element.scrollLeft !== scrollLeft) {
+          element.scrollLeft = scrollLeft;
+        }
+      });
+    }
+
+    function setupSplitScrollSync() {
+      const panes = Array.from(elements.diffMount.querySelectorAll(".split-pane"));
+      const scrollbar = elements.diffMount.querySelector(".split-scrollbar");
+      if (panes.length !== 2 || !scrollbar) return;
+
+      panes.forEach((pane) => {
+        pane.addEventListener("scroll", () => {
+          syncSplitScroll(pane, pane.scrollLeft);
+        });
+      });
+      scrollbar.addEventListener("scroll", () => {
+        syncSplitScroll(scrollbar, scrollbar.scrollLeft);
+      });
+      updateSplitScrollMetrics();
+    }
+
+    function renderUnifiedLine(type, oldNo, newNo, text, key) {
+      const marker = type === "delete" ? "−" : type === "add" ? "+" : "";
+      const className = type === "delete"
+        ? "cell-delete"
+        : type === "add"
+          ? "cell-add"
+          : "";
+      return `
+        <div class="unified-row">
+          <span class="line-number ${className}">${oldNo ?? ""}</span>
+          <span class="line-number ${className}">${newNo ?? ""}</span>
+          <span class="change-marker ${className}">${marker}</span>
+          <span class="code-cell ${className}"><span class="code">${textMarkup(text, key)}</span></span>
+        </div>
+      `;
+    }
+
+    function renderUnifiedRow(row, rowIndex) {
+      if (row.kind === "hunk") {
+        return renderHunk(row, rowIndex);
+      }
+      if (row.kind === "context") {
+        return renderUnifiedLine("context", row.oldNo, row.newNo, row.text, `${rowIndex}:context`);
+      }
+      if (row.kind === "pair") {
+        return `
+          ${renderUnifiedLine("delete", row.oldNo, null, row.oldText, `${rowIndex}:old`)}
+          ${renderUnifiedLine("add", null, row.newNo, row.newText, `${rowIndex}:new`)}
+        `;
+      }
+      if (row.kind === "delete") {
+        return renderUnifiedLine("delete", row.oldNo, null, row.text, `${rowIndex}:delete`);
+      }
+      return renderUnifiedLine("add", null, row.newNo, row.text, `${rowIndex}:add`);
+    }
+
+    function renderHunk(row, rowIndex) {
+      const hunkIndex = currentFile().rows
+        .slice(0, rowIndex + 1)
+        .filter((item) => item.kind === "hunk").length - 1;
+      return `
+        <div class="hunk-row${hunkIndex === state.activeHunk ? " current" : ""}" data-hunk-index="${hunkIndex}">
+          <div class="hunk-content">
+            ${icon("diff", 14)}
+            <span>${textMarkup(row.text, `${rowIndex}:hunk`)}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderDiff() {
+      const file = currentFile();
+      updateSearchVisibility();
+      elements.diffViewport.classList.toggle(
+        "split-nowrap",
+        state.view === "split" && !state.wrap
+      );
+      if (!file) {
+        state.searchMatches = [];
+        state.activeMatch = 0;
+        state.activeHunk = 0;
+        elements.diffMount.innerHTML = `
+          <div class="empty-state">
+            <div><strong>没有匹配的变更</strong><span>清除筛选后恢复全部变更文件。</span></div>
+          </div>
+        `;
+        updateSearchControls();
+        updateHunkControls();
+        return;
+      }
+
+      state.searchMatches = collectSearchMatches(file);
+      if (!state.searchMatches.length) {
+        state.activeMatch = 0;
+      } else {
+        state.activeMatch =
+          ((state.activeMatch % state.searchMatches.length) + state.searchMatches.length) %
+          state.searchMatches.length;
+      }
+
+      if (state.view === "split" && !state.wrap) {
+        elements.diffMount.innerHTML = renderSplitPanes(file);
+      } else {
+        const rowMarkup = file.rows
+          .map((row, rowIndex) =>
+            state.view === "split"
+              ? renderSplitRow(row, rowIndex)
+              : renderUnifiedRow(row, rowIndex)
+          )
+          .join("");
+
+        elements.diffMount.innerHTML = `
+          <div class="diff-table ${state.view}">
+            ${rowMarkup}
+          </div>
+        `;
+      }
+      setupSplitScrollSync();
+      updateSearchControls();
+      updateHunkControls();
+    }
+
+    function fileGroups(files = filteredFiles()) {
+      return [
+        {
+          mode: "staged",
+          label: "已暂存",
+          files: files.filter((file) => file.staged && file.status !== "untracked")
+        },
+        {
+          mode: "unstaged",
+          label: "未暂存",
+          files: files.filter((file) => !file.staged && file.status !== "untracked")
+        },
+        {
+          mode: "untracked",
+          label: "未跟踪",
+          files: files.filter((file) => file.status === "untracked")
+        }
+      ].filter((group) => group.files.length);
+    }
+
+    function renderFileRow(file, depth = 0) {
+      const untracked = file.status === "untracked";
+      const stats = fileStats(file);
+      const displayName = depth
+        ? fileName(file.path)
+        : file.path;
+      const action = file.staged ? "取消暂存" : "暂存";
+      const indent = depth > 0
+        ? ` style="padding-left:calc(var(--space-2) + ${depth} * var(--space-4))"`
+        : "";
+      return `
+        <div
+          class="file-item${file.path === state.selectedPath ? " active" : ""}"
+          ${indent}
+        >
+          <button
+            class="file-select"
+            type="button"
+            data-file-path="${escapeHtml(file.path)}"
+            aria-current="${file.path === state.selectedPath ? "true" : "false"}"
+          >
+            <span class="file-name" title="${escapeHtml(file.path)}">${escapeHtml(displayName)}</span>
+            <span class="file-meta">
+              <span class="file-status${untracked ? " untracked" : ""}">${untracked ? "?" : "M"}</span>
+              <span class="file-dir">${fileStatusLabel(file)}</span>
+              <span class="file-change-stats" aria-label="新增 ${stats.additions} 行，删除 ${stats.deletions} 行">
+                <span class="additions">+${stats.additions}</span>
+                <span class="deletions">-${stats.deletions}</span>
+              </span>
+            </span>
+          </button>
+          ${renderButton({
+            label: action,
+            ariaLabel: `${action} ${file.path}`,
+            title: action,
+            size: "small",
+            variant: "icon",
+            icon: icon(file.staged ? "x" : "plus", 14),
+            className: "stage-toggle",
+            attributes: `data-file-path="${escapeHtml(file.path)}" data-stage-action="${action}"`
+          })}
+        </div>
+      `;
+    }
+
+    function buildFileTree(files) {
+      const root = [];
+      files.forEach((file) => {
+        const segments = file.path.replaceAll("\\", "/").split("/").filter(Boolean);
+        let children = root;
+        let path = "";
+        segments.forEach((segment, index) => {
+          path = path ? `${path}/${segment}` : segment;
+          if (index === segments.length - 1) {
+            children.push({ directory: false, file, name: segment, path });
+            return;
+          }
+          let directory = children.find((node) => node.directory && node.name === segment);
+          if (!directory) {
+            directory = { directory: true, name: segment, path, children: [] };
+            children.push(directory);
+          }
+          children = directory.children;
+        });
+      });
+      return sortFileTree(root);
+    }
+
+    function sortFileTree(nodes) {
+      return [...nodes]
+        .sort((left, right) => {
+          if (left.directory !== right.directory) return left.directory ? -1 : 1;
+          return left.name.localeCompare(
+            right.name,
+            undefined,
+            { numeric: true, sensitivity: "base" }
+          );
+        })
+        .map((node) => ({
+          ...node,
+          children: sortFileTree(node.children || [])
+        }));
+    }
+
+    function compactFileTreeNodes(nodes) {
+      return nodes.map((node) => {
+        if (!node.directory) return node;
+
+        let terminal = node;
+        const names = [node.name];
+        while (
+          terminal.children.length === 1 &&
+          terminal.children[0]?.directory
+        ) {
+          terminal = terminal.children[0];
+          names.push(terminal.name);
+        }
+
+        return {
+          ...terminal,
+          name: names.join(" \\ "),
+          children: compactFileTreeNodes(terminal.children)
+        };
+      });
+    }
+
+    function renderFileTree(files, mode) {
+      return renderFileTreeNodes(
+        compactFileTreeNodes(buildFileTree(files)),
+        mode
+      );
+    }
+
+    function renderFileTreeNodes(nodes, mode, depth = 0) {
+      return nodes.map((node) => {
+        if (!node.directory) return renderFileRow(node.file, depth);
+        const key = `${mode}:${node.path}`;
+        const collapsed = state.collapsedTreeDirectories.has(key);
+        return `
+          <div>
+            <button
+              class="file-tree-directory${collapsed ? " collapsed" : ""}"
+              type="button"
+              data-tree-key="${escapeHtml(key)}"
+              aria-expanded="${!collapsed}"
+              style="padding-left:calc(var(--space-2) + ${depth} * var(--space-4))"
+            >
+              <span class="file-tree-directory-chevron">${icon("chevronRight", 13)}</span>
+              <span class="file-tree-directory-folder">${icon("folder", 13)}</span>
+              <span class="file-tree-directory-label" title="${escapeHtml(node.path)}">${escapeHtml(node.name)}</span>
+            </button>
+            ${collapsed ? "" : renderFileTreeNodes(node.children, mode, depth + 1)}
+          </div>
+        `;
+      }).join("");
+    }
+
+    function collectTreeDirectoryKeys(files, mode) {
+      const keys = new Set();
+      files.forEach((file) => {
+        const segments = file.path.replaceAll("\\", "/").split("/").filter(Boolean);
+        let path = "";
+        segments.slice(0, -1).forEach((segment) => {
+          path = path ? `${path}/${segment}` : segment;
+          keys.add(`${mode}:${path}`);
+        });
+      });
+      return [...keys].sort();
+    }
+
+    function visibleTreeDirectoryKeys() {
+      return fileGroups().flatMap((group) =>
+        collectTreeDirectoryKeys(group.files, group.mode)
+      );
+    }
+
+    function updateSidebarControls() {
+      elements.fileFilterClear.hidden = !state.fileFilter;
+      const treeMode = state.fileViewMode === "tree";
+      elements.fileViewModeIcon.innerHTML = icon(treeMode ? "file" : "folder", 14);
+      elements.fileViewModeLabel.textContent = treeMode
+        ? "以列表形式查看"
+        : "以树形式查看";
+
+      const directoryKeys = visibleTreeDirectoryKeys();
+      const canToggleDirectories = treeMode && directoryKeys.length > 0;
+      const willCollapse = directoryKeys.some(
+        (key) => !state.collapsedTreeDirectories.has(key)
+      );
+      elements.toggleTreeDirectoriesButton.disabled = !canToggleDirectories;
+      elements.treeDirectoriesIcon.innerHTML = icon(
+        willCollapse ? "chevronRight" : "arrowDown",
+        14
+      );
+      elements.treeDirectoriesLabel.textContent = willCollapse
+        ? "收起目录"
+        : "展开目录";
+    }
+
+    function renderFileList() {
+      const groups = fileGroups();
+      if (!groups.length) {
+        elements.fileList.innerHTML = `
+          <div class="empty-state">
+            <div><strong>没有匹配的变更</strong><span>尝试文件名、目录或状态。</span></div>
+          </div>
+        `;
+        updateSidebarControls();
+        return;
+      }
+
+      elements.fileList.innerHTML = groups.map((group) => {
+        const collapsed = state.collapsedFileGroups.has(group.mode);
+        const rows = state.fileViewMode === "tree"
+          ? renderFileTree(group.files, group.mode)
+          : group.files.map((file) => renderFileRow(file)).join("");
+        return `
+          <section class="file-group">
+            <button
+              class="file-group-title"
+              type="button"
+              data-file-group="${group.mode}"
+              aria-expanded="${!collapsed}"
+            >
+              ${icon(collapsed ? "chevronRight" : "arrowDown", 12)}
+              <span>${group.label}</span>
+              <span class="group-count">${group.files.length}</span>
+            </button>
+            ${collapsed ? "" : `<div>${rows}</div>`}
+          </section>
+        `;
+      }).join("");
+
+      elements.fileList.querySelectorAll(".file-group-title").forEach((button) => {
+        button.addEventListener("click", () => {
+          const mode = button.dataset.fileGroup;
+          if (state.collapsedFileGroups.has(mode)) {
+            state.collapsedFileGroups.delete(mode);
+          } else {
+            state.collapsedFileGroups.add(mode);
+          }
+          renderFileList();
+        });
+      });
+      elements.fileList.querySelectorAll(".file-select").forEach((button) => {
+        button.addEventListener("click", () => selectFile(button.dataset.filePath));
+      });
+      elements.fileList.querySelectorAll(".stage-toggle").forEach((button) => {
+        button.addEventListener("click", () => {
+          showNotice(
+            `${button.dataset.stageAction}：${button.dataset.filePath}（原型预览，不执行 Git 命令）`
+          );
+        });
+      });
+      elements.fileList.querySelectorAll(".file-tree-directory").forEach((button) => {
+        button.addEventListener("click", () => {
+          const key = button.dataset.treeKey;
+          if (state.collapsedTreeDirectories.has(key)) {
+            state.collapsedTreeDirectories.delete(key);
+          } else {
+            state.collapsedTreeDirectories.add(key);
+          }
+          renderFileList();
+        });
+      });
+      updateSidebarControls();
+    }
+
+    function renderFileHeader() {
+      const file = currentFile();
+      elements.filePathCopyButton.classList.remove("copied", "failed");
+      elements.fileIcon.innerHTML = icon("file", 14);
+      if (!file) {
+        elements.filePath.textContent = "没有匹配的文件";
+        elements.filePathCopyButton.disabled = true;
+        elements.fileDiffSummary.textContent = "筛选结果为空";
+        elements.fileDiffSummary.setAttribute("aria-label", "筛选结果为空");
+        elements.statusLanguage.textContent = "—";
+        document.title = "GitNest Diff";
+        return;
+      }
+      const stats = fileStats(file);
+      elements.filePath.textContent = file.path;
+      elements.filePathCopyButton.disabled = false;
+      elements.fileDiffSummary.innerHTML = `
+        <strong>+${stats.additions}</strong>
+        <em>-${stats.deletions}</em>
+      `;
+      elements.fileDiffSummary.setAttribute(
+        "aria-label",
+        `新增 ${stats.additions} 行，删除 ${stats.deletions} 行`
+      );
+      elements.statusLanguage.textContent = file.language;
+      document.title = `${fileName(file.path)} — GitNest Diff`;
+    }
+
+    function updateSearchControls() {
+      const count = state.searchMatches.length;
+      diffSearchPopover.update({
+        countLabel: state.searchQuery.trim()
+          ? `${count ? state.activeMatch + 1 : 0} / ${count}`
+          : "0 / 0",
+        hasMatches: Boolean(count)
+      });
+    }
+
+    function updateSearchVisibility() {
+      diffSearchPopover.update({
+        open: state.searchOpen && Boolean(currentFile())
+      });
+    }
+
+    function openSearch() {
+      if (!currentFile()) return;
+      state.searchOpen = true;
+      updateSearchVisibility();
+      requestAnimationFrame(() => {
+        diffSearchPopover.focus({ selectAll: true });
+      });
+    }
+
+    function closeSearch() {
+      state.searchOpen = false;
+      state.searchQuery = "";
+      state.searchMatches = [];
+      state.activeMatch = 0;
+      diffSearchPopover.update({ value: "" });
+      updateSearchVisibility();
+      renderDiff();
+    }
+
+    function updateHunkControls() {
+      const file = currentFile();
+      const count = file ? fileStats(file).hunks : 0;
+      if (!count) {
+        state.activeHunk = 0;
+      } else {
+        state.activeHunk = ((state.activeHunk % count) + count) % count;
+      }
+      elements.hunkCount.textContent = `${count ? state.activeHunk + 1 : 0} / ${count}`;
+      elements.previousHunkButton.disabled = !count;
+      elements.nextHunkButton.disabled = !count;
+    }
+
+    function selectFile(path) {
+      if (!repository.files.some((file) => file.path === path)) return;
+      state.selectedPath = path;
+      state.searchQuery = "";
+      state.searchMatches = [];
+      state.activeMatch = 0;
+      state.activeHunk = 0;
+      diffSearchPopover.update({ value: "" });
+      elements.diffViewport.scrollTo({ top: 0, left: 0 });
+
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set("repo", repository.id);
+      nextUrl.searchParams.set("file", path);
+      try {
+        history.replaceState({}, "", nextUrl.href);
+      } catch {
+        // file:// 预览环境下即使无法更新地址，也不影响查看交互。
+      }
+
+      renderFileList();
+      renderFileHeader();
+      renderDiff();
+    }
+
+    function applyFileFilter(value) {
+      state.fileFilter = value;
+      const files = filteredFiles();
+      if (!files.some((file) => file.path === state.selectedPath)) {
+        state.selectedPath = files[0]?.path || "";
+        state.searchQuery = "";
+        state.searchMatches = [];
+        state.activeMatch = 0;
+        state.activeHunk = 0;
+        diffSearchPopover.update({ value: "" });
+      }
+      renderFileList();
+      renderFileHeader();
+      renderDiff();
+    }
+
+    function toggleFileView() {
+      state.fileViewMode = state.fileViewMode === "tree" ? "list" : "tree";
+      fileViewDropdown.close();
+      renderFileList();
+    }
+
+    function toggleTreeDirectories() {
+      const keys = visibleTreeDirectoryKeys();
+      if (state.fileViewMode !== "tree" || !keys.length) return;
+      const collapse = keys.some(
+        (key) => !state.collapsedTreeDirectories.has(key)
+      );
+      if (collapse) {
+        keys.forEach((key) => state.collapsedTreeDirectories.add(key));
+      } else {
+        keys.forEach((key) => state.collapsedTreeDirectories.delete(key));
+      }
+      fileViewDropdown.close();
+      renderFileList();
+    }
+
+    function setButtonSelected(button, selected) {
+      button.dataset.selected = String(selected);
+      button.setAttribute("aria-pressed", String(selected));
+    }
+
+    function setView(view) {
+      if (state.view === view) return;
+      state.view = view;
+      setButtonSelected(elements.splitButton, view === "split");
+      setButtonSelected(elements.unifiedButton, view === "unified");
+      renderDiff();
+    }
+
+    function toggleWrap() {
+      state.wrap = !state.wrap;
+      document.body.classList.toggle("wrap-lines", state.wrap);
+      setButtonSelected(elements.wrapButton, state.wrap);
+      renderDiff();
+    }
+
+    function updateSearch() {
+      state.searchQuery = elements.diffSearch.value;
+      state.activeMatch = 0;
+      renderDiff();
+      scrollToActiveMatch();
+    }
+
+    function moveSearchMatch(direction) {
+      if (!state.searchMatches.length) return;
+      state.activeMatch =
+        (state.activeMatch + direction + state.searchMatches.length) %
+        state.searchMatches.length;
+      renderDiff();
+      scrollToActiveMatch();
+      diffSearchPopover.focus();
+    }
+
+    function scrollToActiveMatch() {
+      requestAnimationFrame(() => {
+        document
+          .querySelector("mark.search-hit.current")
+          ?.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+      });
+    }
+
+    function moveHunk(direction) {
+      const file = currentFile();
+      const count = file ? fileStats(file).hunks : 0;
+      if (!count) return;
+      state.activeHunk = (state.activeHunk + direction + count) % count;
+      renderDiff();
+      requestAnimationFrame(() => {
+        document
+          .querySelector(`.hunk-row[data-hunk-index="${state.activeHunk}"]`)
+          ?.scrollIntoView({ block: "start", inline: "nearest", behavior: "smooth" });
+      });
+    }
+
+    async function copyText(value) {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        return;
+      }
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand("copy");
+      textarea.remove();
+      if (!copied) throw new Error("copy failed");
+    }
+
+    async function copyCurrentFilePath() {
+      const file = currentFile();
+      if (!file) return;
+      const path = file.path;
+      elements.filePathCopyButton.classList.remove("copied", "failed");
+      try {
+        await copyText(path);
+        elements.filePathCopyButton.classList.add("copied");
+        elements.fileIcon.innerHTML = icon("check", 14);
+        showNotice(`已复制文件路径：${path}`);
+      } catch {
+        elements.filePathCopyButton.classList.add("failed");
+        elements.fileIcon.innerHTML = icon("x", 14);
+        showNotice("复制文件路径失败，请重试。");
+      }
+      window.setTimeout(() => {
+        if (currentFile()?.path !== path) return;
+        elements.filePathCopyButton.classList.remove("copied", "failed");
+        elements.fileIcon.innerHTML = icon("file", 14);
+      }, 1600);
+    }
+
+    function showNotice(message) {
+      if (!message) return;
+      elements.notice.textContent = message;
+      elements.notice.classList.add("show");
+      window.setTimeout(() => elements.notice.classList.remove("show"), 3200);
+    }
+
+    function bindEvents() {
+      elements.splitButton.addEventListener("click", () => setView("split"));
+      elements.unifiedButton.addEventListener("click", () => setView("unified"));
+      elements.wrapButton.addEventListener("click", toggleWrap);
+      elements.previousHunkButton.addEventListener("click", () => moveHunk(-1));
+      elements.nextHunkButton.addEventListener("click", () => moveHunk(1));
+      elements.filePathCopyButton.addEventListener("click", () => void copyCurrentFilePath());
+      elements.fileFilter.addEventListener("input", () => {
+        applyFileFilter(elements.fileFilter.value);
+      });
+      elements.toggleFileViewButton.addEventListener("click", toggleFileView);
+      elements.toggleTreeDirectoriesButton.addEventListener("click", toggleTreeDirectories);
+      window.addEventListener("resize", updateSplitScrollMetrics);
+
+      document.addEventListener("keydown", (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "f") {
+          event.preventDefault();
+          openSearch();
+        } else if (event.key === "Escape" && state.searchOpen) {
+          event.preventDefault();
+          closeSearch();
+        }
+      });
+    }
+
+    function hydrateIcons() {
+      document.getElementById("brandIcon").innerHTML = icon("diff", 15);
+    }
+
+    function renderApp() {
+      const repositoryContext = `${repository.name}/${repository.branch}`;
+      elements.repositoryName.textContent = repositoryContext;
+      elements.repositoryName.title = repositoryContext;
+      renderFileList();
+      renderFileHeader();
+      renderDiff();
+      if (state.notice) {
+        requestAnimationFrame(() => showNotice(state.notice));
+      }
+    }
+
+    hydrateIcons();
+    bindEvents();
+    renderApp();
+  </script>
+</body>
+</html>

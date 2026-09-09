@@ -1,11 +1,6 @@
-import {
-  useEffect,
-  useRef
-} from "react";
+import { useEffect, useState } from "react";
 
 import type {
-  ExternalTerminalKindDto,
-  ExternalTerminalProfileDto,
   RepositoryCommandDto,
   RepositoryStatusSnapshotDto,
   WorkspaceDetailsDto
@@ -13,81 +8,111 @@ import type {
 
 import type {
   AppView,
-  RepositoryTab
+  RepositoryTab,
+  WorkspaceTab
 } from "../../app/navigation";
 import {
   findTargetSnapshot,
+  getSnapshotChangeCount,
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
 import { useRepositoryBranchOptions } from "../../entities/repository/useRepositoryBranchOptions";
-import { Icon } from "../../shared/ui/Icon";
+import type { ExternalApplicationController } from "../../features/external-application/useExternalApplications";
+import { Icon, type IconName } from "../../shared/ui/Icon";
+import { Toast, ToastViewport } from "../../shared/ui/Toast";
+import { BranchSwitchDialog } from "./BranchSwitchDialog";
+import { OpenInControl } from "./OpenInControl";
 
 interface RepositoryHeaderProps {
   inspectorOpen: boolean;
   refreshing: boolean;
+  showPushActions?: boolean;
   view: AppView;
   repositoryTab: RepositoryTab;
+  workspaceTab: WorkspaceTab;
   workspace: WorkspaceDetailsDto | null;
   snapshots: RepositoryStatusSnapshotDto[];
+  externalApplications: ExternalApplicationController;
   commandActive: RepositoryCommandDto["type"] | null;
   commandCompletionVersion: number;
   commandLocked: boolean;
-  terminalProfiles: ExternalTerminalProfileDto[];
-  terminalLoading: boolean;
-  terminalActive: ExternalTerminalKindDto | null;
+  workspaceCommandBusy: boolean;
+  workspaceFetchCount: number;
+  workspacePullCount: number;
   onRefresh(): void;
   onFetch(): void;
+  onFetchWorkspace(): void;
   onPull(): void;
+  onPullWorkspace(): void;
   onPush(): void;
   onForcePush(): void;
-  onOpenTerminal(kind: ExternalTerminalKindDto): void;
   onSwitchBranch(branch: string): void;
   onOpenWorkspace(): void;
   onOpenRepository(): void;
   onOpenOperations(): void;
   onOpenSettings(): void;
   onRepositoryTabChange(tab: RepositoryTab): void;
+  onWorkspaceTabChange(tab: WorkspaceTab): void;
   onToggleInspector(): void;
 }
+
+const workspaceTabs: Array<{
+  id: WorkspaceTab;
+  label: string;
+  icon: IconName;
+}> = [
+  { id: "overview", label: "概览", icon: "grid" },
+  { id: "repositories", label: "仓库", icon: "repository" },
+  { id: "activity", label: "活动", icon: "history" },
+  { id: "worktrees", label: "Worktrees", icon: "worktree" }
+];
 
 const repositoryTabs: Array<{
   id: RepositoryTab;
   label: string;
+  icon: IconName;
 }> = [
-  { id: "overview", label: "概览" },
-  { id: "changes", label: "变更" },
-  { id: "history", label: "历史" },
-  { id: "branches", label: "分支" },
-  { id: "worktrees", label: "Worktrees" }
+  { id: "overview", label: "概览", icon: "grid" },
+  { id: "changes", label: "变更", icon: "fileCode" },
+  { id: "history", label: "历史", icon: "history" },
+  { id: "branches", label: "分支", icon: "branch" },
+  { id: "worktrees", label: "Worktrees", icon: "worktree" }
 ];
 
 export function RepositoryHeader({
   inspectorOpen,
   refreshing,
+  showPushActions = true,
   view,
   repositoryTab,
+  workspaceTab,
   workspace,
   snapshots,
+  externalApplications,
   commandActive,
   commandCompletionVersion,
   commandLocked,
-  terminalProfiles,
-  terminalLoading,
-  terminalActive,
+  workspaceCommandBusy,
+  workspaceFetchCount,
+  workspacePullCount,
   onRefresh,
   onFetch,
+  onFetchWorkspace,
   onPull,
+  onPullWorkspace,
   onPush,
   onForcePush,
-  onOpenTerminal,
   onSwitchBranch,
   onOpenWorkspace,
   onOpenRepository,
   onOpenOperations,
   onOpenSettings,
   onRepositoryTabChange,
+  onWorkspaceTabChange,
   onToggleInspector
 }: RepositoryHeaderProps) {
+  const [branchDialogOpen, setBranchDialogOpen] =
+    useState(false);
   const selected = workspace?.selectedTarget
     ? resolveWorkspaceTarget(workspace, workspace.selectedTarget)
     : undefined;
@@ -99,9 +124,22 @@ export function RepositoryHeader({
     selected?.worktree?.name ??
     selected?.repository?.name ??
     "当前仓库";
-  const workspaceSubtitle = workspace?.entries.length
-    ? `${workspace.entries.length} 个顶层条目 · ${workspace.repositories.length} 个仓库`
-    : "尚未添加真实目录";
+  const workspaceRootPath =
+    workspace?.entries.find(
+      (entry) => entry.kind === "workspace-meta-repository"
+    )?.path ??
+    workspace?.entries[0]?.path ??
+    "Workspace 根目录不可用";
+  const selectedWorkspaceEntry =
+    workspace?.entries.find(
+      (entry) => entry.id === workspace.selectedEntryId
+    ) ?? workspace?.entries[0];
+  const workspaceContextName =
+    selectedWorkspaceEntry?.displayName ??
+    workspace?.name ??
+    "GitNest Workspace";
+  const workspaceContextPath =
+    selectedWorkspaceEntry?.path ?? workspaceRootPath;
   const contextName =
     view === "repository"
       ? repositoryName
@@ -109,7 +147,7 @@ export function RepositoryHeader({
         ? "操作中心"
         : view === "settings"
           ? "设置"
-          : workspace?.name;
+          : workspaceContextName;
   const contextPath =
     view === "repository"
       ? selected?.worktree?.path ?? "工作目录不可用"
@@ -117,7 +155,7 @@ export function RepositoryHeader({
         ? "后台任务、批量同步与错误恢复"
         : view === "settings"
           ? "账号、安全凭据与外部工具"
-          : workspaceSubtitle;
+          : workspaceContextPath;
   const contextIcon =
     view === "repository"
       ? "repository"
@@ -125,7 +163,7 @@ export function RepositoryHeader({
         ? "operations"
         : view === "settings"
           ? "settings"
-          : "layers";
+          : "grid";
   const branchOptions = useRepositoryBranchOptions(
     workspace?.selectedTarget,
     view === "repository"
@@ -147,11 +185,21 @@ export function RepositoryHeader({
     view !== "repository" ||
     !workspace?.selectedTarget ||
     commandLocked;
-  const terminalMenuRef = useRef<HTMLDetailsElement>(null);
-  const terminalDisabled =
-    repositoryCommandDisabled ||
-    terminalLoading ||
-    terminalProfiles.length === 0;
+  const repositoryTabCounts: Partial<
+    Record<RepositoryTab, number>
+  > = {
+    changes: getSnapshotChangeCount(snapshot),
+    history: snapshot?.head ? 1 : 0,
+    branches: branchOptions.branches.length,
+    worktrees: selected?.repository?.worktreeIds.length ?? 0
+  };
+  const workspaceTabCounts: Partial<
+    Record<WorkspaceTab, number>
+  > = {
+    repositories: workspace?.repositories.length ?? 0,
+    activity: workspace?.repositories.length ?? 0,
+    worktrees: workspace?.worktrees.length ?? 0
+  };
 
   useEffect(() => {
     if (
@@ -165,46 +213,6 @@ export function RepositoryHeader({
     commandCompletionVersion,
     view
   ]);
-
-  useEffect(() => {
-    const menu = terminalMenuRef.current;
-    if (!menu) {
-      return;
-    }
-    if (terminalDisabled) {
-      menu.removeAttribute("open");
-    }
-
-    const closeFromOutside = (event: PointerEvent) => {
-      if (
-        menu.open &&
-        event.target instanceof Node &&
-        !menu.contains(event.target)
-      ) {
-        menu.removeAttribute("open");
-      }
-    };
-    const closeFromKeyboard = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && menu.open) {
-        event.preventDefault();
-        menu.removeAttribute("open");
-        menu.querySelector("summary")?.focus();
-      }
-    };
-
-    document.addEventListener("pointerdown", closeFromOutside);
-    document.addEventListener("keydown", closeFromKeyboard);
-    return () => {
-      document.removeEventListener(
-        "pointerdown",
-        closeFromOutside
-      );
-      document.removeEventListener(
-        "keydown",
-        closeFromKeyboard
-      );
-    };
-  }, [terminalDisabled]);
 
   return (
     <>
@@ -222,63 +230,49 @@ export function RepositoryHeader({
             </strong>
             <span title={contextPath}>
               <Icon name="folder" size={12} />
-              {contextPath}
+              <span>{contextPath}</span>
             </span>
           </div>
         </div>
 
+        {view === "workspace" && (
+          <div aria-hidden="true" className="toolbar-divider" />
+        )}
+
         {view === "repository" && workspace?.selectedTarget && (
-          <label
-            className="header-branch-switcher"
-            title={
-              branchOptions.error?.message ??
-              "选择本地分支后将先执行安全预检"
-            }
-          >
-            <Icon name="branch" size={12} />
-            <select
-              aria-label="切换本地分支"
-              disabled={
-                commandLocked ||
-                branchOptions.loading ||
-                localBranches.length === 0
-              }
-              onChange={(event) => {
-                const branch = event.target.value;
-                if (branch && branch !== currentBranch) {
-                  onSwitchBranch(branch);
-                }
+          <>
+            <div aria-hidden="true" className="toolbar-divider" />
+            <button
+              aria-label="切换分支"
+              aria-expanded={branchDialogOpen}
+              aria-haspopup="dialog"
+              className="header-branch-switcher"
+              disabled={repositoryCommandDisabled}
+              onClick={() => {
+                setBranchDialogOpen(true);
+                void branchOptions.reload();
               }}
-              onFocus={() => void branchOptions.reload()}
-              value={currentBranch}
+              title="打开切换分支弹窗"
+              type="button"
             >
-              {!localBranches.some(
-                (branch) => branch.name === currentBranch
-              ) && (
-                <option value={currentBranch}>
-                  {currentBranch || "detached"}
-                </option>
-              )}
-              {localBranches.map((branch) => (
-                <option
-                  disabled={branchOccupiedElsewhere(
-                    branch.worktreePath,
-                    selected?.worktree?.path
-                  )}
-                  key={branch.fullName}
-                  value={branch.name}
-                >
-                  {branch.name}
-                  {branchOccupiedElsewhere(
-                    branch.worktreePath,
-                    selected?.worktree?.path
-                  )
-                    ? " · 其他 Worktree"
-                    : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+              <Icon name="branch" size={12} />
+              <span>{currentBranch || "detached"}</span>
+              <Icon name="chevron" size={12} />
+            </button>
+          </>
+        )}
+
+        {(view === "workspace" ||
+          (view === "repository" &&
+            Boolean(workspace?.selectedTarget))) && (
+          <OpenInControl
+            applications={externalApplications}
+            scope={
+              view === "workspace"
+                ? "workspace"
+                : "repository"
+            }
+          />
         )}
 
         <div className="repository-actions">
@@ -291,99 +285,118 @@ export function RepositoryHeader({
             type="button"
           >
             <Icon name="refresh" />
-            {refreshing ? "刷新中" : "刷新"}
+            <span>{refreshing ? "刷新中" : "刷新"}</span>
           </button>
+          {view === "workspace" && (
+            <>
+              <button
+                aria-busy={commandActive === "pull"}
+                className="toolbar-button"
+                disabled={
+                  workspaceCommandBusy ||
+                  workspacePullCount === 0
+                }
+                onClick={onPullWorkspace}
+                title={`批量 Pull ${workspacePullCount} 个可安全快进的仓库`}
+                type="button"
+              >
+                <Icon name="arrowDown" />
+                <span>
+                  {commandActive === "pull"
+                    ? "预检中"
+                    : "Pull"}
+                </span>
+                {workspacePullCount > 0 ? (
+                  <span className="toolbar-count">
+                    {workspacePullCount}
+                  </span>
+                ) : null}
+              </button>
+              <button
+                aria-busy={commandActive === "fetch"}
+                className="toolbar-button"
+                disabled={
+                  workspaceCommandBusy ||
+                  workspaceFetchCount === 0
+                }
+                onClick={onFetchWorkspace}
+                title={`Fetch Workspace 中的全部 ${workspaceFetchCount} 个仓库`}
+                type="button"
+              >
+                <Icon name="download" />
+                <span>
+                  {commandActive === "fetch"
+                    ? "预检中"
+                    : "Fetch 全部"}
+                </span>
+              </button>
+            </>
+          )}
           {view === "repository" && (
             <>
-          <button
-            aria-busy={commandActive === "fetch"}
-            className="toolbar-button"
-            disabled={repositoryCommandDisabled}
-            onClick={onFetch}
-            title="获取远程引用；不会修改工作目录"
-            type="button"
-          >
-            <Icon name="download" />
-            {commandActive === "fetch" ? "预检中" : "Fetch"}
-          </button>
-          <button
-            aria-busy={commandActive === "pull"}
-            className="toolbar-button"
-            disabled={repositoryCommandDisabled}
-            onClick={onPull}
-            title="仅允许 fast-forward，不自动 Merge、Rebase 或 Stash"
-            type="button"
-          >
-            <Icon name="download" />
-            {commandActive === "pull" ? "预检中" : "Pull"}
-          </button>
-          <button
-            aria-busy={commandActive === "push"}
-            className="toolbar-button"
-            disabled={repositoryCommandDisabled}
-            onClick={onPush}
-            title="普通 Push；执行前展示远程与分支影响"
-            type="button"
-          >
-            <Icon name="upload" />
-            {commandActive === "push" ? "预检中" : "Push"}
-          </button>
-          <button
-            aria-label="Force with lease"
-            className="toolbar-icon-button force-push-button"
-            disabled={repositoryCommandDisabled}
-            onClick={onForcePush}
-            title="Force with lease：独立危险入口，执行前需要再次确认"
-            type="button"
-          >
-            <Icon name="warning" />
-          </button>
-          <details
-            className="toolbar-menu terminal-menu"
-            ref={terminalMenuRef}
-          >
-            <summary
-              aria-disabled={terminalDisabled}
-              aria-label="打开外部终端"
-              className="toolbar-icon-button"
-              onClick={(event) => {
-                if (terminalDisabled) {
-                  event.preventDefault();
-                }
-              }}
-              tabIndex={terminalDisabled ? -1 : 0}
-              title={
-                terminalProfiles.length > 0
-                  ? "在当前 Worktree 打开外部终端"
-                  : terminalLoading
-                    ? "正在检测外部终端"
-                    : "未检测到支持的外部终端"
-              }
-            >
-              <Icon name="terminal" />
-            </summary>
-            <div className="toolbar-menu-popover">
-              <span>打开外部终端</span>
-              {terminalProfiles.map((profile) => (
-                <button
-                  disabled={terminalActive !== null}
-                  key={profile.kind}
-                  onClick={(event) => {
-                    onOpenTerminal(profile.kind);
-                    event.currentTarget
-                      .closest("details")
-                      ?.removeAttribute("open");
-                  }}
-                  type="button"
-                >
-                  <Icon name="terminal" size={13} />
-                  {terminalActive === profile.kind
-                    ? "启动中…"
-                    : profile.label}
-                </button>
-              ))}
-            </div>
-          </details>
+              <button
+                aria-busy={commandActive === "fetch"}
+                className="toolbar-button"
+                disabled={repositoryCommandDisabled}
+                onClick={onFetch}
+                title="获取远程引用；不会修改工作目录"
+                type="button"
+              >
+                <Icon name="download" />
+                <span>
+                  {commandActive === "fetch" ? "预检中" : "Fetch"}
+                </span>
+              </button>
+              <button
+                aria-busy={commandActive === "pull"}
+                className="toolbar-button"
+                disabled={repositoryCommandDisabled}
+                onClick={onPull}
+                title="仅允许 fast-forward，不自动 Merge、Rebase 或 Stash"
+                type="button"
+              >
+                <Icon name="arrowDown" />
+                <span>
+                  {commandActive === "pull" ? "预检中" : "Pull"}
+                </span>
+                {snapshot?.behind ? (
+                  <span className="toolbar-count">
+                    {snapshot.behind}
+                  </span>
+                ) : null}
+              </button>
+              {showPushActions ? (
+                <>
+                  <button
+                    aria-busy={commandActive === "push"}
+                    className="toolbar-button"
+                    disabled={repositoryCommandDisabled}
+                    onClick={onPush}
+                    title="普通 Push；执行前展示远程与分支影响"
+                    type="button"
+                  >
+                    <Icon name="arrowUp" />
+                    <span>
+                      {commandActive === "push" ? "预检中" : "Push"}
+                    </span>
+                    {snapshot?.ahead ? (
+                      <span className="toolbar-count">
+                        {snapshot.ahead}
+                      </span>
+                    ) : null}
+                  </button>
+                  <button
+                    aria-label="Force with lease"
+                    className="toolbar-icon-button force-push-button"
+                    disabled={repositoryCommandDisabled}
+                    onClick={onForcePush}
+                    title="Force with lease：独立危险入口，执行前需要再次确认"
+                    type="button"
+                  >
+                    <Icon name="warning" />
+                  </button>
+                </>
+              ) : null}
             </>
           )}
           <button
@@ -410,6 +423,7 @@ export function RepositoryHeader({
             ? "仓库功能页面"
             : "Workspace 页面"
         }
+        role="tablist"
       >
         {view === "repository" ? (
           repositoryTabs.map((tab) => (
@@ -417,29 +431,61 @@ export function RepositoryHeader({
               aria-current={
                 repositoryTab === tab.id ? "page" : undefined
               }
+              aria-selected={repositoryTab === tab.id}
               className={
                 repositoryTab === tab.id ? "active" : ""
               }
               key={tab.id}
               onClick={() => onRepositoryTabChange(tab.id)}
+              role="tab"
               type="button"
             >
+              <Icon name={tab.icon} />
               {tab.label}
+              {repositoryTabCounts[tab.id] ? (
+                <span className="tab-count">
+                  {repositoryTabCounts[tab.id]}
+                </span>
+              ) : null}
+            </button>
+          ))
+        ) : view === "workspace" ? (
+          workspaceTabs.map((tab) => (
+            <button
+              aria-current={
+                workspaceTab === tab.id ? "page" : undefined
+              }
+              aria-selected={workspaceTab === tab.id}
+              className={
+                workspaceTab === tab.id ? "active" : ""
+              }
+              key={tab.id}
+              onClick={() => onWorkspaceTabChange(tab.id)}
+              role="tab"
+              type="button"
+            >
+              <Icon name={tab.icon} />
+              <span>{tab.label}</span>
+              {workspaceTabCounts[tab.id] ? (
+                <span className="tab-count">
+                  {workspaceTabCounts[tab.id]}
+                </span>
+              ) : null}
             </button>
           ))
         ) : (
           <>
             <button
-              aria-current={
-                view === "workspace" ? "page" : undefined
-              }
-              className={view === "workspace" ? "active" : ""}
+              aria-selected={false}
               onClick={onOpenWorkspace}
+              role="tab"
               type="button"
             >
+              <Icon name="grid" />
               概览
             </button>
             <button
+              aria-selected={false}
               disabled={!workspace?.selectedTarget}
               onClick={onOpenRepository}
               title={
@@ -448,34 +494,80 @@ export function RepositoryHeader({
                   : "请先从 Workspace 选择一个仓库"
               }
               type="button"
+              role="tab"
             >
+              <Icon name="repository" />
               当前仓库
             </button>
             <button
               aria-current={
                 view === "operations" ? "page" : undefined
               }
+              aria-selected={view === "operations"}
               className={
                 view === "operations" ? "active" : ""
               }
               onClick={onOpenOperations}
+              role="tab"
               type="button"
             >
+              <Icon name="operations" />
               操作中心
             </button>
             <button
               aria-current={
                 view === "settings" ? "page" : undefined
               }
+              aria-selected={view === "settings"}
               className={view === "settings" ? "active" : ""}
               onClick={onOpenSettings}
+              role="tab"
               type="button"
             >
+              <Icon name="settings" />
               设置
             </button>
           </>
         )}
       </nav>
+      {branchDialogOpen &&
+        view === "repository" &&
+        workspace?.selectedTarget && (
+          <BranchSwitchDialog
+            branches={localBranches}
+            currentBranch={currentBranch}
+            errorMessage={
+              branchOptions.error?.message ?? null
+            }
+            isDisabled={(branch) =>
+              branchOccupiedElsewhere(
+                branch.worktreePath,
+                selected?.worktree?.path
+              )
+            }
+            loading={branchOptions.loading}
+            onCancel={() => setBranchDialogOpen(false)}
+            onRetry={() => void branchOptions.reload()}
+            onSelect={(branch) => {
+              setBranchDialogOpen(false);
+              onSwitchBranch(branch);
+            }}
+            repositoryName={repositoryName}
+            repositoryPath={
+              selected?.worktree?.path ?? "工作目录不可用"
+            }
+          />
+        )}
+      {externalApplications.error && (
+        <ToastViewport>
+          <Toast
+            message={externalApplications.error.message}
+            onClose={externalApplications.clearError}
+            title="无法打开本地应用"
+            tone="error"
+          />
+        </ToastViewport>
+      )}
     </>
   );
 }

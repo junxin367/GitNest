@@ -1,5 +1,5 @@
 export const gitNestDesignSystem = {
-  minimumCanvasWidth: 1100,
+  minimumCanvasWidth: 1060,
   preferredCanvas: {
     width: 1440,
     height: 900

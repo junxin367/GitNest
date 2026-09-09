@@ -141,6 +141,40 @@ export function parseStatusPorcelainV2(
   };
 }
 
+export function reconcileStatOnlyUnstagedChanges(
+  snapshot: RepositorySnapshot,
+  meaningfulUnstagedPaths: readonly string[]
+): RepositorySnapshot {
+  const meaningfulPaths = new Set(meaningfulUnstagedPaths);
+  const changes = snapshot.changes.flatMap((change) => {
+    if (
+      change.kind !== "ordinary" ||
+      change.worktreeStatus !== "M" ||
+      meaningfulPaths.has(change.path)
+    ) {
+      return [change];
+    }
+
+    if (change.indexStatus === ".") {
+      return [];
+    }
+
+    return [
+      {
+        ...change,
+        worktreeStatus: "."
+      }
+    ];
+  });
+  const counts = countChanges(changes);
+
+  return {
+    ...snapshot,
+    ...counts,
+    changes
+  };
+}
+
 function parsePrefix(record: string, fieldCount: number): ParsedPrefix {
   const fields: string[] = [];
   let cursor = 0;
@@ -169,4 +203,29 @@ function parsePrefix(record: string, fieldCount: number): ParsedPrefix {
   }
 
   return { fields, remainder };
+}
+
+function countChanges(
+  changes: readonly ChangedPath[]
+): Pick<
+  RepositorySnapshot,
+  "staged" | "unstaged" | "untracked" | "conflicted"
+> {
+  let staged = 0;
+  let unstaged = 0;
+  let untracked = 0;
+  let conflicted = 0;
+
+  for (const change of changes) {
+    if (change.kind === "untracked") {
+      untracked += 1;
+    } else if (change.kind === "unmerged") {
+      conflicted += 1;
+    } else {
+      staged += Number(change.indexStatus !== ".");
+      unstaged += Number(change.worktreeStatus !== ".");
+    }
+  }
+
+  return { staged, unstaged, untracked, conflicted };
 }

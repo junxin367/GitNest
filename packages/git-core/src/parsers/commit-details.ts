@@ -58,10 +58,16 @@ export function parseCommitNumstat(output: string): {
   deletions: number;
 } {
   const files: CommitFileStat[] = [];
+  const records = output.split("\0");
   let additions = 0;
   let deletions = 0;
 
-  for (const record of output.split("\0").filter(Boolean)) {
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record) {
+      continue;
+    }
+
     const firstTab = record.indexOf("\t");
     const secondTab =
       firstTab < 0 ? -1 : record.indexOf("\t", firstTab + 1);
@@ -78,7 +84,13 @@ export function parseCommitNumstat(output: string): {
       firstTab + 1,
       secondTab
     );
-    const path = record.slice(secondTab + 1);
+    const inlinePath = record.slice(secondTab + 1);
+    const path =
+      inlinePath ||
+      readRenameDestinationPath(records, index + 1);
+    if (!inlinePath) {
+      index += 2;
+    }
     const binary =
       additionsValue === "-" || deletionsValue === "-";
     const fileAdditions = binary
@@ -115,6 +127,23 @@ export function parseCommitNumstat(output: string): {
   }
 
   return { files, additions, deletions };
+}
+
+function readRenameDestinationPath(
+  records: readonly string[],
+  originalPathIndex: number
+): string {
+  const originalPath = records[originalPathIndex];
+  const destinationPath = records[originalPathIndex + 1];
+
+  if (!originalPath || !destinationPath) {
+    throw new GitError(
+      "INVALID_GIT_OUTPUT",
+      "Commit numstat contains a malformed rename record."
+    );
+  }
+
+  return destinationPath;
 }
 
 function firstLine(value: string): string {

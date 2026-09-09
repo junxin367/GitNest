@@ -2,7 +2,7 @@ import { WorkspaceError } from "@gitnest/workspace-core";
 import { AtomicJsonStore } from "@gitnest/persistence-json";
 
 export const WINDOW_STATE_SCHEMA_VERSION = 1;
-export const MIN_WINDOW_WIDTH = 1_100;
+export const MIN_WINDOW_WIDTH = 1_060;
 export const MIN_WINDOW_HEIGHT = 720;
 
 export interface WindowBounds {

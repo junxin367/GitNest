@@ -98,7 +98,31 @@ describe("createGitNestBridge", () => {
         "ssh://git@git.example.test/team/repository.git"
     });
     await bridge.system.getRuntimeInfo();
+    await bridge.system.listExternalApplications();
+    await bridge.system.openExternalApplication({
+      context: {
+        scope: "repository",
+        target: {
+          repositoryId: "repository",
+          worktreeId: "worktree"
+        }
+      },
+      kind: "vscode"
+    });
     await bridge.system.listExternalTerminals();
+    await bridge.system.openDirectory({
+      target: {
+        repositoryId: "repository",
+        worktreeId: "worktree"
+      }
+    });
+    await bridge.system.openFileLocation({
+      target: {
+        repositoryId: "repository",
+        worktreeId: "worktree"
+      },
+      path: "src/index.ts"
+    });
     await bridge.system.openExternalTerminal({
       target: {
         repositoryId: "repository",
@@ -231,6 +255,9 @@ describe("createGitNestBridge", () => {
       entryId: "entry",
       displayName: "Workspace"
     });
+    await bridge.workspace.removeEntry({
+      entryId: "entry"
+    });
     await bridge.workspace.setGroupCollapsed({
       entryId: "entry",
       groupId: "group",
@@ -255,6 +282,14 @@ describe("createGitNestBridge", () => {
     );
     await bridge.window.minimize();
     await bridge.window.toggleMaximize();
+    await bridge.window.openDiffViewer({
+      target: {
+        repositoryId: "repository",
+        worktreeId: "worktree"
+      },
+      path: "src/index.ts",
+      mode: "unstaged"
+    });
     await bridge.window.close();
 
     expect(Object.keys(bridge)).toEqual([
@@ -329,8 +364,50 @@ describe("createGitNestBridge", () => {
         args: []
       },
       {
+        channel: IPC_CHANNELS.systemListExternalApplications,
+        args: []
+      },
+      {
+        channel: IPC_CHANNELS.systemOpenExternalApplication,
+        args: [
+          {
+            context: {
+              scope: "repository",
+              target: {
+                repositoryId: "repository",
+                worktreeId: "worktree"
+              }
+            },
+            kind: "vscode"
+          }
+        ]
+      },
+      {
         channel: IPC_CHANNELS.systemListExternalTerminals,
         args: []
+      },
+      {
+        channel: IPC_CHANNELS.systemOpenDirectory,
+        args: [
+          {
+            target: {
+              repositoryId: "repository",
+              worktreeId: "worktree"
+            }
+          }
+        ]
+      },
+      {
+        channel: IPC_CHANNELS.systemOpenFileLocation,
+        args: [
+          {
+            target: {
+              repositoryId: "repository",
+              worktreeId: "worktree"
+            },
+            path: "src/index.ts"
+          }
+        ]
       },
       {
         channel: IPC_CHANNELS.systemOpenExternalTerminal,
@@ -551,6 +628,10 @@ describe("createGitNestBridge", () => {
         args: [{ entryId: "entry", displayName: "Workspace" }]
       },
       {
+        channel: IPC_CHANNELS.workspaceRemoveEntry,
+        args: [{ entryId: "entry" }]
+      },
+      {
         channel: IPC_CHANNELS.workspaceSetGroupCollapsed,
         args: [
           {
@@ -586,6 +667,19 @@ describe("createGitNestBridge", () => {
       {
         channel: IPC_CHANNELS.windowToggleMaximize,
         args: []
+      },
+      {
+        channel: IPC_CHANNELS.windowOpenDiffViewer,
+        args: [
+          {
+            target: {
+              repositoryId: "repository",
+              worktreeId: "worktree"
+            },
+            path: "src/index.ts",
+            mode: "unstaged"
+          }
+        ]
       },
       {
         channel: IPC_CHANNELS.windowClose,

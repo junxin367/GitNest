@@ -6,7 +6,7 @@ describe("createWindowOptions", () => {
   it("keeps the renderer isolated from Node.js", () => {
     const options = createWindowOptions("C:\\GitNest\\preload.js");
 
-    expect(options.minWidth).toBe(1100);
+    expect(options.minWidth).toBe(1060);
     expect(options.width).toBe(1440);
     expect(options.height).toBe(900);
     expect(options.webPreferences).toMatchObject({
@@ -35,7 +35,7 @@ describe("createWindowOptions", () => {
       y: 80,
       width: 1280,
       height: 800,
-      minWidth: 1100,
+      minWidth: 1060,
       minHeight: 720
     });
   });

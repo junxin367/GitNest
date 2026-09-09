@@ -12,6 +12,7 @@ import {
 
 import {
   AccountService,
+  ExternalApplicationService,
   ExternalTerminalService,
   GitInspectionService,
   RepositoryCommandService,
@@ -37,6 +38,7 @@ import {
   NodeWorkspaceFileSystem,
   NodeWorktreePathPolicy
 } from "../adapters/filesystem.adapter";
+import { WindowsExternalApplicationAdapter } from "../adapters/external-application.adapter";
 import { WindowsExternalTerminalAdapter } from "../adapters/external-terminal.adapter";
 import { SafeStorageCredentialVault } from "../adapters/credential-vault.adapter";
 import { WindowsGitAskPassBroker } from "../adapters/git-askpass.adapter";
@@ -47,6 +49,7 @@ import { JsonWindowStateStore } from "../windows/window-state";
 export interface ApplicationServices {
   accounts: AccountService;
   diagnostics: RotatingDiagnosticLogger;
+  externalApplication: ExternalApplicationService;
   externalTerminal: ExternalTerminalService;
   gitInspection: GitInspectionService;
   repositoryCommands: RepositoryCommandService;
@@ -194,6 +197,12 @@ export function registerServices(): ApplicationServices {
   return {
     accounts,
     diagnostics,
+    externalApplication: new ExternalApplicationService(
+      workspace,
+      new WindowsExternalApplicationAdapter(
+        externalTerminalAdapter
+      )
+    ),
     externalTerminal: new ExternalTerminalService(
       workspace,
       externalTerminalAdapter

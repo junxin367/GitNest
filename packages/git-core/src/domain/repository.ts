@@ -5,12 +5,20 @@ export interface RepositoryIdentity {
   head: string;
 }
 
+export interface ChangedPathStats {
+  additions: number;
+  deletions: number;
+}
+
 export interface ChangedPath {
   path: string;
   originalPath?: string;
   indexStatus: string;
   worktreeStatus: string;
   kind: "ordinary" | "renamed" | "unmerged" | "untracked";
+  stagedStats?: ChangedPathStats;
+  unstagedStats?: ChangedPathStats;
+  untrackedStats?: ChangedPathStats;
 }
 
 export interface RepositorySnapshot {
@@ -35,6 +43,7 @@ export interface Branch {
   current: boolean;
   remote: boolean;
   worktreePath?: string;
+  updatedAt?: string;
 }
 
 export interface CommitSummary {
@@ -45,6 +54,7 @@ export interface CommitSummary {
   authoredAt: string;
   subject: string;
   parentHashes: string[];
+  refs?: string[];
 }
 
 export interface Worktree {

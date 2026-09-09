@@ -137,6 +137,11 @@ export interface UpdateWorkspaceEntryRequest {
   order?: number;
 }
 
+export interface RemoveWorkspaceEntryRequest {
+  entryId: string;
+  target?: RepositoryTargetDto;
+}
+
 export interface SetWorkspaceGroupCollapsedRequest {
   entryId: string;
   groupId: string;

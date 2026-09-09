@@ -11,21 +11,28 @@ import type {
 } from "@gitnest/contracts";
 
 import type { WorktreeCommandController } from "../../features/worktree-command/useWorktreeCommands";
-import { Icon } from "../../shared/ui/Icon";
+import { Icon, type IconName } from "../../shared/ui/Icon";
 
 interface RepositoryWorktreesProps {
   workspace: WorkspaceDetailsDto;
   repositoryId: string;
+  worktreeId: string;
   snapshots: RepositoryStatusSnapshotDto[];
   commands: WorktreeCommandController;
+  directoryOpening: boolean;
+  onOpenDirectory(worktreeId: string): void;
 }
 
 export function RepositoryWorktrees({
   workspace,
   repositoryId,
+  worktreeId,
   snapshots,
-  commands
+  commands,
+  directoryOpening,
+  onOpenDirectory
 }: RepositoryWorktreesProps) {
+  const [createOpen, setCreateOpen] = useState(false);
   const [createPath, setCreatePath] = useState("");
   const [createBranch, setCreateBranch] = useState("");
   const [createStartPoint, setCreateStartPoint] =
@@ -45,6 +52,21 @@ export function RepositoryWorktrees({
   const prunableCount = worktrees.filter(
     (worktree) => worktree.isPrunable
   ).length;
+  const existingCount = worktrees.length - prunableCount;
+  const detachedCount = worktrees.filter(
+    (worktree) => worktree.isDetached || !worktree.branch
+  ).length;
+  const currentWorktree =
+    worktrees.find((worktree) => worktree.id === worktreeId) ??
+    worktrees.find((worktree) => worktree.isPrimary) ??
+    worktrees[0];
+  const currentSnapshot = currentWorktree
+    ? snapshots.find(
+        (snapshot) =>
+          snapshot.repositoryId === repositoryId &&
+          snapshot.worktreeId === currentWorktree.id
+      )
+    : undefined;
 
   useEffect(() => {
     setCreatePath("");
@@ -52,6 +74,7 @@ export function RepositoryWorktrees({
     setCreateStartPoint("");
     setLockReasons({});
     setMoveDestinations({});
+    setCreateOpen(false);
     commands.clearFeedback();
   }, [repositoryId]);
 
@@ -69,6 +92,10 @@ export function RepositoryWorktrees({
       path,
       ...(branch ? { branch } : {}),
       ...(startPoint ? { startPoint } : {})
+    }).then((accepted) => {
+      if (accepted) {
+        setCreateOpen(false);
+      }
     });
   };
 
@@ -88,152 +115,15 @@ export function RepositoryWorktrees({
 
   return (
     <div className="worktree-management">
-      {(commands.error || commands.notice) && (
-        <div
-          className={`workspace-feedback ${
-            commands.error ? "error" : "success"
-          }`}
-          role={commands.error ? "alert" : "status"}
-        >
-          <Icon
-            name={commands.error ? "warning" : "check"}
-          />
-          <div>
-            <strong>
-              {commands.error
-                ? "Worktree 操作未完成"
-                : "Worktree 操作状态"}
-            </strong>
-            <span>
-              {commands.error?.message ?? commands.notice}
-            </span>
-          </div>
-          <button
-            aria-label="关闭 Worktree 操作提示"
-            className="icon-button"
-            onClick={commands.clearFeedback}
-            title="关闭 Worktree 操作提示"
-            type="button"
-          >
-            <Icon name="close" />
-          </button>
+      <div className="page-heading worktree-page-heading">
+        <div>
+          <h1>{repository.name} Worktrees</h1>
+          <p>
+            显示本次只读扫描得到的登记数量与当前工作目录。
+            聚合仓库可展开全部 {worktrees.length} 条实际登记路径。
+          </p>
         </div>
-      )}
-
-      <section className="worktree-management-grid">
-        <article className="panel worktree-create-panel">
-          <header className="panel-header">
-            <div className="panel-title">
-              <Icon name="plus" />
-              创建 Worktree
-            </div>
-            <span className="panel-caption">
-              已有分支或新分支；留空分支将创建 detached HEAD
-            </span>
-          </header>
-          <form onSubmit={submitCreate}>
-            <div className="field">
-              <label htmlFor="worktree-create-path">
-                目标绝对路径
-              </label>
-              <div className="worktree-path-input">
-                <input
-                  aria-label="Worktree 目标绝对路径"
-                  disabled={commands.busy}
-                  id="worktree-create-path"
-                  onChange={(event) =>
-                    setCreatePath(event.target.value)
-                  }
-                  placeholder="C:\worktrees\feature-name"
-                  spellCheck={false}
-                  value={createPath}
-                />
-                <button
-                  className="button"
-                  disabled={commands.busy}
-                  onClick={() => {
-                    void commands
-                      .chooseDirectory()
-                      .then((path) => {
-                        if (path) {
-                          setCreatePath(path);
-                        }
-                      });
-                  }}
-                  type="button"
-                >
-                  <Icon name="folder" />
-                  选择
-                </button>
-              </div>
-              <small>
-                可选择一个空目录，或选择父目录后在路径末尾补充新目录名。
-              </small>
-            </div>
-            <div className="worktree-create-fields">
-              <label className="field">
-                <span>分支（可选）</span>
-                <input
-                  disabled={commands.busy}
-                  onChange={(event) =>
-                    setCreateBranch(event.target.value)
-                  }
-                  placeholder="feature/worktree"
-                  spellCheck={false}
-                  value={createBranch}
-                />
-              </label>
-              <label className="field">
-                <span>起点（可选）</span>
-                <input
-                  disabled={commands.busy}
-                  onChange={(event) =>
-                    setCreateStartPoint(event.target.value)
-                  }
-                  placeholder="HEAD 或提交"
-                  spellCheck={false}
-                  value={createStartPoint}
-                />
-              </label>
-            </div>
-            <div className="worktree-form-footer">
-              <span>
-                目标必须不存在或为空，且不能与已有 Worktree 重叠。
-              </span>
-              <button
-                aria-busy={commands.active === "create"}
-                className="button primary"
-                disabled={commands.busy || !createPath.trim()}
-                type="submit"
-              >
-                <Icon
-                  name={
-                    commands.active === "create"
-                      ? "refresh"
-                      : "plus"
-                  }
-                />
-                {commands.active === "create"
-                  ? "预检中…"
-                  : "预检并创建"}
-              </button>
-            </div>
-          </form>
-        </article>
-
-        <article className="panel worktree-safety-panel">
-          <header className="panel-header">
-            <div className="panel-title">
-              <Icon name="worktree" />
-              安全边界
-            </div>
-          </header>
-          <ul>
-            <li>Primary Worktree 永不允许移除。</li>
-            <li>脏、冲突、锁定目录不允许 Remove。</li>
-            <li>Move/Remove 不提供强制模式。</li>
-            <li>Prune 只清理失效 Git 登记。</li>
-          </ul>
+        <div className="page-actions">
           <button
             aria-busy={commands.active === "prune"}
             className="button"
@@ -246,78 +136,391 @@ export function RepositoryWorktrees({
             }
             type="button"
           >
-            <Icon name="refresh" />
-            预检 Prune ({prunableCount})
+            <Icon name="eye" />
+            Prune 预览
           </button>
-        </article>
-      </section>
-
-      <section className="worktree-inventory">
-        <header className="worktree-inventory-header">
-          <div>
-            <span className="eyebrow">Git common directory</span>
-            <h2>已登记 Worktrees</h2>
-          </div>
-          <span>
-            {worktrees.length} 个目录 · {prunableCount} 个失效登记
-          </span>
-        </header>
-
-        <div className="worktree-grid">
-          {worktrees.map((worktree) => {
-            const snapshot = snapshots.find(
-              (candidate) =>
-                candidate.repositoryId === repositoryId &&
-                candidate.worktreeId === worktree.id
-            );
-            const dirty = Boolean(
-              snapshot &&
-                (snapshot.staged > 0 ||
-                  snapshot.unstaged > 0 ||
-                  snapshot.untracked > 0 ||
-                  snapshot.conflicted > 0)
-            );
-            return (
-              <WorktreeCard
-                commands={commands}
-                dirty={dirty}
-                key={worktree.id}
-                lockReason={lockReasons[worktree.id] ?? ""}
-                moveDestination={
-                  moveDestinations[worktree.id] ?? ""
-                }
-                onLockReasonChange={(value) =>
-                  setLockReasons((current) => ({
-                    ...current,
-                    [worktree.id]: value
-                  }))
-                }
-                onMoveDestinationChange={(value) =>
-                  setMoveDestinations((current) => ({
-                    ...current,
-                    [worktree.id]: value
-                  }))
-                }
-                worktree={worktree}
-              />
-            );
-          })}
+          <button
+            aria-controls="worktree-create-panel"
+            aria-expanded={createOpen}
+            className="button primary"
+            onClick={() => setCreateOpen((open) => !open)}
+            type="button"
+          >
+            <Icon name={createOpen ? "close" : "plus"} />
+            {createOpen ? "收起创建" : "新建 Worktree"}
+          </button>
         </div>
+      </div>
 
-        {worktrees.length === 0 && (
-          <div className="empty-state repository-empty-state">
-            <span className="empty-state-icon">
-              <Icon name="worktree" size={20} />
-            </span>
-            <div>
-              <strong>没有可展示的 Worktree</strong>
-              <p>创建或修复 Worktree 后会显示在这里。</p>
-            </div>
+      <div className="metric-grid worktree-metric-grid">
+        <WorktreeMetricCard
+          description="包含当前主工作目录"
+          icon="worktree"
+          label="已登记"
+          tone="purple"
+          value={worktrees.length}
+        />
+        <WorktreeMetricCard
+          description="按可清理记录反推"
+          icon="check"
+          label="目录存在"
+          tone="green"
+          value={existingCount}
+        />
+        <WorktreeMetricCard
+          description="gitdir 指向不存在位置"
+          icon="warning"
+          label="可清理"
+          tone="red"
+          value={prunableCount}
+        />
+        <WorktreeMetricCard
+          description="未关联本地分支"
+          icon="branch"
+          label="Detached"
+          tone="yellow"
+          value={detachedCount}
+        />
+      </div>
+
+      {currentWorktree ? (
+        <div className="worktree-grid worktree-summary-grid">
+          <WorktreeSummaryCard
+            directoryOpening={directoryOpening}
+            onOpenDirectory={onOpenDirectory}
+            snapshot={currentSnapshot}
+            worktree={currentWorktree}
+          />
+        </div>
+      ) : (
+        <div className="empty-state repository-empty-state">
+          <span className="empty-state-icon">
+            <Icon name="worktree" size={20} />
+          </span>
+          <div>
+            <strong>没有可展示的 Worktree</strong>
+            <p>创建或修复 Worktree 后会显示在这里。</p>
           </div>
-        )}
-      </section>
+        </div>
+      )}
+
+      {createOpen && (
+        <section
+          className="worktree-management-grid"
+          id="worktree-create-panel"
+        >
+          <article className="panel worktree-create-panel">
+            <header className="panel-header">
+              <div className="panel-title">
+                <Icon name="plus" />
+                创建 Worktree
+              </div>
+              <span className="panel-caption">
+                已有分支或新分支；留空分支将创建 detached HEAD
+              </span>
+            </header>
+            <form onSubmit={submitCreate}>
+              <div className="field">
+                <label htmlFor="worktree-create-path">
+                  目标绝对路径
+                </label>
+                <div className="worktree-path-input">
+                  <input
+                    aria-label="Worktree 目标绝对路径"
+                    disabled={commands.busy}
+                    id="worktree-create-path"
+                    onChange={(event) =>
+                      setCreatePath(event.target.value)
+                    }
+                    placeholder="C:\worktrees\feature-name"
+                    spellCheck={false}
+                    value={createPath}
+                  />
+                  <button
+                    className="button"
+                    disabled={commands.busy}
+                    onClick={() => {
+                      void commands
+                        .chooseDirectory()
+                        .then((path) => {
+                          if (path) {
+                            setCreatePath(path);
+                          }
+                        });
+                    }}
+                    type="button"
+                  >
+                    <Icon name="folder" />
+                    选择
+                  </button>
+                </div>
+                <small>
+                  可选择一个空目录，或选择父目录后在路径末尾补充新目录名。
+                </small>
+              </div>
+              <div className="worktree-create-fields">
+                <label className="field">
+                  <span>分支（可选）</span>
+                  <input
+                    disabled={commands.busy}
+                    onChange={(event) =>
+                      setCreateBranch(event.target.value)
+                    }
+                    placeholder="feature/worktree"
+                    spellCheck={false}
+                    value={createBranch}
+                  />
+                </label>
+                <label className="field">
+                  <span>起点（可选）</span>
+                  <input
+                    disabled={commands.busy}
+                    onChange={(event) =>
+                      setCreateStartPoint(event.target.value)
+                    }
+                    placeholder="HEAD 或提交"
+                    spellCheck={false}
+                    value={createStartPoint}
+                  />
+                </label>
+              </div>
+              <div className="worktree-form-footer">
+                <span>
+                  目标必须不存在或为空，且不能与已有 Worktree 重叠。
+                </span>
+                <button
+                  aria-busy={commands.active === "create"}
+                  className="button primary"
+                  disabled={commands.busy || !createPath.trim()}
+                  type="submit"
+                >
+                  <Icon
+                    name={
+                      commands.active === "create"
+                        ? "refresh"
+                        : "plus"
+                    }
+                  />
+                  {commands.active === "create"
+                    ? "预检中…"
+                    : "预检并创建"}
+                </button>
+              </div>
+            </form>
+          </article>
+
+          <article className="panel worktree-safety-panel">
+            <header className="panel-header">
+              <div className="panel-title">
+                <Icon name="worktree" />
+                安全边界
+              </div>
+            </header>
+            <ul>
+              <li>Primary Worktree 永不允许移除。</li>
+              <li>脏、冲突、锁定目录不允许 Remove。</li>
+              <li>Move/Remove 不提供强制模式。</li>
+              <li>Prune 只清理失效 Git 登记。</li>
+            </ul>
+            <button
+              aria-busy={commands.active === "prune"}
+              className="button"
+              disabled={commands.busy || prunableCount === 0}
+              onClick={() =>
+                void commands.request({
+                  type: "prune",
+                  repositoryId
+                })
+              }
+              type="button"
+            >
+              <Icon name="refresh" />
+              预检 Prune ({prunableCount})
+            </button>
+          </article>
+        </section>
+      )}
+
+      {worktrees.length > 0 && (
+        <details className="worktree-inventory-disclosure">
+          <summary>
+            展开全部 {worktrees.length} 条实际登记路径
+          </summary>
+          <section className="worktree-inventory">
+            <header className="worktree-inventory-header">
+              <div>
+                <span className="eyebrow">Git common directory</span>
+                <h2>已登记 Worktrees</h2>
+              </div>
+              <span>
+                {worktrees.length} 个目录 · {prunableCount} 个失效登记
+              </span>
+            </header>
+
+            <div className="worktree-grid">
+              {worktrees.map((worktree) => {
+                const snapshot = snapshots.find(
+                  (candidate) =>
+                    candidate.repositoryId === repositoryId &&
+                    candidate.worktreeId === worktree.id
+                );
+                const dirty = Boolean(
+                  snapshot &&
+                    (snapshot.staged > 0 ||
+                      snapshot.unstaged > 0 ||
+                      snapshot.untracked > 0 ||
+                      snapshot.conflicted > 0)
+                );
+                return (
+                  <WorktreeCard
+                    commands={commands}
+                    dirty={dirty}
+                    key={worktree.id}
+                    lockReason={lockReasons[worktree.id] ?? ""}
+                    moveDestination={
+                      moveDestinations[worktree.id] ?? ""
+                    }
+                    onLockReasonChange={(value) =>
+                      setLockReasons((current) => ({
+                        ...current,
+                        [worktree.id]: value
+                      }))
+                    }
+                    onMoveDestinationChange={(value) =>
+                      setMoveDestinations((current) => ({
+                        ...current,
+                        [worktree.id]: value
+                      }))
+                    }
+                    worktree={worktree}
+                  />
+                );
+              })}
+            </div>
+
+            {worktrees.length === 0 && (
+              <div className="empty-state repository-empty-state">
+                <span className="empty-state-icon">
+                  <Icon name="worktree" size={20} />
+                </span>
+                <div>
+                  <strong>没有可展示的 Worktree</strong>
+                  <p>创建或修复 Worktree 后会显示在这里。</p>
+                </div>
+              </div>
+            )}
+          </section>
+        </details>
+      )}
     </div>
   );
+}
+
+function WorktreeMetricCard({
+  icon,
+  label,
+  value,
+  description,
+  tone
+}: {
+  icon: IconName;
+  label: string;
+  value: number;
+  description: string;
+  tone: "green" | "purple" | "red" | "yellow";
+}) {
+  return (
+    <article className={`metric-card tone-${tone}`}>
+      <div className="metric-label">
+        <span>{label}</span>
+        <span className="metric-icon">
+          <Icon name={icon} size={14} />
+        </span>
+      </div>
+      <strong className="metric-value">{value}</strong>
+      <span className="metric-foot">{description}</span>
+    </article>
+  );
+}
+
+function WorktreeSummaryCard({
+  worktree,
+  snapshot,
+  directoryOpening,
+  onOpenDirectory
+}: {
+  worktree: WorkspaceWorktreeDto;
+  snapshot: RepositoryStatusSnapshotDto | undefined;
+  directoryOpening: boolean;
+  onOpenDirectory(worktreeId: string): void;
+}) {
+  const changes = snapshot ? worktreeChangeCount(snapshot) : 0;
+  const status = snapshot
+    ? changes > 0
+      ? `${changes} 项变更`
+      : "工作区干净"
+    : "状态待刷新";
+
+  return (
+    <article className="worktree-card worktree-summary-card primary">
+      <div className="worktree-card-head">
+        <span className="worktree-symbol">
+          <Icon name="worktree" size={20} />
+        </span>
+        <span className="worktree-card-head-copy">
+          <span className="worktree-title">当前工作目录</span>
+          <span className="worktree-branch">
+            <Icon name="branch" size={11} />
+            <span>{worktree.branch ?? "detached"}</span>
+          </span>
+        </span>
+        <span className="status-pill green worktree-card-status">
+          {worktree.isPrimary ? "Primary" : "Current"}
+        </span>
+      </div>
+      <div className="worktree-path" title={worktree.path}>
+        {worktree.path}
+      </div>
+      <div className="worktree-foot">
+        <span>{shortWorktreeHead(worktree.head)}</span>
+        <span>·</span>
+        <span
+          className={
+            changes > 0
+              ? "worktree-summary-status dirty"
+              : "worktree-summary-status"
+          }
+        >
+          {status}
+        </span>
+        <span className="spacer" />
+        <button
+          className="worktree-open-button"
+          disabled={directoryOpening}
+          onClick={() => onOpenDirectory(worktree.id)}
+          type="button"
+        >
+          <Icon name="folder" size={12} />
+          打开
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function worktreeChangeCount(
+  snapshot: RepositoryStatusSnapshotDto
+): number {
+  return (
+    snapshot.staged +
+    snapshot.unstaged +
+    snapshot.untracked +
+    snapshot.conflicted
+  );
+}
+
+function shortWorktreeHead(head: string): string {
+  return head ? head.slice(0, 7) : "—";
 }
 
 function WorktreeCard({
