@@ -1,3 +1,4 @@
+import { Button } from "./Button";
 import React, {
   Children,
   type ReactNode
@@ -52,7 +53,7 @@ export function Toast({
         <span>{message}</span>
       </div>
       {onClose && (
-        <button
+        <Button variant="unstyled"
           aria-label={closeLabel}
           className="toast-close"
           onClick={onClose}
@@ -60,7 +61,7 @@ export function Toast({
           type="button"
         >
           <Icon name="close" size={14} />
-        </button>
+        </Button>
       )}
     </div>
   );

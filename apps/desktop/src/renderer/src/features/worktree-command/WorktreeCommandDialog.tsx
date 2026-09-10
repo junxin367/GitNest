@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import {
   useEffect,
   useRef
@@ -151,8 +152,7 @@ export function WorktreeCommandDialog({
             Main 将在入队前和实际执行前重新校验 Git 登记、目录状态与候选集合；任何变化都会使本次确认失效。
           </p>
           <div>
-            <button
-              className="button"
+            <Button size="small"
               data-modal-initial-focus={
                 dangerous ? "true" : undefined
               }
@@ -161,18 +161,19 @@ export function WorktreeCommandDialog({
               type="button"
             >
               取消
-            </button>
-            <button
+            </Button>
+            <Button size="small"
               aria-busy={busy}
-              className={`button ${
-                dangerous ? "danger" : "primary"
-              }`}
               data-modal-initial-focus={
                 dangerous ? undefined : "true"
               }
               disabled={busy}
+              {...(dangerous
+                ? { emphasis: "strong" as const }
+                : {})}
               onClick={onConfirm}
               type="button"
+              variant={dangerous ? "danger" : "primary"}
             >
               <Icon
                 name={
@@ -188,7 +189,7 @@ export function WorktreeCommandDialog({
                 : preflight.command.type === "remove"
                   ? "确认移除 Worktree"
                   : "确认并执行"}
-            </button>
+            </Button>
           </div>
         </footer>
         </section>

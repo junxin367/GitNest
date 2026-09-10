@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import { useEffect, useState } from "react";
 
 import type {
@@ -242,7 +243,7 @@ export function RepositoryHeader({
         {view === "repository" && workspace?.selectedTarget && (
           <>
             <div aria-hidden="true" className="toolbar-divider" />
-            <button
+            <Button variant="unstyled"
               aria-label="切换分支"
               aria-expanded={branchDialogOpen}
               aria-haspopup="dialog"
@@ -258,7 +259,7 @@ export function RepositoryHeader({
               <Icon name="branch" size={12} />
               <span>{currentBranch || "detached"}</span>
               <Icon name="chevron" size={12} />
-            </button>
+            </Button>
           </>
         )}
 
@@ -276,7 +277,7 @@ export function RepositoryHeader({
         )}
 
         <div className="repository-actions">
-          <button
+          <Button variant="unstyled"
             aria-busy={refreshing}
             className="toolbar-button"
             disabled={refreshing || !workspace?.entries.length}
@@ -286,10 +287,10 @@ export function RepositoryHeader({
           >
             <Icon name="refresh" />
             <span>{refreshing ? "刷新中" : "刷新"}</span>
-          </button>
+          </Button>
           {view === "workspace" && (
             <>
-              <button
+              <Button variant="unstyled"
                 aria-busy={commandActive === "pull"}
                 className="toolbar-button"
                 disabled={
@@ -311,8 +312,8 @@ export function RepositoryHeader({
                     {workspacePullCount}
                   </span>
                 ) : null}
-              </button>
-              <button
+              </Button>
+              <Button variant="unstyled"
                 aria-busy={commandActive === "fetch"}
                 className="toolbar-button"
                 disabled={
@@ -329,12 +330,12 @@ export function RepositoryHeader({
                     ? "预检中"
                     : "Fetch 全部"}
                 </span>
-              </button>
+              </Button>
             </>
           )}
           {view === "repository" && (
             <>
-              <button
+              <Button variant="unstyled"
                 aria-busy={commandActive === "fetch"}
                 className="toolbar-button"
                 disabled={repositoryCommandDisabled}
@@ -346,8 +347,8 @@ export function RepositoryHeader({
                 <span>
                   {commandActive === "fetch" ? "预检中" : "Fetch"}
                 </span>
-              </button>
-              <button
+              </Button>
+              <Button variant="unstyled"
                 aria-busy={commandActive === "pull"}
                 className="toolbar-button"
                 disabled={repositoryCommandDisabled}
@@ -364,10 +365,10 @@ export function RepositoryHeader({
                     {snapshot.behind}
                   </span>
                 ) : null}
-              </button>
+              </Button>
               {showPushActions ? (
                 <>
-                  <button
+                  <Button variant="unstyled"
                     aria-busy={commandActive === "push"}
                     className="toolbar-button"
                     disabled={repositoryCommandDisabled}
@@ -384,8 +385,8 @@ export function RepositoryHeader({
                         {snapshot.ahead}
                       </span>
                     ) : null}
-                  </button>
-                  <button
+                  </Button>
+                  <Button variant="unstyled"
                     aria-label="Force with lease"
                     className="toolbar-icon-button force-push-button"
                     disabled={repositoryCommandDisabled}
@@ -394,12 +395,12 @@ export function RepositoryHeader({
                     type="button"
                   >
                     <Icon name="warning" />
-                  </button>
+                  </Button>
                 </>
               ) : null}
             </>
           )}
-          <button
+          <Button variant="unstyled"
             aria-label={
               inspectorOpen ? "折叠详情面板" : "展开详情面板"
             }
@@ -412,7 +413,7 @@ export function RepositoryHeader({
             type="button"
           >
             <Icon name="panel" />
-          </button>
+          </Button>
         </div>
       </header>
 
@@ -427,7 +428,7 @@ export function RepositoryHeader({
       >
         {view === "repository" ? (
           repositoryTabs.map((tab) => (
-            <button
+            <Button variant="unstyled"
               aria-current={
                 repositoryTab === tab.id ? "page" : undefined
               }
@@ -447,11 +448,11 @@ export function RepositoryHeader({
                   {repositoryTabCounts[tab.id]}
                 </span>
               ) : null}
-            </button>
+            </Button>
           ))
         ) : view === "workspace" ? (
           workspaceTabs.map((tab) => (
-            <button
+            <Button variant="unstyled"
               aria-current={
                 workspaceTab === tab.id ? "page" : undefined
               }
@@ -471,11 +472,11 @@ export function RepositoryHeader({
                   {workspaceTabCounts[tab.id]}
                 </span>
               ) : null}
-            </button>
+            </Button>
           ))
         ) : (
           <>
-            <button
+            <Button variant="unstyled"
               aria-selected={false}
               onClick={onOpenWorkspace}
               role="tab"
@@ -483,8 +484,8 @@ export function RepositoryHeader({
             >
               <Icon name="grid" />
               概览
-            </button>
-            <button
+            </Button>
+            <Button variant="unstyled"
               aria-selected={false}
               disabled={!workspace?.selectedTarget}
               onClick={onOpenRepository}
@@ -498,8 +499,8 @@ export function RepositoryHeader({
             >
               <Icon name="repository" />
               当前仓库
-            </button>
-            <button
+            </Button>
+            <Button variant="unstyled"
               aria-current={
                 view === "operations" ? "page" : undefined
               }
@@ -513,8 +514,8 @@ export function RepositoryHeader({
             >
               <Icon name="operations" />
               操作中心
-            </button>
-            <button
+            </Button>
+            <Button variant="unstyled"
               aria-current={
                 view === "settings" ? "page" : undefined
               }
@@ -526,7 +527,7 @@ export function RepositoryHeader({
             >
               <Icon name="settings" />
               设置
-            </button>
+            </Button>
           </>
         )}
       </nav>

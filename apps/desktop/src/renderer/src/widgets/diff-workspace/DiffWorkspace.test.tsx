@@ -123,6 +123,8 @@ describe("DiffWorkspace", () => {
             message: "Share the workspace",
             push: false,
             staged: 1,
+            unstaged: 1,
+            untracked: 0,
             submitting: false,
             onMessageChange,
             onPushChange,
@@ -180,6 +182,7 @@ describe("DiffWorkspace", () => {
         '[aria-label="提交信息"]'
       )?.value
     ).toBe("Share the workspace");
+    expect(container.querySelector(".gn-textarea")).not.toBeNull();
 
     act(() => {
       const message =
@@ -222,12 +225,16 @@ describe("DiffWorkspace", () => {
     });
     expect(onStageFile).toHaveBeenCalledWith(files[1]);
 
+    const unstageButton =
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="取消暂存 src/App.tsx"]'
+      );
+    expect(
+      unstageButton?.querySelector("path")?.getAttribute("d")
+    ).toBe("M6 12h12");
+
     act(() => {
-      container
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="取消暂存 src/App.tsx"]'
-        )
-        ?.click();
+      unstageButton?.click();
     });
     expect(onUnstageFile).toHaveBeenCalledWith(files[0]);
 
@@ -348,6 +355,58 @@ describe("DiffWorkspace", () => {
       subject: "Update workspace state",
       body: "Explain the migration."
     });
+  });
+
+  it("enables committing all changes when the staged index is empty", () => {
+    const onSubmit = vi.fn();
+
+    act(() => {
+      root.render(
+        <DiffWorkspace
+          commit={{
+            busy: false,
+            conflicted: 0,
+            message: "Commit every change",
+            push: false,
+            staged: 0,
+            unstaged: 1,
+            untracked: 0,
+            submitting: false,
+            onMessageChange: vi.fn(),
+            onPushChange: vi.fn(),
+            onSubmit
+          }}
+          configuration={repositoryDiffWorkspaceConfiguration}
+          files={[files[1]!]}
+          onSelectedFileChange={vi.fn()}
+          panelProps={{
+            additions: 1,
+            content,
+            deletions: 0
+          }}
+          selectedFileKey={files[1]?.key}
+        />
+      );
+    });
+
+    const submit = findButton(container, "提交全部变更");
+    expect(submit.disabled).toBe(false);
+
+    act(() => {
+      submit
+        .closest("form")
+        ?.dispatchEvent(
+          new Event("submit", {
+            bubbles: true,
+            cancelable: true
+          })
+        );
+    });
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      "Commit every change",
+      false
+    );
   });
 });
 

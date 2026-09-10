@@ -1,3 +1,7 @@
+export function stageAllArguments(): string[] {
+  return ["add", "--all"];
+}
+
 export function stageArguments(
   paths: readonly string[]
 ): string[] {

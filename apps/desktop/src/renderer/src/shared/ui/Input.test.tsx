@@ -44,4 +44,34 @@ describe("Input", () => {
     act(() => root.unmount());
     container.remove();
   });
+
+  it("renders one native control for unstyled inputs", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <Input
+          appearance="unstyled"
+          aria-label="搜索"
+          className="global-search-input"
+          inputClassName="native-search-input"
+          onChange={() => undefined}
+          value="main"
+        />
+      );
+    });
+
+    const input = container.firstElementChild;
+    expect(container.children).toHaveLength(1);
+    expect(input?.tagName).toBe("INPUT");
+    expect(input?.classList).toContain("gn-input--unstyled");
+    expect(input?.classList).toContain("global-search-input");
+    expect(input?.classList).toContain("native-search-input");
+    expect(container.querySelector(".gn-input")).toBeNull();
+
+    act(() => root.unmount());
+    container.remove();
+  });
 });

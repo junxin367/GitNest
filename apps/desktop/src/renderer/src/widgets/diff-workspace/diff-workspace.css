@@ -362,37 +362,18 @@
 
 .diff-workspace-commit-form {
   display: grid;
-  gap: var(--space-1);
+  gap: var(--space-2);
   padding: var(--space-2);
 }
 
-.diff-workspace-commit-form textarea {
-  width: 100%;
-  min-width: 0;
+.diff-workspace-commit-message {
   min-height: 64px;
   max-height: 140px;
-  padding: var(--space-1) var(--space-2);
-  color: var(--text);
-  background: var(--surface-2);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-regular);
-  font: inherit;
   font-size: var(--font-size-caption);
   line-height: 1.4;
-  resize: vertical;
 }
 
-.diff-workspace-commit-form textarea:hover {
-  border-color: var(--border);
-}
-
-.diff-workspace-commit-form textarea:focus-visible {
-  border-color: var(--accent);
-  outline: 1px solid var(--color-focus);
-  outline-offset: 1px;
-}
-
-.diff-workspace-commit-form > .button {
+.diff-workspace-commit-form > .gn-button {
   width: 100%;
   min-width: 0;
   min-height: var(--control-compact);

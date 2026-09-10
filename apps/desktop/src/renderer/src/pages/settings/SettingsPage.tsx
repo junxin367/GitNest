@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import {
   useEffect,
   useMemo,
@@ -17,6 +18,7 @@ import type {
 
 import type { AccountController } from "../../features/account-manage/useAccounts";
 import { Icon } from "../../shared/ui/Icon";
+import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
@@ -91,16 +93,15 @@ export function SettingsPage({
           </p>
         </div>
         <div className="page-actions">
-          <button
+          <Button size="small"
             aria-busy={accounts.active === "loading"}
-            className="button"
             disabled={accounts.active !== null}
             onClick={() => void accounts.reload()}
             type="button"
           >
             <Icon name="refresh" />
             重新读取
-          </button>
+          </Button>
         </div>
       </section>
 
@@ -160,20 +161,21 @@ export function SettingsPage({
                   <option value="custom">自建 Git</option>
                 </select>
               </label>
-              <label>
-                主机
-                <input
-                  autoComplete="url"
-                  maxLength={320}
-                  onChange={(event) =>
-                    setHost(event.target.value)
-                  }
-                  placeholder="git.example.com"
-                  spellCheck={false}
-                  required
-                  value={host}
-                />
-              </label>
+              <Input
+                autoComplete="url"
+                fieldClassName="account-form-field"
+                fullWidth
+                id="account-host"
+                label="主机"
+                maxLength={320}
+                onChange={(event) =>
+                  setHost(event.target.value)
+                }
+                placeholder="git.example.com"
+                required
+                spellCheck={false}
+                value={host}
+              />
               <label>
                 认证方式
                 <select
@@ -195,39 +197,41 @@ export function SettingsPage({
                   </option>
                 </select>
               </label>
-              <label>
-                用户名（可选）
-                <input
-                  autoComplete="username"
-                  maxLength={255}
-                  onChange={(event) =>
-                    setUsername(event.target.value)
-                  }
-                  placeholder={
-                    authType === "system-ssh"
-                      ? "git"
-                      : "账号用户名"
-                  }
-                  spellCheck={false}
-                  value={username}
-                />
-              </label>
+              <Input
+                autoComplete="username"
+                fieldClassName="account-form-field"
+                fullWidth
+                id="account-username"
+                label="用户名（可选）"
+                maxLength={255}
+                onChange={(event) =>
+                  setUsername(event.target.value)
+                }
+                placeholder={
+                  authType === "system-ssh"
+                    ? "git"
+                    : "账号用户名"
+                }
+                spellCheck={false}
+                value={username}
+              />
               {authType === "https-token" && (
-                <label className="account-token-field">
-                  Token
-                  <input
-                    autoComplete="new-password"
-                    maxLength={8_192}
-                    onChange={(event) =>
-                      setToken(event.target.value)
-                    }
-                    placeholder="仅本次提交存在于 Renderer"
-                    spellCheck={false}
-                    required
-                    type="password"
-                    value={token}
-                  />
-                </label>
+                <Input
+                  autoComplete="new-password"
+                  fieldClassName="account-form-field account-token-field"
+                  fullWidth
+                  id="account-token"
+                  label="Token"
+                  maxLength={8_192}
+                  onChange={(event) =>
+                    setToken(event.target.value)
+                  }
+                  placeholder="仅本次提交存在于 Renderer"
+                  required
+                  spellCheck={false}
+                  type="password"
+                  value={token}
+                />
               )}
             </div>
             <label className="account-checkbox">
@@ -248,8 +252,7 @@ export function SettingsPage({
               </p>
             </div>
             <div className="account-form-actions">
-              <button
-                className="button"
+              <Button size="small"
                 disabled={accounts.active !== null}
                 onClick={() => {
                   setUsername("");
@@ -258,10 +261,9 @@ export function SettingsPage({
                 type="button"
               >
                 清空敏感输入
-              </button>
-              <button
+              </Button>
+              <Button size="small" variant="primary"
                 aria-busy={accounts.active === "saving"}
-                className="button primary"
                 disabled={
                   accounts.active !== null ||
                   !host.trim() ||
@@ -280,7 +282,7 @@ export function SettingsPage({
                 {accounts.active === "saving"
                   ? "安全保存中…"
                   : "保存账号"}
-              </button>
+              </Button>
             </div>
           </form>
         </article>
@@ -354,14 +356,13 @@ export function SettingsPage({
             <div>
               <strong>账号数据暂时不可用</strong>
               <p>{accounts.error.message}</p>
-              <button
-                className="button"
+              <Button size="small"
                 disabled={accounts.active !== null}
                 onClick={() => void accounts.reload()}
                 type="button"
               >
                 重新读取
-              </button>
+              </Button>
             </div>
           </div>
         ) : accounts.overview?.accounts.length ? (
@@ -550,18 +551,16 @@ function AccountRemovalDialog({
             认证。
           </p>
           <div>
-            <button
-              className="button"
+            <Button size="small"
               data-modal-initial-focus
               disabled={accounts.active !== null}
               onClick={accounts.dismissRemoval}
               type="button"
             >
               取消
-            </button>
-            <button
+            </Button>
+            <Button size="small" emphasis="strong" variant="danger"
               aria-busy={accounts.active === "removing"}
-              className="button danger"
               disabled={accounts.active !== null}
               onClick={() => void accounts.confirmRemoval()}
               type="button"
@@ -570,7 +569,7 @@ function AccountRemovalDialog({
               {accounts.active === "removing"
                 ? "删除中…"
                 : "确认删除账号"}
-            </button>
+            </Button>
           </div>
         </footer>
         </section>
@@ -672,8 +671,10 @@ function AccountCard({
       <div className="account-test-field">
         <label htmlFor={testUrlInputId}>测试仓库 URL</label>
         <div className="account-test-row">
-          <input
+          <Input
             autoComplete="url"
+            fieldClassName="account-test-input"
+            fullWidth
             id={testUrlInputId}
             onChange={(event) =>
               onTestUrlChange(event.target.value)
@@ -683,43 +684,43 @@ function AccountCard({
                 ? `https://${account.host}/team/repository.git`
                 : `git@${account.host}:team/repository.git`
             }
+            size="small"
             spellCheck={false}
             value={testUrl}
           />
-          <button
-            className="button"
+          <Button size="small"
             disabled={active || !testUrl.trim()}
             onClick={onTest}
             type="button"
           >
             连接测试
-          </button>
+          </Button>
         </div>
       </div>
 
       <div className="account-card-actions">
         {hostDefault ? (
-          <button
+          <Button variant="unstyled"
             className="mini-action"
             disabled={active}
             onClick={() => onUnbind()}
             type="button"
           >
             取消主机默认
-          </button>
+          </Button>
         ) : (
-          <button
+          <Button variant="unstyled"
             className="mini-action"
             disabled={active}
             onClick={() => onBind()}
             type="button"
           >
             设为主机默认
-          </button>
+          </Button>
         )}
         {selectedRepositoryId &&
           (selectedBound ? (
-            <button
+            <Button variant="unstyled"
               className="mini-action"
               disabled={active}
               onClick={() =>
@@ -728,25 +729,25 @@ function AccountCard({
               type="button"
             >
               取消当前仓库绑定
-            </button>
+            </Button>
           ) : (
-            <button
+            <Button variant="unstyled"
               className="mini-action"
               disabled={active}
               onClick={() => onBind(selectedRepositoryId)}
               type="button"
             >
               绑定当前仓库
-            </button>
+            </Button>
           ))}
-        <button
+        <Button variant="unstyled"
           className="mini-action danger"
           disabled={active}
           onClick={onDelete}
           type="button"
         >
           删除
-        </button>
+        </Button>
       </div>
     </article>
   );

@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import type { RuntimeInfo } from "@gitnest/contracts";
 import { useEffect, useRef, useState } from "react";
 
@@ -97,7 +98,7 @@ export function AppTitlebar({
 
       <nav className="titlebar-menu" aria-label="应用菜单">
         <div className="titlebar-file-menu" ref={fileMenuRef}>
-          <button
+          <Button variant="unstyled"
             aria-expanded={openMenu === "file"}
             aria-haspopup="menu"
             onClick={() =>
@@ -109,7 +110,7 @@ export function AppTitlebar({
             type="button"
           >
             文件
-          </button>
+          </Button>
           {openMenu === "file" && (
             <MenuPopover
               align="start"
@@ -131,7 +132,7 @@ export function AppTitlebar({
             </MenuPopover>
           )}
         </div>
-        <button
+        <Button variant="unstyled"
           aria-current={
             activeView === "repository" ? "page" : undefined
           }
@@ -148,8 +149,8 @@ export function AppTitlebar({
           type="button"
         >
           仓库
-        </button>
-        <button
+        </Button>
+        <Button variant="unstyled"
           aria-current={
             activeView === "operations" ? "page" : undefined
           }
@@ -160,9 +161,9 @@ export function AppTitlebar({
           type="button"
         >
           操作中心
-        </button>
+        </Button>
         <div className="titlebar-view-menu" ref={viewMenuRef}>
-          <button
+          <Button variant="unstyled"
             aria-expanded={openMenu === "view"}
             aria-haspopup="menu"
             onClick={() =>
@@ -174,7 +175,7 @@ export function AppTitlebar({
             type="button"
           >
             视图
-          </button>
+          </Button>
           {openMenu === "view" && (
             <MenuPopover
               align="start"
@@ -265,7 +266,7 @@ export function AppTitlebar({
           : "正在连接本地服务…"}
       </div>
 
-      <button
+      <Button variant="unstyled"
         aria-controls="global-search-dialog"
         aria-haspopup="dialog"
         aria-pressed={searchOpen}
@@ -279,10 +280,10 @@ export function AppTitlebar({
         <Icon name="search" size={15} />
         <span>搜索仓库、分支或命令</span>
         <kbd>Ctrl K</kbd>
-      </button>
+      </Button>
 
       <div className="titlebar-actions">
-        <button
+        <Button variant="unstyled"
           aria-label="最小化"
           className="window-button"
           onClick={() => void window.gitnest.window.minimize()}
@@ -290,8 +291,8 @@ export function AppTitlebar({
           type="button"
         >
           <Icon name="minimize" />
-        </button>
-        <button
+        </Button>
+        <Button variant="unstyled"
           aria-label="最大化或还原"
           className="window-button"
           onClick={() => void window.gitnest.window.toggleMaximize()}
@@ -299,8 +300,8 @@ export function AppTitlebar({
           type="button"
         >
           <Icon name="maximize" size={14} />
-        </button>
-        <button
+        </Button>
+        <Button variant="unstyled"
           aria-label="关闭"
           className="window-button window-button-close"
           onClick={() => void window.gitnest.window.close()}
@@ -308,7 +309,7 @@ export function AppTitlebar({
           type="button"
         >
           <Icon name="close" />
-        </button>
+        </Button>
       </div>
     </header>
   );

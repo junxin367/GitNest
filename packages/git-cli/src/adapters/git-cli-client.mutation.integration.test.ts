@@ -3,6 +3,7 @@ import {
   appendFile,
   mkdir,
   rename,
+  unlink,
   writeFile
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -83,6 +84,55 @@ describe("GitCliClient mutation integration", () => {
       ).rejects.toMatchObject({
         code: "INVALID_REQUEST"
       });
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("stages all modified, deleted, and untracked paths", async () => {
+    const fixture = await createMutationRepository();
+
+    try {
+      await appendFile(
+        join(fixture.repositoryPath, "tracked.txt"),
+        "changed\n",
+        "utf8"
+      );
+      await unlink(
+        join(fixture.repositoryPath, "rename me.txt")
+      );
+      await writeFile(
+        join(fixture.repositoryPath, "untracked.txt"),
+        "new\n",
+        "utf8"
+      );
+
+      await client.stageAll(fixture.repositoryPath);
+
+      const snapshot = await client.readRepositorySnapshot(
+        fixture.repositoryPath
+      );
+      expect(snapshot).toMatchObject({
+        staged: 3,
+        unstaged: 0,
+        untracked: 0
+      });
+      expect(snapshot.changes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: "tracked.txt",
+            indexStatus: "M"
+          }),
+          expect.objectContaining({
+            path: "rename me.txt",
+            indexStatus: "D"
+          }),
+          expect.objectContaining({
+            path: "untracked.txt",
+            indexStatus: "A"
+          })
+        ])
+      );
     } finally {
       await fixture.dispose();
     }

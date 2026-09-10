@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import {
   useCallback,
   useEffect,
@@ -42,6 +43,7 @@ import {
 } from "../../shared/model/diffViewModel";
 import { copyTextToClipboard } from "../../shared/lib/copyTextToClipboard";
 import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
+import { Input } from "../../shared/ui/Input";
 import {
   Menu,
   MenuHeading,
@@ -316,15 +318,14 @@ export function RepositoryPage({
               {snapshotStatus(snapshot)}
             </span>
             {(tab === "history" || tab === "branches") && (
-              <button
+              <Button size="small"
                 aria-busy={details.loading[tab]}
-                className="button"
                 onClick={() => void details.reload(tab)}
                 type="button"
               >
                 <Icon name="refresh" />
                 重新读取
-              </button>
+              </Button>
             )}
           </div>
         </section>
@@ -619,24 +620,24 @@ function RepositoryOverview({
           </div>
         </div>
         <div className="repository-hero-actions">
-          <button
+          <Button size="small"
             aria-busy={directoryOpening}
-            className="button repository-hero-action"
+            className="repository-hero-action"
             disabled={!repositoryPath || directoryOpening}
             onClick={onOpenDirectory}
             type="button"
           >
             <Icon name="folder" />
             {directoryOpening ? "打开中…" : "打开目录"}
-          </button>
-          <button
-            className="button primary repository-hero-action"
+          </Button>
+          <Button size="small" variant="primary"
+            className="repository-hero-action"
             onClick={() => onOpenTab("changes")}
             type="button"
           >
             <Icon name="fileCode" />
             {changes > 0 ? "查看变更" : "查看状态"}
-          </button>
+          </Button>
         </div>
       </section>
 
@@ -707,13 +708,13 @@ function RepositoryOverview({
                   ? `快照采集 ${commits.length} 条`
                   : "暂无提交"}
             </span>
-            <button
+            <Button variant="unstyled"
               className="panel-action"
               onClick={() => onOpenTab("history")}
               type="button"
             >
               打开历史视图
-            </button>
+            </Button>
           </header>
           {historyLoading && !latestCommit ? (
             <div
@@ -726,7 +727,7 @@ function RepositoryOverview({
           ) : latestCommit ? (
             <div className="repository-overview-commit-list">
               {commits.map((commit) => (
-                <button
+                <Button variant="unstyled"
                   aria-current={
                     controller.selectedCommitHash ===
                     commit.hash
@@ -800,7 +801,7 @@ function RepositoryOverview({
                   >
                     {commit.shortHash}
                   </code>
-                </button>
+                </Button>
               ))}
             </div>
           ) : (
@@ -1163,6 +1164,10 @@ function RepositoryChanges({
           message: commitMessage,
           push: pushAfterCommit,
           staged: controller.changes?.snapshot.staged ?? 0,
+          unstaged:
+            controller.changes?.snapshot.unstaged ?? 0,
+          untracked:
+            controller.changes?.snapshot.untracked ?? 0,
           submitting:
             mutations.active === "commit" ||
             (pushAfterCommit && commands.active === "push"),
@@ -1398,7 +1403,8 @@ function RepositoryHistory({
             只读快照 · 最近 {commits.length} 条 HEAD 提交
           </span>
           {filterOpen && (
-            <input
+            <Input
+              appearance="unstyled"
               aria-label="筛选提交历史"
               autoFocus
               className="history-filter-input"
@@ -1417,15 +1423,15 @@ function RepositoryHistory({
               value={filterQuery}
             />
           )}
-          <button
+          <Button size="small"
             aria-expanded={filterOpen}
-            className="button small panel-header-action"
+            className="panel-header-action"
             onClick={() => setFilterOpen((open) => !open)}
             type="button"
           >
             <Icon name="filter" size={13} />
             筛选
-          </button>
+          </Button>
         </header>
         <div className="commit-list">
           {visibleCommits.map((item, index) => (
@@ -1531,7 +1537,7 @@ function RepositoryHistory({
             </div>
           )}
           {controller.history?.page.nextOffset !== undefined && (
-            <button
+            <Button variant="unstyled"
               aria-busy={controller.loading.history}
               className="load-more-button"
               disabled={controller.loading.history}
@@ -1541,7 +1547,7 @@ function RepositoryHistory({
               {controller.loading.history
                 ? "加载中…"
                 : "加载更多"}
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -1753,10 +1759,10 @@ function RepositoryBranches({
         <span className="panel-caption">
           快照采集当前本地分支 {localCount} 条
         </span>
-        <button
+        <Button size="small"
           aria-controls="new-branch-form"
           aria-expanded={createFormOpen}
-          className="button branch-header-action"
+          className="branch-header-action"
           onClick={() => setCreateFormOpen((open) => !open)}
           type="button"
         >
@@ -1765,7 +1771,7 @@ function RepositoryBranches({
             size={13}
           />
           {createFormOpen ? "收起" : "新建分支"}
-        </button>
+        </Button>
       </header>
       {createFormOpen && (
         <div className="branch-management-toolbar">
@@ -1774,19 +1780,20 @@ function RepositoryBranches({
               从当前 HEAD 创建分支
             </label>
             <div>
-              <input
+              <Input
+                fullWidth
                 id="new-branch-name"
                 maxLength={255}
                 onChange={(event) =>
                   setNewBranch(event.target.value)
                 }
                 placeholder="例如 feature/safe-sync"
+                size="small"
                 spellCheck={false}
                 value={newBranch}
               />
-              <button
+              <Button size="small" variant="primary"
                 aria-busy={commands.active === "create-branch"}
-                className="button primary"
                 disabled={
                   commands.busy || !newBranch.trim()
                 }
@@ -1802,7 +1809,7 @@ function RepositoryBranches({
                 {commands.active === "create-branch"
                   ? "预检中…"
                   : "创建"}
-              </button>
+              </Button>
             </div>
           </form>
           <p>
@@ -1900,7 +1907,8 @@ function RepositoryBranches({
                       renameBranch(event, branch.name)
                     }
                   >
-                    <input
+                    <Input
+                      appearance="unstyled"
                       aria-label={`重命名 ${branch.name}`}
                       autoFocus
                       maxLength={255}
@@ -1910,7 +1918,7 @@ function RepositoryBranches({
                       spellCheck={false}
                       value={renamedBranch}
                     />
-                    <button
+                    <Button variant="unstyled"
                       className="mini-action"
                       disabled={
                         commands.busy ||
@@ -1920,8 +1928,8 @@ function RepositoryBranches({
                       type="submit"
                     >
                       保存
-                    </button>
-                    <button
+                    </Button>
+                    <Button variant="unstyled"
                       className="mini-action"
                       disabled={commands.busy}
                       onClick={() => {
@@ -1931,10 +1939,10 @@ function RepositoryBranches({
                       type="button"
                     >
                       取消
-                    </button>
+                    </Button>
                     </form>
                   ) : (
-                    <button
+                    <Button variant="unstyled"
                       aria-expanded={
                         branchMenu?.branchName === branch.name
                       }
@@ -1958,7 +1966,7 @@ function RepositoryBranches({
                       type="button"
                     >
                       <Icon name="more" size={14} />
-                    </button>
+                    </Button>
                   )}
               </span>
             </div>

@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   createCommitArguments,
+  stageAllArguments,
   stageArguments,
   unstageArguments
 } from "./write-repository";
 
 describe("repository write commands", () => {
+  it("stages every working-tree change without a path limit", () => {
+    expect(stageAllArguments()).toEqual(["add", "--all"]);
+  });
+
   it("uses literal pathspecs and an explicit boundary for stage", () => {
     expect(
       stageArguments(["-leading.txt", "src/入口.ts"])

@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import { useEffect, useRef } from "react";
 
 import type { BranchDto } from "@gitnest/contracts";
@@ -79,14 +80,14 @@ export function BranchSwitchDialog({
               {repositoryName} · {repositoryPath}
             </p>
           </div>
-          <button
+          <Button variant="unstyled"
             aria-label="关闭切换分支弹窗"
             className="toolbar-icon-button branch-switch-dialog-close"
             onClick={onCancel}
             type="button"
           >
             <Icon name="close" />
-          </button>
+          </Button>
         </header>
 
         <div className="command-dialog-body branch-switch-dialog-body">
@@ -104,13 +105,12 @@ export function BranchSwitchDialog({
             <div className="branch-switch-dialog-state error">
               <Icon name="warning" size={18} />
               <span>{errorMessage}</span>
-              <button
-                className="button small"
+              <Button size="small"
                 onClick={onRetry}
                 type="button"
               >
                 重试
-              </button>
+              </Button>
             </div>
           ) : branches.length === 0 ? (
             <div className="branch-switch-dialog-state">
@@ -131,7 +131,7 @@ export function BranchSwitchDialog({
                 const disabled = current || occupiedElsewhere;
 
                 return (
-                  <button
+                  <Button variant="unstyled"
                     aria-selected={current}
                     className={`branch-switch-option${
                       current ? " current" : ""
@@ -176,7 +176,7 @@ export function BranchSwitchDialog({
                           ? "被占用"
                           : "切换"}
                     </span>
-                  </button>
+                  </Button>
                 );
               })}
             </div>
@@ -191,8 +191,7 @@ export function BranchSwitchDialog({
         <footer className="command-dialog-footer">
           <p>当前分支不会重复执行切换操作。</p>
           <div>
-            <button
-              className="button"
+            <Button size="small"
               data-modal-initial-focus={
                 firstSelectable ? undefined : "true"
               }
@@ -200,7 +199,7 @@ export function BranchSwitchDialog({
               type="button"
             >
               取消
-            </button>
+            </Button>
           </div>
         </footer>
         </section>

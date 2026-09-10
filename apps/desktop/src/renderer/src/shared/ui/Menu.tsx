@@ -1,3 +1,4 @@
+import { Button } from "./Button";
 import {
   useCallback,
   forwardRef,
@@ -314,7 +315,7 @@ export const MenuItem = forwardRef<
   ref
 ) {
   return (
-    <button
+    <Button variant="unstyled"
       {...props}
       className={mergeClassNames(
         "menu-item",
@@ -334,7 +335,7 @@ export const MenuItem = forwardRef<
       {trailing ? (
         <span className="menu-item-trailing">{trailing}</span>
       ) : null}
-    </button>
+    </Button>
   );
 });
 

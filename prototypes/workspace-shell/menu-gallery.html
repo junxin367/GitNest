@@ -7,6 +7,7 @@
   <title>GitNest · 组件规范总览</title>
   <link rel="stylesheet" href="./button.css" />
   <link rel="stylesheet" href="./input.css" />
+  <link rel="stylesheet" href="./textarea.css" />
   <link rel="stylesheet" href="./diff-search-popover.css" />
   <link rel="stylesheet" href="./diff-panel.css" />
   <link rel="stylesheet" href="./diff-workspace.css" />
@@ -1844,8 +1845,7 @@
       font-size: var(--font-size-caption);
     }
 
-    .gallery-input,
-    .gallery-textarea {
+    .gallery-input {
       width: 100%;
       color: var(--text);
       background: var(--surface-2);
@@ -1860,38 +1860,27 @@
       padding: 0 var(--space-3);
     }
 
-    .gallery-textarea {
-      min-height: 96px;
-      padding: var(--space-3);
-      resize: vertical;
-    }
-
-    .gallery-input:hover,
-    .gallery-textarea:hover {
+    .gallery-input:hover {
       border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
     }
 
-    .gallery-input.focus,
-    .gallery-textarea.focus {
+    .gallery-input.focus {
       border-color: var(--color-focus);
       box-shadow: none;
     }
 
-    .gallery-input.error,
-    .gallery-textarea.error {
+    .gallery-input.error {
       border-color: var(--red);
       background: color-mix(in srgb, var(--red-soft) 48%, var(--surface-2));
     }
 
-    .gallery-input:disabled,
-    .gallery-textarea:disabled {
+    .gallery-input:disabled {
       color: var(--color-text-disabled);
       cursor: not-allowed;
       opacity: 0.72;
     }
 
-    .gallery-input::placeholder,
-    .gallery-textarea::placeholder {
+    .gallery-input::placeholder {
       color: var(--muted);
     }
 
@@ -2099,6 +2088,7 @@
       <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></symbol>
       <symbol id="i-repository" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 4v16"/><path d="M11 8h5M11 12h5"/></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
       <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
       <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
       <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
@@ -3107,7 +3097,7 @@
           </div>
           <div class="sample-specs">
             <div class="sample-spec"><span>Shared size</span><strong>35px / medium</strong></div>
-            <div class="sample-spec"><span>Textarea</span><strong>min 96px / p12</strong></div>
+            <div class="sample-spec"><span>Textarea</span><strong>min 96px / left 8px</strong></div>
             <div class="sample-spec"><span>Focus</span><strong>focus color</strong></div>
             <div class="sample-spec"><span>Error</span><strong>red border + soft</strong></div>
           </div>
@@ -3239,8 +3229,8 @@
             <tr><td>工具栏按钮</td><td><code>auto</code></td><td>8px</td><td>0 12px</td><td>35px</td><td>content / 0</td></tr>
             <tr><td>快捷操作按钮</td><td><code>auto</code></td><td>8px</td><td>0 12px</td><td>35px</td><td>content / 0</td></tr>
             <tr><td>设置开关</td><td><code>42px</code></td><td>999px</td><td>3px</td><td>24px</td><td>content / 0</td></tr>
-            <tr><td>表单输入框</td><td><code>100%</code></td><td>8px</td><td>0 4px</td><td>35px</td><td>content / 0</td></tr>
-            <tr><td>多行输入框</td><td><code>100%</code></td><td>8px</td><td>12px 4px</td><td>min 96px</td><td>content / 0</td></tr>
+            <tr><td>表单输入框</td><td><code>100%</code></td><td>8px</td><td>0 8px</td><td>35px</td><td>content / 0</td></tr>
+            <tr><td>多行输入框</td><td><code>100%</code></td><td>8px</td><td>8px 12px 8px 8px</td><td>min 96px</td><td>content / 0</td></tr>
             <tr><td>搜索输入框</td><td><code>100%</code></td><td>8px</td><td>0 8px</td><td>32px</td><td>content / 0</td></tr>
             <tr><td>命令搜索输入</td><td><code>100%</code></td><td>12px 12px 0 0</td><td>0 16px</td><td>40px</td><td>modal / 500</td></tr>
             <tr><td>Diff 工作区</td><td><code>100% / min 760px</code></td><td>12px</td><td>8px 0 24px</td><td>48px / 44px / 20px</td><td>content + popover</td></tr>
@@ -3252,6 +3242,7 @@
 
   <script src="./button.js"></script>
   <script src="./input.js"></script>
+  <script src="./textarea.js"></script>
   <script src="./diff-search-popover.js"></script>
   <script src="./diff-panel.js"></script>
   <script src="./diff-workspace.js"></script>
@@ -3320,11 +3311,19 @@
         size: showcaseSize,
         disabled: true
       });
-      create("textarea", {
+      const createTextarea = (name, options) => {
+        const target = document.querySelector(`[data-input-mount="${name}"]`);
+        if (!target) return;
+        target.replaceChildren(GitNestTextarea.create({
+          fullWidth: true,
+          ...options
+        }));
+      };
+
+      createTextarea("textarea", {
         id: "gallery-textarea-default",
         placeholder: "输入提交信息或提示词…",
         size: showcaseSize,
-        multiline: true,
         rows: 3
       });
       create("search", {
@@ -3352,11 +3351,10 @@
         trailing: "<kbd>Esc</kbd>",
         ariaLabel: "命令搜索"
       });
-      create("commit", {
+      createTextarea("commit", {
         id: "gallery-textarea-commit",
         placeholder: "输入提交信息…",
         size: showcaseSize,
-        multiline: true,
         rows: 3
       });
     }

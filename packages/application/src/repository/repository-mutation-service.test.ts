@@ -176,6 +176,62 @@ describe("RepositoryMutationService", () => {
         body: "Body line"
       }
     ]);
+    expect(git.stageAllCalls).toHaveLength(0);
+  });
+
+  it("stages all changes before committing when the index is empty", async () => {
+    const git = new FakeGitMutationClient({
+      staged: 0,
+      unstaged: 1,
+      untracked: 1,
+      changes: [
+        {
+          path: "changed.txt",
+          indexStatus: ".",
+          worktreeStatus: "M",
+          kind: "ordinary"
+        },
+        {
+          path: "new.txt",
+          indexStatus: ".",
+          worktreeStatus: "?",
+          kind: "untracked"
+        }
+      ]
+    });
+    const service = new RepositoryMutationService(
+      new ImmediateMutationRuntime(),
+      git,
+      git
+    );
+
+    await service.commit(TARGET, "Commit everything");
+
+    expect(git.stageAllCalls).toEqual([WORKTREE_PATH]);
+    expect(git.commitCalls).toEqual([
+      {
+        path: WORKTREE_PATH,
+        subject: "Commit everything"
+      }
+    ]);
+  });
+
+  it("rejects a commit when the repository has no changes", async () => {
+    const git = new FakeGitMutationClient();
+    const service = new RepositoryMutationService(
+      new ImmediateMutationRuntime(),
+      git,
+      git
+    );
+
+    await expect(
+      service.commit(TARGET, "Nothing to commit")
+    ).rejects.toMatchObject({
+      code: "INVALID_REQUEST"
+    });
+
+    expect(git.stageAllCalls).toHaveLength(0);
+    expect(git.commitCalls).toHaveLength(0);
   });
 
   it("rejects empty commits, unresolved conflicts, and multiline subjects", async () => {
@@ -234,6 +290,7 @@ class FakeGitMutationClient
     path: string;
     paths: string[];
   }> = [];
+  readonly stageAllCalls: string[] = [];
   readonly unstageCalls: Array<{
     path: string;
     paths: string[];
@@ -271,6 +328,10 @@ class FakeGitMutationClient
     paths: readonly string[]
   ): Promise<void> {
     this.stageCalls.push({ path, paths: [...paths] });
+  }
+
+  async stageAll(path: string): Promise<void> {
+    this.stageAllCalls.push(path);
   }
 
   async unstagePaths(

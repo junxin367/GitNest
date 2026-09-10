@@ -136,11 +136,19 @@ export class RepositoryMutationService {
           );
         }
 
-        if (snapshot.staged === 0) {
+        if (
+          snapshot.staged === 0 &&
+          snapshot.unstaged === 0 &&
+          snapshot.untracked === 0
+        ) {
           throw new GitError(
             "INVALID_REQUEST",
-            "A commit requires at least one staged change."
+            "A commit requires at least one repository change."
           );
+        }
+
+        if (snapshot.staged === 0) {
+          await this.#gitWriter.stageAll(worktreePath);
         }
 
         return this.#gitWriter.createCommit(worktreePath, {

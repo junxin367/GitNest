@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import type { IconName } from "../../shared/ui/Icon";
 import { Icon } from "../../shared/ui/Icon";
 import type { AppView } from "../../app/navigation";
@@ -42,7 +43,7 @@ export function ActivityRail({
 }: ActivityRailProps) {
   return (
     <nav className="activity-rail" aria-label="主导航">
-      <button
+      <Button variant="unstyled"
         aria-label={
           sidebarCollapsed ? "展开仓库目录" : "折叠仓库目录"
         }
@@ -60,10 +61,10 @@ export function ActivityRail({
           }
           size={20}
         />
-      </button>
+      </Button>
       <div className="rail-divider" aria-hidden="true" />
       {primaryItems.map((item) => (
-        <button
+        <Button variant="unstyled"
           aria-current={item.id === activeView ? "page" : undefined}
           aria-label={item.label}
           className={`rail-button${
@@ -82,9 +83,9 @@ export function ActivityRail({
                 : operationAttentionCount}
             </span>
           ) : null}
-        </button>
+        </Button>
       ))}
-      <button
+      <Button variant="unstyled"
         aria-label="全局搜索"
         aria-pressed={searchOpen}
         className={`rail-button${searchOpen ? " active" : ""}`}
@@ -93,9 +94,9 @@ export function ActivityRail({
         type="button"
       >
         <Icon name="search" size={20} />
-      </button>
+      </Button>
       <div className="rail-spacer" />
-      <button
+      <Button variant="unstyled"
         aria-label="打开终端"
         className="rail-button"
         disabled={terminalDisabled}
@@ -104,8 +105,8 @@ export function ActivityRail({
         type="button"
       >
         <Icon name="terminal" size={20} />
-      </button>
-      <button
+      </Button>
+      <Button variant="unstyled"
         aria-label={
           theme === "dark" ? "切换浅色主题" : "切换深色主题"
         }
@@ -117,8 +118,8 @@ export function ActivityRail({
         type="button"
       >
         <Icon name={theme === "dark" ? "sun" : "moon"} size={20} />
-      </button>
-      <button
+      </Button>
+      <Button variant="unstyled"
         aria-label="设置"
         aria-current={activeView === "settings" ? "page" : undefined}
         className={`rail-button${
@@ -129,7 +130,7 @@ export function ActivityRail({
         type="button"
       >
         <Icon name="settings" size={20} />
-      </button>
+      </Button>
     </nav>
   );
 }

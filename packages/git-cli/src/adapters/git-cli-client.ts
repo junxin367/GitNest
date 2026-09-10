@@ -70,6 +70,7 @@ import {
 } from "../commands/repository-operations";
 import {
   createCommitArguments,
+  stageAllArguments,
   stageArguments,
   unstageArguments
 } from "../commands/write-repository";
@@ -1208,6 +1209,32 @@ export class GitCliClient
         executable: executablePath,
         cwd: worktreePath,
         args: stageArguments(relativePaths),
+        signal: options.signal,
+        timeoutMs:
+          options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
+        outputLimitBytes: WRITE_OUTPUT_LIMIT_BYTES,
+        discardOutputAfterLimit: true,
+        writeIntent: true
+      });
+    } catch (error) {
+      throw mapRepositoryError(error, worktreePath);
+    }
+  }
+
+  async stageAll(
+    path: string,
+    options: GitWriteOptions = {}
+  ): Promise<void> {
+    const worktreePath = await validateDirectoryPath(path);
+    const executablePath = await this.#getExecutablePath(
+      options.signal
+    );
+
+    try {
+      await runProcess({
+        executable: executablePath,
+        cwd: worktreePath,
+        args: stageAllArguments(),
         signal: options.signal,
         timeoutMs:
           options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,

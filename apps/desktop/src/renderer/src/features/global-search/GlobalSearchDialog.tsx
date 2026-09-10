@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import {
   Fragment,
   useEffect,
@@ -21,6 +22,7 @@ import {
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
 import { Icon, type IconName } from "../../shared/ui/Icon";
+import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
 import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
 
@@ -339,7 +341,8 @@ export function GlobalSearchDialog({
         </h2>
         <div className="global-search-input-wrap">
           <Icon name="search" size={18} />
-          <input
+          <Input
+            appearance="unstyled"
             aria-activedescendant={
               results.length > 0
                 ? getResultElementId(selectedIndex)
@@ -384,7 +387,7 @@ export function GlobalSearchDialog({
                       : "命令"}
                   </div>
                 )}
-                <button
+                <Button variant="unstyled"
                   aria-selected={selectedIndex === index}
                   aria-setsize={results.length}
                   aria-posinset={index + 1}
@@ -417,7 +420,7 @@ export function GlobalSearchDialog({
                       </kbd>
                     )}
                   </span>
-                </button>
+                </Button>
               </Fragment>
             ))
           )}

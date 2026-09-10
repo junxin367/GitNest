@@ -369,6 +369,7 @@
 }
 
 .gn-diff-workspace__commit-status {
+  margin-left: auto;
   padding: 2px var(--space-2);
   color: var(--muted);
   background: var(--surface-2);
@@ -389,7 +390,7 @@
 
 .gn-diff-workspace__commit-form {
   display: grid;
-  gap: var(--space-1);
+  gap: var(--space-2);
   padding: var(--space-2);
 }
 
@@ -400,30 +401,11 @@
   gap: var(--space-2);
 }
 
-.gn-diff-workspace__commit-form textarea {
-  width: 100%;
-  min-width: 0;
+.gn-diff-workspace__commit-message {
   min-height: 64px;
   max-height: 140px;
-  padding: var(--space-1) var(--space-2);
-  color: var(--text);
-  background: var(--surface-2);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-regular);
-  font: inherit;
   font-size: var(--font-size-caption);
   line-height: 1.4;
-  resize: vertical;
-}
-
-.gn-diff-workspace__commit-form textarea:hover {
-  border-color: var(--border);
-}
-
-.gn-diff-workspace__commit-form textarea:focus {
-  border-color: var(--accent);
-  outline: 1px solid var(--color-focus);
-  outline-offset: 1px;
 }
 
 .gn-diff-workspace__commit-form > .gn-button {

@@ -330,7 +330,7 @@ export function DiffFileNavigator({
             : undefined
         }
       >
-        <button
+        <Button variant="unstyled"
           aria-current={selected ? "true" : undefined}
           aria-label={displayName}
           className="diff-workspace-file-select"
@@ -359,7 +359,7 @@ export function DiffFileNavigator({
               </span>
             ) : null}
           </span>
-        </button>
+        </Button>
         <Button
           aria-label={`${
             staged ? "取消暂存" : "暂存"
@@ -368,7 +368,7 @@ export function DiffFileNavigator({
           disabled={!canToggle || mutationBusy}
           icon={
             <Icon
-              name={staged ? "close" : "plus"}
+              name={staged ? "minus" : "plus"}
               size={12}
             />
           }
@@ -386,7 +386,6 @@ export function DiffFileNavigator({
       </div>
     );
   };
-
   const renderTreeNodes = (
     nodes: readonly ChangeTreeNode[],
     section: DiffFileSection,
@@ -399,11 +398,10 @@ export function DiffFileNavigator({
         );
         return file ? [renderFileRow(file, depth)] : [];
       }
-
       const key = `${section.mode}:${node.path}`;
       const collapsed = collapsedDirectories.has(key);
       return [
-        <button
+        <Button variant="unstyled"
           aria-expanded={!collapsed}
           className={`diff-workspace-tree-directory${
             collapsed ? " collapsed" : ""
@@ -436,7 +434,7 @@ export function DiffFileNavigator({
             size={13}
           />
           <span title={node.path}>{node.name}</span>
-        </button>,
+        </Button>,
         ...(collapsed
           ? []
           : renderTreeNodes(
@@ -596,7 +594,7 @@ export function DiffFileNavigator({
                 }`}
                 key={section.mode}
               >
-                <button
+                <Button variant="unstyled"
                   aria-controls={bodyId}
                   aria-expanded={!collapsed}
                   className="diff-workspace-file-section-title"
@@ -617,7 +615,7 @@ export function DiffFileNavigator({
                   <span className="diff-workspace-file-section-count">
                     {section.files.length}
                   </span>
-                </button>
+                </Button>
                 {collapsed ? null : (
                   <div id={bodyId}>
                     {renderSectionRows(section)}

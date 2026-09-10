@@ -31,6 +31,7 @@ export {
 } from "./commands/read-repository";
 export {
   createCommitArguments,
+  stageAllArguments,
   stageArguments,
   unstageArguments
 } from "./commands/write-repository";

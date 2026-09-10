@@ -40,4 +40,18 @@ describe("Button", () => {
     expect(markup).toContain('data-icon-only="true"');
     expect(markup).not.toContain("gn-button__label");
   });
+
+  it("preserves legacy structure for unstyled buttons", () => {
+    const markup = renderToStaticMarkup(
+      <Button className="window-button" variant="unstyled">
+        最小化
+      </Button>
+    );
+
+    expect(markup).toContain('class="window-button"');
+    expect(markup).toContain('type="button"');
+    expect(markup).toContain(">最小化</button>");
+    expect(markup).not.toContain("gn-button");
+    expect(markup).not.toContain("gn-button__label");
+  });
 });

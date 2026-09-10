@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import {
   useEffect,
   useRef
@@ -150,8 +151,7 @@ export function RepositoryCommandDialog({
             执行前 Main 会再次读取仓库与远程状态；如有变化，本次确认将失效。
           </p>
           <div>
-            <button
-              className="button"
+            <Button size="small"
               data-modal-initial-focus={
                 dangerous ? "true" : undefined
               }
@@ -160,18 +160,19 @@ export function RepositoryCommandDialog({
               type="button"
             >
               取消
-            </button>
-            <button
+            </Button>
+            <Button size="small"
               aria-busy={busy}
-              className={`button ${
-                dangerous ? "danger" : "primary"
-              }`}
               data-modal-initial-focus={
                 dangerous ? undefined : "true"
               }
               disabled={busy}
+              {...(dangerous
+                ? { emphasis: "strong" as const }
+                : {})}
               onClick={onConfirm}
               type="button"
+              variant={dangerous ? "danger" : "primary"}
             >
               <Icon
                 name={busy ? "refresh" : dangerous ? "warning" : "check"}
@@ -181,7 +182,7 @@ export function RepositoryCommandDialog({
                 : dangerous
                   ? "确认 Force with lease"
                   : "确认并执行"}
-            </button>
+            </Button>
           </div>
         </footer>
         </section>

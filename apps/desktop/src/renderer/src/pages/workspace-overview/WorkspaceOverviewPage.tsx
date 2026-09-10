@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import {
   useMemo,
   useState,
@@ -23,6 +24,7 @@ import {
 } from "../../entities/workspace/model";
 import type { IconName } from "../../shared/ui/Icon";
 import { Icon } from "../../shared/ui/Icon";
+import { Input } from "../../shared/ui/Input";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 
 type LocalWorkspaceOperation =
@@ -258,30 +260,6 @@ export function WorkspaceOverviewPage({
             集中查看仓库变更、同步状态和后台操作；只有在你明确执行操作时，GitNest 才会修改仓库。
           </p>
         </div>
-        <div className="page-actions">
-          <button
-            aria-controls="manual-path-form"
-            aria-expanded={manualPathOpen}
-            className="button"
-            disabled={busy}
-            onClick={() =>
-              setManualPathOpen((current) => !current)
-            }
-            type="button"
-          >
-            <Icon name="folder" />
-            手动路径
-          </button>
-          <button
-            className="button primary"
-            disabled={busy}
-            onClick={onAddDirectory}
-            type="button"
-          >
-            <Icon name="plus" />
-            添加目录
-          </button>
-        </div>
       </section>
 
       {manualPathOpen && (
@@ -294,31 +272,32 @@ export function WorkspaceOverviewPage({
             本地目录绝对路径
           </label>
           <div>
-            <input
+            <Input
               autoFocus
+              fieldClassName="manual-path-input"
+              fullWidth
               id="manual-workspace-path"
               onChange={(event) =>
                 setManualPath(event.target.value)
               }
               placeholder="例如 D:\code\sc\sc_code"
+              size="small"
               spellCheck={false}
               value={manualPath}
             />
-            <button
-              className="button"
+            <Button size="small"
               disabled={busy}
               onClick={() => setManualPathOpen(false)}
               type="button"
             >
               取消
-            </button>
-            <button
-              className="button primary"
+            </Button>
+            <Button size="small" variant="primary"
               disabled={busy || !manualPath.trim()}
               type="submit"
             >
               {operation === "scanning" ? "扫描中…" : "扫描并添加"}
-            </button>
+            </Button>
           </div>
           <small>
             也可以把一个或多个目录直接拖入窗口。
@@ -412,7 +391,7 @@ export function WorkspaceOverviewPage({
                         key={`${target.repositoryId}:${target.worktreeId}`}
                         role="listitem"
                       >
-                        <button
+                        <Button variant="unstyled"
                           aria-current={
                             selected ? "true" : undefined
                           }
@@ -460,7 +439,7 @@ export function WorkspaceOverviewPage({
                           >
                             {sync}
                           </span>
-                        </button>
+                        </Button>
                       </div>
                     );
                   }
@@ -480,15 +459,14 @@ export function WorkspaceOverviewPage({
                   <p>
                     使用目录选择器、手动输入绝对路径，或把目录拖入窗口。
                   </p>
-                  <button
-                    className="button primary"
+                  <Button size="small" variant="primary"
                     disabled={busy}
                     onClick={onAddDirectory}
                     type="button"
                   >
                     <Icon name="plus" />
                     添加第一个目录
-                  </button>
+                  </Button>
                 </div>
               </div>
             )}
@@ -554,7 +532,7 @@ export function WorkspaceOverviewPage({
                         {operationStateLabel(item.state)}
                       </span>
                       {isCancellableRepositoryOperation(item) && (
-                        <button
+                        <Button variant="unstyled"
                           aria-label={`取消${operationKindLabel(item.kind)}`}
                           className="operation-cancel-button"
                           disabled={item.state === "cancelling"}
@@ -567,7 +545,7 @@ export function WorkspaceOverviewPage({
                           {item.state === "cancelling"
                             ? "取消中"
                             : "取消"}
-                        </button>
+                        </Button>
                       )}
                     </div>
                   </div>

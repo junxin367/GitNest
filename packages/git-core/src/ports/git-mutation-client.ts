@@ -11,6 +11,10 @@ export interface CreateCommitOptions extends GitWriteOptions {
 }
 
 export interface GitMutationClient {
+  stageAll(
+    path: string,
+    options?: GitWriteOptions
+  ): Promise<void>;
   stagePaths(
     path: string,
     paths: readonly string[],

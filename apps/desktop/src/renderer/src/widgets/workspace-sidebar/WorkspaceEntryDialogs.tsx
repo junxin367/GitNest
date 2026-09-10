@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import {
   useRef,
   useState,
@@ -8,6 +9,7 @@ import type { WorkspaceEntryDto } from "@gitnest/contracts";
 
 import { WORKSPACE_ENTRY_LABELS } from "../../entities/workspace/model";
 import { Icon } from "../../shared/ui/Icon";
+import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
 import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
 
@@ -76,14 +78,14 @@ export function WorkspaceGroupRenameDialog({
             id="workspace-group-rename-form"
             onSubmit={submit}
           >
-            <label
-              className="workspace-entry-dialog-field"
-              htmlFor="workspace-group-display-name"
-            >
-              分组名称
-              <input
+            <div className="workspace-entry-dialog-field">
+              <label htmlFor="workspace-group-display-name">
+                分组名称
+              </label>
+              <Input
                 aria-describedby="workspace-group-display-name-help"
                 data-modal-initial-focus="true"
+                fullWidth
                 id="workspace-group-display-name"
                 maxLength={120}
                 onChange={(event) =>
@@ -95,30 +97,28 @@ export function WorkspaceGroupRenameDialog({
               <small id="workspace-group-display-name-help">
                 默认使用包含多个仓库的目录名，也可以修改为更易读的名称。
               </small>
-            </label>
+            </div>
           </form>
         </div>
 
         <footer className="command-dialog-footer">
           <p>只修改当前 Workspace 中的分组显示名称。</p>
           <div>
-            <button
-              className="button"
+            <Button size="small"
               disabled={busy}
               onClick={onCancel}
               type="button"
             >
               取消
-            </button>
-            <button
-              className="button primary"
+            </Button>
+            <Button size="small" variant="primary"
               disabled={busy || !displayName.trim()}
               form="workspace-group-rename-form"
               type="submit"
             >
               <Icon name={busy ? "refresh" : "check"} />
               {busy ? "保存中…" : "保存分组名称"}
-            </button>
+            </Button>
           </div>
         </footer>
         </section>
@@ -191,14 +191,14 @@ export function WorkspaceEntryRenameDialog({
             id="workspace-entry-rename-form"
             onSubmit={submit}
           >
-            <label
-              className="workspace-entry-dialog-field"
-              htmlFor="workspace-entry-display-name"
-            >
-              显示名称
-              <input
+            <div className="workspace-entry-dialog-field">
+              <label htmlFor="workspace-entry-display-name">
+                显示名称
+              </label>
+              <Input
                 aria-describedby="workspace-entry-display-name-help"
                 data-modal-initial-focus="true"
+                fullWidth
                 id="workspace-entry-display-name"
                 maxLength={120}
                 onChange={(event) =>
@@ -210,30 +210,28 @@ export function WorkspaceEntryRenameDialog({
               <small id="workspace-entry-display-name-help">
                 仅修改 Workspace 中的显示名称，不会改动磁盘路径或仓库内容。
               </small>
-            </label>
+            </div>
           </form>
         </div>
 
         <footer className="command-dialog-footer">
           <p>名称长度限制为 1 到 120 个字符。</p>
           <div>
-            <button
-              className="button"
+            <Button size="small"
               disabled={busy}
               onClick={onCancel}
               type="button"
             >
               取消
-            </button>
-            <button
-              className="button primary"
+            </Button>
+            <Button size="small" variant="primary"
               disabled={busy || !displayName.trim()}
               form="workspace-entry-rename-form"
               type="submit"
             >
               <Icon name={busy ? "refresh" : "check"} />
               {busy ? "保存中…" : "保存名称"}
-            </button>
+            </Button>
           </div>
         </footer>
         </section>
@@ -312,25 +310,23 @@ export function WorkspaceEntryRemoveDialog({
         <footer className="command-dialog-footer">
           <p>之后仍可通过“添加目录”重新加入。</p>
           <div>
-            <button
-              className="button"
+            <Button size="small"
               data-modal-initial-focus="true"
               disabled={busy}
               onClick={onCancel}
               type="button"
             >
               取消
-            </button>
-            <button
+            </Button>
+            <Button size="small" emphasis="strong" variant="danger"
               aria-busy={busy}
-              className="button danger"
               disabled={busy}
               onClick={() => void confirm()}
               type="button"
             >
               <Icon name={busy ? "refresh" : "warning"} />
               {busy ? "移除中…" : "确认移出"}
-            </button>
+            </Button>
           </div>
         </footer>
         </section>

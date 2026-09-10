@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import {
   useEffect,
   useState,
@@ -27,6 +28,7 @@ import {
 import { copyTextToClipboard } from "../../shared/lib/copyTextToClipboard";
 import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
 import { Icon } from "../../shared/ui/Icon";
+import { Input } from "../../shared/ui/Input";
 
 interface DetailInspectorProps {
   accountOverview: AccountOverviewDto | null;
@@ -146,7 +148,7 @@ export function DetailInspector({
             <Icon name="commit" />
             提交详情
           </div>
-          <button
+          <Button variant="unstyled"
             aria-label="折叠详情面板"
             className="icon-button"
             onClick={onClose}
@@ -154,7 +156,7 @@ export function DetailInspector({
             type="button"
           >
             <Icon name="close" />
-          </button>
+          </Button>
         </header>
 
         <section className="inspector-section history-commit-summary">
@@ -218,7 +220,7 @@ export function DetailInspector({
             快捷操作
           </div>
           <div className="quick-grid">
-            <button
+            <Button variant="unstyled"
               className="quick-button"
               onClick={() => {
                 void copyTextToClipboard(commit.hash)
@@ -235,8 +237,8 @@ export function DetailInspector({
             >
               <Icon name="copy" />
               复制 ID
-            </button>
-            <button
+            </Button>
+            <Button variant="unstyled"
               className="quick-button"
               onClick={() =>
                 setCommitNotice(
@@ -247,8 +249,8 @@ export function DetailInspector({
             >
               <Icon name="external" />
               远程查看
-            </button>
-            <button
+            </Button>
+            <Button variant="unstyled"
               className="quick-button"
               onClick={() =>
                 setCommitNotice(
@@ -259,8 +261,8 @@ export function DetailInspector({
             >
               <Icon name="commit" />
               Cherry-pick
-            </button>
-            <button
+            </Button>
+            <Button variant="unstyled"
               className="quick-button"
               onClick={() =>
                 setCommitNotice(
@@ -271,7 +273,7 @@ export function DetailInspector({
             >
               <Icon name="branch" />
               创建分支
-            </button>
+            </Button>
           </div>
           {commitNotice && (
             <div className="inspector-note commit-action-notice">
@@ -291,7 +293,7 @@ export function DetailInspector({
           <Icon name="panel" />
           上下文详情
         </div>
-        <button
+        <Button variant="unstyled"
           aria-label="折叠详情面板"
           className="icon-button"
           onClick={onClose}
@@ -299,7 +301,7 @@ export function DetailInspector({
           type="button"
         >
           <Icon name="close" />
-        </button>
+        </Button>
       </header>
 
       <section className="inspector-section">
@@ -418,14 +420,14 @@ export function DetailInspector({
               : "当前仓库未设置显式覆盖；远程操作使用主机默认 GitNest 账号或系统 Credential Helper / SSH。"}
           </p>
         </div>
-        <button
-          className="button inspector-settings-button"
+        <Button size="small"
+          className="inspector-settings-button"
           onClick={onOpenSettings}
           type="button"
         >
           <Icon name="settings" />
           管理账号
-        </button>
+        </Button>
       </section>
 
       <section className="inspector-section">
@@ -463,16 +465,18 @@ export function DetailInspector({
             >
               <label htmlFor="entry-display-name">显示名称</label>
               <div>
-                <input
+                <Input
+                  fieldClassName="entry-settings-input"
+                  fullWidth
                   id="entry-display-name"
                   maxLength={120}
                   onChange={(event) =>
                     setDisplayName(event.target.value)
                   }
+                  size="small"
                   value={displayName}
                 />
-                <button
-                  className="button"
+                <Button size="small"
                   disabled={
                     busy ||
                     !displayName.trim() ||
@@ -482,12 +486,11 @@ export function DetailInspector({
                   type="submit"
                 >
                   保存
-                </button>
+                </Button>
               </div>
             </form>
             <div className="entry-order-actions">
-              <button
-                className="button"
+              <Button size="small"
                 disabled={busy || selectedEntry.order === 0}
                 onClick={() =>
                   void onUpdateEntry({
@@ -498,9 +501,8 @@ export function DetailInspector({
                 type="button"
               >
                 上移
-              </button>
-              <button
-                className="button"
+              </Button>
+              <Button size="small"
                 disabled={
                   busy ||
                   selectedEntry.order ===
@@ -515,7 +517,7 @@ export function DetailInspector({
                 type="button"
               >
                 下移
-              </button>
+              </Button>
             </div>
           </>
         ) : (

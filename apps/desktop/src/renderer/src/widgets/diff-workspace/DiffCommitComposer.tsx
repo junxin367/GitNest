@@ -1,14 +1,18 @@
+import { Button } from "../../shared/ui/Button";
 import {
   useId,
   type FormEvent
 } from "react";
 
 import { Icon } from "../../shared/ui/Icon";
+import { Textarea } from "../../shared/ui/Textarea";
 
 export interface DiffWorkspaceCommit {
   message: string;
   push: boolean;
   staged: number;
+  unstaged: number;
+  untracked: number;
   conflicted: number;
   busy: boolean;
   submitting: boolean;
@@ -28,6 +32,8 @@ export function DiffCommitComposer({
   message,
   push,
   staged,
+  unstaged,
+  untracked,
   conflicted,
   busy,
   submitting,
@@ -37,8 +43,9 @@ export function DiffCommitComposer({
   showPush
 }: DiffCommitComposerProps) {
   const pushId = useId();
+  const hasChanges = staged + unstaged + untracked > 0;
   const canCommit =
-    staged > 0 &&
+    hasChanges &&
     conflicted === 0 &&
     Boolean(parseCommitMessage(message).subject) &&
     !busy;
@@ -86,10 +93,11 @@ export function DiffCommitComposer({
         </span>
       </header>
       <form className="diff-workspace-commit-form" onSubmit={submit}>
-        <textarea
+        <Textarea
           aria-label="提交信息"
           autoComplete="off"
           disabled={busy}
+          fullWidth
           maxLength={100_000}
           name="commit-message"
           onChange={(event) =>
@@ -97,17 +105,22 @@ export function DiffCommitComposer({
           }
           placeholder="输入提交信息…"
           rows={3}
+          size="small"
+          textareaClassName="diff-workspace-commit-message"
           value={message}
         />
-        <button
+        <Button size="small" variant="primary"
           aria-busy={submitting}
-          className="button primary"
           disabled={!canCommit}
           type="submit"
         >
           <Icon name={submitting ? "refresh" : "check"} />
-          {submitting ? "提交中…" : "提交已暂存变更"}
-        </button>
+          {submitting
+            ? "提交中…"
+            : staged > 0
+              ? "提交已暂存变更"
+              : "提交全部变更"}
+        </Button>
       </form>
     </article>
   );

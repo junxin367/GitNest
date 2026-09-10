@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import {
   useEffect,
   useMemo,
@@ -189,8 +190,7 @@ export function OperationCenterPage({
           </span>
         </header>
         <div className="bulk-sync-actions">
-          <button
-            className="button"
+          <Button size="small"
             disabled={commands.busy || targets.length === 0}
             onClick={() =>
               void commands.request({
@@ -202,9 +202,8 @@ export function OperationCenterPage({
           >
             <Icon name="download" />
             Fetch 全部 ({targets.length})
-          </button>
-          <button
-            className="button"
+          </Button>
+          <Button size="small"
             disabled={
               commands.busy || pullTargets.length === 0
             }
@@ -219,9 +218,8 @@ export function OperationCenterPage({
           >
             <Icon name="download" />
             Pull 可快进项 ({pullTargets.length})
-          </button>
-          <button
-            className="button"
+          </Button>
+          <Button size="small"
             disabled={
               commands.busy || pushTargets.length === 0
             }
@@ -235,7 +233,7 @@ export function OperationCenterPage({
           >
             <Icon name="upload" />
             Push 领先项 ({pushTargets.length})
-          </button>
+          </Button>
         </div>
       </article>
 
@@ -254,7 +252,7 @@ export function OperationCenterPage({
                 ["completed", "已完成"]
               ] as const
             ).map(([id, label]) => (
-              <button
+              <Button variant="unstyled"
                 aria-pressed={filter === id}
                 className={filter === id ? "active" : ""}
                 key={id}
@@ -262,7 +260,7 @@ export function OperationCenterPage({
                 type="button"
               >
                 {label}
-              </button>
+              </Button>
             ))}
           </div>
         </header>
@@ -289,13 +287,12 @@ export function OperationCenterPage({
               <strong>当前筛选下没有操作</strong>
               <p>启动刷新、同步或仓库写操作后会显示在这里。</p>
               {filter !== "all" && (
-                <button
-                  className="button"
+                <Button size="small"
                   onClick={() => setFilter("all")}
                   type="button"
                 >
                   查看全部操作
-                </button>
+                </Button>
               )}
             </div>
           </div>
@@ -391,7 +388,7 @@ function OperationCard({
         <p>{operation.message}</p>
         <div className="operation-target-list">
           {targets.map(({ target, label, path }) => (
-            <button
+            <Button variant="unstyled"
               key={`${target.repositoryId}:${target.worktreeId}`}
               onClick={() => onOpenTarget(target)}
               title={path}
@@ -399,7 +396,7 @@ function OperationCard({
             >
               <Icon name="repository" size={11} />
               {label}
-            </button>
+            </Button>
           ))}
           {targets.length === 0 && (
             <span>{operation.targetIds.length} 个目标</span>
@@ -434,7 +431,7 @@ function OperationCard({
         </span>
         <div>
           {canRetry && primaryTarget && (
-            <button
+            <Button variant="unstyled"
               className="mini-action"
               disabled={commands.busy}
               onClick={() =>
@@ -447,10 +444,10 @@ function OperationCard({
               type="button"
             >
               重新预检
-            </button>
+            </Button>
           )}
           {canCancel && (
-            <button
+            <Button variant="unstyled"
               className="mini-action danger"
               disabled={operation.state === "cancelling"}
               onClick={() =>
@@ -461,7 +458,7 @@ function OperationCard({
               {operation.state === "cancelling"
                 ? "取消中"
                 : "取消"}
-            </button>
+            </Button>
           )}
         </div>
       </div>

@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import {
   useEffect,
   useMemo,
@@ -25,6 +26,7 @@ import {
 } from "../../entities/workspace/model";
 import type { AppView } from "../../app/navigation";
 import { Icon } from "../../shared/ui/Icon";
+import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
 import {
   Menu,
@@ -756,7 +758,7 @@ export function WorkspaceSidebar({
         className="workspace-switcher-wrap"
         ref={workspaceSwitcherRef}
       >
-        <button
+        <Button variant="unstyled"
           aria-expanded={workspaceSwitcherOpen}
           aria-haspopup="menu"
           aria-label="切换 Workspace"
@@ -787,7 +789,7 @@ export function WorkspaceSidebar({
           >
             <Icon name="chevron" size={16} />
           </span>
-        </button>
+        </Button>
         {workspaceSwitcherOpen && (
           <MenuPopover
             align="start"
@@ -847,7 +849,8 @@ export function WorkspaceSidebar({
           <span className="sidebar-search-icon">
             <Icon name="search" size={15} />
           </span>
-          <input
+          <Input
+            appearance="unstyled"
             aria-label="筛选仓库"
             autoComplete="off"
             className={query ? "has-value" : undefined}
@@ -858,7 +861,7 @@ export function WorkspaceSidebar({
             value={query}
           />
           {query && (
-            <button
+            <Button variant="unstyled"
               aria-label="清除仓库筛选"
               className="sidebar-search-clear"
               onClick={() => setQuery("")}
@@ -866,14 +869,14 @@ export function WorkspaceSidebar({
               type="button"
             >
               <Icon name="close" size={14} />
-            </button>
+            </Button>
           )}
         </div>
         <div
           className="sidebar-repository-menu-wrap"
           ref={repositoryMenuRef}
         >
-          <button
+          <Button variant="unstyled"
             aria-expanded={repositoryMenuOpen}
             aria-haspopup="menu"
             aria-label="仓库筛选菜单"
@@ -884,7 +887,7 @@ export function WorkspaceSidebar({
             type="button"
           >
             <Icon name="more" size={15} />
-          </button>
+          </Button>
           {repositoryMenuOpen && (
             <MenuPopover
               align="start"
@@ -962,7 +965,7 @@ export function WorkspaceSidebar({
               }`}
               key={entry.id}
             >
-              <button
+              <Button variant="unstyled"
                 aria-current={
                   workspace.selectedEntryId === entry.id
                     ? "true"
@@ -1017,7 +1020,7 @@ export function WorkspaceSidebar({
                     {entry.scanIssues.length}
                   </span>
                 )}
-              </button>
+              </Button>
 
               <div
                 aria-hidden={collapsedEntryIds.has(entry.id)}
@@ -1038,7 +1041,7 @@ export function WorkspaceSidebar({
                       }`}
                       key={group.id}
                   >
-                  <button
+                  <Button variant="unstyled"
                     aria-expanded={!group.collapsed}
                     className={`group-header${
                       groupDragState?.entryId === entry.id &&
@@ -1121,7 +1124,7 @@ export function WorkspaceSidebar({
                     <span className="group-count">
                       {targets.length}
                     </span>
-                  </button>
+                  </Button>
                   {!group.collapsed && (
                     <div className="group-body">
                       {targets.length === 0 ? (
@@ -1157,7 +1160,7 @@ export function WorkspaceSidebar({
                             snapshotStatus(snapshot);
 
                           return (
-                            <button
+                            <Button variant="unstyled"
                               aria-current={
                                 selected ? "true" : undefined
                               }
@@ -1205,7 +1208,7 @@ export function WorkspaceSidebar({
                                   {status.label}
                                 </span>
                               )}
-                            </button>
+                            </Button>
                           );
                         })
                       )}
@@ -1229,7 +1232,7 @@ export function WorkspaceSidebar({
       </nav>
 
       <div className="sidebar-footer">
-        <button
+        <Button variant="unstyled"
           className="sidebar-add-directory"
           disabled={busy}
           onClick={onAddDirectory}
@@ -1240,8 +1243,8 @@ export function WorkspaceSidebar({
             size={14}
           />
           添加目录
-        </button>
-        <button
+        </Button>
+        <Button variant="unstyled"
           aria-busy={busy}
           aria-label="重新扫描 Workspace"
           className="icon-button"
@@ -1251,7 +1254,7 @@ export function WorkspaceSidebar({
           type="button"
         >
           <Icon name="refresh" size={14} />
-        </button>
+        </Button>
       </div>
       {contextMenu && contextEntry && (
         <LayerPortal>
@@ -1575,13 +1578,12 @@ function SidebarEmpty({
     return (
       <div className="sidebar-empty">
         <span>当前筛选条件没有匹配的仓库。</span>
-        <button
-          className="button"
+        <Button size="small"
           onClick={onClearQuery}
           type="button"
         >
           清除筛选
-        </button>
+        </Button>
       </div>
     );
   }

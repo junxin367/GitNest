@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import type {
   RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
@@ -13,6 +14,7 @@ import {
   getSnapshotChangeCount
 } from "../../entities/workspace/model";
 import { Icon } from "../../shared/ui/Icon";
+import { Input } from "../../shared/ui/Input";
 
 type CollectionTab = Exclude<WorkspaceTab, "overview">;
 
@@ -83,7 +85,7 @@ export function WorkspaceCollectionPage({
               {workspace.repositories.length} 个仓库 ·{" "}
               {workspace.entries.length} 个配置项
             </span>
-            <button
+            <Button variant="unstyled"
               className="panel-action"
               disabled={busy}
               onClick={onAddDirectory}
@@ -91,7 +93,7 @@ export function WorkspaceCollectionPage({
             >
               <Icon name="plus" size={13} />
               添加仓库
-            </button>
+            </Button>
           </header>
           {repositoryRows.length > 0 ? (
             <RepositoryTable
@@ -220,7 +222,8 @@ function WorkspaceActivityPanel({
             : ""}
         </span>
         {filterOpen && (
-          <input
+          <Input
+            appearance="unstyled"
             aria-label="筛选 Workspace 活动"
             autoFocus
             className="workspace-activity-filter-input"
@@ -229,7 +232,7 @@ function WorkspaceActivityPanel({
             value={filterQuery}
           />
         )}
-        <button
+        <Button variant="unstyled"
           aria-expanded={filterOpen}
           className={`panel-action${
             filterOpen ? " workspace-activity-filter-open" : ""
@@ -239,7 +242,7 @@ function WorkspaceActivityPanel({
         >
           <Icon name="filter" size={13} />
           筛选
-        </button>
+        </Button>
       </header>
       <div className="workspace-activity-list">
         {visibleRows.map((row, index) => {
@@ -255,7 +258,7 @@ function WorkspaceActivityPanel({
             : "等待状态刷新";
 
           return (
-            <button
+            <Button variant="unstyled"
               aria-label={`${name} 的 HEAD 最近提交，${detail}，${time}`}
               className={`workspace-activity-row${
                 index === visibleRows.length - 1 ? " last" : ""
@@ -299,7 +302,7 @@ function WorkspaceActivityPanel({
               >
                 {time}
               </time>
-            </button>
+            </Button>
           );
         })}
         {activityRows.length === 0 && (
@@ -353,7 +356,7 @@ function RepositoryTable({
             key={row.repository.id}
             role="listitem"
           >
-            <button
+            <Button variant="unstyled"
               aria-label={`${name}，分支 ${branch}，工作区 ${state}，同步 ${syncLabel(
                 row.snapshot
               )}`}
@@ -406,7 +409,7 @@ function RepositoryTable({
               >
                 {syncLabel(row.snapshot)}
               </span>
-            </button>
+            </Button>
           </div>
         );
       })}
@@ -517,15 +520,14 @@ function WorkspaceEmptyState({
       <div>
         <strong>尚未添加本地目录</strong>
         <p>使用目录选择器添加 Workspace 后，这里会显示对应内容。</p>
-        <button
-          className="button primary"
+        <Button size="small" variant="primary"
           disabled={busy}
           onClick={onAddDirectory}
           type="button"
         >
           <Icon name="plus" />
           添加目录
-        </button>
+        </Button>
       </div>
     </div>
   );

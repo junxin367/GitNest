@@ -316,7 +316,7 @@
             label: mode === "staged" ? "取消暂存" : "暂存",
             ariaLabel: `${mode === "staged" ? "取消暂存" : "暂存"} ${file.path}`,
             title: mode === "staged" ? "取消暂存" : "暂存",
-            icon: iconMarkup(mode === "staged" ? "x" : "plus"),
+            icon: iconMarkup(mode === "staged" ? "minus" : "plus"),
             variant: "icon",
             className: "gn-diff-workspace__stage-button",
             attributes: `data-diff-workspace-action="toggle-stage" data-file-key="${escapeHtml(file.key)}"`
@@ -468,7 +468,7 @@
 
     canCommit() {
       return (
-        this.stagedCount() > 0 &&
+        this.options.files.length > 0 &&
         (this.options.commit?.conflicts || 0) === 0 &&
         Boolean(this.state.commitMessage.trim())
       );
@@ -522,15 +522,24 @@
                 })}
               </div>
             ` : ""}
-            <textarea
-              id="${messageId}"
-              data-diff-workspace-control="commit-message"
-              maxlength="100000"
-              placeholder="输入提交信息…"
-              rows="3"
-            >${escapeHtml(this.state.commitMessage)}</textarea>
+            ${global.GitNestTextarea.render({
+              id: messageId,
+              value: this.state.commitMessage,
+              size: "small",
+              fullWidth: true,
+              ariaLabel: "提交信息",
+              autocomplete: "off",
+              maxLength: 100000,
+              name: "commit-message",
+              placeholder: "输入提交信息…",
+              rows: 3,
+              textareaClassName: "gn-diff-workspace__commit-message",
+              attributes: 'data-diff-workspace-control="commit-message"'
+            })}
             ${buttonMarkup({
-              label: "提交已暂存变更",
+              label: staged > 0
+                ? "提交已暂存变更"
+                : "提交全部变更",
               icon: iconMarkup("check"),
               variant: "primary",
               fullWidth: true,
@@ -742,9 +751,12 @@
           "sparkle"
         );
       } else if (actionName === "commit" && this.canCommit()) {
+        const scope = this.stagedCount() > 0
+          ? "当前只会提交已暂存变更。"
+          : "当前会提交全部未暂存和未跟踪变更。";
         global.showToast?.(
           "提交信息已就绪",
-          "当前是设计预览，不会执行本地 Git 命令。",
+          `${scope} 这是设计预览，不会执行本地 Git 命令。`,
           "commit"
         );
       }

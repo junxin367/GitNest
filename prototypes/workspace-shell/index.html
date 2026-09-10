@@ -7,6 +7,7 @@
   <title>GitNest · SC 代码聚合</title>
   <link rel="stylesheet" href="./button.css" />
   <link rel="stylesheet" href="./input.css" />
+  <link rel="stylesheet" href="./textarea.css" />
   <style>
     :root {
       color-scheme: dark;
@@ -2103,8 +2104,7 @@
       font-size: var(--font-size-caption);
     }
 
-    .settings-ai-field input,
-    .settings-ai-prompt textarea {
+    .settings-ai-field input {
       width: 100%;
       min-width: 0;
       min-height: var(--control-default);
@@ -2115,19 +2115,11 @@
       border-radius: var(--radius-regular);
     }
 
-    .settings-ai-prompt textarea {
-      min-height: 132px;
-      resize: vertical;
-      line-height: var(--line-height-body);
-    }
-
-    .settings-ai-field input:hover,
-    .settings-ai-prompt textarea:hover {
+    .settings-ai-field input:hover {
       border-color: var(--border);
     }
 
-    .settings-ai-field input:focus,
-    .settings-ai-prompt textarea:focus {
+    .settings-ai-field input:focus {
       border-color: var(--accent);
     }
 
@@ -3194,9 +3186,9 @@
       display: grid;
       grid-template-columns: clamp(240px, 26%, 300px) minmax(0, 1fr);
       min-width: 0;
-      min-height: 500px;
-      height: calc(100vh - 180px);
-      max-height: 760px;
+      min-height: 0;
+      height: 100%;
+      max-height: none;
       overflow: hidden;
       background: var(--surface);
       border: 1px solid var(--border-soft);
@@ -3204,7 +3196,9 @@
     }
 
     .changes-page {
+      height: 100%;
       min-width: 0;
+      min-height: 0;
     }
 
     .changes-file-pane {
@@ -3572,6 +3566,27 @@
       min-width: 0;
     }
 
+    .file-change-stats {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: var(--space-2);
+      margin-left: var(--space-1);
+      font-family: var(--font-mono);
+      font-size: calc(var(--font-size-caption) - 1px);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .file-change-stats strong {
+      color: var(--green);
+    }
+
+    .file-change-stats em {
+      color: var(--red);
+      font-style: normal;
+    }
+
     .stage-toggle {
       display: grid;
       place-items: center;
@@ -3582,6 +3597,13 @@
       border: 0;
       border-radius: var(--radius-small);
       cursor: pointer;
+    }
+
+    .stage-toggle.gn-button {
+      width: 22px;
+      min-width: 22px;
+      height: 22px;
+      padding: 0;
     }
 
     .stage-toggle:hover {
@@ -4031,6 +4053,30 @@
       gap: var(--space-3);
     }
 
+    .worktree-management {
+      display: grid;
+      gap: var(--space-4);
+      min-width: 0;
+    }
+
+    .page-heading.worktree-page-heading {
+      flex-wrap: nowrap;
+      margin-bottom: 0;
+    }
+
+    .worktree-page-heading .page-actions {
+      width: auto;
+    }
+
+    .worktree-page-heading .page-description {
+      max-width: 680px;
+      font-size: var(--font-size-caption);
+    }
+
+    .worktree-metric-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
     .worktree-card {
       position: relative;
       width: 100%;
@@ -4423,6 +4469,10 @@
       padding: 0 var(--space-2);
     }
 
+    .commit-composer .panel-header > .status-pill {
+      margin-left: auto;
+    }
+
     .commit-push-toggle {
       display: inline-flex;
       align-items: center;
@@ -4443,7 +4493,7 @@
 
     .commit-form {
       display: grid;
-      gap: var(--space-1);
+      gap: var(--space-2);
       padding: var(--space-2);
     }
 
@@ -4454,7 +4504,7 @@
       gap: var(--space-2);
     }
 
-    .commit-ai-button {
+    .commit-ai-button.gn-button {
       flex: 0 0 auto;
       min-height: var(--control-compact);
     }
@@ -4476,45 +4526,14 @@
       font-weight: var(--font-weight-regular);
     }
 
-    .commit-form input:not([type="checkbox"]),
-    .commit-form textarea {
-      width: 100%;
-      min-width: 0;
-      padding: var(--space-2) var(--space-3);
-      color: var(--text);
-      background: var(--surface-2);
-      border: 1px solid var(--border-soft);
-      border-radius: var(--radius-regular);
-      resize: vertical;
-    }
-
-    .commit-form textarea {
+    .commit-message {
       min-height: 64px;
       max-height: 140px;
-      padding: var(--space-1) var(--space-2);
+      font-size: var(--font-size-caption);
       line-height: 1.4;
     }
 
-    .commit-form input:not([type="checkbox"]):hover,
-    .commit-form textarea:hover {
-      border-color: var(--border);
-    }
-
-    .commit-form input:not([type="checkbox"]):focus,
-    .commit-form textarea:focus {
-      border-color: var(--accent);
-    }
-
-    .commit-form-footer {
-      display: flex;
-      align-items: center;
-      justify-content: stretch;
-      gap: 0;
-      margin-top: var(--space-1);
-    }
-
-    .commit-form-footer .button {
-      flex: 1 1 auto;
+    .commit-form > .gn-button {
       width: 100%;
       min-width: 0;
       min-height: var(--control-compact);
@@ -4528,8 +4547,7 @@
       font-weight: var(--font-weight-semibold);
     }
 
-    .form-input,
-    .form-textarea {
+    .form-input {
       width: 100%;
       color: var(--text);
       background: var(--surface-2);
@@ -4541,25 +4559,21 @@
     }
 
     .form-input:hover,
-    .form-textarea:hover,
     .sidebar-search:hover {
       border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
     }
 
     .form-input:focus,
-    .form-textarea:focus,
     .sidebar-search:focus {
       border-color: var(--color-focus);
     }
 
-    .form-input[aria-invalid="true"],
-    .form-textarea[aria-invalid="true"] {
+    .form-input[aria-invalid="true"] {
       border-color: var(--red);
       background: color-mix(in srgb, var(--red-soft) 48%, var(--surface-2));
     }
 
     .form-input:disabled,
-    .form-textarea:disabled,
     .sidebar-search:disabled {
       color: var(--color-text-disabled);
       background: var(--surface-2);
@@ -4572,14 +4586,7 @@
       padding: 0 var(--space-3);
     }
 
-    .form-textarea {
-      min-height: 96px;
-      padding: var(--space-3);
-      resize: vertical;
-    }
-
-    .form-input::placeholder,
-    .form-textarea::placeholder {
+    .form-input::placeholder {
       color: var(--muted);
     }
 
@@ -5985,6 +5992,7 @@
 
   <script src="./button.js"></script>
   <script src="./input.js"></script>
+  <script src="./textarea.js"></script>
   <script src="./dropdown.js"></script>
   <script>
     const iconPaths = {
@@ -6006,6 +6014,7 @@
       arrowDown: '<path d="M12 4v16"/><path d="m6 14 6 6 6-6"/>',
       arrowUp: '<path d="M12 20V4"/><path d="m6 10 6-6 6 6"/>',
       plus: '<path d="M12 5v14M5 12h14"/>',
+      minus: '<path d="M6 12h12"/>',
       check: '<path d="m5 12 4 4L19 6"/>',
       alert: '<path d="M10.3 4.2 2.6 18a2 2 0 0 0 1.8 3h15.2a2 2 0 0 0 1.8-3L13.7 4.2a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
       conflict: '<path d="M6 3v7a4 4 0 0 0 4 4h8"/><path d="m15 11 3 3-3 3"/><path d="M6 21v-4a3 3 0 0 1 3-3"/>',
@@ -6041,6 +6050,9 @@
 
     const renderInput = (options = {}) =>
       window.GitNestInput.render(options);
+
+    const renderTextarea = (options = {}) =>
+      window.GitNestTextarea.render(options);
 
     function mountSidebarSearchInput() {
       const target = document.getElementById("sidebarSearchField");
@@ -8806,8 +8818,11 @@
         showErrorToast("AI 配置不完整", "请先填写 API URL 和 API Key。");
         return;
       }
+      const scope = currentRepo().staged > 0
+        ? "已暂存变更"
+        : "全部变更";
       state.commitDraft.message =
-        "feat: 更新已暂存变更\n\n根据当前已暂存文件和 AI 提交提示词生成的提交说明。";
+        `feat: 更新${scope}\n\n根据当前${scope}和 AI 提交提示词生成的提交说明。`;
       state.commitDirty = true;
       renderChanges();
       showToast(
@@ -8943,10 +8958,17 @@
                   <input id="aiCommitApiKey" autocomplete="off" placeholder="输入用于生成提交信息的 API Key" type="password" value="${escapeHtml(state.aiSettings.apiKey)}" oninput="captureAiSettings()" />
                 </label>
               </div>
-              <label class="settings-ai-prompt">
-                提交信息提示词
-                <textarea id="aiCommitPrompt" maxlength="8000" oninput="captureAiSettings()" placeholder="告诉 AI 如何根据变更生成提交信息。">${escapeHtml(state.aiSettings.prompt)}</textarea>
-              </label>
+              ${renderTextarea({
+                id: "aiCommitPrompt",
+                value: state.aiSettings.prompt,
+                label: "提交信息提示词",
+                size: "large",
+                fullWidth: true,
+                fieldClassName: "settings-ai-prompt",
+                maxLength: 8000,
+                placeholder: "告诉 AI 如何根据变更生成提交信息。",
+                attributes: 'oninput="captureAiSettings()"'
+              })}
               <div class="settings-ai-actions">
                 <div class="settings-ai-actions-buttons">
                   <button type="button" class="button" onclick="testAiConnection()">${icon("check", 13)}测试连接</button>
@@ -9781,9 +9803,11 @@
     function renderCommitComposer(repo) {
       const staged = repo.staged;
       const conflicted = repo.conflicts;
+      const hasChanges =
+        repo.staged + repo.unstaged + repo.untracked > 0;
       const statusTone = conflicted > 0 ? "red" : staged > 0 ? "green" : "neutral";
       const statusText = conflicted > 0 ? `${conflicted} 个冲突` : `${staged} 个已暂存`;
-      const canCommit = staged > 0 && conflicted === 0 && Boolean(state.commitDraft.message.trim());
+      const canCommit = hasChanges && conflicted === 0 && Boolean(state.commitDraft.message.trim());
 
       return `
         <article class="panel commit-composer">
@@ -9797,15 +9821,39 @@
           <form class="commit-form" onsubmit="event.preventDefault(); completePreviewCommit(event.submitter || this.querySelector('button'))">
             ${state.aiSettings.enabled ? `
               <div class="commit-form-field-head">
-                <button type="button" class="button small commit-ai-button" onclick="generateCommitMessageWithAI()">${icon("sparkle", 13)}AI 生成</button>
+                ${renderButton({
+                  label: "AI 生成",
+                  size: "small",
+                  variant: "default",
+                  className: "commit-ai-button",
+                  icon: icon("sparkle", 13),
+                  attributes: 'onclick="generateCommitMessageWithAI()"'
+                })}
               </div>
             ` : ""}
-            <textarea id="commitMessage" maxlength="100000" oninput="updateCommitDraft()" placeholder="输入提交信息…" rows="3">${escapeHtml(state.commitDraft.message)}</textarea>
-            <div class="commit-form-footer">
-              <button class="button primary" ${canCommit ? "" : "disabled"} type="submit">
-                ${icon("check")}提交已暂存变更
-              </button>
-            </div>
+            ${renderTextarea({
+              id: "commitMessage",
+              value: state.commitDraft.message,
+              size: "small",
+              fullWidth: true,
+              ariaLabel: "提交信息",
+              autocomplete: "off",
+              maxLength: 100000,
+              name: "commit-message",
+              placeholder: "输入提交信息…",
+              rows: 3,
+              textareaClassName: "commit-message",
+              attributes: 'oninput="updateCommitDraft()"'
+            })}
+            ${renderButton({
+              label: staged > 0 ? "提交已暂存变更" : "提交全部变更",
+              size: "small",
+              variant: "primary",
+              fullWidth: true,
+              disabled: !canCommit,
+              icon: icon("check"),
+              type: "submit"
+            })}
           </form>
         </article>
       `;
@@ -9933,6 +9981,7 @@
         deleted: "D",
         untracked: "?"
       };
+      const stats = diffPreviewStats(file);
       const displayName = depth > 0
         ? file.path.replace(/\\/g, "/").split("/").pop() || file.path
         : file.path;
@@ -9946,9 +9995,22 @@
             <span class="file-meta">
               <span class="file-status-letter ${file.status}">${statusLetter[file.status] || "M"}</span>
               <small class="file-dir">${changeFileStatusLabel(file)}</small>
+              <span class="file-change-stats" aria-label="新增 ${stats.additions} 行，删除 ${stats.deletions} 行">
+                <strong>+${stats.additions}</strong>
+                <em>-${stats.deletions}</em>
+              </span>
             </span>
           </button>
-          <button class="stage-toggle" aria-label="${file.staged ? "取消暂存" : "暂存"} ${file.path}" onclick="event.stopPropagation(); showToast('${file.staged ? "取消暂存" : "暂存文件"}', '${file.path}', '${file.staged ? "x" : "plus"}')">${file.staged ? icon("x", 12) : icon("plus", 12)}</button>
+          ${renderButton({
+            label: `${file.staged ? "取消暂存" : "暂存"} ${file.path}`,
+            ariaLabel: `${file.staged ? "取消暂存" : "暂存"} ${file.path}`,
+            title: file.staged ? "取消暂存" : "暂存",
+            size: "small",
+            variant: "icon",
+            className: "stage-toggle",
+            icon: icon(file.staged ? "minus" : "plus", 12),
+            attributes: `onclick="event.stopPropagation(); showToast('${file.staged ? "取消暂存" : "暂存文件"}', '${file.path}', '${file.staged ? "minus" : "plus"}')"`
+          })}
         </div>
       `;
     }
@@ -10145,7 +10207,12 @@
       const commitButton = document.querySelector(".commit-composer button[type='submit']");
       if (commitButton) {
         const repo = currentRepo();
-        commitButton.disabled = repo.staged === 0 || repo.conflicts > 0 || !message?.value.trim();
+        const hasChanges =
+          repo.staged + repo.unstaged + repo.untracked > 0;
+        commitButton.disabled =
+          !hasChanges ||
+          repo.conflicts > 0 ||
+          !message?.value.trim();
       }
       if (message?.value.trim()) {
         message.removeAttribute("aria-invalid");
@@ -10160,10 +10227,21 @@
 
     function completePreviewCommit(trigger) {
       const message = document.getElementById("commitMessage");
+      const repo = currentRepo();
+      const hasChanges =
+        repo.staged + repo.unstaged + repo.untracked > 0;
       if (!message?.value.trim()) {
         message?.setAttribute("aria-invalid", "true");
         showErrorToast("无法提交", "请输入提交信息。");
         message?.focus();
+        return;
+      }
+      if (repo.conflicts > 0) {
+        showErrorToast("无法提交", "请先解决所有冲突。");
+        return;
+      }
+      if (!hasChanges) {
+        showErrorToast("无法提交", "当前仓库没有可提交的变更。");
         return;
       }
       startButtonLoading(trigger);
@@ -10172,7 +10250,14 @@
         state.commitDirty = false;
         stopButtonLoading(trigger);
         renderChangesInspector();
-        showToast("提交信息已就绪", "当前是设计预览，不会执行本地 Git 命令。", "commit");
+        const scope = repo.staged > 0
+          ? "当前只会提交已暂存变更。"
+          : "当前会提交全部未暂存和未跟踪变更。";
+        showToast(
+          "提交信息已就绪",
+          `${scope} 这是设计预览，不会执行本地 Git 命令。`,
+          "commit"
+        );
       }, 900);
     }
 
@@ -10432,26 +10517,41 @@
       const existingWorktrees = Math.max(0, repo.worktrees - repo.prunable);
       document.getElementById("mainContent").innerHTML = `
         <div class="page-scroll">
-          <div class="page-heading">
-            <div>
-              <h1 class="page-title">${repo.name} Worktrees</h1>
-              <p class="page-description">显示本次只读扫描得到的登记数量与当前工作目录。聚合仓库可展开全部 11 条实际登记路径。</p>
+          <div class="worktree-management">
+            <div class="page-heading worktree-page-heading">
+              <div>
+                <h1 class="page-title">${repo.name} Worktrees</h1>
+                <p class="page-description">显示本次只读扫描得到的登记数量与当前工作目录。聚合仓库可展开全部 ${repo.worktrees} 条实际登记路径。</p>
+              </div>
+              <div class="page-actions">
+                ${renderButton({
+                  label: "Prune 预览",
+                  size: "small",
+                  variant: "default",
+                  icon: icon("eye"),
+                  disabled: repo.prunable === 0,
+                  attributes: 'onclick="showToast(\'Prune 预览\', \'先列出可清理记录，不会直接删除目录。\', \'eye\')"'
+                })}
+                ${renderButton({
+                  label: "新建 Worktree",
+                  size: "small",
+                  variant: "primary",
+                  icon: icon("plus"),
+                  attributes: 'onclick="showToast(\'创建 Worktree\', \'选择目标目录、起点和新分支后创建。\', \'plus\')"'
+                })}
+              </div>
             </div>
-            <div class="page-actions">
-              <button class="button" onclick="showToast('Prune 预览', '先列出可清理记录，不会直接删除目录。', 'eye')">${icon("eye")}Prune 预览</button>
-              <button class="button primary" onclick="showToast('创建 Worktree', '选择目标目录、起点和新分支后创建。', 'plus')">${icon("plus")}新建 Worktree</button>
+            <div class="metric-grid worktree-metric-grid">
+              ${metricCard("worktree", "已登记", String(repo.worktrees), "包含当前主工作目录", "var(--purple)", "rgba(174,140,255,.13)")}
+              ${metricCard("check", "目录存在", String(existingWorktrees), "按可清理记录反推", "var(--green)", "var(--green-soft)")}
+              ${metricCard("alert", "可清理", String(repo.prunable), "gitdir 指向不存在位置", "var(--red)", "var(--red-soft)")}
+              ${metricCard("branch", "Detached", String(repo.detached), "未关联本地分支", "var(--yellow)", "var(--yellow-soft)")}
             </div>
-          </div>
-          <div class="metric-grid">
-            ${metricCard("worktree", "已登记", String(repo.worktrees), "包含当前主工作目录", "var(--purple)", "rgba(174,140,255,.13)")}
-            ${metricCard("check", "目录存在", String(existingWorktrees), "按可清理记录反推", "var(--green)", "var(--green-soft)")}
-            ${metricCard("alert", "可清理", String(repo.prunable), "gitdir 指向不存在位置", "var(--red)", "var(--red-soft)")}
-            ${metricCard("branch", "Detached", String(repo.detached), "未关联本地分支", "var(--yellow)", "var(--yellow-soft)")}
-          </div>
-          <div class="worktree-grid">
-            ${repo.id === "workspace-root"
-              ? workspaceSnapshot.worktreeEntries.map(workspaceWorktreeCard).join("")
-              : repositoryWorktreeCard("当前工作目录", repo.branch, repoAbsolutePath(repo), repo.head, repo.changes ? `${repo.changes} 项变更` : "工作区干净", true, false)}
+            <div class="worktree-grid">
+              ${repo.id === "workspace-root"
+                ? workspaceSnapshot.worktreeEntries.map(workspaceWorktreeCard).join("")
+                : repositoryWorktreeCard("当前工作目录", repo.branch, repoAbsolutePath(repo), repo.head, repo.changes ? `${repo.changes} 项变更` : "工作区干净", true, false)}
+            </div>
           </div>
         </div>
       `;

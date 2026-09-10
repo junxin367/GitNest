@@ -10,8 +10,7 @@
  *   trailing: '<kbd>Ctrl K</kbd>',
  *   clearButton: { icon: '<svg class="icon">...</svg>', ariaLabel: "清除" },
  *   fullWidth: true,
- *   state: "default", // default | focus | error
- *   multiline: false
+ *   state: "default" // default | focus | error
  * });
  *
  * 尺寸：small 32px / medium 35px / large 40px。
@@ -51,7 +50,6 @@
 
   function normalizeOptions(options = {}) {
     const size = normalizeSize(options.size);
-    const multiline = Boolean(options.multiline || options.as === "textarea");
     const clearButton = options.clearButton
       ? {
           icon: serializeMarkup(options.clearButton.icon),
@@ -64,7 +62,6 @@
     return {
       ...options,
       size,
-      multiline,
       clearButton,
       actions: Array.isArray(options.actions) ? options.actions : [],
       leadingIcon: serializeMarkup(options.leadingIcon || options.icon),
@@ -86,7 +83,7 @@
       `class="gn-input__control"`,
       options.id ? `id="${escapeHtml(options.id)}"` : "",
       options.name ? `name="${escapeHtml(options.name)}"` : "",
-      !options.multiline ? `type="${escapeHtml(options.type)}"` : "",
+      `type="${escapeHtml(options.type)}"`,
       options.placeholder ? `placeholder="${escapeHtml(options.placeholder)}"` : "",
       options.autocomplete ? `autocomplete="${escapeHtml(options.autocomplete)}"` : "",
       options.spellcheck !== undefined ? `spellcheck="${String(Boolean(options.spellcheck))}"` : "",
@@ -94,12 +91,9 @@
       options.ariaInvalid ? 'aria-invalid="true"' : "",
       options.disabled ? "disabled" : "",
       options.readonly ? "readonly" : "",
-      options.rows ? `rows="${escapeHtml(options.rows)}"` : "",
       options.attributes || ""
     ].filter(Boolean).join(" ");
-    return options.multiline
-      ? `<textarea ${attrs}>${escapeHtml(options.value)}</textarea>`
-      : `<input ${attrs} value="${escapeHtml(options.value)}" />`;
+    return `<input ${attrs} value="${escapeHtml(options.value)}" />`;
   }
 
   function renderAction(action, className = "gn-input__action") {
@@ -144,7 +138,6 @@
       `data-full-width="${String(options.fullWidth)}"`,
       `data-state="${options.state}"`,
       `data-disabled="${String(options.disabled)}"`,
-      `data-multiline="${String(options.multiline)}"`,
       `data-has-leading="${String(Boolean(options.leadingIcon))}"`,
       `data-has-trailing="${String(Boolean(trailing))}"`,
       options.state === "focus" ? 'data-focused="true"' : ""

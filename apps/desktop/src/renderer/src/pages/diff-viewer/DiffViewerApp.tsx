@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import {
   useEffect,
   useMemo,
@@ -312,7 +313,7 @@ function DiffViewer({
         </span>
         <div className="titlebar-drag-region" />
         <div className="titlebar-actions">
-          <button
+          <Button variant="unstyled"
             aria-label="最小化"
             className="window-button"
             onClick={() => void window.gitnest.window.minimize()}
@@ -320,8 +321,8 @@ function DiffViewer({
             type="button"
           >
             <Icon name="minimize" size={14} />
-          </button>
-          <button
+          </Button>
+          <Button variant="unstyled"
             aria-label="最大化或还原"
             className="window-button"
             onClick={() =>
@@ -331,8 +332,8 @@ function DiffViewer({
             type="button"
           >
             <Icon name="maximize" size={13} />
-          </button>
-          <button
+          </Button>
+          <Button variant="unstyled"
             aria-label="关闭"
             className="window-button window-button-close"
             onClick={() => void window.gitnest.window.close()}
@@ -340,7 +341,7 @@ function DiffViewer({
             type="button"
           >
             <Icon name="close" size={14} />
-          </button>
+          </Button>
         </div>
       </header>
 
@@ -456,7 +457,7 @@ function InvalidDiffViewer() {
         </div>
         <div className="titlebar-drag-region" />
         <div className="titlebar-actions">
-          <button
+          <Button variant="unstyled"
             aria-label="关闭"
             className="window-button window-button-close"
             onClick={() => void window.gitnest.window.close()}
@@ -464,7 +465,7 @@ function InvalidDiffViewer() {
             type="button"
           >
             <Icon name="close" size={14} />
-          </button>
+          </Button>
         </div>
       </header>
       <DiffViewerState

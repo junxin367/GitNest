@@ -1,3 +1,4 @@
+import { Button } from "./Button";
 import React, {
   forwardRef,
   type InputHTMLAttributes,
@@ -8,9 +9,11 @@ import { Icon } from "./Icon";
 
 export type InputSize = "small" | "medium" | "large";
 export type InputState = "default" | "error";
+export type InputAppearance = "default" | "unstyled";
 
 export interface InputProps
   extends Omit<InputHTMLAttributes<HTMLInputElement>, "size"> {
+  appearance?: InputAppearance;
   clearLabel?: string;
   fieldClassName?: string;
   fullWidth?: boolean;
@@ -28,6 +31,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
   function Input(
     {
       "aria-invalid": ariaInvalid,
+      appearance = "default",
       className,
       clearLabel = "清除内容",
       disabled = false,
@@ -47,6 +51,28 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
     },
     ref
   ) {
+    if (appearance === "unstyled") {
+      return (
+        <input
+          {...props}
+          aria-invalid={
+            ariaInvalid ?? (state === "error" ? true : undefined)
+          }
+          className={
+            mergeClassNames(
+              "gn-input--unstyled",
+              className,
+              inputClassName
+            ) || undefined
+          }
+          disabled={disabled}
+          id={id}
+          ref={ref}
+          type={type}
+        />
+      );
+    }
+
     const hasTrailing = Boolean(trailing || onClear);
 
     return (
@@ -92,7 +118,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             <span className="gn-input__trailing">
               {trailing}
               {onClear ? (
-                <button
+                <Button variant="unstyled"
                   aria-label={clearLabel}
                   className="gn-input__clear"
                   onClick={onClear}
@@ -100,7 +126,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
                   type="button"
                 >
                   <Icon name="close" size={12} />
-                </button>
+                </Button>
               ) : null}
             </span>
           ) : null}

@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import {
   useEffect,
   useRef,
@@ -118,7 +119,7 @@ export function OpenInControl({
   return (
     <>
       <div className="open-in-control" ref={rootRef}>
-        <button
+        <Button variant="unstyled"
           aria-busy={
             preferred
               ? applications.active === preferred.kind
@@ -154,8 +155,8 @@ export function OpenInControl({
                 ? "Detecting"
                 : "Open in"}
           </span>
-        </button>
-        <button
+        </Button>
+        <Button variant="unstyled"
           aria-expanded={menuOpen}
           aria-haspopup="menu"
           aria-label="选择打开方式"
@@ -182,7 +183,7 @@ export function OpenInControl({
             name="chevron"
             size={12}
           />
-        </button>
+        </Button>
       </div>
       {menu}
     </>

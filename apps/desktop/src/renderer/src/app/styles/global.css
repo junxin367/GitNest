@@ -1143,7 +1143,7 @@ p {
   text-align: center;
 }
 
-.sidebar-empty .button {
+.sidebar-empty .gn-button {
   width: auto;
 }
 
@@ -1701,29 +1701,10 @@ p {
   min-width: 0;
 }
 
-.manual-path-form input,
-.entry-settings-form input {
-  min-width: 0;
-  height: var(--control-compact);
-  padding: 0 var(--space-3);
-  color: var(--text);
-  background: var(--surface-2);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-regular);
-}
-
-.manual-path-form input {
+.manual-path-form > div > .manual-path-input,
+.entry-settings-form > div > .entry-settings-input {
   flex: 1 1 auto;
-}
-
-.manual-path-form input:hover,
-.entry-settings-form input:hover {
-  border-color: var(--border);
-}
-
-.manual-path-form input:focus,
-.entry-settings-form input:focus {
-  border-color: var(--accent);
+  min-width: 0;
 }
 
 .manual-path-form small {
@@ -1970,7 +1951,7 @@ p {
   white-space: nowrap;
 }
 
-.repository-hero-actions .button {
+.repository-hero-actions .gn-button {
   width: 100%;
   min-width: 0;
   height: var(--control-compact);
@@ -2767,7 +2748,7 @@ button.repository-status-row:disabled {
   align-items: flex-start;
 }
 
-.workspace-empty-state .button {
+.workspace-empty-state .gn-button {
   margin-top: var(--space-3);
 }
 
@@ -3269,10 +3250,6 @@ button.repository-status-row:disabled {
   margin-top: var(--space-3);
 }
 
-.entry-settings-form input {
-  flex: 1 1 auto;
-}
-
 .entry-order-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3280,7 +3257,7 @@ button.repository-status-row:disabled {
   margin-top: var(--space-2);
 }
 
-.entry-order-actions .button {
+.entry-order-actions .gn-button {
   width: 100%;
 }
 
@@ -3416,16 +3393,18 @@ button.repository-status-row:disabled {
 }
 
 .changes-page {
+  height: 100%;
   min-width: 0;
+  min-height: 0;
 }
 
 .changes-layout {
   display: grid;
   grid-template-columns: clamp(240px, 26%, 300px) minmax(0, 1fr);
   min-width: 0;
-  min-height: 500px;
-  height: calc(100vh - 180px);
-  max-height: 760px;
+  min-height: 0;
+  height: 100%;
+  max-height: none;
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border-soft);
@@ -3801,7 +3780,7 @@ button.repository-status-row:disabled {
   border-color: transparent;
 }
 
-.mutation-file-actions .button {
+.mutation-file-actions .gn-button {
   height: var(--control-compact);
   padding: 0 var(--space-2);
   font-size: var(--font-size-caption);
@@ -3859,7 +3838,7 @@ button.repository-status-row:disabled {
   flex-direction: column;
 }
 
-.changes-file-pane > .commit-composer .commit-form-footer .button {
+.changes-file-pane > .commit-composer .commit-form-footer .gn-button {
   width: 100%;
 }
 
@@ -3886,8 +3865,7 @@ button.repository-status-row:disabled {
   font-weight: var(--font-weight-regular);
 }
 
-.commit-form input,
-.commit-form textarea {
+.commit-form input {
   width: 100%;
   min-width: 0;
   padding: var(--space-2) var(--space-3);
@@ -3902,19 +3880,11 @@ button.repository-status-row:disabled {
   height: var(--control-default);
 }
 
-.commit-form textarea {
-  min-height: 92px;
-  max-height: 260px;
-  line-height: 1.5;
-}
-
-.commit-form input:hover,
-.commit-form textarea:hover {
+.commit-form input:hover {
   border-color: var(--border);
 }
 
-.commit-form input:focus,
-.commit-form textarea:focus {
+.commit-form input:focus {
   border-color: var(--accent);
   outline: 1px solid var(--color-focus);
   outline-offset: 1px;
@@ -3935,7 +3905,7 @@ button.repository-status-row:disabled {
   font-size: var(--font-size-caption);
 }
 
-.commit-form-footer .button {
+.commit-form-footer .gn-button {
   flex: 0 0 auto;
 }
 
@@ -4505,7 +4475,6 @@ button.repository-status-row:disabled {
   min-width: 0;
 }
 
-.branch-management-toolbar input,
 .branch-rename-form input {
   min-width: 0;
   height: var(--control-compact);
@@ -4518,16 +4487,20 @@ button.repository-status-row:disabled {
   font-size: var(--font-size-caption);
 }
 
-.branch-management-toolbar input {
+.branch-management-toolbar .gn-input-field {
   flex: 1 1 auto;
+  min-width: 0;
 }
 
-.branch-management-toolbar input:hover,
+.branch-management-toolbar .gn-input__control {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+}
+
 .branch-rename-form input:hover {
   border-color: var(--border);
 }
 
-.branch-management-toolbar input:focus,
 .branch-rename-form input:focus {
   border-color: var(--accent);
 }
@@ -4812,6 +4785,10 @@ button.repository-status-row:disabled {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-large);
   cursor: pointer;
+  transition:
+    background-color var(--motion-micro),
+    border-color var(--motion-micro),
+    transform var(--motion-micro);
 }
 
 .worktree-summary-card:hover {
@@ -4823,8 +4800,16 @@ button.repository-status-row:disabled {
 }
 
 .worktree-summary-card:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+  outline: 1px solid var(--color-focus);
   outline-offset: 2px;
+}
+
+.worktree-summary-card:not([aria-disabled="true"]):active {
+  transform: translateY(1px);
+}
+
+.worktree-summary-card[aria-disabled="true"] {
+  cursor: wait;
 }
 
 .worktree-summary-card.primary {
@@ -4959,10 +4944,6 @@ button.repository-status-row:disabled {
   flex: 1 1 auto;
 }
 
-.worktree-summary-status.dirty {
-  color: var(--yellow);
-}
-
 .worktree-location-status.missing,
 .worktree-foot-action.prune {
   color: var(--red);
@@ -4974,23 +4955,6 @@ button.repository-status-row:disabled {
   flex: 0 0 auto;
   gap: var(--space-1);
   color: var(--muted);
-}
-
-.worktree-open-button {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  gap: var(--space-1);
-  height: var(--control-compact);
-  padding: 0;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  font-size: var(--font-size-caption);
-}
-
-.worktree-open-button:hover:not(:disabled) {
-  color: var(--accent);
 }
 
 .worktree-inventory-disclosure {
@@ -5073,7 +5037,6 @@ button.repository-status-row:disabled {
   font-size: var(--font-size-caption);
 }
 
-.worktree-create-panel input,
 .worktree-inline-action input {
   min-width: 0;
   height: var(--control-compact);
@@ -5086,14 +5049,17 @@ button.repository-status-row:disabled {
   font-size: var(--font-size-caption);
 }
 
-.worktree-create-panel input:hover,
 .worktree-inline-action input:hover {
   border-color: var(--border);
 }
 
-.worktree-create-panel input:focus,
 .worktree-inline-action input:focus {
   border-color: var(--accent);
+}
+
+.worktree-create-panel .gn-input__control {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
 }
 
 .worktree-path-input {
@@ -5138,7 +5104,7 @@ button.repository-status-row:disabled {
   line-height: 1.5;
 }
 
-.worktree-safety-panel > .button {
+.worktree-safety-panel > .gn-button {
   margin: 0 var(--space-4);
 }
 
@@ -5291,10 +5257,15 @@ button.repository-status-row:disabled {
   gap: var(--space-3);
 }
 
-.account-form-grid label {
+.account-form-grid label,
+.account-form-field {
   display: grid;
   gap: var(--space-1);
   min-width: 0;
+}
+
+.account-form-grid label,
+.account-form-field > .gn-input-field__label {
   color: var(--text-soft);
   font-size: var(--font-size-caption);
   font-weight: var(--font-weight-medium);
@@ -5304,9 +5275,8 @@ button.repository-status-row:disabled {
   grid-column: 1 / -1;
 }
 
-.account-form input,
 .account-form select,
-.account-test-row input {
+.account-test-row select {
   width: 100%;
   min-width: 0;
   height: var(--control-default);
@@ -5317,15 +5287,13 @@ button.repository-status-row:disabled {
   border-radius: var(--radius-regular);
 }
 
-.account-form input:hover,
 .account-form select:hover,
-.account-test-row input:hover {
+.account-test-row select:hover {
   border-color: var(--border);
 }
 
-.account-form input:focus,
 .account-form select:focus,
-.account-test-row input:focus {
+.account-test-row select:focus {
   border-color: var(--accent);
 }
 
@@ -5457,9 +5425,12 @@ button.repository-status-row:disabled {
   font-weight: var(--font-weight-medium);
 }
 
-.account-test-row input {
+.account-test-input {
   flex: 1 1 auto;
-  height: var(--control-compact);
+  min-width: 0;
+}
+
+.account-test-input .gn-input__control {
   font-family: var(--font-mono);
   font-size: var(--font-size-caption);
 }
@@ -6141,19 +6112,8 @@ button.repository-status-row:disabled {
   font-weight: var(--font-weight-semibold);
 }
 
-.workspace-entry-dialog-field input {
+.workspace-entry-dialog-field > .gn-input-field {
   width: 100%;
-  height: var(--control-default);
-  padding: 0 var(--space-3);
-  color: var(--text);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-regular);
-  font-size: var(--font-size-body);
-}
-
-.workspace-entry-dialog-field input:focus {
-  border-color: var(--accent);
 }
 
 .workspace-entry-dialog-field small {
@@ -6425,17 +6385,17 @@ button.repository-status-row:disabled {
   animation: workspace-spin 900ms linear infinite;
 }
 
-.account-form-actions .button.primary,
-.worktree-form-footer .button.primary {
+.account-form-actions .gn-button[data-variant="primary"],
+.worktree-form-footer .gn-button[data-variant="primary"] {
   min-width: 112px;
 }
 
-.commit-form-footer .button.primary,
-.command-dialog-footer .button:last-child {
+.commit-form-footer .gn-button[data-variant="primary"],
+.command-dialog-footer .gn-button:last-child {
   min-width: 144px;
 }
 
-.empty-state .button {
+.empty-state .gn-button {
   margin-top: var(--space-3);
 }
 
@@ -6718,10 +6678,6 @@ button.repository-status-row:disabled {
 
   .repository-health-card > strong {
     font-size: var(--font-size-emphasis);
-  }
-
-  .worktree-grid {
-    grid-template-columns: minmax(0, 1fr);
   }
 
   .worktree-management-grid {

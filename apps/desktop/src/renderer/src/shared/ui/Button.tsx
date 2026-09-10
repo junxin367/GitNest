@@ -11,7 +11,8 @@ export type ButtonVariant =
   | "danger"
   | "toolbar"
   | "quick"
-  | "icon";
+  | "icon"
+  | "unstyled";
 
 export interface ButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -49,6 +50,7 @@ export const Button = forwardRef<
   },
   ref
 ) {
+  const unstyled = variant === "unstyled";
   const resolvedIconOnly = iconOnly || variant === "icon";
   const iconNode = icon ? (
     <span className="gn-button__icon">{icon}</span>
@@ -62,22 +64,30 @@ export const Button = forwardRef<
     <button
       {...props}
       aria-busy={loading || props["aria-busy"]}
-      className={mergeClassNames(
-        "gn-button",
-        loading ? "is-loading" : undefined,
-        className
-      )}
-      data-emphasis={emphasis}
-      data-full-width={fullWidth}
-      data-icon-only={resolvedIconOnly}
-      data-selected={selected || undefined}
-      data-size={size}
-      data-variant={variant}
+      className={
+        unstyled
+          ? className
+          : mergeClassNames(
+              "gn-button",
+              loading ? "is-loading" : undefined,
+              className
+            )
+      }
+      data-emphasis={unstyled ? undefined : emphasis}
+      data-full-width={unstyled ? undefined : fullWidth}
+      data-icon-only={unstyled ? undefined : resolvedIconOnly}
+      data-selected={
+        unstyled ? undefined : selected || undefined
+      }
+      data-size={unstyled ? undefined : size}
+      data-variant={unstyled ? undefined : variant}
       disabled={disabled || loading}
       ref={ref}
       type={type}
     >
-      {iconPosition === "after" ? (
+      {unstyled ? (
+        children
+      ) : iconPosition === "after" ? (
         <>
           {labelNode}
           {iconNode}

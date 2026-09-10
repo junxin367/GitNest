@@ -1,3 +1,4 @@
+import { Button } from "../../shared/ui/Button";
 import {
   useEffect,
   useState,
@@ -12,6 +13,7 @@ import type {
 
 import type { WorktreeCommandController } from "../../features/worktree-command/useWorktreeCommands";
 import { Icon, type IconName } from "../../shared/ui/Icon";
+import { Input } from "../../shared/ui/Input";
 
 interface RepositoryWorktreesProps {
   workspace: WorkspaceDetailsDto;
@@ -124,9 +126,8 @@ export function RepositoryWorktrees({
           </p>
         </div>
         <div className="page-actions">
-          <button
+          <Button size="small"
             aria-busy={commands.active === "prune"}
-            className="button"
             disabled={commands.busy || prunableCount === 0}
             onClick={() =>
               void commands.request({
@@ -138,17 +139,16 @@ export function RepositoryWorktrees({
           >
             <Icon name="eye" />
             Prune 预览
-          </button>
-          <button
+          </Button>
+          <Button size="small" variant="primary"
             aria-controls="worktree-create-panel"
             aria-expanded={createOpen}
-            className="button primary"
             onClick={() => setCreateOpen((open) => !open)}
             type="button"
           >
             <Icon name={createOpen ? "close" : "plus"} />
             {createOpen ? "收起创建" : "新建 Worktree"}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -225,19 +225,20 @@ export function RepositoryWorktrees({
                   目标绝对路径
                 </label>
                 <div className="worktree-path-input">
-                  <input
+                  <Input
                     aria-label="Worktree 目标绝对路径"
                     disabled={commands.busy}
+                    fullWidth
                     id="worktree-create-path"
                     onChange={(event) =>
                       setCreatePath(event.target.value)
                     }
                     placeholder="C:\worktrees\feature-name"
+                    size="small"
                     spellCheck={false}
                     value={createPath}
                   />
-                  <button
-                    className="button"
+                  <Button size="small"
                     disabled={commands.busy}
                     onClick={() => {
                       void commands
@@ -252,45 +253,54 @@ export function RepositoryWorktrees({
                   >
                     <Icon name="folder" />
                     选择
-                  </button>
+                  </Button>
                 </div>
                 <small>
                   可选择一个空目录，或选择父目录后在路径末尾补充新目录名。
                 </small>
               </div>
               <div className="worktree-create-fields">
-                <label className="field">
-                  <span>分支（可选）</span>
-                  <input
+                <div className="field">
+                  <label htmlFor="worktree-create-branch">
+                    分支（可选）
+                  </label>
+                  <Input
                     disabled={commands.busy}
+                    fullWidth
+                    id="worktree-create-branch"
                     onChange={(event) =>
                       setCreateBranch(event.target.value)
                     }
                     placeholder="feature/worktree"
+                    size="small"
                     spellCheck={false}
                     value={createBranch}
                   />
-                </label>
-                <label className="field">
-                  <span>起点（可选）</span>
-                  <input
+                </div>
+                <div className="field">
+                  <label htmlFor="worktree-create-start-point">
+                    起点（可选）
+                  </label>
+                  <Input
                     disabled={commands.busy}
+                    fullWidth
+                    id="worktree-create-start-point"
                     onChange={(event) =>
                       setCreateStartPoint(event.target.value)
                     }
                     placeholder="HEAD 或提交"
+                    size="small"
                     spellCheck={false}
                     value={createStartPoint}
                   />
-                </label>
+                </div>
               </div>
               <div className="worktree-form-footer">
                 <span>
                   目标必须不存在或为空，且不能与已有 Worktree 重叠。
                 </span>
-                <button
+                <Button size="small" variant="primary"
                   aria-busy={commands.active === "create"}
-                  className="button primary"
                   disabled={commands.busy || !createPath.trim()}
                   type="submit"
                 >
@@ -304,7 +314,7 @@ export function RepositoryWorktrees({
                   {commands.active === "create"
                     ? "预检中…"
                     : "预检并创建"}
-                </button>
+                </Button>
               </div>
             </form>
           </article>
@@ -322,9 +332,8 @@ export function RepositoryWorktrees({
               <li>Move/Remove 不提供强制模式。</li>
               <li>Prune 只清理失效 Git 登记。</li>
             </ul>
-            <button
+            <Button size="small"
               aria-busy={commands.active === "prune"}
-              className="button"
               disabled={commands.busy || prunableCount === 0}
               onClick={() =>
                 void commands.request({
@@ -336,7 +345,7 @@ export function RepositoryWorktrees({
             >
               <Icon name="refresh" />
               预检 Prune ({prunableCount})
-            </button>
+            </Button>
           </article>
         </section>
       )}
@@ -460,9 +469,30 @@ function WorktreeSummaryCard({
       ? `${changes} 项变更`
       : "工作区干净"
     : "状态待刷新";
+  const openDirectory = () => {
+    if (!directoryOpening) {
+      onOpenDirectory(worktree.id);
+    }
+  };
 
   return (
-    <article className="worktree-card worktree-summary-card primary">
+    <article
+      aria-busy={directoryOpening || undefined}
+      aria-disabled={directoryOpening || undefined}
+      aria-label={`打开当前工作目录，${
+        worktree.branch ?? "detached"
+      }，${status}，${worktree.path}`}
+      className="worktree-card worktree-summary-card primary"
+      onClick={openDirectory}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openDirectory();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+    >
       <div className="worktree-card-head">
         <span className="worktree-symbol">
           <Icon name="worktree" size={20} />
@@ -494,15 +524,10 @@ function WorktreeSummaryCard({
           {status}
         </span>
         <span className="spacer" />
-        <button
-          className="worktree-open-button"
-          disabled={directoryOpening}
-          onClick={() => onOpenDirectory(worktree.id)}
-          type="button"
-        >
-          <Icon name="folder" size={12} />
+        <span className="worktree-foot-action">
+          <Icon name="external" size={12} />
           打开
-        </button>
+        </span>
       </div>
     </article>
   );
@@ -593,7 +618,8 @@ function WorktreeCard({
       <div className="worktree-card-actions">
         {linked && !worktree.isLocked && !worktree.isPrunable && (
           <div className="worktree-inline-action">
-            <input
+            <Input
+              appearance="unstyled"
               aria-label={`${worktree.name} 锁定原因`}
               disabled={commands.busy}
               maxLength={512}
@@ -603,7 +629,7 @@ function WorktreeCard({
               placeholder="锁定原因（可选）"
               value={lockReason}
             />
-            <button
+            <Button variant="unstyled"
               className="mini-action"
               disabled={commands.busy}
               onClick={() =>
@@ -618,13 +644,12 @@ function WorktreeCard({
               type="button"
             >
               锁定
-            </button>
+            </Button>
           </div>
         )}
 
         {linked && worktree.isLocked && (
-          <button
-            className="button"
+          <Button size="small"
             disabled={commands.busy}
             onClick={() =>
               void commands.request({
@@ -635,12 +660,13 @@ function WorktreeCard({
             type="button"
           >
             解锁 Worktree
-          </button>
+          </Button>
         )}
 
         {mutable && (
           <div className="worktree-inline-action move">
-            <input
+            <Input
+              appearance="unstyled"
               aria-label={`${worktree.name} 移动目标`}
               disabled={commands.busy}
               onChange={(event) =>
@@ -650,7 +676,7 @@ function WorktreeCard({
               spellCheck={false}
               value={moveDestination}
             />
-            <button
+            <Button variant="unstyled"
               aria-label={`选择 ${worktree.name} 移动父目录`}
               className="mini-action"
               disabled={commands.busy}
@@ -671,8 +697,8 @@ function WorktreeCard({
               type="button"
             >
               选择
-            </button>
-            <button
+            </Button>
+            <Button variant="unstyled"
               className="mini-action"
               disabled={
                 commands.busy || !moveDestination.trim()
@@ -687,13 +713,12 @@ function WorktreeCard({
               type="button"
             >
               移动
-            </button>
+            </Button>
           </div>
         )}
 
         <div className="worktree-button-row">
-          <button
-            className="button"
+          <Button size="small"
             disabled={commands.busy || worktree.isBare}
             onClick={() =>
               void commands.request({
@@ -704,10 +729,9 @@ function WorktreeCard({
             type="button"
           >
             修复登记
-          </button>
+          </Button>
           {linked && (
-            <button
-              className="button danger"
+            <Button size="small" emphasis="strong" variant="danger"
               disabled={commands.busy || !removable}
               onClick={() =>
                 void commands.request({
@@ -727,7 +751,7 @@ function WorktreeCard({
               type="button"
             >
               移除
-            </button>
+            </Button>
           )}
         </div>
       </div>
