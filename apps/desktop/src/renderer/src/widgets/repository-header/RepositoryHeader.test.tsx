@@ -59,18 +59,17 @@ describe("RepositoryHeader", () => {
           view="workspace"
           workspace={workspace}
           workspaceCommandBusy={false}
-          workspaceFetchCount={5}
-          workspacePullCount={2}
+          workspaceRepositoryCount={2}
           workspaceTab="overview"
           onFetch={vi.fn()}
           onFetchWorkspace={onFetchWorkspace}
-          onForcePush={vi.fn()}
           onOpenOperations={vi.fn()}
           onOpenRepository={vi.fn()}
           onOpenSettings={vi.fn()}
           onOpenWorkspace={vi.fn()}
           onPull={vi.fn()}
           onPullWorkspace={onPullWorkspace}
+          onPushWorkspace={vi.fn()}
           onPush={vi.fn()}
           onRefresh={vi.fn()}
           onRepositoryTabChange={vi.fn()}
@@ -82,15 +81,16 @@ describe("RepositoryHeader", () => {
     });
 
     const pull = container.querySelector<HTMLButtonElement>(
-      'button[title="批量 Pull 2 个可安全快进的仓库"]'
+      'button[title="批量 Pull Workspace 中的全部 2 个仓库"]'
     );
     const fetch = container.querySelector<HTMLButtonElement>(
-      'button[title="Fetch Workspace 中的全部 5 个仓库"]'
+      'button[title="Fetch Workspace 中的全部 2 个仓库"]'
     );
 
     expect(pull?.textContent).toContain("Pull");
     expect(pull?.textContent).toContain("2");
-    expect(fetch?.textContent).toContain("Fetch 全部");
+    expect(fetch?.textContent).toContain("Fetch");
+    expect(fetch?.textContent).not.toContain("Fetch 全部");
     expect(
       container.querySelector(".toolbar-divider")
     ).not.toBeNull();
@@ -103,7 +103,7 @@ describe("RepositoryHeader", () => {
     expect(onFetchWorkspace).toHaveBeenCalledOnce();
   });
 
-  it("hides repository Push actions when the Diff workspace config disables them", () => {
+  it("shows repository actions without a force-push control", () => {
     act(() => {
       root.render(
         <RepositoryHeader
@@ -114,23 +114,21 @@ describe("RepositoryHeader", () => {
           inspectorOpen={false}
           refreshing={false}
           repositoryTab="changes"
-          showPushActions={false}
           snapshots={[]}
           view="repository"
           workspace={workspace}
           workspaceCommandBusy={false}
-          workspaceFetchCount={0}
-          workspacePullCount={0}
+          workspaceRepositoryCount={0}
           workspaceTab="overview"
           onFetch={vi.fn()}
           onFetchWorkspace={vi.fn()}
-          onForcePush={vi.fn()}
           onOpenOperations={vi.fn()}
           onOpenRepository={vi.fn()}
           onOpenSettings={vi.fn()}
           onOpenWorkspace={vi.fn()}
           onPull={vi.fn()}
           onPullWorkspace={vi.fn()}
+          onPushWorkspace={vi.fn()}
           onPush={vi.fn()}
           onRefresh={vi.fn()}
           onRepositoryTabChange={vi.fn()}
@@ -141,10 +139,11 @@ describe("RepositoryHeader", () => {
       );
     });
 
-    expect(container.textContent).not.toContain("Push");
     expect(
-      container.querySelector('[aria-label="Force with lease"]')
-    ).toBeNull();
+      container.querySelectorAll(
+        ".repository-actions .toolbar-button"
+      )
+    ).toHaveLength(4);
   });
 });
 

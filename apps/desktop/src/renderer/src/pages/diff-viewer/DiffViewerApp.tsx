@@ -17,6 +17,7 @@ import {
   canUnstageChange,
   useRepositoryMutations
 } from "../../entities/repository/useRepositoryMutations";
+import { useAppSettings } from "../../features/settings/useAppSettings";
 import {
   buildDiffViewerFiles,
   type DiffViewerFile,
@@ -52,6 +53,7 @@ function DiffViewer({
 }: {
   request: OpenDiffViewerRequest;
 }) {
+  const appSettings = useAppSettings();
   const initialFile = useMemo<DiffViewerFile>(() => {
     const change: ChangedPathDto = {
       path: request.path,
@@ -131,6 +133,11 @@ function DiffViewer({
       files
     ]
   );
+
+  useEffect(() => {
+    document.documentElement.dataset.theme =
+      appSettings.settings.appearance.theme;
+  }, [appSettings.settings.appearance.theme]);
 
   useEffect(() => {
     document.title = selectedFile
@@ -356,10 +363,17 @@ function DiffViewer({
         changesLoading={changesLoading}
         className="diff-viewer-workspace"
         configuration={standaloneDiffWorkspaceConfiguration}
+        fileView={appSettings.settings.diff.fileView}
         files={workspaceFiles}
         mutationBusy={mutations.active !== null}
         onRefresh={() =>
           setRefreshVersion((version) => version + 1)
+        }
+        onFileViewChange={(fileView) =>
+          void appSettings.update(
+            { diff: { fileView } },
+            { silent: true }
+          )
         }
         onSelectedFileChange={(file) =>
           setSelectedKey(file.key)
@@ -376,10 +390,37 @@ function DiffViewer({
           content: diff?.content,
           deletions: diff?.deletions,
           onPathCopyStatusChange: setPathCopyStatus,
+          onLayoutPreferenceChange: (layout) =>
+            void appSettings.update(
+              { diff: { layout } },
+              { silent: true }
+            ),
+          onWrapPreferenceChange: (wrap) =>
+            void appSettings.update(
+              { diff: { wrap } },
+              { silent: true }
+            ),
+          preferredLayout: appSettings.settings.diff.layout,
+          preferredWrap: appSettings.settings.diff.wrap,
           state: panelState,
           truncated: diff?.truncated
         }}
         selectedFileKey={selectedKey}
+        treePreference={{
+          initiallyCollapsed:
+            appSettings.settings.diff
+              .treeDirectoriesCollapsed,
+          scopeKey: `${request.target.repositoryId}:${request.target.worktreeId}`,
+          onCollapsedPreferenceChange: (collapsed) =>
+            void appSettings.update(
+              {
+                diff: {
+                  treeDirectoriesCollapsed: collapsed
+                }
+              },
+              { silent: true }
+            )
+        }}
         statusbar={
           <>
             <span>{language}</span>

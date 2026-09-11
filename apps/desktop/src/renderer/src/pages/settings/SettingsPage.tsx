@@ -28,13 +28,15 @@ interface SettingsPageProps {
   gitEnvironment: GitEnvironmentDto | null;
   terminalProfiles: ExternalTerminalProfileDto[];
   accounts: AccountController;
+  embedded?: boolean;
 }
 
 export function SettingsPage({
   workspace,
   gitEnvironment,
   terminalProfiles,
-  accounts
+  accounts,
+  embedded = false
 }: SettingsPageProps) {
   const [provider, setProvider] =
     useState<AccountProviderDto>("github");
@@ -82,8 +84,14 @@ export function SettingsPage({
   };
 
   return (
-    <div className="page-scroll settings-page">
-      <section className="page-heading">
+    <div
+      className={
+        embedded
+          ? "settings-page account-settings-embedded"
+          : "page-scroll settings-page"
+      }
+    >
+      {!embedded && <section className="page-heading">
         <div>
           <span className="eyebrow">安全与工具</span>
           <h1>设置</h1>
@@ -103,7 +111,7 @@ export function SettingsPage({
             重新读取
           </Button>
         </div>
-      </section>
+      </section>}
 
       <ToastViewport>
         {(accounts.notice ||
@@ -423,7 +431,7 @@ export function SettingsPage({
         )}
       </article>
 
-      <article className="panel terminal-settings-panel">
+      {!embedded && <article className="panel terminal-settings-panel">
         <header className="panel-header">
           <div className="panel-title">
             <Icon name="terminal" />
@@ -451,7 +459,7 @@ export function SettingsPage({
             </div>
           )}
         </div>
-      </article>
+      </article>}
 
       {accounts.removalImpact && (
         <AccountRemovalDialog

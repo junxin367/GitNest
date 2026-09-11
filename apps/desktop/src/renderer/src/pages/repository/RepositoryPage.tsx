@@ -22,6 +22,7 @@ import type { RepositoryTab } from "../../app/navigation";
 import { useRepositoryDetails } from "../../entities/repository/useRepositoryDetails";
 import type { ExternalApplicationController } from "../../features/external-application/useExternalApplications";
 import type { RepositoryCommandController } from "../../features/repository-command/useRepositoryCommands";
+import type { AppSettingsController } from "../../features/settings/useAppSettings";
 import type { ExternalTerminalController } from "../../features/external-terminal/useExternalTerminals";
 import { WorktreeCommandDialog } from "../../features/worktree-command/WorktreeCommandDialog";
 import { useWorktreeCommands } from "../../features/worktree-command/useWorktreeCommands";
@@ -51,11 +52,6 @@ import {
   MenuPopover
 } from "../../shared/ui/Menu";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
-import {
-  getRendererPreferenceStorage,
-  readTreeDirectoriesCollapsedPreference,
-  writeTreeDirectoriesCollapsedPreference
-} from "./changeTreePreferences";
 import { RepositoryWorktrees } from "./RepositoryWorktrees";
 import { ApplicationIcon } from "../../widgets/repository-header/OpenInControl";
 import {
@@ -76,6 +72,7 @@ interface RepositoryPageProps {
   commands: RepositoryCommandController;
   terminals: ExternalTerminalController;
   externalApplications: ExternalApplicationController;
+  appSettings: AppSettingsController;
   onOpenTab(tab: RepositoryTab): void;
   onCommitSelectionChange?(
     commit: RepositoryCommitDto["commit"] | null
@@ -102,6 +99,7 @@ export function RepositoryPage({
   commands,
   terminals,
   externalApplications,
+  appSettings,
   onOpenTab,
   onCommitSelectionChange
 }: RepositoryPageProps) {
@@ -164,9 +162,17 @@ export function RepositoryPage({
     message: string;
     tone: "success" | "error";
   } | null>(null);
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiFeedback, setAiFeedback] = useState<{
+    title: string;
+    message: string;
+    tone: "success" | "error";
+  } | null>(null);
   const targetKey = target
     ? `${target.repositoryId}:${target.worktreeId}`
     : "";
+  const targetKeyRef = useRef(targetKey);
+  targetKeyRef.current = targetKey;
   const handledCommandCompletion = useRef(
     commands.completionVersion
   );
@@ -179,9 +185,60 @@ export function RepositoryPage({
     terminals.clearFeedback();
     setDirectoryError(null);
     setCopyFeedback(null);
+    setAiGenerating(false);
+    setAiFeedback(null);
     handledCommandCompletion.current =
       commands.completionVersion;
   }, [mutations.clearFeedback, targetKey]);
+
+  const generateAiCommitMessage = useCallback(async () => {
+    if (!target || aiGenerating) {
+      return;
+    }
+    const requestTargetKey = targetKey;
+    setAiGenerating(true);
+    setAiFeedback(null);
+    try {
+      const result =
+        await window.gitnest.ai.generateCommitMessage({
+          target
+        });
+      if (targetKeyRef.current !== requestTargetKey) {
+        return;
+      }
+      if (!result.ok) {
+        setAiFeedback({
+          title: "AI 提交信息未生成",
+          message: formatAiError(result.error),
+          tone: "error"
+        });
+        return;
+      }
+      setCommitMessage(result.value.message);
+      setAiFeedback({
+        title: "AI 提交信息已生成",
+        message: result.value.truncated
+          ? `已根据 ${result.value.stagedFiles} 个暂存文件生成；输入 Diff 过大，已按上限截断。`
+          : `已根据 ${result.value.stagedFiles} 个暂存文件填入提交信息。`,
+        tone: "success"
+      });
+    } catch (reason) {
+      if (targetKeyRef.current === requestTargetKey) {
+        setAiFeedback({
+          title: "AI 提交信息未生成",
+          message:
+            reason instanceof Error
+              ? reason.message
+              : "AI 请求失败。",
+          tone: "error"
+        });
+      }
+    } finally {
+      if (targetKeyRef.current === requestTargetKey) {
+        setAiGenerating(false);
+      }
+    }
+  }, [aiGenerating, target, targetKey]);
 
   const copyCommitId = useCallback(async (hash: string) => {
     try {
@@ -450,6 +507,21 @@ export function RepositoryPage({
             tone={copyFeedback.tone}
           />
         )}
+        {aiFeedback && (
+          <Toast
+            closeLabel="关闭 AI 提示"
+            icon={
+              aiFeedback.tone === "error"
+                ? "warning"
+                : "sparkle"
+            }
+            key="ai-commit-feedback"
+            message={aiFeedback.message}
+            onClose={() => setAiFeedback(null)}
+            title={aiFeedback.title}
+            tone={aiFeedback.tone}
+          />
+        )}
       </ToastViewport>
 
       {tab === "overview" && (
@@ -470,11 +542,14 @@ export function RepositoryPage({
       {tab === "changes" && (
         <RepositoryChanges
           commands={commands}
+          appSettings={appSettings}
+          aiGenerating={aiGenerating}
           commitMessage={commitMessage}
           controller={details}
           externalApplications={externalApplications}
           mutations={mutations}
           onCommitMessageChange={setCommitMessage}
+          onGenerateAi={generateAiCommitMessage}
           onCommitted={() => {
             setCommitMessage("");
           }}
@@ -817,6 +892,8 @@ function RepositoryOverview({
 }
 
 function RepositoryChanges({
+  appSettings,
+  aiGenerating,
   commands,
   controller,
   mutations,
@@ -824,11 +901,14 @@ function RepositoryChanges({
   commitMessage,
   pushAfterCommit,
   onCommitMessageChange,
+  onGenerateAi,
   onPushAfterCommitChange,
   onCommitted,
   workspaceId,
   target
 }: {
+  appSettings: AppSettingsController;
+  aiGenerating: boolean;
   commands: RepositoryCommandController;
   controller: ReturnType<typeof useRepositoryDetails>;
   mutations: ReturnType<typeof useRepositoryMutations>;
@@ -836,6 +916,7 @@ function RepositoryChanges({
   commitMessage: string;
   pushAfterCommit: boolean;
   onCommitMessageChange(value: string): void;
+  onGenerateAi(): void | Promise<void>;
   onPushAfterCommitChange(value: boolean): void;
   onCommitted(): void;
   workspaceId: string | undefined;
@@ -895,15 +976,6 @@ function RepositoryChanges({
     useRef<HTMLDivElement>(null);
   const changeFileOpenInCloseTimerRef =
     useRef<number | null>(null);
-  const [
-    treeDirectoriesCollapsedPreference,
-    setTreeDirectoriesCollapsedPreference
-  ] = useState(() =>
-    readTreeDirectoriesCollapsedPreference(
-      getRendererPreferenceStorage(),
-      workspaceId
-    )
-  );
   const treeScopeKey = controller.changes
     ? `${workspaceId ?? ""}\u0001${controller.changes.target.repositoryId}:${controller.changes.target.worktreeId}`
     : "";
@@ -1006,15 +1078,6 @@ function RepositoryChanges({
     },
     []
   );
-
-  useEffect(() => {
-    setTreeDirectoriesCollapsedPreference(
-      readTreeDirectoriesCollapsedPreference(
-        getRendererPreferenceStorage(),
-        workspaceId
-      )
-    );
-  }, [workspaceId]);
 
   useEffect(() => {
     if (!changeFileContextMenu) {
@@ -1158,6 +1221,23 @@ function RepositoryChanges({
         }
         changesLoading={controller.loading.changes}
         commit={{
+          ai: {
+            enabled: appSettings.settings.ai.enabled,
+            busy: aiGenerating,
+            disabled:
+              !appSettings.settings.ai.apiKeyConfigured ||
+              !appSettings.settings.ai.apiUrl ||
+              !appSettings.settings.ai.model ||
+              !appSettings.settings.ai.prompt,
+            title:
+              !appSettings.settings.ai.apiKeyConfigured ||
+              !appSettings.settings.ai.apiUrl ||
+              !appSettings.settings.ai.model ||
+              !appSettings.settings.ai.prompt
+                ? "请先在设置中完成 AI 提交信息配置"
+                : "根据当前仓库的已暂存 Diff 生成提交信息",
+            onGenerate: onGenerateAi
+          },
           busy: mutations.active !== null || commands.busy,
           conflicted:
             controller.changes?.snapshot.conflicted ?? 0,
@@ -1192,9 +1272,16 @@ function RepositoryChanges({
           }
         }}
         configuration={repositoryDiffWorkspaceConfiguration}
+        fileView={appSettings.settings.diff.fileView}
         files={workspaceFiles}
         mutationBusy={mutations.active !== null}
         onFileContextMenu={openChangeFileContextMenu}
+        onFileViewChange={(fileView) =>
+          void appSettings.update(
+            { diff: { fileView } },
+            { silent: true }
+          )
+        }
         onSelectedFileChange={(file) =>
           void controller.selectChange(file.change, file.mode)
         }
@@ -1223,21 +1310,35 @@ function RepositoryChanges({
           maxLines: 4_000,
           state: diffPanelState,
           statsAvailable: Boolean(selectedDiff),
-          truncated: selectedDiff?.truncated
+          truncated: selectedDiff?.truncated,
+          preferredLayout: appSettings.settings.diff.layout,
+          preferredWrap: appSettings.settings.diff.wrap,
+          onLayoutPreferenceChange: (layout) =>
+            void appSettings.update(
+              { diff: { layout } },
+              { silent: true }
+            ),
+          onWrapPreferenceChange: (wrap) =>
+            void appSettings.update(
+              { diff: { wrap } },
+              { silent: true }
+            )
         }}
         selectedFileKey={selectedFileKey}
         treePreference={{
           initiallyCollapsed:
-            treeDirectoriesCollapsedPreference,
+            appSettings.settings.diff
+              .treeDirectoriesCollapsed,
           scopeKey: treeScopeKey,
-          onCollapsedPreferenceChange: (collapsed) => {
-            setTreeDirectoriesCollapsedPreference(collapsed);
-            writeTreeDirectoriesCollapsedPreference(
-              getRendererPreferenceStorage(),
-              workspaceId,
-              collapsed
-            );
-          }
+          onCollapsedPreferenceChange: (collapsed) =>
+            void appSettings.update(
+              {
+                diff: {
+                  treeDirectoriesCollapsed: collapsed
+                }
+              },
+              { silent: true }
+            )
         }}
       />
       {changeFileContextMenu && (
@@ -1434,101 +1535,103 @@ function RepositoryHistory({
           </Button>
         </header>
         <div className="commit-list">
-          {visibleCommits.map((item, index) => (
-            <div
-              aria-current={
-                controller.historyDetailOpen &&
-                item.hash === controller.selectedCommitHash
-                  ? "true"
-                  : undefined
-              }
-              className={`commit-row${
-                controller.historyDetailOpen &&
-                item.hash === controller.selectedCommitHash
-                  ? " selected"
-                  : ""
-              }`}
-              key={item.hash}
-              onClick={() =>
-                void controller.selectCommit(item.hash)
-              }
-              onKeyDown={(event) => {
-                if (
-                  event.key !== "Enter" &&
-                  event.key !== " "
-                ) {
-                  return;
+          {visibleCommits.map((item, index) => {
+            const displayRef = getPrimaryCommitRef(
+              item.refs,
+              branch
+            );
+
+            return (
+              <div
+                aria-current={
+                  controller.historyDetailOpen &&
+                  item.hash === controller.selectedCommitHash
+                    ? "true"
+                    : undefined
                 }
-                event.preventDefault();
-                void controller.selectCommit(item.hash);
-              }}
-              role="button"
-              tabIndex={0}
-            >
-              <span
-                className={`commit-graph ${
-                  index === 2 ? "branch " : ""
-                }lane-${index % 3}`}
-              >
-                <span className="commit-node" />
-              </span>
-              <span className="commit-message">
-                <strong className="commit-subject">
-                  {item.subject}
-                </strong>
-                <span className="commit-meta">
-                  {(item.refs ?? []).length > 0
-                    ? (item.refs ?? []).map((ref) => (
-                        <span
-                          className={`ref-label${
-                            ref.startsWith("origin")
-                              ? " remote"
-                              : ""
-                          }`}
-                          key={ref}
-                        >
-                          {ref}
-                        </span>
-                      ))
-                    : (
-                        <span className="ref-label">
-                          {branch ?? "detached"}
-                        </span>
-                      )}
-                </span>
-              </span>
-              <time
-                className="commit-time"
-                dateTime={item.authoredAt}
-              >
-                {formatCommitTimestamp(item.authoredAt)}
-              </time>
-              <span className="commit-author">
-                {item.authorName}
-              </span>
-                <code
-                  className="commit-id"
-                  aria-label={`复制 Commit ID ${item.hash}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void onCopyCommitId(item.hash);
-                }}
+                className={`commit-row${
+                  controller.historyDetailOpen &&
+                  item.hash === controller.selectedCommitHash
+                    ? " selected"
+                    : ""
+                }`}
+                key={item.hash}
+                onClick={() =>
+                  void controller.selectCommit(item.hash)
+                }
                 onKeyDown={(event) => {
-                  if (event.key !== "Enter" && event.key !== " ") {
+                  if (
+                    event.key !== "Enter" &&
+                    event.key !== " "
+                  ) {
                     return;
                   }
                   event.preventDefault();
-                  event.stopPropagation();
-                  void onCopyCommitId(item.hash);
+                  void controller.selectCommit(item.hash);
                 }}
                 role="button"
                 tabIndex={0}
-                title={`点击复制 Commit ID ${item.hash}`}
               >
-                {item.shortHash}
-              </code>
-            </div>
-          ))}
+                <span
+                  className={`commit-graph ${
+                    index === 2 ? "branch " : ""
+                  }lane-${index % 3}`}
+                >
+                  <span className="commit-node" />
+                </span>
+                <span className="commit-message">
+                  <strong className="commit-subject">
+                    {item.subject}
+                  </strong>
+                  <span className="commit-meta">
+                    <span
+                      className={`ref-label${
+                        displayRef.startsWith("origin/")
+                          ? " remote"
+                          : ""
+                      }`}
+                      title={displayRef}
+                    >
+                      {displayRef}
+                    </span>
+                  </span>
+                </span>
+                <time
+                  className="commit-time"
+                  dateTime={item.authoredAt}
+                >
+                  {formatCommitTimestamp(item.authoredAt)}
+                </time>
+                <span className="commit-author">
+                  {item.authorName}
+                </span>
+                <code
+                  className="commit-id"
+                  aria-label={`复制 Commit ID ${item.hash}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void onCopyCommitId(item.hash);
+                  }}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key !== "Enter" &&
+                      event.key !== " "
+                    ) {
+                      return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void onCopyCommitId(item.hash);
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  title={`点击复制 Commit ID ${item.hash}`}
+                >
+                  {item.shortHash}
+                </code>
+              </div>
+            );
+          })}
           {visibleCommits.length === 0 && (
             <div className="history-filter-empty">
               <Icon name="search" size={18} />
@@ -1579,11 +1682,19 @@ function RepositoryHistory({
                 </span>
               </div>
               {selected.refs.length > 0 && (
-                <div className="commit-refs">
-                  {selected.refs.map((ref) => (
-                    <span key={ref}>{ref}</span>
-                  ))}
-                </div>
+                <details
+                  className="commit-refs commit-refs-collapsible"
+                  key={selected.hash}
+                >
+                  <summary>
+                    分支（{selected.refs.length}）
+                  </summary>
+                  <div className="commit-ref-list">
+                    {selected.refs.map((ref) => (
+                      <span key={ref}>{ref}</span>
+                    ))}
+                  </div>
+                </details>
               )}
               <p className="selected-commit-body">
                 {selected.body}
@@ -1599,6 +1710,24 @@ function RepositoryHistory({
       )}
     </section>
   );
+}
+
+function getPrimaryCommitRef(
+  refs: string[] | undefined,
+  branch: string | undefined
+): string {
+  const ref =
+    (refs ?? []).find(
+      (value) =>
+        !value.startsWith("origin/") &&
+        !value.startsWith("tag:")
+    ) ??
+    (refs ?? []).find((value) => !value.startsWith("tag:")) ??
+    (refs ?? [])[0] ??
+    branch ??
+    "detached";
+
+  return ref.replace(/^HEAD -> /, "");
 }
 
 function RepositoryBranches({
@@ -2247,6 +2376,21 @@ function formatDirectoryOpenError(
   }
 
   return "无法打开当前工作目录，请检查目录是否存在且有访问权限。";
+}
+
+function formatAiError(error: GitReadErrorDto): string {
+  if (error.code === "AUTHENTICATION_FAILED") {
+    return "AI 认证失败，请检查 API Key。";
+  }
+  if (error.code === "COMMAND_TIMEOUT") {
+    return "AI 请求超时，请检查服务地址或网络连接。";
+  }
+  if (error.code === "INVALID_REQUEST") {
+    return error.message.includes("staged")
+      ? "当前仓库没有可用于生成的已暂存变更。"
+      : error.message;
+  }
+  return error.message;
 }
 
 function formatDirectoryOpenFailure(reason: unknown): string {

@@ -11,6 +11,11 @@ import {
   vi
 } from "vitest";
 
+import {
+  createDefaultAppSettings,
+  type UpdateAppSettingsRequest
+} from "@gitnest/contracts";
+
 import { DiffViewerApp } from "./DiffViewerApp";
 
 (globalThis as typeof globalThis & {
@@ -116,7 +121,10 @@ describe("DiffViewerApp", () => {
     ).not.toBeNull();
 
     const splitButton = findButton(container, "并排");
-    act(() => splitButton.click());
+    await act(async () => {
+      splitButton.click();
+      await Promise.resolve();
+    });
     expect(splitButton.dataset.selected).toBe("true");
     expect(
       container.querySelector(".diff-viewer-split-panes")
@@ -176,7 +184,10 @@ describe("DiffViewerApp", () => {
     expect(splitScrollbar?.scrollLeft).toBe(52);
 
     const wrapButton = findButton(container, "自动换行");
-    act(() => wrapButton.click());
+    await act(async () => {
+      wrapButton.click();
+      await Promise.resolve();
+    });
     expect(
       container.querySelector(".diff-viewer-split-table")
     ).not.toBeNull();
@@ -189,8 +200,12 @@ describe("DiffViewerApp", () => {
         ?.classList.contains("wrap")
     ).toBe(true);
 
-    act(() => wrapButton.click());
-    act(() => unifiedButton.click());
+    await act(async () => {
+      wrapButton.click();
+      await Promise.resolve();
+      unifiedButton.click();
+      await Promise.resolve();
+    });
     expect(unifiedButton.dataset.selected).toBe("true");
     expect(
       container.querySelector(".diff-viewer-unified")
@@ -230,7 +245,10 @@ describe("DiffViewerApp", () => {
     );
     act(() => viewMenuButton?.click());
     const treeViewButton = findButton(document.body, "以树形式查看");
-    act(() => treeViewButton.click());
+    await act(async () => {
+      treeViewButton.click();
+      await Promise.resolve();
+    });
 
     const directoryLabels = Array.from(
       container.querySelectorAll(
@@ -260,6 +278,7 @@ function findButton(
 }
 
 function createBridge(): typeof window.gitnest {
+  const appSettings = createDefaultAppSettings();
   const changes = [
     {
       path: "src/main/java/App.java",
@@ -288,6 +307,61 @@ function createBridge(): typeof window.gitnest {
   ];
 
   return {
+    settings: {
+      get: vi.fn().mockResolvedValue({
+        ok: true,
+        value: {
+          settings: structuredClone(appSettings),
+          storageState: "persisted"
+        }
+      }),
+      update: vi.fn(
+        async (patch: UpdateAppSettingsRequest) => {
+          if (patch.general) {
+            Object.assign(appSettings.general, patch.general);
+          }
+          if (patch.appearance) {
+            Object.assign(
+              appSettings.appearance,
+              patch.appearance
+            );
+          }
+          if (patch.diff) {
+            Object.assign(appSettings.diff, patch.diff);
+          }
+          if (patch.git) {
+            Object.assign(appSettings.git, patch.git);
+          }
+          if (patch.ai) {
+            const { apiKey, ...publicAiPatch } = patch.ai;
+            Object.assign(appSettings.ai, publicAiPatch);
+            if (apiKey) {
+              appSettings.ai.apiKeyConfigured = true;
+            }
+          }
+          if (patch.navigation) {
+            Object.assign(
+              appSettings.navigation,
+              patch.navigation
+            );
+          }
+          return {
+            ok: true as const,
+            value: structuredClone(appSettings)
+          };
+        }
+      ),
+      clearAiApiKey: vi.fn().mockResolvedValue({
+        ok: true,
+        value: {
+          ...structuredClone(appSettings),
+          ai: {
+            ...appSettings.ai,
+            apiKeyConfigured: false
+          }
+        }
+      })
+    },
     repository: {
       getChanges: vi.fn().mockResolvedValue({
         ok: true,

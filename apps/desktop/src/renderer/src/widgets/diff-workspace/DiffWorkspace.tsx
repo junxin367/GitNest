@@ -3,6 +3,8 @@ import type {
   ReactNode
 } from "react";
 
+import type { DiffFileViewDto } from "@gitnest/contracts";
+
 import type { DiffViewerFile } from "../../shared/model/diffViewModel";
 import { Button } from "../../shared/ui/Button";
 import { Icon } from "../../shared/ui/Icon";
@@ -67,6 +69,10 @@ export interface DiffWorkspaceProps {
   commit?: DiffWorkspaceCommit | undefined;
   statusbar?: ReactNode | undefined;
   treePreference?: DiffWorkspaceTreePreference | undefined;
+  fileView?: DiffFileViewDto | undefined;
+  onFileViewChange?:
+    | ((value: DiffFileViewDto) => void)
+    | undefined;
   className?: string | undefined;
 }
 
@@ -89,6 +95,8 @@ export function DiffWorkspace({
   commit,
   statusbar,
   treePreference,
+  fileView,
+  onFileViewChange,
   className
 }: DiffWorkspaceProps) {
   const selectedFile =
@@ -156,6 +164,8 @@ export function DiffWorkspace({
           onUnstageFile={onUnstageFile}
           selectedFileKey={selectedFileKey}
           treePreference={treePreference}
+          fileView={fileView}
+          onFileViewChange={onFileViewChange}
         />
         {showCommit && commit ? (
           <DiffCommitComposer

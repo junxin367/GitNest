@@ -864,6 +864,7 @@ class FakeGitClient
 
   async fetchRemote(): Promise<void> {}
   async pullFastForward(): Promise<void> {}
+  async pullBranch(): Promise<void> {}
   async pushBranch(): Promise<void> {}
   async createBranch(): Promise<void> {}
   async switchBranch(): Promise<void> {}

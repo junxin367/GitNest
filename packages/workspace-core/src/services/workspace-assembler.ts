@@ -19,6 +19,9 @@ import {
   repositoryTargetKey
 } from "./workspace-targets";
 
+export const DEFAULT_ROOT_REPOSITORY_GROUP_NAME = "原/根仓库";
+const LEGACY_ROOT_REPOSITORY_GROUP_NAME = "根目录仓库";
+
 interface OwnedRepository {
   rootId: string;
   discovery: DiscoveredRepository;
@@ -130,9 +133,13 @@ export class WorkspaceAssembler {
         ({ discovery }) =>
           discovery.canonicalPath !== root.canonicalPath
       );
+      const groupedRepositories =
+        rootRepository && descendants.length > 0
+          ? [rootRepository, ...descendants]
+          : descendants;
       const groups = createGroups(
         root,
-        descendants,
+        groupedRepositories,
         targetByDiscovery,
         previous?.groups ?? []
       );
@@ -431,7 +438,7 @@ function createGroups(
     const relativeSegments = discovery.relativeSegments;
     const groupName =
       relativeSegments.length <= 1
-        ? "根目录仓库"
+        ? DEFAULT_ROOT_REPOSITORY_GROUP_NAME
         : (relativeSegments[0] as string);
     const groupKey = groupName.toLocaleLowerCase();
     const group = grouped.get(groupKey) ?? {
@@ -456,10 +463,10 @@ function createGroups(
 
   return [...grouped.values()]
     .sort((left, right) => {
-      if (left.name === "根目录仓库") {
+      if (left.name === DEFAULT_ROOT_REPOSITORY_GROUP_NAME) {
         return -1;
       }
-      if (right.name === "根目录仓库") {
+      if (right.name === DEFAULT_ROOT_REPOSITORY_GROUP_NAME) {
         return 1;
       }
       return left.name.localeCompare(right.name, undefined, {
@@ -471,11 +478,21 @@ function createGroups(
         "group",
         `${root.canonicalPath}\0${group.name.toLocaleLowerCase()}`
       );
+      const legacyId =
+        group.name === DEFAULT_ROOT_REPOSITORY_GROUP_NAME
+          ? createPathIdentity(
+              "group",
+              `${root.canonicalPath}\0${LEGACY_ROOT_REPOSITORY_GROUP_NAME.toLocaleLowerCase()}`
+            )
+          : undefined;
       return {
         id,
         name: group.name,
         targets: group.targets,
-        collapsed: collapsedById.get(id) ?? false
+        collapsed:
+          collapsedById.get(id) ??
+          (legacyId ? collapsedById.get(legacyId) : undefined) ??
+          false
       };
     });
 }

@@ -62,6 +62,12 @@ export interface DiffPanelProps {
   onPathCopyStatusChange?(
     status: DiffPathCopyStatus
   ): void;
+  preferredLayout?: DiffViewerLayout | undefined;
+  preferredWrap?: boolean | undefined;
+  onLayoutPreferenceChange?(
+    layout: DiffViewerLayout
+  ): void;
+  onWrapPreferenceChange?(wrap: boolean): void;
 }
 
 export function DiffPanel({
@@ -80,7 +86,11 @@ export function DiffPanel({
   state,
   headerActions,
   className,
-  onPathCopyStatusChange
+  onPathCopyStatusChange,
+  preferredLayout,
+  preferredWrap,
+  onLayoutPreferenceChange,
+  onWrapPreferenceChange
 }: DiffPanelProps) {
   const availableLayouts = config.layouts.length
     ? config.layouts
@@ -90,10 +100,17 @@ export function DiffPanel({
   )
     ? config.defaultLayout
     : (availableLayouts[0] ?? "unified");
-  const [layout, setLayout] = useState<DiffViewerLayout>(
+  const [internalLayout, setInternalLayout] =
+    useState<DiffViewerLayout>(
     configuredDefaultLayout
   );
-  const [wrap, setWrap] = useState(false);
+  const layout =
+    preferredLayout &&
+    availableLayouts.includes(preferredLayout)
+      ? preferredLayout
+      : internalLayout;
+  const [internalWrap, setInternalWrap] = useState(false);
+  const wrap = preferredWrap ?? internalWrap;
   const [pathCopyStatus, setPathCopyStatus] =
     useState<DiffPathCopyStatus>("idle");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -219,12 +236,15 @@ export function DiffPanel({
     )
       ? config.defaultLayout
       : (availableLayouts[0] ?? "unified");
-    setLayout(nextLayout);
-    setWrap(false);
+    setInternalLayout(nextLayout);
+    if (preferredWrap === undefined) {
+      setInternalWrap(false);
+    }
   }, [
     availableLayouts,
     config.allowWrap,
-    config.defaultLayout
+    config.defaultLayout,
+    preferredWrap
   ]);
 
   useEffect(() => {
@@ -352,7 +372,13 @@ export function DiffPanel({
               {availableLayouts.includes("split") ? (
                 <Button
                   aria-pressed={layout === "split"}
-                  onClick={() => setLayout("split")}
+                  onClick={() => {
+                    if (onLayoutPreferenceChange) {
+                      onLayoutPreferenceChange("split");
+                    } else {
+                      setInternalLayout("split");
+                    }
+                  }}
                   selected={layout === "split"}
                   size="small"
                   variant="toolbar"
@@ -363,7 +389,13 @@ export function DiffPanel({
               {availableLayouts.includes("unified") ? (
                 <Button
                   aria-pressed={layout === "unified"}
-                  onClick={() => setLayout("unified")}
+                  onClick={() => {
+                    if (onLayoutPreferenceChange) {
+                      onLayoutPreferenceChange("unified");
+                    } else {
+                      setInternalLayout("unified");
+                    }
+                  }}
                   selected={layout === "unified"}
                   size="small"
                   variant="toolbar"
@@ -380,7 +412,14 @@ export function DiffPanel({
               className="diff-viewer-wrap-button"
               disabled={!limitedContent.content}
               icon={<Icon name="wrap" size={14} />}
-              onClick={() => setWrap((value) => !value)}
+              onClick={() => {
+                const next = !wrap;
+                if (onWrapPreferenceChange) {
+                  onWrapPreferenceChange(next);
+                } else {
+                  setInternalWrap(next);
+                }
+              }}
               selected={wrap}
               size="small"
               variant="toolbar"

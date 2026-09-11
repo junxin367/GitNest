@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="./button.css" />
   <link rel="stylesheet" href="./input.css" />
   <link rel="stylesheet" href="./textarea.css" />
+  <link rel="stylesheet" href="./toast.css" />
   <style>
     :root {
       color-scheme: dark;
@@ -663,6 +664,12 @@
 
     .workspace-switcher-menu[hidden] {
       display: none;
+    }
+
+    .workspace-switcher-menu {
+      width: 286px;
+      max-width: calc(100vw - var(--space-4));
+      border-right-color: color-mix(in srgb, var(--border) 72%, var(--text));
     }
 
     .workspace-avatar {
@@ -2115,11 +2122,29 @@
       border-radius: var(--radius-regular);
     }
 
-    .settings-ai-field input:hover {
+    .settings-ai-field select {
+      width: 100%;
+      min-width: 0;
+      min-height: var(--control-default);
+      padding: 0 var(--space-3);
+      color: var(--text);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .settings-ai-field-grid.single {
+      grid-template-columns: minmax(0, 1fr);
+      padding-top: 0;
+    }
+
+    .settings-ai-field input:hover,
+    .settings-ai-field select:hover {
       border-color: var(--border);
     }
 
-    .settings-ai-field input:focus {
+    .settings-ai-field input:focus,
+    .settings-ai-field select:focus {
       border-color: var(--accent);
     }
 
@@ -2140,6 +2165,42 @@
     .settings-ai-actions-buttons {
       display: flex;
       flex: 0 0 auto;
+      gap: var(--space-2);
+    }
+
+    .settings-ai-actions-buttons .gn-button {
+      width: 120px;
+      min-width: 120px;
+    }
+
+    .settings-account-preview {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+      padding: var(--space-4) 0;
+    }
+
+    .settings-account-preview > div:first-child {
+      display: grid;
+      gap: var(--space-1);
+      min-width: 0;
+    }
+
+    .settings-account-preview strong {
+      color: var(--text);
+    }
+
+    .settings-account-preview span {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .settings-account-actions {
+      display: flex;
+      flex: 0 0 auto;
+      flex-wrap: wrap;
+      justify-content: flex-end;
       gap: var(--space-2);
     }
 
@@ -2980,7 +3041,7 @@
       white-space: nowrap;
     }
 
-    .repo-hero-actions .button {
+    .repo-hero-actions .gn-button {
       width: 100%;
       min-width: 0;
       height: var(--control-compact);
@@ -3600,9 +3661,9 @@
     }
 
     .stage-toggle.gn-button {
-      width: 22px;
-      min-width: 22px;
-      height: 22px;
+      width: var(--control-compact);
+      min-width: var(--control-compact);
+      height: var(--control-compact);
       padding: 0;
     }
 
@@ -4758,72 +4819,6 @@
       box-shadow: 0 0 0 3px var(--green-soft);
     }
 
-    .toast {
-      position: fixed;
-      top: var(--space-5);
-      left: 50%;
-      z-index: var(--z-toast);
-      display: flex;
-      align-items: center;
-      gap: var(--space-3);
-      width: min(400px, calc(100vw - 48px));
-      min-height: 64px;
-      padding: var(--space-3) var(--space-4);
-      color: var(--text);
-      background: color-mix(in srgb, var(--surface) 92%, transparent);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-large);
-      box-shadow: var(--shadow);
-      opacity: 0;
-      transform: translate(-50%, -12px);
-      pointer-events: none;
-      transition:
-        opacity var(--motion-exit) var(--ease-exit),
-        transform var(--motion-exit) var(--ease-exit);
-      backdrop-filter: blur(16px);
-    }
-
-    .toast.show {
-      opacity: 1;
-      transform: translate(-50%, 0);
-      transition-duration: var(--motion-micro), var(--motion-micro);
-      transition-timing-function: var(--ease-enter), var(--ease-enter);
-    }
-
-    .toast.error {
-      border-color: color-mix(in srgb, var(--red) 42%, var(--border));
-    }
-
-    .toast.error .toast-symbol {
-      color: var(--red);
-      background: var(--red-soft);
-    }
-
-    .toast-symbol {
-      display: grid;
-      place-items: center;
-      width: var(--control-default);
-      height: var(--control-default);
-      flex: 0 0 auto;
-      color: var(--accent);
-      background: var(--accent-soft);
-      border-radius: var(--radius-regular);
-    }
-
-    .toast-title {
-      color: var(--text);
-      font-size: var(--font-size-body);
-      font-weight: var(--font-weight-semibold);
-      display: block;
-    }
-
-    .toast-message {
-      margin-top: var(--space-1);
-      color: var(--muted);
-      font-size: var(--font-size-caption);
-      display: block;
-    }
-
     .command-overlay {
       position: fixed;
       inset: 0;
@@ -5129,7 +5124,7 @@
 
     .history-commit-detail {
       min-height: 0;
-      max-height: min(360px, 42vh);
+      max-height: min(350px, 42vh);
       overflow: auto;
       border-top: 1px solid var(--border);
       background: var(--surface);
@@ -5599,6 +5594,10 @@
         grid-template-columns: 48px 244px minmax(0, 1fr);
       }
 
+      .workspace-switcher-menu {
+        width: 244px;
+      }
+
       .workspace-frame.sidebar-collapsed {
         grid-template-columns: 48px minmax(0, 1fr);
       }
@@ -5780,6 +5779,15 @@
         justify-content: flex-end;
       }
 
+      .settings-account-preview {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .settings-account-actions {
+        justify-content: flex-start;
+      }
+
       .settings-switch {
         margin-bottom: var(--space-1);
       }
@@ -5904,14 +5912,6 @@
     </footer>
   </div>
 
-  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true">
-    <span class="toast-symbol" id="toastSymbol"></span>
-    <span>
-      <span class="toast-title" id="toastTitle"></span>
-      <span class="toast-message" id="toastMessage"></span>
-    </span>
-  </div>
-
   <div id="workspaceContextMenuMount"></div>
 
   <div class="command-overlay" id="commandOverlay" role="presentation" aria-hidden="true" inert onpointerdown="rememberPaletteBackdropPointer(event)" onpointerup="closePaletteFromBackdrop(event)">
@@ -5936,8 +5936,8 @@
         </div>
       </div>
       <div class="confirm-dialog-actions">
-        <button type="button" class="button" id="confirmCancel" onclick="closeConfirmDialog()">取消</button>
-        <button type="button" class="button danger primary" id="confirmAction" onclick="runConfirmAction()">确认</button>
+        <button type="button" class="gn-button" data-full-width="false" data-icon-only="false" data-size="small" data-variant="default" id="confirmCancel" onclick="closeConfirmDialog()"><span class="gn-button__label">取消</span></button>
+        <button type="button" class="gn-button" data-emphasis="strong" data-full-width="false" data-icon-only="false" data-size="small" data-variant="danger" id="confirmAction" onclick="runConfirmAction()"><span class="gn-button__label">确认</span></button>
       </div>
     </div>
   </div>
@@ -5962,7 +5962,7 @@
         <p class="branch-switch-dialog-note">选择后会先执行工作区脏状态和 Worktree 占用预检；当前原型不会执行真实 Git 命令。</p>
       </div>
       <div class="confirm-dialog-actions">
-        <button type="button" class="button" id="branchSwitchCancel" onclick="closeBranchSwitchDialog()">取消</button>
+        <button type="button" class="gn-button" data-full-width="false" data-icon-only="false" data-size="small" data-variant="default" id="branchSwitchCancel" onclick="closeBranchSwitchDialog()"><span class="gn-button__label">取消</span></button>
       </div>
     </section>
   </div>
@@ -5984,8 +5984,8 @@
         </label>
       </form>
       <div class="confirm-dialog-actions">
-        <button type="button" class="button" id="renameEntryCancel" onclick="closeRenameEntryDialog()">取消</button>
-        <button type="submit" form="renameEntryForm" class="button primary" id="renameEntryAction">保存名称</button>
+        <button type="button" class="gn-button" data-full-width="false" data-icon-only="false" data-size="small" data-variant="default" id="renameEntryCancel" onclick="closeRenameEntryDialog()"><span class="gn-button__label">取消</span></button>
+        <button type="submit" form="renameEntryForm" class="gn-button" data-full-width="false" data-icon-only="false" data-size="small" data-variant="primary" id="renameEntryAction"><span class="gn-button__label">保存名称</span></button>
       </div>
     </div>
   </div>
@@ -5993,6 +5993,7 @@
   <script src="./button.js"></script>
   <script src="./input.js"></script>
   <script src="./textarea.js"></script>
+  <script src="./toast.js"></script>
   <script src="./dropdown.js"></script>
   <script>
     const iconPaths = {
@@ -6353,8 +6354,8 @@
     };
 
     const repositories = [
-      { id: "workspace-root", group: "Workspace 元仓库", name: "sc_code", branch: "master", upstream: "origin/master", path: ".", listed: true, status: "clean", changes: 0, staged: 0, unstaged: 0, untracked: 0, ahead: 0, behind: 0, conflicts: 0, worktrees: 11, prunable: 3, detached: 5, head: "f392cef", lastAuthor: "刘俊鑫", lastDate: "2026-09-02T11:46:41+08:00", lastSubject: "skill(worktree): 更新worktree skill" },
-      { id: "core", group: "根目录仓库", name: "core", branch: "test", upstream: "origin/test", path: "core", listed: true, status: "behind", changes: 4, staged: 1, unstaged: 2, untracked: 1, ahead: 0, behind: 3, conflicts: 0, worktrees: 14, prunable: 2, detached: 2, head: "e3d9234", lastAuthor: "niliang", lastDate: "2026-09-02T15:22:51+08:00", lastSubject: "feat(版本)：版本号+1" },
+      { id: "workspace-root", group: "原/根仓库", name: "sc_code", branch: "master", upstream: "origin/master", path: ".", listed: true, status: "clean", changes: 0, staged: 0, unstaged: 0, untracked: 0, ahead: 0, behind: 0, conflicts: 0, worktrees: 11, prunable: 3, detached: 5, head: "f392cef", lastAuthor: "刘俊鑫", lastDate: "2026-09-02T11:46:41+08:00", lastSubject: "skill(worktree): 更新worktree skill" },
+      { id: "core", group: "原/根仓库", name: "core", branch: "test", upstream: "origin/test", path: "core", listed: true, status: "behind", changes: 4, staged: 1, unstaged: 2, untracked: 1, ahead: 0, behind: 3, conflicts: 0, worktrees: 14, prunable: 2, detached: 2, head: "e3d9234", lastAuthor: "niliang", lastDate: "2026-09-02T15:22:51+08:00", lastSubject: "feat(版本)：版本号+1" },
       { id: "sc-cut-svr", group: "后端服务", name: "ScCutSvr", branch: "pre-production", upstream: "origin/pre-production", path: "svr\\ScCutSvr", listed: true, status: "clean", changes: 0, staged: 0, unstaged: 0, untracked: 0, ahead: 0, behind: 0, conflicts: 0, worktrees: 11, prunable: 3, detached: 5, head: "8dbbdfc", lastAuthor: "hls", lastDate: "2026-08-10T15:00:02+08:00", updatedAt: "2026-08-10T15:00:02+08:00", lastSubject: "fix：目前MQ发送后无需接收结果，失败打印日志即可" },
       { id: "sc-opt-log-svr", group: "后端服务", name: "ScOptLogSvr", branch: "pre-production", upstream: "origin/pre-production", path: "svr\\ScOptLogSvr", listed: true, status: "behind", changes: 0, staged: 0, unstaged: 0, untracked: 0, ahead: 0, behind: 4, conflicts: 0, worktrees: 11, prunable: 3, detached: 5, head: "76e3f17", lastAuthor: "刘俊鑫", lastDate: "2026-08-06T11:57:46+08:00", lastSubject: "Merge branch 'test' into pre-production" },
       { id: "sc-prof-svr", group: "后端服务", name: "ScProfSvr", branch: "pre-production", upstream: "origin/pre-production", path: "svr\\ScProfSvr", listed: true, status: "behind", changes: 0, staged: 0, unstaged: 0, untracked: 0, ahead: 0, behind: 12, conflicts: 0, worktrees: 11, prunable: 3, detached: 5, head: "c0f2400", lastAuthor: "刘俊鑫", lastDate: "2026-07-29T10:53:13+08:00", lastSubject: "docs(readme): 删除重复的 Linux 手工格式化说明" },
@@ -6444,7 +6445,7 @@
 
     const groupColors = {
       "Workspace 元仓库": "var(--accent)",
-      "根目录仓库": "var(--blue)",
+      "原/根仓库": "var(--blue)",
       "svr": "var(--purple)",
       "web": "var(--green)",
       "python": "var(--yellow)",
@@ -7073,6 +7074,8 @@
       const fallback = {
         enabled: false,
         url: "",
+        model: "",
+        apiKey: "",
         prompt:
           "根据已暂存文件和代码变更，生成一条简洁准确的 Git 提交信息。使用 Conventional Commits 格式，使用中文，只返回提交信息，不要 Markdown。"
       };
@@ -7084,6 +7087,14 @@
           ...fallback,
           enabled: parsed?.enabled === true,
           url: typeof parsed?.url === "string" ? parsed.url : fallback.url,
+          model:
+            typeof parsed?.model === "string"
+              ? parsed.model
+              : fallback.model,
+          apiKey:
+            typeof parsed?.apiKey === "string"
+              ? parsed.apiKey
+              : fallback.apiKey,
           prompt:
             typeof parsed?.prompt === "string"
               ? parsed.prompt
@@ -7190,10 +7201,7 @@
           ? savedToolPreferences.fileApplication
           : "vscode"
       },
-      aiSettings: {
-        ...savedAiSettings,
-        apiKey: ""
-      },
+      aiSettings: { ...savedAiSettings },
       openInMenuOpen: false,
       selectedBranch: repositories[0].branch,
       commitDraft: { ...initialCommitDraft },
@@ -7206,13 +7214,12 @@
       operationProgress: 0,
       operationTimer: null,
       operationTrigger: null,
-      settingsAutoScan: true,
       settingsRestoreLastView: true,
-      settingsConfirmDangerous: true,
-      settingsIncludeLocalRepositories: true,
       settingsFetchMode: "manual",
+      settingsPushStrategy: "rebase",
+      settingsDiffLayout: "unified",
+      settingsDiffWrap: false,
       transientLoadingTimer: null,
-      toastTimer: null,
       paletteReturnFocus: null,
       palettePointerDownOnBackdrop: false,
       inspectorReturnFocus: null,
@@ -7291,12 +7298,6 @@
       if (!menu || !trigger) return;
 
       const entries = [
-        {
-          id: "workspace-root",
-          iconName: "layers",
-          name: workspaceEntryDisplayName("workspace-root"),
-          action: "selectWorkspaceSwitcherEntry('workspace-root')"
-        },
         ...repositories
           .filter((repo) => repo.standalone && !state.removedEntryIds.has(repo.id))
           .map((repo) => ({
@@ -7356,7 +7357,6 @@
       return sidebarGroupNames(
         repositories.filter(
           (repo) =>
-            repo.id !== "workspace-root" &&
             !repo.standalone &&
             !state.removedRepositoryIds.has(repo.id)
         )
@@ -7595,7 +7595,6 @@
       const entrySearchText = `${workspaceEntryDisplayName("workspace-root")} ${workspaceSnapshot.rootPath}`.toLowerCase();
       const entryMatches = !query || entrySearchText.includes(query);
       const sidebarRepositories = repositories.filter((repo) =>
-        repo.id !== "workspace-root" &&
         !repo.standalone &&
         !state.removedRepositoryIds.has(repo.id)
         && (!showChangedRepositoriesOnly || hasLocalRepositoryChanges(repo))
@@ -7694,7 +7693,12 @@
             <div class="empty-state-title">没有匹配的仓库</div>
             <div class="empty-state-description">当前筛选条件未匹配仓库，请修改关键词或清除筛选。</div>
             <div class="empty-state-actions">
-              <button type="button" class="button small" onclick="clearRepositoryFilter()">清除筛选</button>
+              ${renderButton({
+                label: "清除筛选",
+                size: "small",
+                variant: "default",
+                attributes: 'onclick="clearRepositoryFilter()"'
+              })}
             </div>
           </div>
         </div>
@@ -8076,7 +8080,6 @@
     function getGroupRepositoryCount(groupName) {
       return repositories.filter(
         (repo) =>
-          repo.id !== "workspace-root" &&
           !repo.standalone &&
           !state.removedEntryIds.has(repo.id) &&
           !state.removedRepositoryIds.has(repo.id) &&
@@ -8305,11 +8308,11 @@
         <div class="toolbar-divider"></div>
         ${renderOpenInControl("workspace")}
         <div class="toolbar-actions">
-          <button class="toolbar-button" aria-label="预览重新扫描 Workspace" onclick="runOperation('scan', event.currentTarget)">${icon("refresh")}<span>重新扫描</span></button>
-          <button class="toolbar-button" aria-label="预览批量 Pull ${workspaceSnapshot.behindRepositories} 个仓库" onclick="runOperation('pull-all', event.currentTarget)">${icon("arrowDown")}<span>Pull</span><span class="toolbar-count">${workspaceSnapshot.behindRepositories}</span></button>
-          <button class="toolbar-button" aria-label="预览 Fetch 全部仓库" onclick="runOperation('fetch-all', event.currentTarget)">${icon("download")}<span>Fetch 全部</span></button>
+          <button class="toolbar-button" aria-label="预览刷新 Workspace" onclick="runOperation('scan', event.currentTarget)">${icon("refresh")}<span>刷新</span></button>
+          <button class="toolbar-button" aria-label="预览 Pull 全部仓库" onclick="runOperation('pull-all', event.currentTarget)">${icon("arrowDown")}<span>Pull</span><span class="toolbar-count">${workspaceSnapshot.totalRepositories}</span></button>
+          <button class="toolbar-button" aria-label="预览 Push 全部仓库" onclick="runOperation('push-all', event.currentTarget)">${icon("arrowUp")}<span>Push</span></button>
+          <button class="toolbar-button" aria-label="预览 Fetch 全部仓库" onclick="runOperation('fetch-all', event.currentTarget)">${icon("download")}<span>Fetch</span></button>
           <button class="icon-button" aria-label="切换详情面板" aria-pressed="${state.inspectorOpen}" onclick="toggleInspector()">${icon("panel")}</button>
-          <button class="icon-button" aria-label="打开 Workspace 菜单" onclick="showToast('Workspace 菜单', '分组、导入、导出和扫描设置将集中在这里。', 'more')">${icon("more")}</button>
         </div>
       ` : `
         <div class="context-identity">
@@ -8323,13 +8326,10 @@
         <button class="branch-selector" aria-haspopup="dialog" onclick="openBranchSwitchDialog(event.currentTarget)">${icon("branch")}<span>${repo.branch}</span>${icon("chevronDown", 12)}</button>
         ${renderOpenInControl("repository")}
         <div class="toolbar-actions">
-          <button class="toolbar-button" aria-label="预览 Fetch ${repo.name}" onclick="runOperation('fetch', event.currentTarget)">${icon("download")}<span>Fetch</span></button>
           <button class="toolbar-button" aria-label="预览 Pull ${repo.name}${repo.behind ? `，本地跟踪引用显示落后 ${repo.behind} 个提交` : ""}" onclick="runOperation('pull', event.currentTarget)">${icon("arrowDown")}<span>Pull</span>${repo.behind ? `<span class="toolbar-count">${repo.behind}</span>` : ""}</button>
-          ${repositoryDiffWorkspaceConfiguration.extensions.pushRegion ? `
-            <button class="toolbar-button" aria-label="预览 Push ${repo.name}${repo.ahead ? `，领先 ${repo.ahead} 个提交` : ""}" onclick="runOperation('push', event.currentTarget)">${icon("arrowUp")}<span>Push</span>${repo.ahead ? `<span class="toolbar-count">${repo.ahead}</span>` : ""}</button>
-          ` : ""}
+          <button class="toolbar-button" aria-label="预览 Push ${repo.name}${repo.ahead ? `，领先 ${repo.ahead} 个提交` : ""}" onclick="runOperation('push', event.currentTarget)">${icon("arrowUp")}<span>Push</span>${repo.ahead ? `<span class="toolbar-count">${repo.ahead}</span>` : ""}</button>
+          <button class="toolbar-button" aria-label="预览 Fetch ${repo.name}" onclick="runOperation('fetch', event.currentTarget)">${icon("download")}<span>Fetch</span></button>
           <button class="icon-button" aria-label="切换详情面板" aria-pressed="${state.inspectorOpen}" onclick="toggleInspector()">${icon("panel")}</button>
-          <button class="icon-button" aria-label="打开仓库菜单" onclick="showToast('仓库菜单', 'Stash、Tag、Reflog 与高级操作位于这里。', 'more')">${icon("more")}</button>
         </div>
       `;
     }
@@ -8700,11 +8700,10 @@
     }
 
     const settingsSections = [
-      { id: "general", label: "通用", subtitle: "应用行为", iconName: "settings", group: "GitNest" },
-      { id: "ai", label: "AI 提交信息", subtitle: "生成提交信息", iconName: "sparkle", group: "GitNest" },
-      { id: "workspace", label: "Workspace", subtitle: "路径与扫描", iconName: "workspace", group: "当前 Workspace" },
-      { id: "git", label: "Git", subtitle: "版本与同步", iconName: "branch", group: "当前 Workspace" },
-      { id: "shortcuts", label: "快捷键", subtitle: "命令与导航", iconName: "sparkle", group: "当前 Workspace" }
+      { id: "general", label: "通用", subtitle: "应用行为与偏好", iconName: "settings" },
+      { id: "ai", label: "AI 提交信息", subtitle: "生成提交信息", iconName: "sparkle" },
+      { id: "git", label: "Git", subtitle: "运行环境与 Fetch", iconName: "branch" },
+      { id: "account", label: "账号与认证", subtitle: "凭据与仓库绑定", iconName: "repository" }
     ];
 
     function openSettings() {
@@ -8749,6 +8748,8 @@
           JSON.stringify({
             enabled: state.aiSettings.enabled,
             url: state.aiSettings.url,
+            model: state.aiSettings.model,
+            apiKey: state.aiSettings.apiKey,
             prompt: state.aiSettings.prompt
           })
         );
@@ -8759,9 +8760,11 @@
 
     function captureAiSettings() {
       const url = document.getElementById("aiCommitUrl");
+      const model = document.getElementById("aiCommitModel");
       const apiKey = document.getElementById("aiCommitApiKey");
       const prompt = document.getElementById("aiCommitPrompt");
       if (url) state.aiSettings.url = url.value;
+      if (model) state.aiSettings.model = model.value;
       if (apiKey) state.aiSettings.apiKey = apiKey.value;
       if (prompt) state.aiSettings.prompt = prompt.value;
     }
@@ -8784,16 +8787,53 @@
       showToast(
         "AI 设置已保存",
         state.aiSettings.apiKey
-          ? "URL、提示词和当前页面中的 API Key 已更新。"
-          : "URL 和提示词已保存，请填写 API Key 后再测试连接。",
+          ? "URL、模型、提示词和 API Key 已保存。"
+          : "URL、模型和提示词已保存，请填写 API Key 后再测试连接。",
         "check"
       );
+    }
+
+    function clearAiApiKey() {
+      captureAiSettings();
+      if (!state.aiSettings.apiKey) {
+        showToast("无需清空", "当前没有已保存的 AI API Key。", "settings");
+        return;
+      }
+      openConfirmDialog({
+        title: "清空 AI API Key？",
+        description: "生成和连接测试将不可用，直到再次保存 Key。API URL、模型和提示词不会被删除。",
+        actionLabel: "确认清空 Key",
+        onConfirm: () => {
+          state.aiSettings.apiKey = "";
+          persistAiSettings();
+          renderSettingsPage();
+          showToast("AI API Key 已清空", "其他 AI 设置已保留。", "check");
+        }
+      });
+    }
+
+    function confirmPreviewAccountRemoval() {
+      openConfirmDialog({
+        title: "删除 GitHub 账号？",
+        description: "删除前会展示受影响的仓库绑定；正式应用始终要求确认。",
+        actionLabel: "确认删除",
+        onConfirm: () =>
+          showToast(
+            "账号删除预览完成",
+            "原型未删除真实账号或凭据。",
+            "alert"
+          )
+      });
     }
 
     function testAiConnection() {
       captureAiSettings();
       if (!state.aiSettings.url.trim()) {
         showErrorToast("无法测试 AI 连接", "请先填写 API URL。");
+        return;
+      }
+      if (!state.aiSettings.model.trim()) {
+        showErrorToast("无法测试 AI 连接", "请先填写模型。");
         return;
       }
       if (!state.aiSettings.apiKey.trim()) {
@@ -8814,15 +8854,16 @@
         showErrorToast("AI 生成未启用", "请先在设置的“AI 提交信息”中启用。");
         return;
       }
-      if (!state.aiSettings.url.trim() || !state.aiSettings.apiKey.trim()) {
-        showErrorToast("AI 配置不完整", "请先填写 API URL 和 API Key。");
+      if (!state.aiSettings.url.trim() || !state.aiSettings.model.trim() || !state.aiSettings.apiKey.trim()) {
+        showErrorToast("AI 配置不完整", "请先填写 API URL、模型和 API Key。");
         return;
       }
-      const scope = currentRepo().staged > 0
-        ? "已暂存变更"
-        : "全部变更";
+      if (currentRepo().staged <= 0) {
+        showErrorToast("没有已暂存变更", "AI 只读取 staged Diff，请先暂存要提交的文件。");
+        return;
+      }
       state.commitDraft.message =
-        `feat: 更新${scope}\n\n根据当前${scope}和 AI 提交提示词生成的提交说明。`;
+        "feat: 更新已暂存变更\n\n根据当前 staged Diff 和 AI 提交提示词生成的提交说明。";
       state.commitDirty = true;
       renderChanges();
       showToast(
@@ -8830,16 +8871,6 @@
         "已填入提交信息。",
         "sparkle"
       );
-    }
-
-    function settingsSectionHeading(kicker, title, description) {
-      return `
-        <div class="settings-section-heading">
-          <div class="settings-section-kicker">${icon("settings", 13)}${kicker}</div>
-          <h2 class="settings-section-title">${title}</h2>
-          <p class="settings-section-description">${description}</p>
-        </div>
-      `;
     }
 
     function settingsToggle(label, description, key) {
@@ -8872,20 +8903,6 @@
       `;
     }
 
-    function settingsShortcut(label, description, keys) {
-      return `
-        <div class="settings-shortcut-row">
-          <div>
-            <div class="settings-shortcut-title">${label}</div>
-            <div class="settings-shortcut-description">${description}</div>
-          </div>
-          <div class="settings-shortcut-keys">
-            ${keys.map((key) => `<kbd class="settings-key">${key}</kbd>`).join("")}
-          </div>
-        </div>
-      `;
-    }
-
     function settingsNavItems(sections) {
       return sections.map((section) => `
         <button type="button" class="settings-nav-item ${state.settingsSection === section.id ? "active" : ""}" aria-current="${state.settingsSection === section.id ? "page" : "false"}" onclick="setSettingsSection('${section.id}')">
@@ -8908,20 +8925,23 @@
               <div>
                 <div class="eyebrow">${icon("settings", 14)}应用偏好</div>
                 <h1 class="page-title">设置</h1>
-                <p class="page-description">集中管理 GitNest 的应用行为、AI 提交信息、Workspace、Git 和键盘操作。</p>
+                <p class="page-description">管理应用行为、AI 提交信息、Git 同步策略以及账号认证。</p>
               </div>
               <div class="page-actions">
-                <button class="button primary" onclick="saveSettings()">${icon("check")}保存设置</button>
+                ${renderButton({
+                  label: "保存设置",
+                  size: "small",
+                  variant: "primary",
+                  icon: icon("check"),
+                  attributes: 'onclick="saveSettings()"'
+                })}
               </div>
             </div>
 
             <div class="settings-layout">
               <nav class="settings-nav panel" aria-label="设置分组">
                 <div class="settings-nav-label">GitNest</div>
-                ${settingsNavItems(settingsSections.filter((section) => section.group === "GitNest"))}
-                <div class="settings-nav-divider"></div>
-                <div class="settings-nav-label">当前 Workspace</div>
-                ${settingsNavItems(settingsSections.filter((section) => section.group === "当前 Workspace"))}
+                ${settingsNavItems(settingsSections)}
               </nav>
 
               <section class="settings-content" aria-live="polite">
@@ -8951,8 +8971,14 @@
               <div class="settings-ai-field-grid">
                 <label class="settings-ai-field">
                   API URL
-                  <input id="aiCommitUrl" autocomplete="url" placeholder="https://api.example.com/v1/chat/completions" spellcheck="false" type="url" value="${escapeHtml(state.aiSettings.url)}" oninput="captureAiSettings()" />
+                  <input id="aiCommitUrl" autocomplete="url" placeholder="https://api.example.com/v1" spellcheck="false" type="url" value="${escapeHtml(state.aiSettings.url)}" oninput="captureAiSettings()" />
                 </label>
+                <label class="settings-ai-field">
+                  模型
+                  <input id="aiCommitModel" autocomplete="off" placeholder="gpt-4.1-mini" spellcheck="false" type="text" value="${escapeHtml(state.aiSettings.model)}" oninput="captureAiSettings()" />
+                </label>
+              </div>
+              <div class="settings-ai-field-grid single">
                 <label class="settings-ai-field">
                   API Key
                   <input id="aiCommitApiKey" autocomplete="off" placeholder="输入用于生成提交信息的 API Key" type="password" value="${escapeHtml(state.aiSettings.apiKey)}" oninput="captureAiSettings()" />
@@ -8969,29 +8995,131 @@
                 placeholder: "告诉 AI 如何根据变更生成提交信息。",
                 attributes: 'oninput="captureAiSettings()"'
               })}
+              <div class="settings-inline-note">${icon("check", 14)}可填写基础地址或完整的 /chat/completions 地址；基础地址会自动补全端点。</div>
               <div class="settings-ai-actions">
                 <div class="settings-ai-actions-buttons">
-                  <button type="button" class="button" onclick="testAiConnection()">${icon("check", 13)}测试连接</button>
-                  <button type="button" class="button primary" onclick="saveAiSettings()">${icon("check", 13)}保存 AI 设置</button>
+                  ${renderButton({
+                    label: "测试连接",
+                    size: "small",
+                    variant: "default",
+                    icon: icon("check", 13),
+                    attributes: 'onclick="testAiConnection()"'
+                  })}
+                  ${renderButton({
+                    label: "保存 AI 设置",
+                    size: "small",
+                    variant: "primary",
+                    icon: icon("check", 13),
+                    attributes: 'onclick="saveAiSettings()"'
+                  })}
                 </div>
+                ${renderButton({
+                  label: "清空 Key",
+                  size: "small",
+                  variant: "danger",
+                  attributes: 'onclick="clearAiApiKey()"'
+                })}
               </div>
             </div>
           </section>
         `;
       }
 
-      if (section === "workspace") {
+      if (section === "account") {
         return `
           <section class="panel settings-card">
             <div class="settings-card-header">
               <div>
-                <div class="settings-card-title">扫描与发现</div>
-                <div class="settings-card-description">控制 Workspace 列表如何反映本地目录变化。</div>
+                <div class="settings-card-title">添加 GitNest 账号</div>
+                <div class="settings-card-description">使用 HTTPS Token，或继续交由系统 SSH 和 Credential Helper 认证。</div>
               </div>
             </div>
             <div class="settings-card-body">
-              ${settingsToggle("启动时自动扫描", "打开 Workspace 时检查新增、移动或移除的仓库目录。", "settingsAutoScan")}
-              ${settingsToggle("包含本地发现的仓库", "将根目录下未写入 repos.yaml 的仓库标记为“本地发现”。", "settingsIncludeLocalRepositories")}
+              <div class="settings-ai-field-grid">
+                <label class="settings-ai-field">
+                  主机
+                  <input autocomplete="url" placeholder="github.com" spellcheck="false" type="text" value="github.com" />
+                </label>
+                <label class="settings-ai-field">
+                  认证方式
+                  <select>
+                    <option>HTTPS Token</option>
+                    <option>系统 SSH / Credential Helper</option>
+                  </select>
+                </label>
+              </div>
+              <div class="settings-ai-field-grid single">
+                <label class="settings-ai-field">
+                  Token
+                  <input autocomplete="new-password" placeholder="输入访问令牌" type="password" />
+                </label>
+              </div>
+              <div class="settings-inline-note">${icon("alert", 14)}正式应用会把 Token 存入系统凭据存储；不会写入普通 JSON、日志或 Git 参数。</div>
+              <div class="settings-ai-actions">
+                <span></span>
+                ${renderButton({
+                  label: "保存账号",
+                  size: "small",
+                  variant: "primary",
+                  icon: icon("check", 13),
+                  attributes: 'onclick="showToast(\'账号已保存\', \'原型未写入真实凭据。\', \'check\')"'
+                })}
+              </div>
+            </div>
+          </section>
+          <section class="panel settings-card">
+            <div class="settings-card-header">
+              <div>
+                <div class="settings-card-title">系统 Git 认证</div>
+                <div class="settings-card-description">未绑定账号时，GitNest 不改变系统 Git 行为。</div>
+              </div>
+              <span class="status-pill green">${icon("check", 12)}默认</span>
+            </div>
+            <div class="settings-card-body">
+              <div class="settings-info-grid">
+                <div class="settings-info-item"><span class="settings-info-label">Credential Helpers</span><span class="settings-info-value">1 个</span></div>
+                <div class="settings-info-item"><span class="settings-info-label">SSH Agent</span><span class="settings-info-value">已配置</span></div>
+                <div class="settings-info-item"><span class="settings-info-label">.ssh/config</span><span class="settings-info-value">已检测</span></div>
+                <div class="settings-info-item"><span class="settings-info-label">全局 Git 配置</span><span class="settings-info-value">保持不变</span></div>
+              </div>
+            </div>
+          </section>
+          <section class="panel settings-card">
+            <div class="settings-card-header">
+              <div>
+                <div class="settings-card-title">GitNest 账号中心</div>
+                <div class="settings-card-description">管理仓库绑定、连接测试和删除操作。</div>
+              </div>
+              <span class="status-pill neutral">1 个账号</span>
+            </div>
+            <div class="settings-card-body">
+              <div class="settings-account-preview">
+                <div>
+                  <strong>GitHub · github.com</strong>
+                  <span>HTTPS Token · 已绑定 gitnest-ui</span>
+                </div>
+                <div class="settings-account-actions">
+                  ${renderButton({
+                    label: "测试",
+                    size: "small",
+                    variant: "default",
+                    icon: icon("check", 13),
+                    attributes: 'onclick="showToast(\'账号连接正常\', \'github.com 已通过认证测试。\', \'check\')"'
+                  })}
+                  ${renderButton({
+                    label: "管理绑定",
+                    size: "small",
+                    variant: "default",
+                    attributes: 'onclick="showToast(\'仓库绑定已更新\', \'原型展示账号与仓库绑定流程。\', \'branch\')"'
+                  })}
+                  ${renderButton({
+                    label: "删除",
+                    size: "small",
+                    variant: "danger",
+                    attributes: 'onclick="confirmPreviewAccountRemoval()"'
+                  })}
+                </div>
+              </div>
             </div>
           </section>
         `;
@@ -9023,38 +9151,30 @@
           <section class="panel settings-card">
             <div class="settings-card-header">
               <div>
-                <div class="settings-card-title">默认同步策略</div>
-                <div class="settings-card-description">选择打开 Workspace 后对远程状态的处理方式。</div>
+              <div class="settings-card-title">默认同步策略</div>
+                <div class="settings-card-description">选择启动且 Workspace 加载完成后的远程检查方式。</div>
               </div>
             </div>
             <div class="settings-card-body">
               <div class="settings-option-grid">
                 ${settingsOption("settingsFetchMode", "manual", "download", "手动 Fetch", "只有明确点击 Fetch 时才检查远程引用。")}
-                ${settingsOption("settingsFetchMode", "startup", "refresh", "启动时检查", "打开 Workspace 后自动刷新远程跟踪引用。")}
+                ${settingsOption("settingsFetchMode", "startup", "refresh", "启动时检查", "Workspace 首次加载完成后，对全部仓库执行一次 Fetch。")}
               </div>
+              <div class="settings-inline-note">${icon("check", 14)}仅更新远程跟踪引用；不会执行 Pull、Merge、Rebase，也不会修改工作区或暂存区。</div>
             </div>
           </section>
-        `;
-      }
-
-      if (section === "shortcuts") {
-        return `
           <section class="panel settings-card">
             <div class="settings-card-header">
               <div>
-                <div class="settings-card-title">导航与命令</div>
-                <div class="settings-card-description">配置常用导航与命令入口。</div>
+                <div class="settings-card-title">Push 同步策略</div>
+                <div class="settings-card-description">远程分支有更新时，先按这里的策略同步，再继续 Push。</div>
               </div>
-              <span class="status-pill neutral">4 个快捷键</span>
             </div>
-            <div class="settings-shortcut-list">
-              ${settingsShortcut("打开命令面板", "搜索仓库、分支或可执行命令。", ["Ctrl", "K"])}
-              ${settingsShortcut("关闭当前弹层", "关闭命令面板或确认对话框。", ["Esc"])}
-              ${settingsShortcut("切换详情面板", "在桌面布局中显示或隐藏右侧详情列。", ["Ctrl", "\\"])}
-              ${settingsShortcut("切换主题", "在深色和浅色主题之间切换。", ["Ctrl", "Shift", "L"])}
-            </div>
-            <div class="settings-card-footer">
-              <button type="button" class="button small" onclick="showToast('快捷键编辑', '快捷键编辑入口已打开。', 'sparkle')">编辑快捷键</button>
+            <div class="settings-card-body">
+              <div class="settings-option-grid">
+                ${settingsOption("settingsPushStrategy", "rebase", "branch", "Rebase", "将本地提交重新应用到远程更新之后，保持线性历史。")}
+                ${settingsOption("settingsPushStrategy", "merge", "branch", "Merge", "将远程更新合并到当前分支，必要时生成 Merge 提交。")}
+              </div>
             </div>
           </section>
         `;
@@ -9072,9 +9192,8 @@
             </div>
           </div>
           <div class="settings-card-body">
-            ${settingsToggle("危险操作前确认", "删除分支、清理 Worktree 等操作在执行前显示保护性确认。", "settingsConfirmDangerous")}
             ${settingsToggle("记住上次打开的视图", "重新打开 GitNest 时恢复最近使用的 Workspace 或仓库页面。", "settingsRestoreLastView")}
-            ${settingsToggle("保留本地发现结果", "将扫描到但未写入配置的仓库保留在 Workspace 列表中。", "settingsIncludeLocalRepositories")}
+            <div class="settings-inline-note">${icon("alert", 14)}危险操作始终确认：删除分支、清理或移除 Worktree、删除账号等操作无法跳过保护性确认。</div>
           </div>
         </section>
         <section class="panel settings-card">
@@ -9116,8 +9235,9 @@
           <div class="settings-card-body">
             <div class="detail-list settings-preference-list">
               <div class="detail-row"><span class="detail-label">文件变更视图</span><span class="detail-value">${state.changeViewMode === "tree" ? "树形" : "列表"}</span></div>
+              <div class="detail-row"><span class="detail-label">Diff 布局</span><span class="detail-value">${state.settingsDiffLayout === "split" ? "并排" : "统一"}</span></div>
+              <div class="detail-row"><span class="detail-label">自动换行</span><span class="detail-value">${state.settingsDiffWrap ? "开启" : "关闭"}</span></div>
               <div class="detail-row"><span class="detail-label">树形目录</span><span class="detail-value">${state.changeTreeDirectoriesCollapsedPreference ? "已收起" : "已展开"}</span></div>
-              <div class="detail-row"><span class="detail-label">仓库筛选</span><span class="detail-value">${state.sidebarChangedRepositoriesOnly ? "仅显示有变更" : "全部仓库"}</span></div>
               <div class="detail-row"><span class="detail-label">界面主题</span><span class="detail-value">${state.theme === "dark" ? "深色" : "浅色"}</span></div>
             </div>
           </div>
@@ -9146,8 +9266,20 @@
               <p class="page-description">集中查看 Workspace 与仓库任务的排队、执行和终态；原型只展示状态，不会执行真实 Git 操作。</p>
             </div>
             <div class="page-actions">
-              <button class="button" onclick="runOperation('scan', event.currentTarget)">${icon("refresh")}重新扫描</button>
-              <button class="button primary" onclick="runOperation('fetch-all', event.currentTarget)">${icon("download")}Fetch 全部</button>
+              ${renderButton({
+                label: "重新扫描",
+                size: "small",
+                variant: "default",
+                icon: icon("refresh"),
+                attributes: 'onclick="runOperation(\'scan\', event.currentTarget)"'
+              })}
+              ${renderButton({
+                label: "Fetch 全部",
+                size: "small",
+                variant: "primary",
+                icon: icon("download"),
+                attributes: 'onclick="runOperation(\'fetch-all\', event.currentTarget)"'
+              })}
             </div>
           </div>
 
@@ -9567,8 +9699,22 @@
             </div>
           </span>
           <span class="repo-hero-actions">
-            <button class="button" onclick="showToast('打开目录', '${repo.name} 已准备在文件管理器中打开。', 'folder')">${icon("folder")}打开目录</button>
-            <button class="button primary" onclick="setRepoTab('changes')">${icon("fileCode")}${repo.changes ? "查看变更" : "查看状态"}</button>
+            ${renderButton({
+              label: "打开目录",
+              size: "small",
+              variant: "default",
+              icon: icon("folder"),
+              fullWidth: true,
+              attributes: `onclick="showToast('打开目录', '${repo.name} 已准备在文件管理器中打开。', 'folder')"`
+            })}
+            ${renderButton({
+              label: repo.changes ? "查看变更" : "查看状态",
+              size: "small",
+              variant: "primary",
+              icon: icon("fileCode"),
+              fullWidth: true,
+              attributes: 'onclick="setRepoTab(\'changes\')"'
+            })}
           </span>
         </section>
       `;
@@ -10314,11 +10460,14 @@
                     onkeydown="if (event.key === 'Escape') { event.preventDefault(); toggleHistoryFilter(); }"
                   />
                 ` : ""}
-                <button
-                  class="button small panel-header-action"
-                  aria-expanded="${state.historyFilterOpen}"
-                  onclick="toggleHistoryFilter()"
-                >${icon("filter", 13)}筛选</button>
+                ${renderButton({
+                  label: "筛选",
+                  size: "small",
+                  variant: "default",
+                  className: "panel-header-action",
+                  icon: icon("filter", 13),
+                  attributes: `aria-expanded="${state.historyFilterOpen}" onclick="toggleHistoryFilter()"`
+                })}
               </div>
               <div class="commit-list">
                 ${visibleCommits.length
@@ -10431,7 +10580,14 @@
           <div class="panel-header sticky-panel-header">
             <div class="panel-title">${icon("branch")}分支管理</div>
             <span class="panel-caption">快照采集当前本地分支 1 条</span>
-            <button class="button small panel-header-action" onclick="showToast('新建分支', '可从当前 HEAD、指定分支或提交创建。', 'plus')">${icon("plus", 13)}新建分支</button>
+            ${renderButton({
+              label: "新建分支",
+              size: "small",
+              variant: "default",
+              className: "panel-header-action",
+              icon: icon("plus", 13),
+              attributes: 'onclick="showToast(\'新建分支\', \'可从当前 HEAD、指定分支或提交创建。\', \'plus\')"'
+            })}
           </div>
           <table class="branches-table">
             <thead>
@@ -10505,7 +10661,15 @@
           </div>
         </section>
         <section class="inspector-section">
-          <button class="button danger block" ${isCurrent ? 'disabled aria-describedby="branchDeleteReason"' : ""} onclick="confirmBranchDelete('${branch.name}')">${icon("alert")}${isRemote ? "删除远程分支…" : "删除分支…"}</button>
+          ${renderButton({
+            label: isRemote ? "删除远程分支…" : "删除分支…",
+            size: "small",
+            variant: "danger",
+            fullWidth: true,
+            disabled: isCurrent,
+            icon: icon("alert"),
+            attributes: `${isCurrent ? 'aria-describedby="branchDeleteReason"' : ""} onclick="confirmBranchDelete('${branch.name}')"`
+          })}
           <div class="field-help ${isCurrent ? "warning" : ""}" id="branchDeleteReason">${isCurrent ? "当前分支无法删除。请先检出其他分支，再执行删除。" : "删除前会检查未合并提交、远程引用和关联 Worktree。"}</div>
         </section>
       `;
@@ -10617,7 +10781,15 @@
           </div>
         </section>
         <section class="inspector-section">
-          <button class="button danger block" disabled aria-describedby="worktreeRemoveReason">${icon("alert")}移除 Worktree…</button>
+          ${renderButton({
+            label: "移除 Worktree…",
+            size: "small",
+            variant: "danger",
+            fullWidth: true,
+            disabled: true,
+            icon: icon("alert"),
+            attributes: 'aria-describedby="worktreeRemoveReason"'
+          })}
           <div class="field-help warning" id="worktreeRemoveReason">当前是只读设计预览，不会移动、清理或删除任何 Worktree。</div>
         </section>
       `;
@@ -10800,7 +10972,8 @@
       const config = {
         "fetch-all": ["Fetch 全部（设计预览）", `不会执行 Git 命令；当前仍是 ${workspaceSnapshot.totalRepositories} 个仓库的本地快照。`, "download"],
         "scan": ["重新扫描（设计预览）", `不会重新读取或修改 ${workspaceSnapshot.rootPath}。`, "refresh"],
-        "pull-all": ["批量 Pull（设计预览）", `${workspaceSnapshot.behindRepositories} 个仓库的本地跟踪引用显示落后；不会执行更新。`, "arrowDown"],
+        "pull-all": ["批量 Pull（设计预览）", `会对 Workspace 中的全部 ${workspaceSnapshot.totalRepositories} 个仓库执行 Pull；当前不会执行更新。`, "arrowDown"],
+        "push-all": ["批量 Push（设计预览）", `会对 Workspace 中的全部 ${workspaceSnapshot.totalRepositories} 个仓库执行 Push；当前不会执行更新。`, "arrowUp"],
         "fetch": ["Fetch（设计预览）", `${currentRepo().name} 不会获取远程引用。`, "download"],
         "pull": ["Pull（设计预览）", `${currentRepo().name} 不会更新工作目录或分支。`, "arrowDown"],
         "push": ["Push（设计预览）", `${currentRepo().name} 不会向远程发送任何提交。`, "arrowUp"]
@@ -10818,14 +10991,14 @@
     }
 
     function showToast(title, message, iconName = "check", tone = "info") {
-      const toast = document.getElementById("toast");
-      document.getElementById("toastTitle").textContent = title;
-      document.getElementById("toastMessage").textContent = message;
-      document.getElementById("toastSymbol").innerHTML = icon(iconName);
-      toast.classList.toggle("error", tone === "error");
-      toast.classList.add("show");
-      clearTimeout(state.toastTimer);
-      state.toastTimer = setTimeout(() => toast.classList.remove("show"), 3100);
+      return window.GitNestToast.show({
+        title,
+        message,
+        tone,
+        icon: icon(iconName),
+        duration: 3100,
+        closable: true
+      });
     }
 
     function showErrorToast(title, message) {
@@ -11094,7 +11267,8 @@
       state.confirmAction = typeof onConfirm === "function" ? onConfirm : null;
       document.getElementById("confirmTitle").textContent = title;
       document.getElementById("confirmDescription").textContent = description;
-      document.getElementById("confirmAction").textContent = actionLabel;
+      document.querySelector("#confirmAction .gn-button__label").textContent =
+        actionLabel;
       document.getElementById("confirmIcon").innerHTML = icon("alert", 22);
       document.querySelector(".app-shell").inert = true;
       overlay.inert = false;
@@ -11197,7 +11371,12 @@
               <div class="empty-state-title">没有匹配结果</div>
               <div class="empty-state-description">当前关键词未匹配仓库或命令，请修改关键词或清除搜索。</div>
               <div class="empty-state-actions">
-                <button type="button" class="button small" onclick="clearCommandSearch()">清除搜索</button>
+                ${renderButton({
+                  label: "清除搜索",
+                  size: "small",
+                  variant: "default",
+                  attributes: 'onclick="clearCommandSearch()"'
+                })}
               </div>
             </div>
           </div>

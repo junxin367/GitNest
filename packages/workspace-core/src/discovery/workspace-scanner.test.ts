@@ -12,7 +12,10 @@ import type {
   WorkspaceFileSystem
 } from "../ports/workspace-filesystem";
 import { createPathIdentity } from "../services/path-identity";
-import { WorkspaceAssembler } from "../services/workspace-assembler";
+import {
+  DEFAULT_ROOT_REPOSITORY_GROUP_NAME,
+  WorkspaceAssembler
+} from "../services/workspace-assembler";
 import { createEmptyWorkspace } from "../domain/workspace";
 import {
   WorkspaceScanner,
@@ -138,7 +141,7 @@ describe("WorkspaceAssembler", () => {
       kind: "workspace-meta-repository",
       groups: [
         {
-          name: "根目录仓库",
+          name: DEFAULT_ROOT_REPOSITORY_GROUP_NAME,
           collapsed: false
         }
       ]
@@ -147,11 +150,14 @@ describe("WorkspaceAssembler", () => {
       kind: "workspace-directory",
       groups: [
         {
-          name: "根目录仓库",
+          name: DEFAULT_ROOT_REPOSITORY_GROUP_NAME,
           collapsed: false
         }
       ]
     });
+    expect(
+      assembled.entries[0]?.groups[0]?.targets
+    ).toHaveLength(2);
     expect(assembled.repositories).toHaveLength(3);
     expect(assembled.worktrees).toHaveLength(4);
 

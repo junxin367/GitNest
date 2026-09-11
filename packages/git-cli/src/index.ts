@@ -12,6 +12,7 @@ export {
   createBranchArguments,
   deleteBranchArguments,
   fetchRemoteArguments,
+  pullBranchArguments,
   pullFastForwardArguments,
   pushBranchArguments,
   READ_REMOTES_ARGUMENTS,

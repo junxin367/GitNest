@@ -5,6 +5,8 @@ import {
   validateAccountRemovalImpactRequest,
   validateBindAccountRequest,
   validateCancelRepositoryOperationRequest,
+  validateClearAiApiKeyRequest,
+  validateGenerateAiCommitMessageRequest,
   validateOpenDirectoryRequest,
   validateOpenDiffViewerRequest,
   validateOpenExternalApplicationRequest,
@@ -14,8 +16,10 @@ import {
   validateRepositoryCommandExecuteRequest,
   validateRepositoryCommandPreflightRequest,
   validateSaveAccountRequest,
+  validateTestAiConnectionRequest,
   validateTestAccountRequest,
   validateUnbindAccountRequest,
+  validateUpdateAppSettingsRequest,
   validateWorktreeCommandExecuteRequest,
   validateWorktreeCommandPreflightRequest
 } from "./register-ipc";
@@ -104,8 +108,8 @@ describe("repository command IPC validation", () => {
       validateRepositoryCommandPreflightRequest({
         command: {
           type: "push",
-          targets: [target, target],
-          forceWithLease: true
+          targets: [target],
+          strategy: "squash"
         }
       })
     ).toThrowError(
@@ -398,6 +402,124 @@ describe("directory IPC validation", () => {
         expect.objectContaining({ code: "INVALID_REQUEST" })
       );
     }
+  });
+});
+
+describe("application settings and AI IPC validation", () => {
+  const target = {
+    repositoryId: "repository",
+    worktreeId: "worktree"
+  };
+
+  it("normalizes supported settings without accepting an empty AI key", () => {
+    expect(
+      validateUpdateAppSettingsRequest({
+        general: {
+          restoreLastView: false,
+          defaultTerminalKind: "git-bash"
+        },
+        appearance: { theme: "light" },
+        diff: {
+          fileView: "tree",
+          layout: "split",
+          wrap: true,
+          treeDirectoriesCollapsed: true
+        },
+        git: {
+          fetchMode: "startup",
+          pushStrategy: "merge"
+        },
+        ai: {
+          enabled: true,
+          apiUrl: " https://ai.example.test/v1 ",
+          model: " test-model ",
+          apiKey: " test-key ",
+          prompt: "Keep this prompt spacing."
+        },
+        navigation: {
+          lastContentView: "repository",
+          workspaceTab: "activity",
+          repositoryTab: "changes"
+        }
+      })
+    ).toEqual({
+      general: {
+        restoreLastView: false,
+        defaultTerminalKind: "git-bash"
+      },
+      appearance: { theme: "light" },
+      diff: {
+        fileView: "tree",
+        layout: "split",
+        wrap: true,
+        treeDirectoriesCollapsed: true
+      },
+      git: {
+        fetchMode: "startup",
+        pushStrategy: "merge"
+      },
+      ai: {
+        enabled: true,
+        apiUrl: "https://ai.example.test/v1",
+        model: "test-model",
+        apiKey: "test-key",
+        prompt: "Keep this prompt spacing."
+      },
+      navigation: {
+        lastContentView: "repository",
+        workspaceTab: "activity",
+        repositoryTab: "changes"
+      }
+    });
+
+    expect(() =>
+      validateUpdateAppSettingsRequest({
+        ai: { apiKey: " " }
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+
+  it("validates explicit key clearing, connection tests, and exact generation targets", () => {
+    expect(
+      validateClearAiApiKeyRequest({ confirmed: false })
+    ).toEqual({ confirmed: false });
+    expect(
+      validateTestAiConnectionRequest({
+        apiUrl: "https://ai.example.test/v1",
+        model: "test-model",
+        apiKey: "temporary-key"
+      })
+    ).toEqual({
+      apiUrl: "https://ai.example.test/v1",
+      model: "test-model",
+      apiKey: "temporary-key"
+    });
+    expect(
+      validateGenerateAiCommitMessageRequest({ target })
+    ).toEqual({ target });
+
+    expect(() =>
+      validateClearAiApiKeyRequest({ confirmed: "yes" })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+    expect(() =>
+      validateTestAiConnectionRequest({
+        apiUrl: "file:///model",
+        model: "test-model"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+    expect(() =>
+      validateGenerateAiCommitMessageRequest({
+        target: { repositoryId: "repository" }
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
   });
 });
 

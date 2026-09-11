@@ -373,6 +373,17 @@
   line-height: 1.4;
 }
 
+.diff-workspace-commit-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.diff-workspace-commit-ai.gn-button {
+  flex: 0 0 auto;
+}
+
 .diff-workspace-commit-form > .gn-button {
   width: 100%;
   min-width: 0;

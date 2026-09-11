@@ -1,6 +1,7 @@
 import { Button } from "./Button";
 import React, {
   Children,
+  useEffect,
   type ReactNode
 } from "react";
 import { createPortal } from "react-dom";
@@ -16,10 +17,49 @@ interface ToastProps {
   icon?: IconName;
   onClose?: () => void;
   closeLabel?: string;
+  duration?: number;
 }
 
 interface ToastViewportProps {
   children: ReactNode;
+}
+
+let globalViewport: HTMLDivElement | null = null;
+let activeViewportUsers = 0;
+
+function ensureGlobalViewport(): HTMLDivElement {
+  if (globalViewport && document.body.contains(globalViewport)) {
+    return globalViewport;
+  }
+
+  const existing = document.querySelector<HTMLDivElement>(
+    '.toast-viewport[data-toast-viewport="true"]'
+  );
+  if (existing) {
+    globalViewport = existing;
+    return existing;
+  }
+
+  const viewport = document.createElement("div");
+  viewport.className = "toast-viewport";
+  viewport.dataset.toastViewport = "true";
+  viewport.setAttribute("aria-label", "消息提示");
+  document.body.append(viewport);
+  globalViewport = viewport;
+  return viewport;
+}
+
+function releaseGlobalViewport(): void {
+  if (
+    activeViewportUsers > 0 ||
+    !globalViewport ||
+    globalViewport.childElementCount > 0
+  ) {
+    return;
+  }
+
+  globalViewport.remove();
+  globalViewport = null;
 }
 
 export function Toast({
@@ -28,7 +68,8 @@ export function Toast({
   tone = "info",
   icon,
   onClose,
-  closeLabel = "关闭提示"
+  closeLabel = "关闭提示",
+  duration = 3100
 }: ToastProps) {
   const iconName =
     icon ??
@@ -37,6 +78,15 @@ export function Toast({
       : tone === "success"
         ? "check"
         : "operations");
+
+  useEffect(() => {
+    if (!onClose || duration <= 0) {
+      return;
+    }
+
+    const timer = window.setTimeout(onClose, duration);
+    return () => window.clearTimeout(timer);
+  }, [duration, onClose]);
 
   return (
     <div
@@ -71,19 +121,36 @@ export function ToastViewport({
   children
 }: ToastViewportProps) {
   const items = Children.toArray(children);
-  if (items.length === 0) {
+  const hasItems = items.length > 0;
+
+  useEffect(() => {
+    if (
+      !hasItems ||
+      typeof document === "undefined" ||
+      !document.body
+    ) {
+      return;
+    }
+
+    activeViewportUsers += 1;
+    return () => {
+      activeViewportUsers -= 1;
+      releaseGlobalViewport();
+    };
+  }, [hasItems]);
+
+  if (!hasItems) {
     return null;
   }
 
-  const viewport = (
-    <div className="toast-viewport" aria-label="消息提示">
-      {items}
-    </div>
-  );
-
   if (typeof document === "undefined" || !document.body) {
-    return viewport;
+    return (
+      <div className="toast-viewport" aria-label="消息提示">
+        {items}
+      </div>
+    );
   }
 
-  return createPortal(viewport, document.body);
+  const viewport = ensureGlobalViewport();
+  return createPortal(items, viewport);
 }

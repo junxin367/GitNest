@@ -22,6 +22,13 @@ export interface DiffWorkspaceCommit {
     message: string,
     push: boolean
   ): void | Promise<void>;
+  ai?: {
+    enabled: boolean;
+    busy: boolean;
+    disabled?: boolean | undefined;
+    title?: string | undefined;
+    onGenerate(): void | Promise<void>;
+  };
 }
 
 interface DiffCommitComposerProps extends DiffWorkspaceCommit {
@@ -40,6 +47,7 @@ export function DiffCommitComposer({
   onMessageChange,
   onPushChange,
   onSubmit,
+  ai,
   showPush
 }: DiffCommitComposerProps) {
   const pushId = useId();
@@ -93,6 +101,30 @@ export function DiffCommitComposer({
         </span>
       </header>
       <form className="diff-workspace-commit-form" onSubmit={submit}>
+        {ai?.enabled ? (
+          <div className="diff-workspace-commit-field-head">
+            <Button
+              aria-busy={ai.busy}
+              className="diff-workspace-commit-ai"
+              disabled={
+                ai.busy ||
+                ai.disabled ||
+                staged === 0 ||
+                busy
+              }
+              onClick={() => void ai.onGenerate()}
+              size="small"
+              title={
+                ai.title ??
+                "根据当前仓库的已暂存 Diff 生成提交信息"
+              }
+              type="button"
+            >
+              <Icon name={ai.busy ? "refresh" : "sparkle"} />
+              {ai.busy ? "生成中…" : "AI 生成"}
+            </Button>
+          </div>
+        ) : null}
         <Textarea
           aria-label="提交信息"
           autoComplete="off"
@@ -109,10 +141,13 @@ export function DiffCommitComposer({
           textareaClassName="diff-workspace-commit-message"
           value={message}
         />
-        <Button size="small" variant="primary"
+        <Button
           aria-busy={submitting}
           disabled={!canCommit}
+          fullWidth
+          size="small"
           type="submit"
+          variant="primary"
         >
           <Icon name={submitting ? "refresh" : "check"} />
           {submitting

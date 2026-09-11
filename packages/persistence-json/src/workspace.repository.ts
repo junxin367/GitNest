@@ -20,7 +20,10 @@ export class JsonWorkspaceStore implements WorkspaceStore {
     }
     try {
       const migrated = migrateWorkspaceDocument(value);
-      if (readSchemaVersion(value) !== migrated.schemaVersion) {
+      if (
+        readSchemaVersion(value) !== migrated.schemaVersion ||
+        JSON.stringify(value) !== JSON.stringify(migrated)
+      ) {
         await this.#store.write(migrated);
       }
       return migrated;

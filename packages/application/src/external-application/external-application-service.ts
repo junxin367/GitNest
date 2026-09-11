@@ -119,6 +119,9 @@ function resolveLaunchTarget(
   if (context.scope === "workspace") {
     const root =
       workspace.entries.find(
+        (entry) => entry.id === workspace.selectedEntryId
+      ) ??
+      workspace.entries.find(
         (entry) => entry.kind === "workspace-meta-repository"
       ) ?? workspace.entries[0];
     if (!root) {

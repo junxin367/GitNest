@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="./button.css" />
   <link rel="stylesheet" href="./input.css" />
   <link rel="stylesheet" href="./textarea.css" />
+  <link rel="stylesheet" href="./toast.css" />
   <link rel="stylesheet" href="./diff-search-popover.css" />
   <link rel="stylesheet" href="./diff-panel.css" />
   <link rel="stylesheet" href="./diff-workspace.css" />
@@ -638,10 +639,12 @@
     .workspace-switcher-menu {
       display: grid;
       gap: var(--space-1);
-      width: 222px;
+      width: 286px;
+      max-width: calc(100vw - var(--space-4));
       padding: var(--space-2);
       background: var(--surface);
       border: 1px solid var(--border);
+      border-right-color: color-mix(in srgb, var(--border) 72%, var(--text));
       border-radius: var(--radius-large);
       box-shadow: var(--shadow-popover);
     }
@@ -686,6 +689,12 @@
 
     .workspace-switcher-create {
       grid-template-columns: 22px minmax(0, 1fr);
+    }
+
+    @media (max-width: 1240px) {
+      .workspace-switcher-menu {
+        width: 244px;
+      }
     }
 
     .menu-separator {
@@ -1532,8 +1541,11 @@
     }
 
     .commit-detail-demo-panel {
+      display: flex;
+      flex-direction: column;
       min-height: 0;
-      overflow: auto;
+      max-height: 350px;
+      overflow: hidden;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius-regular);
@@ -1542,11 +1554,12 @@
 
     .commit-detail-demo-panel-head {
       display: flex;
+      flex: 0 0 auto;
       align-items: center;
       justify-content: space-between;
       gap: var(--space-3);
-      min-height: var(--control-large);
-      padding: 0 var(--space-4);
+      min-height: var(--control-default);
+      padding: 0 var(--space-3);
       border-bottom: 1px solid var(--border-soft);
     }
 
@@ -1561,50 +1574,58 @@
     }
 
     .commit-detail-demo-body {
-      display: grid;
-      gap: var(--space-3);
-      padding: var(--space-4);
+      min-height: 0;
+      overflow-y: auto;
+      padding: var(--space-3) var(--space-4);
     }
 
     .commit-detail-demo-title {
       margin: 0;
       color: var(--text);
-      font-size: var(--font-size-emphasis);
-      line-height: var(--line-height-title);
+      font-size: var(--font-size-body);
+      line-height: 1.35;
+      overflow-wrap: anywhere;
     }
 
     .commit-detail-demo-description {
-      margin: var(--space-1) 0 0;
-      color: var(--muted);
+      margin: var(--space-2) 0;
+      color: var(--text-soft);
       font-size: var(--font-size-caption);
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
 
-    .commit-detail-demo-details {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+    .commit-detail-demo-panel-meta,
+    .commit-detail-demo-panel-refs {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
       gap: var(--space-2);
     }
 
-    .commit-detail-demo-detail {
-      min-width: 0;
-      padding: var(--space-2);
-      background: var(--surface-2);
-      border-radius: var(--radius-small);
-    }
-
-    .commit-detail-demo-detail span {
-      display: block;
+    .commit-detail-demo-panel-meta {
+      margin-top: var(--space-1);
       color: var(--muted);
       font-size: var(--font-size-caption);
     }
 
-    .commit-detail-demo-detail strong {
-      display: block;
-      overflow: hidden;
-      margin-top: var(--space-1);
-      color: var(--text-soft);
+    .commit-detail-demo-panel-meta code {
+      color: var(--accent);
+      font-family: var(--font-mono);
+    }
+
+    .commit-detail-demo-panel-refs {
+      margin-top: var(--space-2);
+    }
+
+    .commit-detail-demo-panel-refs span {
+      padding: calc(var(--space-1) / 2) var(--space-2);
+      color: var(--blue);
+      background: var(--blue-soft);
+      border-radius: 999px;
+      font-family: var(--font-mono);
       font-size: var(--font-size-caption);
-      text-overflow: ellipsis;
       white-space: nowrap;
     }
 
@@ -1816,6 +1837,24 @@
 
     .toggle-demo.active span {
       background: #071411;
+    }
+
+    .toast-showcase {
+      display: grid;
+      gap: var(--space-4);
+      width: min(100%, 400px);
+    }
+
+    .toast-showcase-stack {
+      display: grid;
+      justify-items: center;
+      gap: var(--space-2);
+    }
+
+    .toast-showcase-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
     }
 
     .input-showcase {
@@ -2066,10 +2105,6 @@
         grid-template-columns: 1fr;
       }
 
-      .commit-detail-demo-details {
-        grid-template-columns: 1fr;
-      }
-
       .commit-detail-demo-row {
         grid-template-columns: 12px minmax(0, 1fr);
       }
@@ -2175,6 +2210,10 @@
         <span>按钮</span>
         <span class="gallery-tab-count">8</span>
       </button>
+      <button class="gallery-tab" id="gallery-tab-toast" type="button" role="tab" aria-selected="false" aria-controls="gallery-panel-toast" tabindex="-1" data-gallery-tab="toast">
+        <span>提示信息</span>
+        <span class="gallery-tab-count">3</span>
+      </button>
       <button class="gallery-tab" id="gallery-tab-inputs" type="button" role="tab" aria-selected="false" aria-controls="gallery-panel-inputs" tabindex="-1" data-gallery-tab="inputs">
         <span>输入框</span>
         <span class="gallery-tab-count">5</span>
@@ -2185,7 +2224,7 @@
       </button>
       <button class="gallery-tab" id="gallery-tab-spec" type="button" role="tab" aria-selected="false" aria-controls="gallery-panel-spec" tabindex="-1" data-gallery-tab="spec">
         <span>规格速览</span>
-        <span class="gallery-tab-count">23</span>
+        <span class="gallery-tab-count">24</span>
       </button>
     </nav>
 
@@ -2292,7 +2331,7 @@
             </div>
           </div>
           <div class="sample-specs">
-            <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
+            <div class="sample-spec"><span>Width</span><strong>244px / 286px</strong></div>
             <div class="sample-spec"><span>Row</span><strong>34px</strong></div>
             <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
             <div class="sample-spec"><span>Shadow</span><strong>popover</strong></div>
@@ -2805,7 +2844,7 @@
                 <p class="branch-switch-dialog-note">选择后会先执行工作区脏状态和 Worktree 占用预检；当前原型不会执行真实 Git 命令。</p>
               </div>
               <div class="branch-switch-dialog-actions">
-                <button class="button" type="button">取消</button>
+                <button class="gn-button" data-full-width="false" data-icon-only="false" data-size="small" data-variant="default" type="button"><span class="gn-button__label">取消</span></button>
               </div>
             </section>
           </div>
@@ -2821,7 +2860,7 @@
           <div class="sample-title">
             <div>
               <h3>提交详情底部展示</h3>
-              <p>点击任意提交记录，下方详情区域同步展示主题、作者、时间和 Commit 信息。</p>
+              <p>点击任意提交记录，下方详情区域按程序布局展示主题、作者、Commit、时间、分支和正文。</p>
             </div>
             <span class="sample-index">15</span>
           </div>
@@ -2894,25 +2933,25 @@
                   <strong id="commitDetailDemoTitle"><svg class="icon" aria-hidden="true"><use href="#i-commit"></use></svg>提交详情</strong>
                 </header>
                 <div class="commit-detail-demo-body">
-                  <div>
-                    <h4 class="commit-detail-demo-title" data-commit-detail-title></h4>
-                    <p class="commit-detail-demo-description" data-commit-detail-description></p>
+                  <h4 class="commit-detail-demo-title" data-commit-detail-title></h4>
+                  <div class="commit-detail-demo-panel-meta">
+                    <span data-commit-detail-author></span>
+                    <code data-commit-detail-hash></code>
+                    <span data-commit-detail-time></span>
                   </div>
-                  <div class="commit-detail-demo-details">
-                    <div class="commit-detail-demo-detail"><span>Commit</span><strong data-commit-detail-hash></strong></div>
-                    <div class="commit-detail-demo-detail"><span>作者</span><strong data-commit-detail-author></strong></div>
-                    <div class="commit-detail-demo-detail"><span>提交时间</span><strong data-commit-detail-time></strong></div>
+                  <div class="commit-detail-demo-panel-refs">
+                    <span data-commit-detail-ref></span>
                   </div>
-                  <div class="commit-detail-demo-detail"><span>分支</span><strong data-commit-detail-ref></strong></div>
+                  <p class="commit-detail-demo-description" data-commit-detail-description></p>
                 </div>
               </section>
             </div>
           </div>
           <div class="sample-specs">
             <div class="sample-spec"><span>Trigger</span><strong>commit row click</strong></div>
-            <div class="sample-spec"><span>Position</span><strong>history bottom</strong></div>
+            <div class="sample-spec"><span>Height</span><strong>max 350px</strong></div>
+            <div class="sample-spec"><span>Scroll</span><strong>content body only</strong></div>
             <div class="sample-spec"><span>Update</span><strong>selection sync</strong></div>
-            <div class="sample-spec"><span>Layer</span><strong>inline · 0</strong></div>
           </div>
         </article>
       </div>
@@ -2922,9 +2961,9 @@
       <div class="section-heading">
         <div>
           <h2>按钮</h2>
-          <p>顶部单独展示尺寸差异；其余状态与功能示例统一使用 35px medium。</p>
+          <p>顶部单独展示尺寸差异；其余状态与功能示例统一使用 32px small。</p>
         </div>
-        <span class="section-count">3 sizes</span>
+        <span class="section-count">3 sizes · shared states</span>
       </div>
 
       <div class="menu-grid">
@@ -2948,7 +2987,7 @@
             <div class="sample-spec"><span>Small</span><strong>32px</strong></div>
             <div class="sample-spec"><span>Medium</span><strong>35px</strong></div>
             <div class="sample-spec"><span>Large</span><strong>40px</strong></div>
-            <div class="sample-spec"><span>States</span><strong>shared 35px</strong></div>
+            <div class="sample-spec"><span>States</span><strong>shared 32px</strong></div>
           </div>
         </article>
 
@@ -2956,7 +2995,7 @@
           <div class="sample-title">
             <div>
               <h3>操作按钮状态</h3>
-              <p>以下示例统一使用 35px medium；按钮层级通过颜色和语义区分。</p>
+              <p>以下示例统一使用 32px small；按钮层级通过颜色和语义区分。</p>
             </div>
             <span class="sample-index">17</span>
           </div>
@@ -2977,9 +3016,9 @@
             </div>
           </div>
           <div class="sample-specs">
-            <div class="sample-spec"><span>Shared size</span><strong>35px / medium</strong></div>
-            <div class="sample-spec"><span>Padding</span><strong>16px</strong></div>
-            <div class="sample-spec"><span>Primary</span><strong>accent</strong></div>
+            <div class="sample-spec"><span>Shared size</span><strong>32px / small</strong></div>
+            <div class="sample-spec"><span>Padding</span><strong>12px</strong></div>
+            <div class="sample-spec"><span>Primary</span><strong>blue</strong></div>
             <div class="sample-spec"><span>Danger</span><strong>red / red-soft</strong></div>
           </div>
         </article>
@@ -2988,7 +3027,7 @@
           <div class="sample-title">
             <div>
               <h3>图标、工具栏与切换按钮</h3>
-              <p>以下示例统一使用 35px medium；图标按钮保留无文本语义。</p>
+              <p>以下示例统一使用 32px small；图标按钮保留无文本语义。</p>
             </div>
             <span class="sample-index">18</span>
           </div>
@@ -3012,10 +3051,45 @@
             </div>
           </div>
           <div class="sample-specs">
-            <div class="sample-spec"><span>Icon</span><strong>35 × 35px</strong></div>
-            <div class="sample-spec"><span>Toolbar</span><strong>35px / transparent</strong></div>
-            <div class="sample-spec"><span>Quick</span><strong>35px / surface-2</strong></div>
+            <div class="sample-spec"><span>Icon</span><strong>32 × 32px</strong></div>
+            <div class="sample-spec"><span>Toolbar</span><strong>32px / transparent</strong></div>
+            <div class="sample-spec"><span>Quick</span><strong>32px / surface-2</strong></div>
             <div class="sample-spec"><span>Switch</span><strong>42 × 24px</strong></div>
+          </div>
+        </article>
+
+      </div>
+    </section>
+
+    <section class="section gallery-tab-panel" id="gallery-panel-toast" data-gallery-panel="toast" role="tabpanel" aria-labelledby="gallery-tab-toast">
+      <div class="section-heading">
+        <div>
+          <h2>提示信息</h2>
+          <p>集中展示操作完成、普通状态和失败反馈，不与按钮组件混合分类。</p>
+        </div>
+        <span class="section-count">3 tones</span>
+      </div>
+
+      <div class="menu-grid">
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>提示信息 / Toast 弹窗</h3>
+              <p>用于操作完成、普通状态和失败反馈；顶部居中显示，可关闭、自动消失并支持多条堆叠。</p>
+            </div>
+            <span class="sample-index">19</span>
+          </div>
+          <div class="sample-stage wide">
+            <div class="toast-showcase">
+              <div class="toast-showcase-stack" data-toast-showcase="states"></div>
+              <div class="toast-showcase-actions" data-toast-showcase="actions"></div>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Tones</span><strong>success / info / error</strong></div>
+            <div class="sample-spec"><span>Width</span><strong>300–400px</strong></div>
+            <div class="sample-spec"><span>Position</span><strong>top center / z 600</strong></div>
+            <div class="sample-spec"><span>Behavior</span><strong>close / 3100ms / stack</strong></div>
           </div>
         </article>
       </div>
@@ -3037,7 +3111,7 @@
               <h3>尺寸效果</h3>
               <p>使用同一内容对比 small、medium、large 三种控件高度。</p>
             </div>
-            <span class="sample-index">19</span>
+            <span class="sample-index">20</span>
           </div>
           <div class="sample-stage">
             <div class="input-showcase input-size-showcase">
@@ -3069,7 +3143,7 @@
               <h3>表单输入状态</h3>
               <p>以下示例统一使用 35px medium；错误态改用危险色边框和浅色背景。</p>
             </div>
-            <span class="sample-index">20</span>
+            <span class="sample-index">21</span>
           </div>
           <div class="sample-stage">
             <div class="input-showcase">
@@ -3109,7 +3183,7 @@
               <h3>搜索与组合输入</h3>
               <p>以下示例统一使用 35px medium；清除与右侧功能保持独立配置。</p>
             </div>
-            <span class="sample-index">21</span>
+            <span class="sample-index">22</span>
           </div>
           <div class="sample-stage">
             <div class="input-showcase">
@@ -3157,7 +3231,7 @@
               <h3>仓库变更页配置</h3>
               <p>启用文件导航、暂存、提交区和独立窗口入口；文档工具栏及底部状态栏关闭。</p>
             </div>
-            <span class="sample-index">22</span>
+            <span class="sample-index">23</span>
           </div>
           <div class="sample-stage diff-component-stage">
             <div class="diff-component-mount" id="diffWorkspaceShowcase"></div>
@@ -3176,7 +3250,7 @@
               <h3>独立 Diff 窗口配置</h3>
               <p>复用同一文件导航和文档组件，启用布局、换行、变更导航、刷新与底部状态栏，不显示仓库操作。</p>
             </div>
-            <span class="sample-index">23</span>
+            <span class="sample-index">24</span>
           </div>
           <div class="sample-stage diff-component-stage">
             <div class="diff-component-mount" id="diffWorkspaceStandaloneShowcase"></div>
@@ -3223,12 +3297,13 @@
             <tr><td>Ctrl+K 命令面板</td><td><code>610px / viewport</code></td><td>12px</td><td>16px / 8px</td><td>48px / 48px</td><td>modal / 500</td></tr>
             <tr><td>分支切换</td><td><code>520px</code></td><td>12px</td><td>16px / 24px</td><td>54px</td><td>modal / 500</td></tr>
             <tr><td>组合下拉触发器</td><td><code>32px + 20px</code></td><td>8px</td><td>0</td><td>32px</td><td>popover / 200</td></tr>
-            <tr><td>默认按钮</td><td><code>auto</code></td><td>8px</td><td>0 16px</td><td>35px</td><td>content / 0</td></tr>
-            <tr><td>紧凑按钮</td><td><code>auto</code></td><td>8px</td><td>0 12px</td><td>32px</td><td>content / 0</td></tr>
-            <tr><td>图标按钮</td><td><code>35px</code></td><td>8px</td><td>0</td><td>35px</td><td>content / 0</td></tr>
-            <tr><td>工具栏按钮</td><td><code>auto</code></td><td>8px</td><td>0 12px</td><td>35px</td><td>content / 0</td></tr>
-            <tr><td>快捷操作按钮</td><td><code>auto</code></td><td>8px</td><td>0 12px</td><td>35px</td><td>content / 0</td></tr>
+            <tr><td>默认按钮</td><td><code>auto</code></td><td>8px</td><td>0 12px</td><td>32px</td><td>content / 0</td></tr>
+            <tr><td>Medium 按钮</td><td><code>auto</code></td><td>8px</td><td>0 16px</td><td>35px</td><td>content / 0</td></tr>
+            <tr><td>图标按钮</td><td><code>32px</code></td><td>8px</td><td>0</td><td>32px</td><td>content / 0</td></tr>
+            <tr><td>工具栏按钮</td><td><code>auto</code></td><td>8px</td><td>0 12px</td><td>32px</td><td>content / 0</td></tr>
+            <tr><td>快捷操作按钮</td><td><code>auto</code></td><td>8px</td><td>0 12px</td><td>32px</td><td>content / 0</td></tr>
             <tr><td>设置开关</td><td><code>42px</code></td><td>999px</td><td>3px</td><td>24px</td><td>content / 0</td></tr>
+            <tr><td>提示信息 / Toast 弹窗</td><td><code>300–400px / viewport</code></td><td>12px</td><td>12px</td><td>48px+</td><td>toast / 600</td></tr>
             <tr><td>表单输入框</td><td><code>100%</code></td><td>8px</td><td>0 8px</td><td>35px</td><td>content / 0</td></tr>
             <tr><td>多行输入框</td><td><code>100%</code></td><td>8px</td><td>8px 12px 8px 8px</td><td>min 96px</td><td>content / 0</td></tr>
             <tr><td>搜索输入框</td><td><code>100%</code></td><td>8px</td><td>0 8px</td><td>32px</td><td>content / 0</td></tr>
@@ -3243,6 +3318,7 @@
   <script src="./button.js"></script>
   <script src="./input.js"></script>
   <script src="./textarea.js"></script>
+  <script src="./toast.js"></script>
   <script src="./diff-search-popover.js"></script>
   <script src="./diff-panel.js"></script>
   <script src="./diff-workspace.js"></script>
@@ -3360,7 +3436,7 @@
     }
 
     function mountButtonShowcases() {
-      const showcaseSize = "medium";
+      const showcaseSize = "small";
       const create = (options) =>
         GitNestButton.create({
           type: "button",
@@ -3401,6 +3477,68 @@
         { label: "已选中", size: showcaseSize, variant: "toolbar", iconName: "check", selected: true },
         { label: "打开目录", size: showcaseSize, variant: "quick", iconName: "folder" }
       ]);
+    }
+
+    function mountToastShowcase() {
+      const stateMount = document.querySelector(
+        '[data-toast-showcase="states"]'
+      );
+      const actionMount = document.querySelector(
+        '[data-toast-showcase="actions"]'
+      );
+      if (!stateMount || !actionMount) return;
+
+      const examples = [
+        {
+          tone: "success",
+          title: "设置已保存",
+          message: "AI 提交信息设置已写入 app-settings.json。"
+        },
+        {
+          tone: "info",
+          title: "正在刷新仓库",
+          message: "GitNest 正在更新远程跟踪引用。"
+        },
+        {
+          tone: "error",
+          title: "连接测试失败",
+          message: "请检查 API URL、模型和 API Key。"
+        }
+      ];
+
+      stateMount.replaceChildren(
+        ...examples.map((example) =>
+          GitNestToast.create({
+            ...example,
+            closable: true
+          })
+        )
+      );
+
+      const labels = {
+        success: "显示成功提示",
+        info: "显示信息提示",
+        error: "显示错误提示"
+      };
+      actionMount.replaceChildren(
+        ...examples.map((example) =>
+          GitNestButton.create({
+            label: labels[example.tone],
+            size: "small",
+            variant:
+              example.tone === "error"
+                ? "danger"
+                : example.tone === "success"
+                  ? "primary"
+                  : "default",
+            onClick: () =>
+              GitNestToast.show({
+                ...example,
+                duration: 3100
+              })
+          })
+        )
+      );
     }
 
     function mountDiffSearchPopoverShowcase() {
@@ -3676,6 +3814,7 @@
 
     const initialCategory = window.location.hash.slice(1);
     mountButtonShowcases();
+    mountToastShowcase();
     mountInputShowcases();
     mountDiffSearchPopoverShowcase();
     mountDiffWorkspaceShowcase();

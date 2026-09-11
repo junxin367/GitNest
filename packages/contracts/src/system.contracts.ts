@@ -58,6 +58,16 @@ import type {
   WorktreeCommandPreflightDto,
   WorktreeCommandPreflightRequest
 } from "./worktree.contracts";
+import type {
+  AiCommitMessageDto,
+  AiConnectionTestResultDto,
+  AppSettingsDto,
+  AppSettingsLoadDto,
+  ClearAiApiKeyRequest,
+  GenerateAiCommitMessageRequest,
+  TestAiConnectionRequest,
+  UpdateAppSettingsRequest
+} from "./settings.contracts";
 
 export type ExternalTerminalKindDto =
   | "windows-terminal"
@@ -158,6 +168,23 @@ export interface RuntimeInfo {
 }
 
 export interface GitNestBridge {
+  settings: {
+    get(): Promise<GitReadResult<AppSettingsLoadDto>>;
+    update(
+      request: UpdateAppSettingsRequest
+    ): Promise<GitReadResult<AppSettingsDto>>;
+    clearAiApiKey(
+      request: ClearAiApiKeyRequest
+    ): Promise<GitReadResult<AppSettingsDto>>;
+  };
+  ai: {
+    testConnection(
+      request: TestAiConnectionRequest
+    ): Promise<GitReadResult<AiConnectionTestResultDto>>;
+    generateCommitMessage(
+      request: GenerateAiCommitMessageRequest
+    ): Promise<GitReadResult<AiCommitMessageDto>>;
+  };
   account: {
     list(): Promise<GitReadResult<AccountOverviewDto>>;
     save(

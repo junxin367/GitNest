@@ -43,7 +43,7 @@ export const Button = forwardRef<
     iconPosition = "before",
     loading = false,
     selected = false,
-    size = "medium",
+    size = "small",
     type = "button",
     variant = "default",
     ...props

@@ -2,9 +2,11 @@
   --gn-button-size-small: 32px;
   --gn-button-size-medium: 35px;
   --gn-button-size-large: 40px;
-  --gn-button-height: var(--gn-button-size-medium);
+  --gn-button-height: var(--gn-button-size-small);
   --gn-button-padding: 0 var(--space-4);
   --gn-button-icon-size: var(--icon-small);
+  --gn-button-primary-color: var(--blue);
+  --gn-button-primary-foreground: #071411;
   position: relative;
   display: inline-flex;
   flex: 0 0 auto;
@@ -35,6 +37,12 @@
   --gn-button-padding: 0 var(--space-3);
   --gn-button-icon-size: 14px;
   font-size: var(--font-size-caption);
+}
+
+.gn-button[data-size="medium"] {
+  --gn-button-height: var(--gn-button-size-medium);
+  --gn-button-padding: 0 var(--space-4);
+  --gn-button-icon-size: var(--icon-small);
 }
 
 .gn-button[data-size="large"] {
@@ -83,9 +91,9 @@
 }
 
 .gn-button[data-variant="primary"] {
-  color: #071411;
-  background: var(--accent);
-  border-color: var(--accent);
+  color: var(--gn-button-primary-foreground);
+  background: var(--gn-button-primary-color);
+  border-color: var(--gn-button-primary-color);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -115,7 +123,16 @@
 }
 
 .gn-button[data-variant="primary"]:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 88%, white);
+  background: color-mix(
+    in srgb,
+    var(--gn-button-primary-color) 88%,
+    var(--text)
+  );
+  border-color: color-mix(
+    in srgb,
+    var(--gn-button-primary-color) 88%,
+    var(--text)
+  );
 }
 
 .gn-button[data-variant="danger"][data-emphasis="strong"]:hover:not(:disabled) {
@@ -165,16 +182,17 @@
   left: 50%;
   width: var(--icon-small);
   height: var(--icon-small);
-  margin: -8px 0 0 -8px;
+  margin: 0;
   content: "";
   border: 2px solid color-mix(in srgb, var(--text) 24%, transparent);
   border-top-color: var(--accent);
   border-radius: 50%;
+  translate: -50% -50%;
   animation: gn-button-spin 700ms linear infinite;
 }
 
 .gn-button[data-variant="primary"].is-loading::after {
-  border-top-color: #071411;
+  border-top-color: var(--gn-button-primary-foreground);
 }
 
 @keyframes gn-button-spin {
@@ -183,14 +201,6 @@
   }
 }
 
-html[data-theme="light"] .gn-button[data-variant="primary"] {
-  color: white;
-}
-
-html[data-theme="light"] .gn-button[data-variant="primary"]:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 88%, black);
-}
-
-html[data-theme="light"] .gn-button[data-variant="primary"].is-loading::after {
-  border-top-color: #fff;
+html[data-theme="light"] .gn-button {
+  --gn-button-primary-foreground: #fff;
 }

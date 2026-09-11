@@ -44,6 +44,13 @@ export function OpenInControl({
     !preferred;
   const contextLabel =
     scope === "workspace" ? "Workspace 根目录" : "当前 Worktree";
+  const primaryActionLabel = preferred
+    ? applications.active === preferred.kind
+      ? `正在使用 ${preferred.label} 打开${contextLabel}`
+      : `使用 ${preferred.label} 打开${contextLabel}`
+    : applications.loading
+      ? "正在检测可用的本地应用"
+      : "未检测到可用的本地应用";
 
   useEffect(() => {
     if (!menuOpen) {
@@ -125,6 +132,7 @@ export function OpenInControl({
               ? applications.active === preferred.kind
               : false
           }
+          aria-label={primaryActionLabel}
           className="open-in-primary"
           disabled={disabled}
           onClick={() => {
@@ -132,13 +140,7 @@ export function OpenInControl({
               void applications.open(preferred.kind);
             }
           }}
-          title={
-            preferred
-              ? `使用 ${preferred.label} 打开${contextLabel}`
-              : applications.loading
-                ? "正在检测可用的本地应用"
-                : "未检测到可用的本地应用"
-          }
+          title={primaryActionLabel}
           type="button"
         >
           {preferred ? (
@@ -146,15 +148,6 @@ export function OpenInControl({
           ) : (
             <Icon name="external" size={14} />
           )}
-          <span className="open-in-label">
-            {preferred
-              ? applications.active === preferred.kind
-                ? "正在打开"
-                : `Open in ${preferred.label}`
-              : applications.loading
-                ? "Detecting"
-                : "Open in"}
-          </span>
         </Button>
         <Button variant="unstyled"
           aria-expanded={menuOpen}

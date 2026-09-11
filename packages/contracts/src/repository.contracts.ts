@@ -3,6 +3,7 @@ import type {
   CommitSummaryDto,
   RepositorySnapshotDto
 } from "./git.contracts";
+import type { GitPushStrategyDto } from "./settings.contracts";
 import type { RepositoryTargetDto } from "./workspace.contracts";
 
 export interface RepositoryQueryRequest {
@@ -124,7 +125,7 @@ export type RepositoryCommandDto =
       type: "push";
       targets: RepositoryTargetDto[];
       remote?: string;
-      forceWithLease?: boolean;
+      strategy?: GitPushStrategyDto;
     }
   | {
       type: "switch-branch";
@@ -164,7 +165,6 @@ export interface RepositoryCommandWarningDto {
   code:
     | "REMOTE_CONTACT"
     | "SET_UPSTREAM"
-    | "FORCE_WITH_LEASE"
     | "REMOTE_BRANCH_EXISTS";
   severity: "info" | "warning" | "danger";
   message: string;

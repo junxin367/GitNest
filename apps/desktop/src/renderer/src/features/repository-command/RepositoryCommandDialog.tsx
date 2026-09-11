@@ -179,9 +179,7 @@ export function RepositoryCommandDialog({
               />
               {busy
                 ? "重新校验中…"
-                : dangerous
-                  ? "确认 Force with lease"
-                  : "确认并执行"}
+                : "确认并执行"}
             </Button>
           </div>
         </footer>

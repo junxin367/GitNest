@@ -56,9 +56,14 @@ describe("WorkspaceService integration", () => {
       path: fixture.metaRootPath
     });
     expect(metaEntry?.groups.map((group) => group.name)).toEqual([
-      "根目录仓库",
+      "原/根仓库",
       "svr"
     ]);
+    expect(
+      metaEntry?.groups.find(
+        (group) => group.name === "原/根仓库"
+      )?.targets
+    ).toHaveLength(2);
     expect(metaResult.workspace.repositories).toHaveLength(3);
     expect(
       metaResult.workspace.worktrees.some(
@@ -114,11 +119,11 @@ describe("WorkspaceService integration", () => {
     );
 
     expect(rescannedMeta?.groups.map((group) => group.name)).toEqual([
-      "根目录仓库"
+      "原/根仓库"
     ]);
     expect(overlapEntry).toMatchObject({
       kind: "workspace-directory",
-      groups: [{ name: "根目录仓库" }]
+      groups: [{ name: "原/根仓库" }]
     });
 
     const group = overlapEntry?.groups[0];

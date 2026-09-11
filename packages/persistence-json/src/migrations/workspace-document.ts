@@ -1,15 +1,20 @@
 import {
+  DEFAULT_ROOT_REPOSITORY_GROUP_NAME,
   WORKSPACE_SCHEMA_VERSION,
   WorkspaceError,
+  createPathIdentity,
   listWorkspaceTargets,
   repositoryTargetKey,
   type RepositoryGroup,
+  type RepositoryTarget,
   type Workspace,
   type WorkspaceEntry,
   type WorkspaceRepository,
   type WorkspaceScanIssue,
   type WorkspaceWorktree
 } from "@gitnest/workspace-core";
+
+const LEGACY_ROOT_REPOSITORY_GROUP_NAME = "根目录仓库";
 
 export function migrateWorkspaceDocument(value: unknown): Workspace {
   const migrated = migrateLegacyWorkspaceDocument(value);
@@ -306,7 +311,7 @@ function rebuildWorkspaceEntry(
     canonicalPath: entry.canonicalPath,
     excludes: [...entry.excludes],
     order: entry.order,
-    groups: entry.groups.map(rebuildRepositoryGroup),
+    groups: normalizeRepositoryGroups(entry),
     scanIssues: entry.scanIssues.map(
       (issue): WorkspaceScanIssue => ({
         path: issue.path,
@@ -340,6 +345,58 @@ function rebuildWorkspaceEntry(
     ...base,
     kind: "workspace-directory"
   };
+}
+
+function normalizeRepositoryGroups(
+  entry: WorkspaceEntry
+): RepositoryGroup[] {
+  const groups = entry.groups.map(rebuildRepositoryGroup);
+  const defaultGroup = groups.find(
+    (group) =>
+      group.name === DEFAULT_ROOT_REPOSITORY_GROUP_NAME ||
+      group.name === LEGACY_ROOT_REPOSITORY_GROUP_NAME
+  );
+
+  if (defaultGroup) {
+    defaultGroup.name = DEFAULT_ROOT_REPOSITORY_GROUP_NAME;
+    if (entry.kind === "workspace-meta-repository") {
+      appendTarget(defaultGroup.targets, entry.rootTarget);
+    }
+    return groups;
+  }
+
+  if (entry.kind !== "workspace-meta-repository") {
+    return groups;
+  }
+
+  groups.unshift({
+    id: createPathIdentity(
+      "group",
+      `${entry.canonicalPath}\0${DEFAULT_ROOT_REPOSITORY_GROUP_NAME.toLocaleLowerCase()}`
+    ),
+    name: DEFAULT_ROOT_REPOSITORY_GROUP_NAME,
+    targets: [entry.rootTarget],
+    collapsed: false
+  });
+  return groups;
+}
+
+function appendTarget(
+  targets: RepositoryTarget[],
+  target: RepositoryTarget
+): void {
+  if (
+    !targets.some(
+      (candidate) =>
+        repositoryTargetKey(candidate) ===
+        repositoryTargetKey(target)
+    )
+  ) {
+    targets.push({
+      repositoryId: target.repositoryId,
+      worktreeId: target.worktreeId
+    });
+  }
 }
 
 function rebuildRepositoryGroup(

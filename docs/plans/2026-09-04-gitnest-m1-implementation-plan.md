@@ -226,7 +226,7 @@ M1 最终集成验证 [完成]
   - 三种添加入口共用同一发现管线。
   - 根目录本身是仓库时仍继续扫描子目录。
   - 自动分类严格区分 Workspace 元仓库、Workspace 目录、普通仓库和无仓库目录。
-  - 直属子仓库进入 `根目录仓库`，更深仓库按首段相对路径分组。
+  - Workspace 根目录仓库和直属子仓库进入 `原/根仓库`，更深仓库按首段相对路径分组。
   - 相同规范化路径去重，不同本地路径不因 Remote 相同而合并。
   - linked worktree 通过 `RepositoryTarget(repositoryId + worktreeId)` 精确指向并按 commonDir 建立关系。
   - 重叠根目录按最具体已添加根归属。

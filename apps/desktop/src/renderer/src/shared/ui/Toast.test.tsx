@@ -33,6 +33,7 @@ describe("Toast", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     act(() => root.unmount());
     container.remove();
     vi.unstubAllGlobals();
@@ -70,5 +71,61 @@ describe("Toast", () => {
       (close as HTMLButtonElement).click();
     });
     expect(closed).toBe(true);
+  });
+
+  it("auto-closes through the owner callback after its duration", () => {
+    vi.useFakeTimers();
+    let closed = false;
+
+    act(() => {
+      root.render(
+        <ToastViewport>
+          <Toast
+            duration={100}
+            message="正在刷新仓库。"
+            onClose={() => {
+              closed = true;
+            }}
+            title="处理中"
+          />
+        </ToastViewport>
+      );
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+
+    expect(closed).toBe(true);
+  });
+
+  it("shares one global viewport across multiple owners", () => {
+    act(() => {
+      root.render(
+        <>
+          <ToastViewport>
+            <Toast
+              message="第一个提示。"
+              title="操作完成"
+              tone="success"
+            />
+          </ToastViewport>
+          <ToastViewport>
+            <Toast
+              message="第二个提示。"
+              title="正在刷新"
+              tone="info"
+            />
+          </ToastViewport>
+        </>
+      );
+    });
+
+    expect(
+      document.querySelectorAll(
+        '.toast-viewport[data-toast-viewport="true"]'
+      )
+    ).toHaveLength(1);
+    expect(document.body.querySelectorAll(".toast")).toHaveLength(2);
   });
 });

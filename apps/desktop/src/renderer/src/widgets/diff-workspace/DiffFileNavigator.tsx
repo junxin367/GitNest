@@ -7,6 +7,8 @@ import {
   type ReactNode
 } from "react";
 
+import type { DiffFileViewDto } from "@gitnest/contracts";
+
 import {
   buildChangeTree,
   changeTreeDirectoryPaths,
@@ -29,8 +31,6 @@ import { DiffViewerState } from "./DiffPanel";
 import type {
   DiffNavigationFeatureConfig
 } from "./diffWorkspaceConfiguration";
-
-type DiffFileViewMode = "list" | "tree";
 
 interface DiffFileSection {
   title: string;
@@ -60,6 +60,10 @@ export interface DiffFileNavigatorProps {
   changesLoading?: boolean | undefined;
   changesError?: DiffWorkspaceMessage | undefined;
   treePreference?: DiffWorkspaceTreePreference | undefined;
+  fileView?: DiffFileViewDto | undefined;
+  onFileViewChange?:
+    | ((value: DiffFileViewDto) => void)
+    | undefined;
   onSelectedFileChange(file: DiffViewerFile): void;
   onStageFile?:
     | ((
@@ -94,6 +98,8 @@ export function DiffFileNavigator({
   changesLoading = false,
   changesError,
   treePreference,
+  fileView,
+  onFileViewChange,
   onSelectedFileChange,
   onStageFile,
   onUnstageFile,
@@ -103,8 +109,9 @@ export function DiffFileNavigator({
   onFileContextMenu
 }: DiffFileNavigatorProps) {
   const [filter, setFilter] = useState("");
-  const [viewMode, setViewMode] =
-    useState<DiffFileViewMode>("list");
+  const [internalViewMode, setInternalViewMode] =
+    useState<DiffFileViewDto>("list");
+  const viewMode = fileView ?? internalViewMode;
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<
     Record<DiffViewerMode, boolean>
@@ -514,9 +521,13 @@ export function DiffFileNavigator({
                     />
                   }
                   onClick={() => {
-                    setViewMode((current) =>
-                      current === "tree" ? "list" : "tree"
-                    );
+                    const next =
+                      viewMode === "tree" ? "list" : "tree";
+                    if (onFileViewChange) {
+                      onFileViewChange(next);
+                    } else {
+                      setInternalViewMode(next);
+                    }
                     setViewMenuOpen(false);
                   }}
                 >

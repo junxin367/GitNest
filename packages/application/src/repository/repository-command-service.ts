@@ -2,6 +2,8 @@ import {
   GitError,
   type Branch,
   type GitClient,
+  type GitAncestry,
+  type GitPullStrategy,
   type GitReadOptions,
   type GitRepositoryCommandClient,
   type RemoteBranchRef,
@@ -41,7 +43,7 @@ export type RepositoryCommand =
       type: "push";
       targets: RepositoryTarget[];
       remote?: string;
-      forceWithLease?: boolean;
+      strategy?: GitPullStrategy;
     }
   | {
       type: "switch-branch";
@@ -81,7 +83,6 @@ export interface CommandWarning {
   code:
     | "REMOTE_CONTACT"
     | "SET_UPSTREAM"
-    | "FORCE_WITH_LEASE"
     | "REMOTE_BRANCH_EXISTS";
   severity: "info" | "warning" | "danger";
   message: string;
@@ -137,7 +138,7 @@ interface CommandTargetPlan {
   localBranch?: string;
   remoteBranch?: string;
   setUpstream?: boolean;
-  forceWithLeaseExpected?: string;
+  pullStrategy?: GitPullStrategy;
   branch?: string;
   newName?: string;
   startPoint?: string;
@@ -606,45 +607,45 @@ export class RepositoryCommandService {
     const remoteRef = remoteRefs.find(
       (candidate) => candidate.name === remoteBranch
     );
-    const forceWithLease =
-      command.forceWithLease ?? false;
-
-    if (forceWithLease && !remoteRef) {
-      throw new GitError(
-        "INVALID_REQUEST",
-        "Force-with-lease requires an existing remote branch."
-      );
-    }
-
+    const strategy = command.strategy ?? "rebase";
+    let ancestry: GitAncestry | undefined;
     if (remoteRef) {
-      const ancestry =
-        await this.#gitCommands.compareAncestry(
-          path,
-          remoteRef.head,
-          context.snapshot.head,
-          signalOptions(signal)
-        );
-      if (!forceWithLease && ancestry !== "ancestor") {
-        throw new GitError(
-          "NON_FAST_FORWARD",
-          ancestry === "unknown"
-            ? "Fetch the remote branch before pushing."
-            : "The remote branch is not an ancestor of local HEAD."
-        );
+      ancestry = await this.#gitCommands.compareAncestry(
+        path,
+        remoteRef.head,
+        context.snapshot.head,
+        signalOptions(signal)
+      );
+      if (ancestry !== "ancestor") {
+        assertCleanWorktree(context.snapshot, "Push 同步");
       }
     }
+    const pullStrategy =
+      remoteRef && ancestry !== "ancestor"
+        ? strategy
+        : undefined;
 
     const setUpstream =
       !upstream ||
       upstream.remote !== remote ||
       upstream.branch !== remoteBranch;
     const impacts: CommandImpact[] = [
+      ...(pullStrategy
+        ? [
+            {
+              kind: "worktree-update" as const,
+              target,
+              summary: `Pull ${remote}/${remoteBranch}`,
+              detail: `远程分支已有更新，将先执行 ${pullStrategy === "rebase" ? "Rebase" : "Merge"}，再继续 Push。`
+            }
+          ]
+        : []),
       {
         kind: "remote-branch",
         target,
-        summary: `${forceWithLease ? "Force-with-lease " : ""}Push ${remote}/${remoteBranch}`,
+        summary: `Push ${remote}/${remoteBranch}`,
         detail: remoteRef
-          ? `远程分支将从 ${remoteRef.head.slice(0, 8)} 更新到 ${context.snapshot.head.slice(0, 8)}。`
+          ? `远程分支将更新到本地分支 ${context.snapshot.branch} 的最新提交。`
           : `将创建远程分支 ${remoteBranch} 并设置本地上游。`
       }
     ];
@@ -663,13 +664,12 @@ export class RepositoryCommandService {
             }
           ]
         : []),
-      ...(forceWithLease
+      ...(pullStrategy
         ? [
             {
-              code: "FORCE_WITH_LEASE" as const,
-              severity: "danger" as const,
-              message:
-                "这会覆盖远程分支，但仅在远程仍等于预检对象时执行。"
+              code: "REMOTE_CONTACT" as const,
+              severity: "info" as const,
+              message: `远程有更新，Push 前将自动执行 ${pullStrategy === "rebase" ? "Rebase" : "Merge"}。`
             }
           ]
         : [])
@@ -681,9 +681,7 @@ export class RepositoryCommandService {
       localBranch: context.snapshot.branch,
       remoteBranch,
       setUpstream,
-      ...(forceWithLease && remoteRef
-        ? { forceWithLeaseExpected: remoteRef.head }
-        : {}),
+      ...(pullStrategy ? { pullStrategy } : {}),
       impacts,
       warnings,
       fingerprint: planFingerprint({
@@ -694,7 +692,9 @@ export class RepositoryCommandService {
         remoteBranch,
         remoteHead: remoteRef?.head ?? "",
         setUpstream,
-        forceWithLease
+        strategy,
+        ancestry,
+        pullStrategy
       })
     };
   }
@@ -956,17 +956,20 @@ export class RepositoryCommandService {
         );
         return;
       case "push":
+        if (plan.pullStrategy) {
+          await this.#gitCommands.pullBranch(
+            path,
+            plan.remote as string,
+            plan.remoteBranch as string,
+            plan.pullStrategy,
+            { signal }
+          );
+        }
         await this.#gitCommands.pushBranch(path, {
           remote: plan.remote as string,
           localBranch: plan.localBranch as string,
           remoteBranch: plan.remoteBranch as string,
           setUpstream: plan.setUpstream ?? false,
-          ...(plan.forceWithLeaseExpected
-            ? {
-                forceWithLeaseExpected:
-                  plan.forceWithLeaseExpected
-              }
-            : {}),
           signal
         });
         return;
@@ -1064,21 +1067,14 @@ function normalizeRepositoryCommand(
       };
     case "push": {
       const targets = normalizeTargets(command.targets);
-      const forceWithLease =
-        command.forceWithLease ?? false;
-      if (forceWithLease && targets.length !== 1) {
-        throw new GitError(
-          "INVALID_REQUEST",
-          "Force-with-lease is limited to one repository target."
-        );
-      }
+      const strategy = command.strategy ?? "rebase";
       return {
         type: "push",
         targets,
         ...(command.remote?.trim()
           ? { remote: command.remote.trim() }
           : {}),
-        forceWithLease
+        strategy
       };
     }
     case "switch-branch":

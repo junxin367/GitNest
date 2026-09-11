@@ -1,6 +1,8 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type DragEvent
 } from "react";
@@ -31,9 +33,15 @@ import { useExternalTerminals } from "../features/external-terminal/useExternalT
 import { GlobalSearchDialog } from "../features/global-search/GlobalSearchDialog";
 import { RepositoryCommandDialog } from "../features/repository-command/RepositoryCommandDialog";
 import { useRepositoryCommands } from "../features/repository-command/useRepositoryCommands";
+import { useAppSettings } from "../features/settings/useAppSettings";
+import {
+  chunkRepositoryTargets,
+  resolveDefaultTerminalProfile,
+  resolveStartupNavigation
+} from "../features/settings/settingsRuntime";
 import { RepositoryPage } from "../pages/repository/RepositoryPage";
 import { OperationCenterPage } from "../pages/operations/OperationCenterPage";
-import { SettingsPage } from "../pages/settings/SettingsPage";
+import { ApplicationSettingsPage } from "../pages/settings/ApplicationSettingsPage";
 import { WorkspaceCollectionPage } from "../pages/workspace-overview/WorkspaceCollectionPage";
 import { WorkspaceOverviewPage } from "../pages/workspace-overview/WorkspaceOverviewPage";
 import { Icon } from "../shared/ui/Icon";
@@ -41,14 +49,10 @@ import { ActivityRail } from "../widgets/activity-rail/ActivityRail";
 import { AppTitlebar } from "../widgets/app-titlebar/AppTitlebar";
 import { DetailInspector } from "../widgets/detail-inspector/DetailInspector";
 import { RepositoryHeader } from "../widgets/repository-header/RepositoryHeader";
-import { repositoryDiffWorkspaceConfiguration } from "../widgets/diff-workspace/diffWorkspaceConfiguration";
 import { StatusBar } from "../widgets/status-bar/StatusBar";
 import { WorkspaceSidebar } from "../widgets/workspace-sidebar/WorkspaceSidebar";
 
-type Theme = "dark" | "light";
-
 export function App() {
-  const [theme, setTheme] = useState<Theme>(readInitialTheme);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(
     null
@@ -70,6 +74,8 @@ export function App() {
   const [selectedCommit, setSelectedCommit] = useState<
     RepositoryCommitDto["commit"] | null
   >(null);
+  const appSettings = useAppSettings();
+  const theme = appSettings.settings.appearance.theme;
   const workspace = useWorkspace();
   const repositoryCommands = useRepositoryCommands(
     workspace.workspace?.selectedTarget,
@@ -105,21 +111,6 @@ export function App() {
         : [],
     [workspace.workspace]
   );
-  const workspacePullTargets = useMemo(
-    () =>
-      workspaceTargets.filter((target) => {
-        const snapshot = findTargetSnapshot(
-          workspace.snapshots,
-          target
-        );
-        return Boolean(
-          snapshot?.upstream &&
-            snapshot.behind > 0 &&
-            getSnapshotChangeCount(snapshot) === 0
-        );
-      }),
-    [workspace.snapshots, workspaceTargets]
-  );
   const operationAttentionCount = workspace.operations.filter(
     (operation) =>
       operation.state === "queued" ||
@@ -145,16 +136,26 @@ export function App() {
     repositoryCommands.preflight !== null ||
     selectedRepositoryBusy;
   const defaultTerminalProfile =
-    externalTerminals.profiles[0];
+    resolveDefaultTerminalProfile(
+      externalTerminals.profiles,
+      appSettings.settings.general.defaultTerminalKind
+    );
   const fullPageView =
     view === "operations" || view === "settings";
   const inspectorVisible =
     inspectorOpen && !fullPageView;
   const directoryPanelHidden =
     sidebarCollapsed || fullPageView;
+  const startupNavigationApplied = useRef(false);
+  const startupFetchAttempted = useRef(false);
   const toggleTheme = () =>
-    setTheme((current) =>
-      current === "dark" ? "light" : "dark"
+    appSettings.update(
+      {
+        appearance: {
+          theme: theme === "dark" ? "light" : "dark"
+        }
+      },
+      { silent: true }
     );
   const resetLayout = () => {
     setSidebarCollapsed(false);
@@ -171,11 +172,6 @@ export function App() {
           .getPropertyValue("--titlebar")
           .trim()
       );
-    try {
-      localStorage.setItem("gitnest.theme", theme);
-    } catch {
-      // Theme persistence is best-effort in restricted environments.
-    }
   }, [theme]);
 
   useEffect(() => {
@@ -244,6 +240,69 @@ export function App() {
   }, [view, workspace.workspace?.selectedTarget]);
 
   useEffect(() => {
+    if (
+      startupNavigationApplied.current ||
+      appSettings.loading ||
+      workspace.operation === "loading"
+    ) {
+      return;
+    }
+
+    startupNavigationApplied.current = true;
+    const destination = resolveStartupNavigation(
+      appSettings.settings,
+      Boolean(workspace.workspace?.selectedTarget)
+    );
+    setWorkspaceTab(destination.workspaceTab);
+    setRepositoryTab(destination.repositoryTab);
+    setView(destination.view);
+  }, [
+    appSettings.loading,
+    appSettings.settings,
+    workspace.operation,
+    workspace.workspace?.selectedTarget
+  ]);
+
+  const fetchTargets = useCallback(
+    async (targets: RepositoryTargetDto[]) => {
+      for (const batch of chunkRepositoryTargets(targets)) {
+        await repositoryCommands.request({
+          type: "fetch",
+          targets: batch
+        });
+      }
+    },
+    [repositoryCommands.request]
+  );
+
+  useEffect(() => {
+    if (
+      startupFetchAttempted.current ||
+      !startupNavigationApplied.current ||
+      appSettings.loading ||
+      workspace.operation === "loading" ||
+      !workspace.workspace
+    ) {
+      return;
+    }
+
+    startupFetchAttempted.current = true;
+    if (appSettings.settings.git.fetchMode !== "startup") {
+      return;
+    }
+    const targets = listWorkspaceTargets(workspace.workspace);
+    if (targets.length > 0) {
+      void fetchTargets(targets);
+    }
+  }, [
+    appSettings.loading,
+    appSettings.settings.git.fetchMode,
+    fetchTargets,
+    workspace.operation,
+    workspace.workspace
+  ]);
+
+  useEffect(() => {
     const handleGlobalSearchShortcut = (
       event: KeyboardEvent
     ) => {
@@ -274,17 +333,34 @@ export function App() {
       target
     );
     void workspace.selectTarget(target);
-    setRepositoryTab(
-      preferredRepositoryTab(
-        getSnapshotChangeCount(snapshot)
-      )
+    const nextTab = preferredRepositoryTab(
+      getSnapshotChangeCount(snapshot)
     );
+    setRepositoryTab(nextTab);
     setView("repository");
+    void appSettings.update(
+      {
+        navigation: {
+          lastContentView: "repository",
+          repositoryTab: nextTab
+        }
+      },
+      { silent: true }
+    );
   };
   const navigate = (nextView: AppView) => {
     if (nextView === "workspace") {
       setRepositoryTab("overview");
       setWorkspaceTab("overview");
+      void appSettings.update(
+        {
+          navigation: {
+            lastContentView: "workspace",
+            workspaceTab: "overview"
+          }
+        },
+        { silent: true }
+      );
     }
     if (
       nextView === "operations" ||
@@ -298,6 +374,29 @@ export function App() {
   const openWorkspaceTab = (tab: WorkspaceTab) => {
     setWorkspaceTab(tab);
     setView("workspace");
+    void appSettings.update(
+      {
+        navigation: {
+          lastContentView: "workspace",
+          workspaceTab: tab
+        }
+      },
+      { silent: true }
+    );
+  };
+
+  const openRepositoryTab = (tab: RepositoryTab) => {
+    setRepositoryTab(tab);
+    setView("repository");
+    void appSettings.update(
+      {
+        navigation: {
+          lastContentView: "repository",
+          repositoryTab: tab
+        }
+      },
+      { silent: true }
+    );
   };
 
   return (
@@ -388,7 +487,6 @@ export function App() {
           sidebarHidden={directoryPanelHidden}
           snapshots={workspace.snapshots}
           onAddDirectory={() => void workspace.chooseDirectory()}
-          onOpenWorkspace={() => navigate("workspace")}
           onRemoveEntry={workspace.removeEntry}
           onRescan={workspace.rescan}
           onSelectEntry={(entryId) =>
@@ -425,10 +523,6 @@ export function App() {
                 workspace.operation === "scanning" ||
                 runtimeRefreshing
               }
-              showPushActions={
-                repositoryDiffWorkspaceConfiguration.extensions
-                  .pushRegion
-              }
               repositoryTab={repositoryTab}
               workspaceTab={workspaceTab}
               snapshots={workspace.snapshots}
@@ -443,8 +537,7 @@ export function App() {
               workspaceCommandBusy={
                 repositoryCommands.busy || runtimeRefreshing
               }
-              workspaceFetchCount={workspaceTargets.length}
-              workspacePullCount={workspacePullTargets.length}
+              workspaceRepositoryCount={workspaceTargets.length}
               onFetch={() => {
                 if (selectedTarget) {
                   void repositoryCommands.request({
@@ -464,18 +557,24 @@ export function App() {
               }}
               onFetchWorkspace={() => {
                 if (workspaceTargets.length > 0) {
-                  void repositoryCommands.request({
-                    type: "fetch",
-                    targets: workspaceTargets
-                  });
+                  void fetchTargets(workspaceTargets);
                 }
               }}
               onPullWorkspace={() => {
-                if (workspacePullTargets.length > 0) {
+                if (workspaceTargets.length > 0) {
                   void repositoryCommands.request({
                     type: "pull",
-                    targets: workspacePullTargets,
+                    targets: workspaceTargets,
                     strategy: "ff-only"
+                  });
+                }
+              }}
+              onPushWorkspace={() => {
+                if (workspaceTargets.length > 0) {
+                  void repositoryCommands.request({
+                    type: "push",
+                    targets: workspaceTargets,
+                    strategy: appSettings.settings.git.pushStrategy
                   });
                 }
               }}
@@ -483,16 +582,8 @@ export function App() {
                 if (selectedTarget) {
                   void repositoryCommands.request({
                     type: "push",
-                    targets: [selectedTarget]
-                  });
-                }
-              }}
-              onForcePush={() => {
-                if (selectedTarget) {
-                  void repositoryCommands.request({
-                    type: "push",
                     targets: [selectedTarget],
-                    forceWithLease: true
+                    strategy: appSettings.settings.git.pushStrategy
                   });
                 }
               }}
@@ -514,7 +605,7 @@ export function App() {
               onOpenSettings={() => navigate("settings")}
               onOpenWorkspace={() => navigate("workspace")}
               onRefresh={() => void workspace.refresh()}
-              onRepositoryTabChange={setRepositoryTab}
+              onRepositoryTabChange={openRepositoryTab}
               onWorkspaceTabChange={openWorkspaceTab}
               onToggleInspector={() =>
                 setInspectorOpen((current) => !current)
@@ -570,6 +661,7 @@ export function App() {
                 />
               ) : view === "repository" ? (
                 <RepositoryPage
+                  appSettings={appSettings}
                   externalApplications={externalApplications}
                   operations={workspace.operations}
                   snapshots={workspace.snapshots}
@@ -578,7 +670,7 @@ export function App() {
                   workspace={workspace.workspace}
                   commands={repositoryCommands}
                   terminals={externalTerminals}
-                  onOpenTab={setRepositoryTab}
+                  onOpenTab={openRepositoryTab}
                   onCommitSelectionChange={setSelectedCommit}
                 />
               ) : view === "operations" ? (
@@ -590,8 +682,9 @@ export function App() {
                   workspace={workspace.workspace}
                 />
               ) : (
-                <SettingsPage
+                <ApplicationSettingsPage
                   accounts={accounts}
+                  appSettings={appSettings}
                   gitEnvironment={gitEnvironment}
                   terminalProfiles={externalTerminals.profiles}
                   workspace={workspace.workspace}
@@ -647,10 +740,7 @@ export function App() {
               workspace.workspace
             );
             if (targets.length > 0) {
-              void repositoryCommands.request({
-                type: "fetch",
-                targets
-              });
+              void fetchTargets(targets);
             }
           }}
           onNavigate={navigate}
@@ -716,20 +806,4 @@ function handleDragLeave(
   ) {
     setDragActive(false);
   }
-}
-
-function readInitialTheme(): Theme {
-  try {
-    const stored = localStorage.getItem("gitnest.theme");
-    if (stored === "dark" || stored === "light") {
-      return stored;
-    }
-  } catch {
-    // Fall through to the operating-system preference.
-  }
-
-  return window.matchMedia("(prefers-color-scheme: light)")
-    .matches
-    ? "light"
-    : "dark";
 }

@@ -117,3 +117,25 @@ export type {
   WorktreeCommandPreflightRequest,
   WorktreeCommandWarningDto
 } from "./worktree.contracts";
+export {
+  DEFAULT_AI_COMMIT_PROMPT,
+  createDefaultAppSettings
+} from "./settings.contracts";
+export type {
+  AiCommitMessageDto,
+  AiConnectionTestResultDto,
+  AppSettingsDto,
+  AppSettingsLoadDto,
+  AppThemeDto,
+  ClearAiApiKeyRequest,
+  DiffFileViewDto,
+  DiffLayoutDto,
+  GenerateAiCommitMessageRequest,
+  GitFetchModeDto,
+  GitPushStrategyDto,
+  LastContentViewDto,
+  RepositoryTabDto,
+  TestAiConnectionRequest,
+  UpdateAppSettingsRequest,
+  WorkspaceTabDto
+} from "./settings.contracts";

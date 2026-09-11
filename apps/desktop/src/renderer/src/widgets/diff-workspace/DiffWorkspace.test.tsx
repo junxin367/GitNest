@@ -112,6 +112,7 @@ describe("DiffWorkspace", () => {
     const onMessageChange = vi.fn();
     const onPushChange = vi.fn();
     const onSubmit = vi.fn();
+    const onGenerate = vi.fn();
 
     act(() => {
       root.render(
@@ -126,6 +127,11 @@ describe("DiffWorkspace", () => {
             unstaged: 1,
             untracked: 0,
             submitting: false,
+            ai: {
+              enabled: true,
+              busy: false,
+              onGenerate
+            },
             onMessageChange,
             onPushChange,
             onSubmit
@@ -183,6 +189,28 @@ describe("DiffWorkspace", () => {
       )?.value
     ).toBe("Share the workspace");
     expect(container.querySelector(".gn-textarea")).not.toBeNull();
+    expect(
+      findButton(container, "AI 生成").closest(
+        ".diff-workspace-commit-field-head"
+      )
+    ).not.toBeNull();
+    expect(
+      findButton(container, "提交已暂存变更").dataset
+        .fullWidth
+    ).toBe("true");
+    expect(
+      findButton(
+        container,
+        "提交已暂存变更"
+      ).parentElement?.classList.contains(
+        "diff-workspace-commit-form"
+      )
+    ).toBe(true);
+
+    act(() => {
+      findButton(container, "AI 生成").click();
+    });
+    expect(onGenerate).toHaveBeenCalledTimes(1);
 
     act(() => {
       const message =

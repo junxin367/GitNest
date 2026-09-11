@@ -80,11 +80,11 @@
 }
 
 .gn-diff-search-popover__action.gn-button {
-  --gn-button-height: 28px;
+  --gn-button-height: var(--control-compact);
   --gn-button-icon-size: 13px;
-  width: 24px;
-  min-width: 24px;
-  height: 28px;
+  width: var(--control-compact);
+  min-width: var(--control-compact);
+  height: var(--control-compact);
   padding: 0;
   border-radius: var(--radius-small);
 }

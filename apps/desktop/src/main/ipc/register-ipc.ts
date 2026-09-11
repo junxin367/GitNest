@@ -18,15 +18,27 @@ import {
 
 import {
   IPC_CHANNELS,
+  type AiCommitMessageDto,
+  type AiConnectionTestResultDto,
   type AccountRemovalImpactRequest,
+  type AppSettingsDto,
+  type AppSettingsLoadDto,
+  type AppThemeDto,
   type BindAccountRequest,
   type CancelRepositoryOperationRequest,
   type CancelRepositoryQueryRequest,
+  type ClearAiApiKeyRequest,
   type CreateRepositoryCommitRequest,
   type GitReadErrorDto,
   type GitReadResult,
+  type GenerateAiCommitMessageRequest,
   type AddWorkspaceEntryRequest,
   type ExternalApplicationKindDto,
+  type ExternalTerminalKindDto,
+  type DiffFileViewDto,
+  type DiffLayoutDto,
+  type GitFetchModeDto,
+  type GitPushStrategyDto,
   type IpcArguments,
   type IpcChannel,
   type IpcResult,
@@ -46,6 +58,7 @@ import {
   type RepositoryHistoryRequest,
   type RepositoryPathsMutationRequest,
   type RepositoryQueryRequest,
+  type RepositoryTabDto,
   type RuntimeInfo,
   type RuntimePlatform,
   type SaveAccountRequest,
@@ -54,8 +67,12 @@ import {
   type SelectWorkspaceEntryRequest,
   type SetWorkspaceGroupCollapsedRequest,
   type TestAccountRequest,
+  type TestAiConnectionRequest,
   type UnbindAccountRequest,
   type UpdateWorkspaceEntryRequest,
+  type UpdateAppSettingsRequest,
+  type LastContentViewDto,
+  type WorkspaceTabDto,
   type WorkspaceErrorDto,
   type WorkspaceResult,
   type WorktreeCommandDto,
@@ -112,6 +129,32 @@ const MAX_ACCOUNT_HOST_LENGTH = 320;
 const MAX_ACCOUNT_USERNAME_LENGTH = 255;
 const MAX_ACCOUNT_TOKEN_LENGTH = 8_192;
 const MAX_ACCOUNT_REPOSITORY_URL_LENGTH = 4_096;
+const MAX_AI_API_URL_LENGTH = 2_048;
+const MAX_AI_MODEL_LENGTH = 256;
+const MAX_AI_API_KEY_LENGTH = 8_192;
+const MAX_AI_PROMPT_LENGTH = 12_000;
+const APP_THEMES = new Set(["dark", "light"]);
+const DIFF_FILE_VIEWS = new Set(["list", "tree"]);
+const DIFF_LAYOUTS = new Set(["split", "unified"]);
+const GIT_FETCH_MODES = new Set(["manual", "startup"]);
+const GIT_PUSH_STRATEGIES = new Set(["rebase", "merge"]);
+const LAST_CONTENT_VIEWS = new Set([
+  "workspace",
+  "repository"
+]);
+const WORKSPACE_TABS = new Set([
+  "overview",
+  "repositories",
+  "activity",
+  "worktrees"
+]);
+const REPOSITORY_TABS = new Set([
+  "overview",
+  "changes",
+  "history",
+  "branches",
+  "worktrees"
+]);
 
 export function registerIpcHandlers(
   services: ApplicationServices
@@ -121,6 +164,64 @@ export function registerIpcHandlers(
   }
 
   registered = true;
+
+  registerHandler(
+    IPC_CHANNELS.settingsGet,
+    (): Promise<GitReadResult<AppSettingsLoadDto>> =>
+      captureGitRead(() => services.settings.get())
+  );
+
+  registerHandler(
+    IPC_CHANNELS.settingsUpdate,
+    (
+      _event,
+      request
+    ): Promise<GitReadResult<AppSettingsDto>> =>
+      captureGitRead(() =>
+        services.settings.update(
+          validateUpdateAppSettingsRequest(request)
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.settingsClearAiApiKey,
+    (
+      _event,
+      request
+    ): Promise<GitReadResult<AppSettingsDto>> =>
+      captureGitRead(() =>
+        services.settings.clearAiApiKey(
+          validateClearAiApiKeyRequest(request).confirmed
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.aiTestConnection,
+    (
+      _event,
+      request
+    ): Promise<GitReadResult<AiConnectionTestResultDto>> =>
+      captureGitRead(() =>
+        services.aiCommitMessages.testConnection(
+          validateTestAiConnectionRequest(request)
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.aiGenerateCommitMessage,
+    (
+      _event,
+      request
+    ): Promise<GitReadResult<AiCommitMessageDto>> =>
+      captureGitRead(() =>
+        services.aiCommitMessages.generateCommitMessage(
+          validateGenerateAiCommitMessageRequest(request).target
+        )
+      )
+  );
 
   registerHandler(
     IPC_CHANNELS.systemGetRuntimeInfo,
@@ -810,6 +911,342 @@ function toWorkspaceError(error: unknown): WorkspaceErrorDto {
         : "An unknown Workspace error occurred.",
     details: {}
   };
+}
+
+export function validateUpdateAppSettingsRequest(
+  request: unknown
+): UpdateAppSettingsRequest {
+  if (!isRecord(request)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Updating application settings requires an object."
+    );
+  }
+  const result: UpdateAppSettingsRequest = {};
+
+  if ("general" in request) {
+    if (!isRecord(request.general)) {
+      throw invalidSettingsRequest();
+    }
+    const general: NonNullable<
+      UpdateAppSettingsRequest["general"]
+    > = {};
+    if ("restoreLastView" in request.general) {
+      general.restoreLastView = requireBoolean(
+        request.general.restoreLastView
+      );
+    }
+    if ("defaultTerminalKind" in request.general) {
+      const value = request.general.defaultTerminalKind;
+      if (
+        value !== null &&
+        (typeof value !== "string" ||
+          !EXTERNAL_TERMINAL_KINDS.has(value))
+      ) {
+        throw invalidSettingsRequest();
+      }
+      general.defaultTerminalKind =
+        value as ExternalTerminalKindDto | null;
+    }
+    result.general = general;
+  }
+
+  if ("appearance" in request) {
+    if (!isRecord(request.appearance)) {
+      throw invalidSettingsRequest();
+    }
+    const appearance: NonNullable<
+      UpdateAppSettingsRequest["appearance"]
+    > = {};
+    if ("theme" in request.appearance) {
+      appearance.theme = requireEnum(
+        request.appearance.theme,
+        APP_THEMES
+      ) as AppThemeDto;
+    }
+    result.appearance = appearance;
+  }
+
+  if ("diff" in request) {
+    if (!isRecord(request.diff)) {
+      throw invalidSettingsRequest();
+    }
+    const diff: NonNullable<
+      UpdateAppSettingsRequest["diff"]
+    > = {};
+    if ("fileView" in request.diff) {
+      diff.fileView = requireEnum(
+        request.diff.fileView,
+        DIFF_FILE_VIEWS
+      ) as DiffFileViewDto;
+    }
+    if ("layout" in request.diff) {
+      diff.layout = requireEnum(
+        request.diff.layout,
+        DIFF_LAYOUTS
+      ) as DiffLayoutDto;
+    }
+    if ("wrap" in request.diff) {
+      diff.wrap = requireBoolean(request.diff.wrap);
+    }
+    if ("treeDirectoriesCollapsed" in request.diff) {
+      diff.treeDirectoriesCollapsed = requireBoolean(
+        request.diff.treeDirectoriesCollapsed
+      );
+    }
+    result.diff = diff;
+  }
+
+  if ("git" in request) {
+    if (!isRecord(request.git)) {
+      throw invalidSettingsRequest();
+    }
+    const git: NonNullable<
+      UpdateAppSettingsRequest["git"]
+    > = {};
+    if ("fetchMode" in request.git) {
+      git.fetchMode = requireEnum(
+        request.git.fetchMode,
+        GIT_FETCH_MODES
+      ) as GitFetchModeDto;
+    }
+    if ("pushStrategy" in request.git) {
+      git.pushStrategy = requireEnum(
+        request.git.pushStrategy,
+        GIT_PUSH_STRATEGIES
+      ) as GitPushStrategyDto;
+    }
+    result.git = git;
+  }
+
+  if ("ai" in request) {
+    if (!isRecord(request.ai)) {
+      throw invalidSettingsRequest();
+    }
+    const ai: NonNullable<
+      UpdateAppSettingsRequest["ai"]
+    > = {};
+    if ("enabled" in request.ai) {
+      ai.enabled = requireBoolean(request.ai.enabled);
+    }
+    if ("apiUrl" in request.ai) {
+      ai.apiUrl = requireBoundedString(
+        request.ai.apiUrl,
+        MAX_AI_API_URL_LENGTH,
+        true
+      );
+      if (ai.apiUrl) {
+        validateAiUrl(ai.apiUrl);
+      }
+    }
+    if ("model" in request.ai) {
+      ai.model = requireBoundedString(
+        request.ai.model,
+        MAX_AI_MODEL_LENGTH,
+        true
+      );
+    }
+    if ("apiKey" in request.ai) {
+      ai.apiKey = requireBoundedString(
+        request.ai.apiKey,
+        MAX_AI_API_KEY_LENGTH,
+        true
+      );
+      if (!ai.apiKey) {
+        throw new GitError(
+          "INVALID_REQUEST",
+          "Use the dedicated action to clear the AI API Key."
+        );
+      }
+    }
+    if ("prompt" in request.ai) {
+      ai.prompt = requireBoundedString(
+        request.ai.prompt,
+        MAX_AI_PROMPT_LENGTH,
+        false
+      );
+    }
+    result.ai = ai;
+  }
+
+  if ("navigation" in request) {
+    if (!isRecord(request.navigation)) {
+      throw invalidSettingsRequest();
+    }
+    const navigation: NonNullable<
+      UpdateAppSettingsRequest["navigation"]
+    > = {};
+    if ("lastContentView" in request.navigation) {
+      navigation.lastContentView = requireEnum(
+        request.navigation.lastContentView,
+        LAST_CONTENT_VIEWS
+      ) as LastContentViewDto;
+    }
+    if ("workspaceTab" in request.navigation) {
+      navigation.workspaceTab = requireEnum(
+        request.navigation.workspaceTab,
+        WORKSPACE_TABS
+      ) as WorkspaceTabDto;
+    }
+    if ("repositoryTab" in request.navigation) {
+      navigation.repositoryTab = requireEnum(
+        request.navigation.repositoryTab,
+        REPOSITORY_TABS
+      ) as RepositoryTabDto;
+    }
+    result.navigation = navigation;
+  }
+
+  return result;
+}
+
+export function validateClearAiApiKeyRequest(
+  request: unknown
+): ClearAiApiKeyRequest {
+  if (
+    !isRecord(request) ||
+    typeof request.confirmed !== "boolean"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Clearing the AI API Key requires confirmation state."
+    );
+  }
+  return { confirmed: request.confirmed };
+}
+
+export function validateTestAiConnectionRequest(
+  request: unknown
+): TestAiConnectionRequest {
+  if (!isRecord(request)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Testing AI requires an API URL and model."
+    );
+  }
+  const apiUrl = requireBoundedString(
+    request.apiUrl,
+    MAX_AI_API_URL_LENGTH,
+    true
+  );
+  const model = requireBoundedString(
+    request.model,
+    MAX_AI_MODEL_LENGTH,
+    true
+  );
+  if (!apiUrl || !model) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Testing AI requires an API URL and model."
+    );
+  }
+  validateAiUrl(apiUrl);
+  const apiKey =
+    "apiKey" in request
+      ? requireBoundedString(
+          request.apiKey,
+          MAX_AI_API_KEY_LENGTH,
+          true
+        )
+      : undefined;
+  if ("apiKey" in request && !apiKey) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "AI API Keys cannot be empty."
+    );
+  }
+  return {
+    apiUrl,
+    model,
+    ...(apiKey ? { apiKey } : {})
+  };
+}
+
+export function validateGenerateAiCommitMessageRequest(
+  request: unknown
+): GenerateAiCommitMessageRequest {
+  if (!isRecord(request) || !("target" in request)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "AI generation requires a repository target."
+    );
+  }
+  return {
+    target: validateRepositoryTarget(request.target)
+  };
+}
+
+function invalidSettingsRequest(): GitError {
+  return new GitError(
+    "INVALID_REQUEST",
+    "Application settings contain unsupported values."
+  );
+}
+
+function requireBoolean(value: unknown): boolean {
+  if (typeof value !== "boolean") {
+    throw invalidSettingsRequest();
+  }
+  return value;
+}
+
+function requireEnum(
+  value: unknown,
+  allowed: ReadonlySet<string>
+): string {
+  if (typeof value !== "string" || !allowed.has(value)) {
+    throw invalidSettingsRequest();
+  }
+  return value;
+}
+
+function requireBoundedString(
+  value: unknown,
+  maximumLength: number,
+  trim: boolean
+): string {
+  if (typeof value !== "string") {
+    throw invalidSettingsRequest();
+  }
+  const normalized = trim ? value.trim() : value;
+  if (
+    normalized.length > maximumLength ||
+    normalized.includes("\0")
+  ) {
+    throw invalidSettingsRequest();
+  }
+  return normalized;
+}
+
+function validateAiUrl(value: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "The AI API URL is invalid."
+    );
+  }
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.hash
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "The AI API URL must use HTTP or HTTPS and cannot contain credentials or a fragment."
+    );
+  }
+}
+
+function isRecord(
+  value: unknown
+): value is Record<string, unknown> {
+  return Boolean(
+    value && typeof value === "object" && !Array.isArray(value)
+  );
 }
 
 function validateInspectionRequest(
@@ -1838,26 +2275,23 @@ function validateRepositoryCommand(
       const targets = validateRepositoryCommandTargets(
         input.targets
       );
-      const forceWithLease = validateOptionalBoolean(
-        input.forceWithLease,
-        "Force-with-lease"
-      );
-      if (forceWithLease && targets.length !== 1) {
-        throw new GitError(
-          "INVALID_REQUEST",
-          "Force-with-lease is limited to one repository target."
-        );
-      }
       const remote = validateOptionalCommandText(
         input.remote,
         "Remote",
         MAX_REPOSITORY_COMMAND_NAME_LENGTH
       );
+      const strategy =
+        input.strategy === undefined
+          ? undefined
+          : (requireEnum(
+              input.strategy,
+              GIT_PUSH_STRATEGIES
+            ) as GitPushStrategyDto);
       return {
         type: "push",
         targets,
         ...(remote ? { remote } : {}),
-        forceWithLease
+        ...(strategy ? { strategy } : {})
       };
     }
     case "switch-branch":

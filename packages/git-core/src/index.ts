@@ -47,6 +47,7 @@ export {
 export { parseWorktrees } from "./parsers/worktrees";
 export type {
   FetchRemoteOptions,
+  GitPullStrategy,
   GitRepositoryCommandClient,
   PushBranchOptions
 } from "./ports/git-command-client";

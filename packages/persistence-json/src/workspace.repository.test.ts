@@ -250,6 +250,53 @@ describe("JsonWorkspaceStore", () => {
     expect(persisted.unknownLegacyField).toBeUndefined();
   });
 
+  it("normalizes persisted Workspace meta repositories into the default root group", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture(
+        "workspace-root-group-normalization"
+      );
+    const filePath = join(
+      temporary.path,
+      "default.workspace.json"
+    );
+    const document =
+      createCurrentWorkspaceDocument() as Record<
+        string,
+        unknown
+      >;
+    const entry = (
+      document.entries as Array<Record<string, unknown>>
+    )[0] as Record<string, unknown>;
+    const target = document.selectedTarget;
+    entry.kind = "workspace-meta-repository";
+    entry.rootTarget = target;
+    (
+      (entry.groups as Array<Record<string, unknown>>)[0]!
+        .targets as unknown[]
+    ).length = 0;
+    await new AtomicJsonStore(filePath).write(document);
+
+    const migrated = await new JsonWorkspaceStore(
+      filePath
+    ).load();
+    expect(migrated?.entries[0]).toMatchObject({
+      kind: "workspace-meta-repository",
+      groups: [
+        {
+          name: "原/根仓库",
+          targets: [target]
+        }
+      ]
+    });
+    const persisted = JSON.parse(
+      await readFile(filePath, "utf8")
+    );
+    expect(persisted.entries[0].groups[0]).toMatchObject({
+      name: "原/根仓库",
+      targets: [target]
+    });
+  });
+
   it("rejects semantically inconsistent Repository and selected-target relationships", async () => {
     temporary =
       await createTemporaryDirectoryFixture(

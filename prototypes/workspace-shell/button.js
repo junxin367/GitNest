@@ -22,7 +22,7 @@
     small: "small",
     md: "medium",
     medium: "medium",
-    default: "medium",
+    default: "small",
     lg: "large",
     large: "large"
   };
@@ -45,7 +45,7 @@
   }
 
   function normalizeSize(size) {
-    return SIZE_ALIASES[size] || SIZE_ALIASES.medium;
+    return SIZE_ALIASES[size] || SIZE_ALIASES.small;
   }
 
   function normalizeVariant(variant) {

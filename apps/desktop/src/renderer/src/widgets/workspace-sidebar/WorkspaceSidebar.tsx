@@ -53,7 +53,6 @@ interface WorkspaceSidebarProps {
   snapshots: RepositoryStatusSnapshotDto[];
   busy: boolean;
   onAddDirectory(): void;
-  onOpenWorkspace(): void;
   onRemoveEntry(
     entryId: string,
     target?: RepositoryTargetDto
@@ -127,7 +126,6 @@ export function WorkspaceSidebar({
   snapshots,
   busy,
   onAddDirectory,
-  onOpenWorkspace,
   onRemoveEntry,
   onRescan,
   onSelectEntry,
@@ -800,15 +798,6 @@ export function WorkspaceSidebar({
             side="bottom"
           >
             <MenuHeading>Workspace</MenuHeading>
-            <MenuItem
-              leading={<Icon name="layers" size={15} />}
-              onClick={() => {
-                setWorkspaceSwitcherOpen(false);
-                onOpenWorkspace();
-              }}
-            >
-              {workspace?.name ?? "GitNest Workspace"}
-            </MenuItem>
             {workspace?.entries.map((entry) => (
               <MenuItem
                 key={entry.id}

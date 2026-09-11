@@ -13,6 +13,19 @@ export function createGitNestBridge(
   ) => () => void = () => () => undefined
 ): GitNestBridge {
   return {
+    settings: {
+      get: () => invoke(IPC_CHANNELS.settingsGet),
+      update: (request) =>
+        invoke(IPC_CHANNELS.settingsUpdate, request),
+      clearAiApiKey: (request) =>
+        invoke(IPC_CHANNELS.settingsClearAiApiKey, request)
+    },
+    ai: {
+      testConnection: (request) =>
+        invoke(IPC_CHANNELS.aiTestConnection, request),
+      generateCommitMessage: (request) =>
+        invoke(IPC_CHANNELS.aiGenerateCommitMessage, request)
+    },
     account: {
       list: () => invoke(IPC_CHANNELS.accountList),
       save: (request) =>

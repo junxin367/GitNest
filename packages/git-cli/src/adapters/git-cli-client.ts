@@ -19,6 +19,7 @@ import {
   type GitReadOptions,
   type GitWriteOptions,
   type FetchRemoteOptions,
+  type GitPullStrategy,
   type PushBranchOptions,
   type InspectRepositoryOptions,
   type CreateCommitOptions,
@@ -59,6 +60,7 @@ import {
   createBranchArguments,
   deleteBranchArguments,
   fetchRemoteArguments,
+  pullBranchArguments,
   pullFastForwardArguments,
   pushBranchArguments,
   READ_REMOTES_ARGUMENTS,
@@ -680,6 +682,57 @@ export class GitCliClient
             args: pullFastForwardArguments(
               remoteName,
               remoteBranch
+            ),
+            signal: options.signal,
+            timeoutMs:
+              options.timeoutMs ?? DEFAULT_NETWORK_TIMEOUT_MS,
+            outputLimitBytes: REMOTE_OUTPUT_LIMIT_BYTES,
+            discardOutputAfterLimit: true,
+            writeIntent: true,
+            environment
+          }).then(() => undefined)
+      );
+    } catch (error) {
+      throw mapRepositoryError(error, worktreePath);
+    }
+  }
+
+  async pullBranch(
+    path: string,
+    remote: string,
+    remoteBranch: string,
+    strategy: GitPullStrategy,
+    options: GitWriteOptions = {}
+  ): Promise<void> {
+    const worktreePath = await validateDirectoryPath(path);
+    const remoteName = validateRemoteName(remote);
+    const executablePath = await this.#getExecutablePath(
+      options.signal
+    );
+
+    try {
+      await assertBranchName(
+        {
+          executable: executablePath,
+          cwd: worktreePath,
+          signal: options.signal,
+          timeoutMs: options.timeoutMs
+        },
+        remoteBranch
+      );
+      await this.#withRemoteEnvironment(
+        worktreePath,
+        remoteName,
+        executablePath,
+        options.signal,
+        (environment) =>
+          runProcess({
+            executable: executablePath,
+            cwd: worktreePath,
+            args: pullBranchArguments(
+              remoteName,
+              remoteBranch,
+              strategy
             ),
             signal: options.signal,
             timeoutMs:

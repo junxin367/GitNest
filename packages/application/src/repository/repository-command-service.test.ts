@@ -38,10 +38,6 @@ const TARGET: RepositoryTarget = {
   repositoryId: "repository-1",
   worktreeId: "worktree-1"
 };
-const SECOND_TARGET: RepositoryTarget = {
-  repositoryId: "repository-2",
-  worktreeId: "worktree-2"
-};
 const WORKTREE_PATH = "C:\\workspace\\repository-1";
 const LOCAL_HEAD = "a".repeat(40);
 const REMOTE_HEAD = "b".repeat(40);
@@ -217,23 +213,6 @@ describe("RepositoryCommandService", () => {
     expect(runtime.queued).toHaveLength(1);
   });
 
-  it("limits force-with-lease to one repository target before reading Git", async () => {
-    const client = new FakeRepositoryClient();
-    const runtime = new FakeRuntime(createWorkspace(2));
-    const service = createService(runtime, client);
-
-    await expect(
-      service.preflight({
-        type: "push",
-        targets: [TARGET, SECOND_TARGET],
-        forceWithLease: true
-      })
-    ).rejects.toMatchObject({
-      code: "INVALID_REQUEST"
-    });
-    expect(client.snapshotReads).toBe(0);
-  });
-
   it.each<{
     label: string;
     command: RepositoryCommand;
@@ -384,29 +363,26 @@ describe("RepositoryCommandService", () => {
     expect(client.resolveRevisionCalls).toEqual([]);
   });
 
-  it("queues and executes an exact force-with-lease push plan", async () => {
+  it("queues and executes a push plan with the configured sync strategy", async () => {
     const client = new FakeRepositoryClient();
     client.remotes = ["origin", "backup"];
     client.remoteBranches.set("backup", [
       createRemoteBranch("main", REMOTE_HEAD)
     ]);
+    client.ancestry = "descendant";
     const runtime = new FakeRuntime();
     const service = createService(runtime, client);
     const preflight = await service.preflight({
       type: "push",
       targets: [TARGET],
       remote: "backup",
-      forceWithLease: true
+      strategy: "merge"
     });
 
     expect(preflight.warnings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           code: "SET_UPSTREAM"
-        }),
-        expect.objectContaining({
-          code: "FORCE_WITH_LEASE",
-          severity: "danger"
         })
       ])
     );
@@ -427,14 +403,21 @@ describe("RepositoryCommandService", () => {
     client.snapshot.refreshedAt =
       "2026-09-04T12:00:45.000Z";
     await runtime.runQueued(0);
+    expect(client.pullCalls).toEqual([
+      {
+        path: WORKTREE_PATH,
+        remote: "backup",
+        remoteBranch: "main",
+        strategy: "merge"
+      }
+    ]);
     expect(client.pushCalls).toEqual([
       {
         path: WORKTREE_PATH,
         remote: "backup",
         localBranch: "main",
         remoteBranch: "main",
-        setUpstream: true,
-        forceWithLeaseExpected: REMOTE_HEAD
+        setUpstream: true
       }
     ]);
   });
@@ -554,13 +537,18 @@ class FakeRepositoryClient
     remote: string;
     prune: boolean;
   }> = [];
+  readonly pullCalls: Array<{
+    path: string;
+    remote: string;
+    remoteBranch: string;
+    strategy: "rebase" | "merge";
+  }> = [];
   readonly pushCalls: Array<{
     path: string;
     remote: string;
     localBranch: string;
     remoteBranch: string;
     setUpstream: boolean;
-    forceWithLeaseExpected?: string;
   }> = [];
   snapshotReads = 0;
 
@@ -679,6 +667,21 @@ class FakeRepositoryClient
     throw new Error("Not used.");
   }
 
+  async pullBranch(
+    path: string,
+    remote: string,
+    remoteBranch: string,
+    strategy: "rebase" | "merge",
+    _options?: GitWriteOptions
+  ): Promise<void> {
+    this.pullCalls.push({
+      path,
+      remote,
+      remoteBranch,
+      strategy
+    });
+  }
+
   async pushBranch(
     path: string,
     options: PushBranchOptions
@@ -688,13 +691,7 @@ class FakeRepositoryClient
       remote: options.remote,
       localBranch: options.localBranch,
       remoteBranch: options.remoteBranch,
-      setUpstream: options.setUpstream ?? false,
-      ...(options.forceWithLeaseExpected
-        ? {
-            forceWithLeaseExpected:
-              options.forceWithLeaseExpected
-          }
-        : {})
+      setUpstream: options.setUpstream ?? false
     });
   }
 

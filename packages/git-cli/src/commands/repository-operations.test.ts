@@ -4,6 +4,7 @@ import {
   createBranchArguments,
   deleteBranchArguments,
   fetchRemoteArguments,
+  pullBranchArguments,
   pullFastForwardArguments,
   pushBranchArguments,
   readRemoteUrlArguments,
@@ -19,6 +20,27 @@ describe("repository operation commands", () => {
     ).toEqual([
       "pull",
       "--ff-only",
+      "--no-rebase",
+      "--",
+      "origin",
+      "refs/heads/main"
+    ]);
+  });
+
+  it("builds configured rebase and merge pull arguments", () => {
+    expect(
+      pullBranchArguments("origin", "main", "rebase")
+    ).toEqual([
+      "pull",
+      "--rebase",
+      "--",
+      "origin",
+      "refs/heads/main"
+    ]);
+    expect(
+      pullBranchArguments("origin", "main", "merge")
+    ).toEqual([
+      "pull",
       "--no-rebase",
       "--",
       "origin",

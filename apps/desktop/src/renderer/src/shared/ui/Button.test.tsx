@@ -37,6 +37,7 @@ describe("Button", () => {
       />
     );
 
+    expect(markup).toContain('data-size="small"');
     expect(markup).toContain('data-icon-only="true"');
     expect(markup).not.toContain("gn-button__label");
   });

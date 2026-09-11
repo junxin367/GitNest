@@ -69,6 +69,30 @@ describe("createGitNestBridge", () => {
       }
     );
 
+    await bridge.settings.get();
+    await bridge.settings.update({
+      general: {
+        restoreLastView: true,
+        defaultTerminalKind: "powershell"
+      },
+      git: {
+        fetchMode: "startup"
+      }
+    });
+    await bridge.settings.clearAiApiKey({
+      confirmed: true
+    });
+    await bridge.ai.testConnection({
+      apiUrl: "https://api.example.test/v1",
+      model: "test-model",
+      apiKey: "secret"
+    });
+    await bridge.ai.generateCommitMessage({
+      target: {
+        repositoryId: "repository",
+        worktreeId: "worktree"
+      }
+    });
     await bridge.account.list();
     await bridge.account.save({
       provider: "custom",
@@ -293,6 +317,8 @@ describe("createGitNestBridge", () => {
     await bridge.window.close();
 
     expect(Object.keys(bridge)).toEqual([
+      "settings",
+      "ai",
       "account",
       "system",
       "git",
@@ -302,6 +328,49 @@ describe("createGitNestBridge", () => {
       "window"
     ]);
     expect(calls).toEqual([
+      {
+        channel: IPC_CHANNELS.settingsGet,
+        args: []
+      },
+      {
+        channel: IPC_CHANNELS.settingsUpdate,
+        args: [
+          {
+            general: {
+              restoreLastView: true,
+              defaultTerminalKind: "powershell"
+            },
+            git: {
+              fetchMode: "startup"
+            }
+          }
+        ]
+      },
+      {
+        channel: IPC_CHANNELS.settingsClearAiApiKey,
+        args: [{ confirmed: true }]
+      },
+      {
+        channel: IPC_CHANNELS.aiTestConnection,
+        args: [
+          {
+            apiUrl: "https://api.example.test/v1",
+            model: "test-model",
+            apiKey: "secret"
+          }
+        ]
+      },
+      {
+        channel: IPC_CHANNELS.aiGenerateCommitMessage,
+        args: [
+          {
+            target: {
+              repositoryId: "repository",
+              worktreeId: "worktree"
+            }
+          }
+        ]
+      },
       {
         channel: IPC_CHANNELS.accountList,
         args: []

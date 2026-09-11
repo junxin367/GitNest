@@ -15,10 +15,12 @@ import type {
 } from "@gitnest/contracts";
 
 import {
+  filterSnapshotsToTargets,
   findTargetSnapshot,
+  getActiveWorkspaceEntry,
   getSnapshotChangeCount,
   isWorkspaceDataBlocked,
-  listWorkspaceTargets,
+  listActiveWorkspaceTargets,
   repositoryTargetSelected,
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
@@ -67,9 +69,17 @@ export function WorkspaceOverviewPage({
 }: WorkspaceOverviewPageProps) {
   const [manualPathOpen, setManualPathOpen] = useState(false);
   const [manualPath, setManualPath] = useState("");
-  const targets = useMemo(
-    () => (workspace ? listWorkspaceTargets(workspace) : []),
+  const activeEntry = useMemo(
+    () => getActiveWorkspaceEntry(workspace),
     [workspace]
+  );
+  const targets = useMemo(
+    () => listActiveWorkspaceTargets(workspace),
+    [workspace]
+  );
+  const scopedSnapshots = useMemo(
+    () => filterSnapshotsToTargets(snapshots, targets),
+    [snapshots, targets]
   );
   const statusRows = useMemo(
     () =>
@@ -78,37 +88,53 @@ export function WorkspaceOverviewPage({
             .map((target) => ({
               target,
               ...resolveWorkspaceTarget(workspace, target),
-              snapshot: findTargetSnapshot(snapshots, target)
+              snapshot: findTargetSnapshot(
+                scopedSnapshots,
+                target
+              )
             }))
             .sort(compareStatusRows)
         : [],
-    [snapshots, targets, workspace]
+    [scopedSnapshots, targets, workspace]
   );
-  const dirtyRepositoryCount = snapshots.filter(
+  const dirtyRepositoryCount = scopedSnapshots.filter(
     (snapshot) => getSnapshotChangeCount(snapshot) > 0
   ).length;
-  const totalChangeCount = snapshots.reduce(
+  const totalChangeCount = scopedSnapshots.reduce(
     (total, snapshot) => total + getSnapshotChangeCount(snapshot),
     0
   );
-  const untrackedCount = snapshots.reduce(
+  const untrackedCount = scopedSnapshots.reduce(
     (total, snapshot) => total + snapshot.untracked,
     0
   );
-  const behindRepositoryCount = snapshots.filter(
+  const behindRepositoryCount = scopedSnapshots.filter(
     (snapshot) => snapshot.behind > 0
   ).length;
-  const behindCommitCount = snapshots.reduce(
+  const behindCommitCount = scopedSnapshots.reduce(
     (total, snapshot) => total + snapshot.behind,
     0
   );
-  const freshCount = snapshots.filter(
+  const freshCount = scopedSnapshots.filter(
     (snapshot) => !snapshot.stale && !snapshot.error
   ).length;
-  const prunableWorktreeCount =
-    workspace?.worktrees.filter((worktree) => worktree.isPrunable).length ?? 0;
-  const detachedWorktreeCount =
-    workspace?.worktrees.filter((worktree) => worktree.isDetached).length ?? 0;
+  const activeRepositoryCount = new Set(
+    targets.map((target) => target.repositoryId)
+  ).size;
+  const activeWorktrees = targets.flatMap((target) => {
+    const worktree = workspace?.worktrees.find(
+      (candidate) =>
+        candidate.id === target.worktreeId &&
+        candidate.repositoryId === target.repositoryId
+    );
+    return worktree ? [worktree] : [];
+  });
+  const prunableWorktreeCount = activeWorktrees.filter(
+    (worktree) => worktree.isPrunable
+  ).length;
+  const detachedWorktreeCount = activeWorktrees.filter(
+    (worktree) => worktree.isDetached
+  ).length;
   const metrics: Array<{
     label: string;
     value: string;
@@ -118,7 +144,7 @@ export function WorkspaceOverviewPage({
   }> = [
     {
       label: "仓库",
-      value: String(workspace?.repositories.length ?? 0),
+      value: String(activeRepositoryCount),
       foot:
         targets.length > 0
           ? `${freshCount}/${targets.length} 个状态已刷新`
@@ -148,22 +174,20 @@ export function WorkspaceOverviewPage({
     },
     {
       label: "Worktrees",
-      value: String(workspace?.worktrees.length ?? 0),
+      value: String(activeWorktrees.length),
       foot: `${prunableWorktreeCount} 个可清理 · ${detachedWorktreeCount} 个 detached`,
       icon: "worktree",
       tone: "purple"
     }
   ];
   const scanIssues =
-    workspace?.entries.flatMap((entry) =>
-      entry.scanIssues.map((issue) => ({
-        entryName: entry.displayName,
-        issue
-      }))
-    ) ?? [];
+    activeEntry?.scanIssues.map((issue) => ({
+      entryName: activeEntry.displayName,
+      issue
+    })) ?? [];
   const snapshotIssues =
-    workspace?.entries.length && workspace
-      ? snapshots
+    activeEntry && workspace
+      ? scopedSnapshots
           .filter(
             (
               snapshot

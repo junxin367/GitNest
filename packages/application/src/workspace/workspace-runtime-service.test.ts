@@ -1249,7 +1249,7 @@ function createWorkspace(count: number): Workspace {
         groups: [
           {
             id: "group",
-            name: "根目录仓库",
+            name: "原/根仓库",
             targets,
             collapsed: false
           }

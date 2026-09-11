@@ -27,7 +27,6 @@ import { OpenInControl } from "./OpenInControl";
 interface RepositoryHeaderProps {
   inspectorOpen: boolean;
   refreshing: boolean;
-  showPushActions?: boolean;
   view: AppView;
   repositoryTab: RepositoryTab;
   workspaceTab: WorkspaceTab;
@@ -38,15 +37,14 @@ interface RepositoryHeaderProps {
   commandCompletionVersion: number;
   commandLocked: boolean;
   workspaceCommandBusy: boolean;
-  workspaceFetchCount: number;
-  workspacePullCount: number;
+  workspaceRepositoryCount: number;
   onRefresh(): void;
   onFetch(): void;
   onFetchWorkspace(): void;
   onPull(): void;
   onPullWorkspace(): void;
+  onPushWorkspace(): void;
   onPush(): void;
-  onForcePush(): void;
   onSwitchBranch(branch: string): void;
   onOpenWorkspace(): void;
   onOpenRepository(): void;
@@ -83,7 +81,6 @@ const repositoryTabs: Array<{
 export function RepositoryHeader({
   inspectorOpen,
   refreshing,
-  showPushActions = true,
   view,
   repositoryTab,
   workspaceTab,
@@ -94,15 +91,14 @@ export function RepositoryHeader({
   commandCompletionVersion,
   commandLocked,
   workspaceCommandBusy,
-  workspaceFetchCount,
-  workspacePullCount,
+  workspaceRepositoryCount,
   onRefresh,
   onFetch,
   onFetchWorkspace,
   onPull,
   onPullWorkspace,
+  onPushWorkspace,
   onPush,
-  onForcePush,
   onSwitchBranch,
   onOpenWorkspace,
   onOpenRepository,
@@ -295,10 +291,10 @@ export function RepositoryHeader({
                 className="toolbar-button"
                 disabled={
                   workspaceCommandBusy ||
-                  workspacePullCount === 0
+                  workspaceRepositoryCount === 0
                 }
                 onClick={onPullWorkspace}
-                title={`批量 Pull ${workspacePullCount} 个可安全快进的仓库`}
+                title={`批量 Pull Workspace 中的全部 ${workspaceRepositoryCount} 个仓库`}
                 type="button"
               >
                 <Icon name="arrowDown" />
@@ -307,47 +303,52 @@ export function RepositoryHeader({
                     ? "预检中"
                     : "Pull"}
                 </span>
-                {workspacePullCount > 0 ? (
+                {workspaceRepositoryCount > 0 ? (
                   <span className="toolbar-count">
-                    {workspacePullCount}
+                    {workspaceRepositoryCount}
                   </span>
                 ) : null}
+              </Button>
+              <Button variant="unstyled"
+                aria-busy={commandActive === "push"}
+                className="toolbar-button"
+                disabled={
+                  workspaceCommandBusy ||
+                  workspaceRepositoryCount === 0
+                }
+                onClick={onPushWorkspace}
+                title={`批量 Push Workspace 中的全部 ${workspaceRepositoryCount} 个仓库`}
+                type="button"
+              >
+                <Icon name="arrowUp" />
+                <span>
+                  {commandActive === "push"
+                    ? "预检中"
+                    : "Push"}
+                </span>
               </Button>
               <Button variant="unstyled"
                 aria-busy={commandActive === "fetch"}
                 className="toolbar-button"
                 disabled={
                   workspaceCommandBusy ||
-                  workspaceFetchCount === 0
+                  workspaceRepositoryCount === 0
                 }
                 onClick={onFetchWorkspace}
-                title={`Fetch Workspace 中的全部 ${workspaceFetchCount} 个仓库`}
+                title={`Fetch Workspace 中的全部 ${workspaceRepositoryCount} 个仓库`}
                 type="button"
               >
                 <Icon name="download" />
                 <span>
                   {commandActive === "fetch"
                     ? "预检中"
-                    : "Fetch 全部"}
+                    : "Fetch"}
                 </span>
               </Button>
             </>
           )}
           {view === "repository" && (
             <>
-              <Button variant="unstyled"
-                aria-busy={commandActive === "fetch"}
-                className="toolbar-button"
-                disabled={repositoryCommandDisabled}
-                onClick={onFetch}
-                title="获取远程引用；不会修改工作目录"
-                type="button"
-              >
-                <Icon name="download" />
-                <span>
-                  {commandActive === "fetch" ? "预检中" : "Fetch"}
-                </span>
-              </Button>
               <Button variant="unstyled"
                 aria-busy={commandActive === "pull"}
                 className="toolbar-button"
@@ -366,38 +367,37 @@ export function RepositoryHeader({
                   </span>
                 ) : null}
               </Button>
-              {showPushActions ? (
-                <>
-                  <Button variant="unstyled"
-                    aria-busy={commandActive === "push"}
-                    className="toolbar-button"
-                    disabled={repositoryCommandDisabled}
-                    onClick={onPush}
-                    title="普通 Push；执行前展示远程与分支影响"
-                    type="button"
-                  >
-                    <Icon name="arrowUp" />
-                    <span>
-                      {commandActive === "push" ? "预检中" : "Push"}
-                    </span>
-                    {snapshot?.ahead ? (
-                      <span className="toolbar-count">
-                        {snapshot.ahead}
-                      </span>
-                    ) : null}
-                  </Button>
-                  <Button variant="unstyled"
-                    aria-label="Force with lease"
-                    className="toolbar-icon-button force-push-button"
-                    disabled={repositoryCommandDisabled}
-                    onClick={onForcePush}
-                    title="Force with lease：独立危险入口，执行前需要再次确认"
-                    type="button"
-                  >
-                    <Icon name="warning" />
-                  </Button>
-                </>
-              ) : null}
+              <Button variant="unstyled"
+                aria-busy={commandActive === "push"}
+                className="toolbar-button"
+                disabled={repositoryCommandDisabled}
+                onClick={onPush}
+                title="远程有更新时会先按 Git 设置执行 Pull，再继续 Push"
+                type="button"
+              >
+                <Icon name="arrowUp" />
+                <span>
+                  {commandActive === "push" ? "预检中" : "Push"}
+                </span>
+                {snapshot?.ahead ? (
+                  <span className="toolbar-count">
+                    {snapshot.ahead}
+                  </span>
+                ) : null}
+              </Button>
+              <Button variant="unstyled"
+                aria-busy={commandActive === "fetch"}
+                className="toolbar-button"
+                disabled={repositoryCommandDisabled}
+                onClick={onFetch}
+                title="获取远程引用；不会修改工作目录"
+                type="button"
+              >
+                <Icon name="download" />
+                <span>
+                  {commandActive === "fetch" ? "预检中" : "Fetch"}
+                </span>
+              </Button>
             </>
           )}
           <Button variant="unstyled"

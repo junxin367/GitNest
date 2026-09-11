@@ -70,6 +70,16 @@ import type {
   WorktreeCommandPreflightDto,
   WorktreeCommandPreflightRequest
 } from "./worktree.contracts";
+import type {
+  AiCommitMessageDto,
+  AiConnectionTestResultDto,
+  AppSettingsDto,
+  AppSettingsLoadDto,
+  ClearAiApiKeyRequest,
+  GenerateAiCommitMessageRequest,
+  TestAiConnectionRequest,
+  UpdateAppSettingsRequest
+} from "./settings.contracts";
 
 interface IpcContract<
   Arguments extends unknown[],
@@ -80,6 +90,26 @@ interface IpcContract<
 }
 
 export interface IpcContractMap {
+  [IPC_CHANNELS.settingsGet]: IpcContract<
+    [],
+    GitReadResult<AppSettingsLoadDto>
+  >;
+  [IPC_CHANNELS.settingsUpdate]: IpcContract<
+    [request: UpdateAppSettingsRequest],
+    GitReadResult<AppSettingsDto>
+  >;
+  [IPC_CHANNELS.settingsClearAiApiKey]: IpcContract<
+    [request: ClearAiApiKeyRequest],
+    GitReadResult<AppSettingsDto>
+  >;
+  [IPC_CHANNELS.aiTestConnection]: IpcContract<
+    [request: TestAiConnectionRequest],
+    GitReadResult<AiConnectionTestResultDto>
+  >;
+  [IPC_CHANNELS.aiGenerateCommitMessage]: IpcContract<
+    [request: GenerateAiCommitMessageRequest],
+    GitReadResult<AiCommitMessageDto>
+  >;
   [IPC_CHANNELS.systemGetRuntimeInfo]: IpcContract<[], RuntimeInfo>;
   [IPC_CHANNELS.systemListExternalApplications]: IpcContract<
     [],

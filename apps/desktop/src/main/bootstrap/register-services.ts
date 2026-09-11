@@ -44,10 +44,13 @@ import { SafeStorageCredentialVault } from "../adapters/credential-vault.adapter
 import { WindowsGitAskPassBroker } from "../adapters/git-askpass.adapter";
 import { NodeWorkspaceWatcher } from "../adapters/watcher.adapter";
 import { RotatingDiagnosticLogger } from "../adapters/diagnostic-logger.adapter";
+import { AiCommitMessageService } from "../ai/ai-commit-message-service";
+import { AppSettingsService } from "../settings/app-settings";
 import { JsonWindowStateStore } from "../windows/window-state";
 
 export interface ApplicationServices {
   accounts: AccountService;
+  aiCommitMessages: AiCommitMessageService;
   diagnostics: RotatingDiagnosticLogger;
   externalApplication: ExternalApplicationService;
   externalTerminal: ExternalTerminalService;
@@ -55,6 +58,7 @@ export interface ApplicationServices {
   repositoryCommands: RepositoryCommandService;
   repositoryMutations: RepositoryMutationService;
   repositoryQueries: RepositoryQueryService;
+  settings: AppSettingsService;
   worktreeCommands: WorktreeCommandService;
   worktreePaths: NodeWorktreePathPolicy;
   windowState: JsonWindowStateStore;
@@ -83,6 +87,9 @@ export function registerServices(): ApplicationServices {
   );
   const windowState = new JsonWindowStateStore(
     join(userDataPath, "settings", "window-state.json")
+  );
+  const settings = new AppSettingsService(
+    join(userDataPath, "settings", "app-settings.json")
   );
   const workspaceStore = new JsonWorkspaceStore(
     join(
@@ -196,6 +203,11 @@ export function registerServices(): ApplicationServices {
 
   return {
     accounts,
+    aiCommitMessages: new AiCommitMessageService(
+      settings,
+      workspace,
+      gitClient
+    ),
     diagnostics,
     externalApplication: new ExternalApplicationService(
       workspace,
@@ -225,6 +237,7 @@ export function registerServices(): ApplicationServices {
       workspace,
       gitClient
     ),
+    settings,
     worktreeCommands: new WorktreeCommandService(
       workspace,
       gitClient,

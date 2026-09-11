@@ -53,6 +53,7 @@ export type {
 } from "./ports/workspace-watcher";
 export { createPathIdentity } from "./services/path-identity";
 export {
+  DEFAULT_ROOT_REPOSITORY_GROUP_NAME,
   WorkspaceAssembler,
   type AssembleWorkspaceInput
 } from "./services/workspace-assembler";

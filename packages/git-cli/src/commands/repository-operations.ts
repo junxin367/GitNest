@@ -64,6 +64,20 @@ export function pullFastForwardArguments(
   ];
 }
 
+export function pullBranchArguments(
+  remote: string,
+  remoteBranch: string,
+  strategy: "rebase" | "merge"
+): string[] {
+  return [
+    "pull",
+    strategy === "rebase" ? "--rebase" : "--no-rebase",
+    "--",
+    remote,
+    `refs/heads/${remoteBranch}`
+  ];
+}
+
 export function pushBranchArguments(input: {
   remote: string;
   localBranch: string;
