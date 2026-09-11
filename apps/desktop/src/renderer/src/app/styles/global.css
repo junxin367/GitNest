@@ -1455,12 +1455,20 @@ p {
   border-radius: var(--radius-small);
 }
 
+.repository-header-action-group {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  margin-left: auto;
+}
+
 .repository-actions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: var(--space-1);
-  margin-left: auto;
 }
 
 .toolbar-button,

@@ -1518,13 +1518,21 @@
       object-fit: contain;
     }
 
+    .toolbar-actions-group {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: var(--space-3);
+      min-width: 0;
+      margin-left: auto;
+    }
+
     .toolbar-actions {
       display: flex;
       flex: 0 0 auto;
       align-items: center;
       gap: var(--space-1);
       min-width: 0;
-      margin-left: auto;
     }
 
     .toolbar-button {
@@ -8306,13 +8314,15 @@
           </span>
         </div>
         <div class="toolbar-divider"></div>
-        ${renderOpenInControl("workspace")}
-        <div class="toolbar-actions">
-          <button class="toolbar-button" aria-label="预览刷新 Workspace" onclick="runOperation('scan', event.currentTarget)">${icon("refresh")}<span>刷新</span></button>
-          <button class="toolbar-button" aria-label="预览 Pull 全部仓库" onclick="runOperation('pull-all', event.currentTarget)">${icon("arrowDown")}<span>Pull</span><span class="toolbar-count">${workspaceSnapshot.totalRepositories}</span></button>
-          <button class="toolbar-button" aria-label="预览 Push 全部仓库" onclick="runOperation('push-all', event.currentTarget)">${icon("arrowUp")}<span>Push</span></button>
-          <button class="toolbar-button" aria-label="预览 Fetch 全部仓库" onclick="runOperation('fetch-all', event.currentTarget)">${icon("download")}<span>Fetch</span></button>
-          <button class="icon-button" aria-label="切换详情面板" aria-pressed="${state.inspectorOpen}" onclick="toggleInspector()">${icon("panel")}</button>
+        <div class="toolbar-actions-group">
+          ${renderOpenInControl("workspace")}
+          <div class="toolbar-actions">
+            <button class="toolbar-button" aria-label="预览刷新 Workspace" onclick="runOperation('scan', event.currentTarget)">${icon("refresh")}<span>刷新</span></button>
+            <button class="toolbar-button" aria-label="预览 Pull 全部仓库" onclick="runOperation('pull-all', event.currentTarget)">${icon("arrowDown")}<span>Pull</span><span class="toolbar-count">${workspaceSnapshot.totalRepositories}</span></button>
+            <button class="toolbar-button" aria-label="预览 Push 全部仓库" onclick="runOperation('push-all', event.currentTarget)">${icon("arrowUp")}<span>Push</span></button>
+            <button class="toolbar-button" aria-label="预览 Fetch 全部仓库" onclick="runOperation('fetch-all', event.currentTarget)">${icon("download")}<span>Fetch</span></button>
+            <button class="icon-button" aria-label="切换详情面板" aria-pressed="${state.inspectorOpen}" onclick="toggleInspector()">${icon("panel")}</button>
+          </div>
         </div>
       ` : `
         <div class="context-identity">
@@ -8324,12 +8334,14 @@
         </div>
         <div class="toolbar-divider"></div>
         <button class="branch-selector" aria-haspopup="dialog" onclick="openBranchSwitchDialog(event.currentTarget)">${icon("branch")}<span>${repo.branch}</span>${icon("chevronDown", 12)}</button>
-        ${renderOpenInControl("repository")}
-        <div class="toolbar-actions">
-          <button class="toolbar-button" aria-label="预览 Pull ${repo.name}${repo.behind ? `，本地跟踪引用显示落后 ${repo.behind} 个提交` : ""}" onclick="runOperation('pull', event.currentTarget)">${icon("arrowDown")}<span>Pull</span>${repo.behind ? `<span class="toolbar-count">${repo.behind}</span>` : ""}</button>
-          <button class="toolbar-button" aria-label="预览 Push ${repo.name}${repo.ahead ? `，领先 ${repo.ahead} 个提交` : ""}" onclick="runOperation('push', event.currentTarget)">${icon("arrowUp")}<span>Push</span>${repo.ahead ? `<span class="toolbar-count">${repo.ahead}</span>` : ""}</button>
-          <button class="toolbar-button" aria-label="预览 Fetch ${repo.name}" onclick="runOperation('fetch', event.currentTarget)">${icon("download")}<span>Fetch</span></button>
-          <button class="icon-button" aria-label="切换详情面板" aria-pressed="${state.inspectorOpen}" onclick="toggleInspector()">${icon("panel")}</button>
+        <div class="toolbar-actions-group">
+          ${renderOpenInControl("repository")}
+          <div class="toolbar-actions">
+            <button class="toolbar-button" aria-label="预览 Pull ${repo.name}${repo.behind ? `，本地跟踪引用显示落后 ${repo.behind} 个提交` : ""}" onclick="runOperation('pull', event.currentTarget)">${icon("arrowDown")}<span>Pull</span>${repo.behind ? `<span class="toolbar-count">${repo.behind}</span>` : ""}</button>
+            <button class="toolbar-button" aria-label="预览 Push ${repo.name}${repo.ahead ? `，领先 ${repo.ahead} 个提交` : ""}" onclick="runOperation('push', event.currentTarget)">${icon("arrowUp")}<span>Push</span>${repo.ahead ? `<span class="toolbar-count">${repo.ahead}</span>` : ""}</button>
+            <button class="toolbar-button" aria-label="预览 Fetch ${repo.name}" onclick="runOperation('fetch', event.currentTarget)">${icon("download")}<span>Fetch</span></button>
+            <button class="icon-button" aria-label="切换详情面板" aria-pressed="${state.inspectorOpen}" onclick="toggleInspector()">${icon("panel")}</button>
+          </div>
         </div>
       `;
     }

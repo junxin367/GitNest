@@ -259,20 +259,21 @@ export function RepositoryHeader({
           </>
         )}
 
-        {(view === "workspace" ||
-          (view === "repository" &&
-            Boolean(workspace?.selectedTarget))) && (
-          <OpenInControl
-            applications={externalApplications}
-            scope={
-              view === "workspace"
-                ? "workspace"
-                : "repository"
-            }
-          />
-        )}
+        <div className="repository-header-action-group">
+          {(view === "workspace" ||
+            (view === "repository" &&
+              Boolean(workspace?.selectedTarget))) && (
+            <OpenInControl
+              applications={externalApplications}
+              scope={
+                view === "workspace"
+                  ? "workspace"
+                  : "repository"
+              }
+            />
+          )}
 
-        <div className="repository-actions">
+          <div className="repository-actions">
           <Button variant="unstyled"
             aria-busy={refreshing}
             className="toolbar-button"
@@ -414,6 +415,7 @@ export function RepositoryHeader({
           >
             <Icon name="panel" />
           </Button>
+          </div>
         </div>
       </header>
 
