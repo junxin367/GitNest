@@ -12,6 +12,7 @@ import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
 import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
+import { normalizeTapdKeyword } from "./tapdKeywordPreferences";
 
 interface WorkspaceGroupRenameDialogProps {
   automaticName: string;
@@ -234,6 +235,121 @@ export function WorkspaceEntryRenameDialog({
             </Button>
           </div>
         </footer>
+        </section>
+      </div>
+    </LayerPortal>
+  );
+}
+
+interface WorkspaceEntryTapdKeywordDialogProps {
+  entry: WorkspaceEntryDto;
+  busy: boolean;
+  initialKeyword: string;
+  onCancel(): void;
+  onConfirm(keyword: string): Promise<boolean>;
+}
+
+export function WorkspaceEntryTapdKeywordDialog({
+  entry,
+  busy,
+  initialKeyword,
+  onCancel,
+  onConfirm
+}: WorkspaceEntryTapdKeywordDialogProps) {
+  const [keyword, setKeyword] = useState(initialKeyword);
+  const dialogRef = useRef<HTMLElement>(null);
+  useModalFocusTrap(dialogRef);
+
+  const normalizedKeyword = normalizeTapdKeyword(keyword);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (busy) {
+      return;
+    }
+
+    if (await onConfirm(normalizedKeyword)) {
+      onCancel();
+    }
+  };
+
+  return (
+    <LayerPortal>
+      <div className="command-dialog-backdrop workspace-entry-dialog-backdrop">
+        <section
+          aria-describedby="workspace-entry-tapd-keyword-description"
+          aria-labelledby="workspace-entry-tapd-keyword-title"
+          aria-modal="true"
+          className="command-dialog workspace-entry-dialog"
+          ref={dialogRef}
+          role="dialog"
+        >
+          <header className="command-dialog-header">
+            <span className="command-dialog-icon">
+              <Icon name="tag" size={20} />
+            </span>
+            <div>
+              <span className="eyebrow">Workspace 条目</span>
+              <h2 id="workspace-entry-tapd-keyword-title">
+                设置 TAPD 关键字
+              </h2>
+              <p id="workspace-entry-tapd-keyword-description">
+                {entry.displayName} · AI 提交信息默认附加
+              </p>
+            </div>
+          </header>
+
+          <div className="command-dialog-body">
+            <form
+              id="workspace-entry-tapd-keyword-form"
+              onSubmit={submit}
+            >
+              <div className="workspace-entry-dialog-field">
+                <label htmlFor="workspace-entry-tapd-keyword">
+                  TAPD 关键字
+                </label>
+                <Input
+                  aria-describedby="workspace-entry-tapd-keyword-help"
+                  data-modal-initial-focus="true"
+                  fullWidth
+                  id="workspace-entry-tapd-keyword"
+                  maxLength={120}
+                  onChange={(event) =>
+                    setKeyword(event.target.value)
+                  }
+                  placeholder="例如：TAPD-12345"
+                  spellCheck={false}
+                  value={keyword}
+                />
+                <small id="workspace-entry-tapd-keyword-help">
+                  留空可清除设置。使用 AI 生成提交信息时，该关键字会自动插入第二行。
+                </small>
+              </div>
+            </form>
+          </div>
+
+          <footer className="command-dialog-footer">
+            <p>仅保存为当前 Workspace 条目的本地偏好。</p>
+            <div>
+              <Button
+                size="small"
+                disabled={busy}
+                onClick={onCancel}
+                type="button"
+              >
+                取消
+              </Button>
+              <Button
+                size="small"
+                variant="primary"
+                disabled={busy}
+                form="workspace-entry-tapd-keyword-form"
+                type="submit"
+              >
+                <Icon name={busy ? "refresh" : "check"} />
+                {busy ? "保存中…" : "保存关键字"}
+              </Button>
+            </div>
+          </footer>
         </section>
       </div>
     </LayerPortal>

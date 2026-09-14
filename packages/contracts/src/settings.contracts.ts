@@ -2,7 +2,10 @@ import type { RepositoryTargetDto } from "./workspace.contracts";
 import type { ExternalTerminalKindDto } from "./system.contracts";
 
 export const DEFAULT_AI_COMMIT_PROMPT =
-  "根据已暂存文件和代码变更，生成一条简洁准确的 Git 提交信息。使用 Conventional Commits 格式，使用中文，只返回提交信息，不要 Markdown。";
+  "根据下一次提交将包含的文件和代码变更，生成一条简洁准确的 Git 提交信息。使用 Conventional Commits 格式，使用中文，只返回提交信息，不要 Markdown。";
+export const DEFAULT_DIFF_COMMIT_PANEL_HEIGHT = 180;
+export const MIN_DIFF_COMMIT_PANEL_HEIGHT = 180;
+export const MAX_DIFF_COMMIT_PANEL_HEIGHT = 420;
 
 export type AppThemeDto = "dark" | "light";
 export type DiffFileViewDto = "list" | "tree";
@@ -35,6 +38,7 @@ export interface AppSettingsDto {
     layout: DiffLayoutDto;
     wrap: boolean;
     treeDirectoriesCollapsed: boolean;
+    commitPanelHeight: number;
   };
   git: {
     fetchMode: GitFetchModeDto;
@@ -72,6 +76,7 @@ export interface UpdateAppSettingsRequest {
     layout?: DiffLayoutDto;
     wrap?: boolean;
     treeDirectoriesCollapsed?: boolean;
+    commitPanelHeight?: number;
   };
   git?: {
     fetchMode?: GitFetchModeDto;
@@ -129,7 +134,8 @@ export function createDefaultAppSettings(): AppSettingsDto {
       fileView: "list",
       layout: "unified",
       wrap: false,
-      treeDirectoriesCollapsed: false
+      treeDirectoriesCollapsed: false,
+      commitPanelHeight: DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
     },
     git: {
       fetchMode: "manual",

@@ -38,8 +38,10 @@ export type IconName =
   | "sidebarCollapse"
   | "sidebarExpand"
   | "sun"
+  | "tag"
   | "terminal"
   | "upload"
+  | "undo"
   | "warning"
   | "wrap"
   | "worktree";
@@ -324,6 +326,13 @@ function renderIcon(name: IconName): ReactNode {
           <path d="m17.7 6.3 1.4-1.4" />
         </>
       );
+    case "tag":
+      return (
+        <>
+          <path d="M20.59 13.41 13.41 20.59a2 2 0 0 1-2.82 0L3.41 13.41a2 2 0 0 1 0-2.82L10.59 3.41A2 2 0 0 1 12 3h6a2 2 0 0 1 2 2v6a2 2 0 0 1-.59 1.41Z" />
+          <circle cx="16" cy="7" r="1.25" />
+        </>
+      );
     case "terminal":
       return (
         <>
@@ -337,6 +346,13 @@ function renderIcon(name: IconName): ReactNode {
           <path d="M12 21V9" />
           <path d="m7 14 5-5 5 5" />
           <path d="M5 3h14" />
+        </>
+      );
+    case "undo":
+      return (
+        <>
+          <path d="M9 7 4 12l5 5" />
+          <path d="M4 12h9a7 7 0 0 1 7 7" />
         </>
       );
     case "warning":

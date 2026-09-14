@@ -136,15 +136,64 @@ describe("RepositoryMutationService", () => {
     ]);
   });
 
+  it("discards tracked worktree edits and removes untracked files", async () => {
+    const git = new FakeGitMutationClient({
+      unstaged: 2,
+      untracked: 1,
+      changes: [
+        {
+          path: "changed.txt",
+          indexStatus: ".",
+          worktreeStatus: "M",
+          kind: "ordinary"
+        },
+        {
+          path: "new.txt",
+          indexStatus: ".",
+          worktreeStatus: "?",
+          kind: "untracked"
+        }
+      ]
+    });
+    const service = new RepositoryMutationService(
+      new ImmediateMutationRuntime(),
+      git,
+      git
+    );
+
+    await service.discard(TARGET, ["changed.txt", "new.txt"]);
+
+    expect(git.restoreCalls).toEqual([
+      { path: WORKTREE_PATH, paths: ["changed.txt"] }
+    ]);
+    expect(git.removeUntrackedCalls).toEqual([
+      { path: WORKTREE_PATH, paths: ["new.txt"] }
+    ]);
+  });
+
   it("creates a commit only from a conflict-free staged index", async () => {
     const git = new FakeGitMutationClient({
       staged: 1,
+      unstaged: 1,
+      untracked: 1,
       changes: [
         {
           path: "staged.txt",
           indexStatus: "M",
           worktreeStatus: ".",
           kind: "ordinary"
+        },
+        {
+          path: "unstaged.txt",
+          indexStatus: ".",
+          worktreeStatus: "M",
+          kind: "ordinary"
+        },
+        {
+          path: "new.txt",
+          indexStatus: ".",
+          worktreeStatus: "?",
+          kind: "untracked"
         }
       ]
     });
@@ -272,7 +321,7 @@ class ImmediateMutationRuntime
 {
   async runWorktreeMutation<Result>(
     _target: RepositoryTarget,
-    kind: "stage" | "unstage" | "commit",
+    kind: "stage" | "unstage" | "discard" | "commit",
     action: (worktreePath: string) => Promise<Result>
   ) {
     return {
@@ -292,6 +341,14 @@ class FakeGitMutationClient
   }> = [];
   readonly stageAllCalls: string[] = [];
   readonly unstageCalls: Array<{
+    path: string;
+    paths: string[];
+  }> = [];
+  readonly restoreCalls: Array<{
+    path: string;
+    paths: string[];
+  }> = [];
+  readonly removeUntrackedCalls: Array<{
     path: string;
     paths: string[];
   }> = [];
@@ -339,6 +396,23 @@ class FakeGitMutationClient
     paths: readonly string[]
   ): Promise<void> {
     this.unstageCalls.push({ path, paths: [...paths] });
+  }
+
+  async restoreWorktreePaths(
+    path: string,
+    paths: readonly string[]
+  ): Promise<void> {
+    this.restoreCalls.push({ path, paths: [...paths] });
+  }
+
+  async removeUntrackedPaths(
+    path: string,
+    paths: readonly string[]
+  ): Promise<void> {
+    this.removeUntrackedCalls.push({
+      path,
+      paths: [...paths]
+    });
   }
 
   async createCommit(

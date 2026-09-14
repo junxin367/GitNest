@@ -157,11 +157,6 @@ export function App() {
       },
       { silent: true }
     );
-  const resetLayout = () => {
-    setSidebarCollapsed(false);
-    setInspectorOpen(false);
-  };
-
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document
@@ -418,28 +413,13 @@ export function App() {
       </a>
       <AppTitlebar
         activeView={view}
-        hasRepository={Boolean(
-          workspace.workspace?.selectedTarget
-        )}
-        inspectorOpen={inspectorOpen}
-        layoutControlsDisabled={fullPageView}
         onCreateWorkspace={() =>
           void workspace.chooseDirectory()
         }
         onNavigate={navigate}
         onOpenSearch={() => setGlobalSearchOpen(true)}
-        onResetLayout={resetLayout}
-        onToggleInspector={() =>
-          setInspectorOpen((current) => !current)
-        }
-        onToggleSidebar={() =>
-          setSidebarCollapsed((current) => !current)
-        }
-        onToggleTheme={toggleTheme}
         runtimeInfo={runtimeInfo}
         searchOpen={globalSearchOpen}
-        sidebarCollapsed={sidebarCollapsed}
-        theme={theme}
       />
       <div
         className={`workspace-frame${
@@ -627,9 +607,7 @@ export function App() {
                   busy={workspace.busy}
                   error={workspace.error}
                   notice={workspace.notice}
-                  monitor={workspace.monitor}
                   operation={workspace.operation}
-                  operations={workspace.operations}
                   snapshots={workspace.snapshots}
                   workspace={workspace.workspace}
                   onAddDirectory={() =>
@@ -637,11 +615,6 @@ export function App() {
                   }
                   onAddManualPath={workspace.addManualPath}
                   onClearFeedback={workspace.clearFeedback}
-                  onCancelOperation={(operationId) =>
-                    void repositoryCommands.cancelOperation(
-                      operationId
-                    )
-                  }
                   onSelectTarget={openRepositoryTarget}
                 />
               ) : view === "workspace" ? (

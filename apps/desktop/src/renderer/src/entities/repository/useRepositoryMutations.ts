@@ -16,6 +16,7 @@ import type {
 export type RepositoryMutationKind =
   | "stage"
   | "unstage"
+  | "discard"
   | "commit";
 
 export interface RepositoryMutationController {
@@ -24,6 +25,14 @@ export interface RepositoryMutationController {
   notice: string | null;
   stageChange(change: ChangedPathDto): Promise<boolean>;
   unstageChange(change: ChangedPathDto): Promise<boolean>;
+  discardChange(change: ChangedPathDto): Promise<boolean>;
+  stageChanges(changes: readonly ChangedPathDto[]): Promise<boolean>;
+  unstageChanges(
+    changes: readonly ChangedPathDto[]
+  ): Promise<boolean>;
+  discardChanges(
+    changes: readonly ChangedPathDto[]
+  ): Promise<boolean>;
   createCommit(
     subject: string,
     body?: string
@@ -150,6 +159,62 @@ export function useRepositoryMutations(
     [runMutation]
   );
 
+  const discardChange = useCallback(
+    (change: ChangedPathDto) =>
+      runMutation(
+        "discard",
+        (mutationTarget) =>
+          window.gitnest.repository.discard({
+            target: mutationTarget,
+            paths: mutationPathsForChange(change)
+          }),
+        () => "所选文件的更改已放弃。"
+      ),
+    [runMutation]
+  );
+
+  const stageChanges = useCallback(
+    (changes: readonly ChangedPathDto[]) =>
+      runMutation(
+        "stage",
+        (mutationTarget) =>
+          window.gitnest.repository.stage({
+            target: mutationTarget,
+            paths: mutationPathsForChanges(changes)
+          }),
+        () => `${changes.length} 个文件已暂存。`
+      ),
+    [runMutation]
+  );
+
+  const unstageChanges = useCallback(
+    (changes: readonly ChangedPathDto[]) =>
+      runMutation(
+        "unstage",
+        (mutationTarget) =>
+          window.gitnest.repository.unstage({
+            target: mutationTarget,
+            paths: mutationPathsForChanges(changes)
+          }),
+        () => `${changes.length} 个文件已取消暂存。`
+      ),
+    [runMutation]
+  );
+
+  const discardChanges = useCallback(
+    (changes: readonly ChangedPathDto[]) =>
+      runMutation(
+        "discard",
+        (mutationTarget) =>
+          window.gitnest.repository.discard({
+            target: mutationTarget,
+            paths: mutationPathsForChanges(changes)
+          }),
+        () => `${changes.length} 个文件的更改已放弃。`
+      ),
+    [runMutation]
+  );
+
   const createCommit = useCallback(
     (subject: string, body?: string) =>
       runMutation(
@@ -179,6 +244,10 @@ export function useRepositoryMutations(
     notice,
     stageChange,
     unstageChange,
+    discardChange,
+    stageChanges,
+    unstageChanges,
+    discardChanges,
     createCommit,
     clearFeedback
   };
@@ -190,6 +259,14 @@ export function mutationPathsForChange(
   return [
     change.path,
     ...(change.originalPath ? [change.originalPath] : [])
+  ];
+}
+
+export function mutationPathsForChanges(
+  changes: readonly ChangedPathDto[]
+): string[] {
+  return [
+    ...new Set(changes.flatMap(mutationPathsForChange))
   ];
 }
 
@@ -210,6 +287,16 @@ export function canUnstageChange(
     change.kind !== "untracked" &&
     (change.kind === "unmerged" ||
       change.indexStatus !== ".")
+  );
+}
+
+export function canDiscardChange(
+  change: ChangedPathDto
+): boolean {
+  return (
+    change.kind === "untracked" ||
+    change.kind === "unmerged" ||
+    change.worktreeStatus !== "."
   );
 }
 

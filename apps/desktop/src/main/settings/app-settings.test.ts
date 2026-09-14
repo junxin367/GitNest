@@ -9,6 +9,8 @@ import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { DEFAULT_DIFF_COMMIT_PANEL_HEIGHT } from "@gitnest/contracts";
+
 import {
   APP_SETTINGS_SCHEMA_VERSION,
   AppSettingsService
@@ -41,6 +43,9 @@ describe("AppSettingsService", () => {
     expect(initial.storageState).toBe("missing");
     expect(initial.settings.general.restoreLastView).toBe(true);
     expect(initial.settings.git.pushStrategy).toBe("rebase");
+    expect(initial.settings.diff.commitPanelHeight).toBe(
+      DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
+    );
     expect(initial.settings.ai.apiKeyConfigured).toBe(false);
 
     const updated = await service.update({
@@ -122,6 +127,58 @@ describe("AppSettingsService", () => {
       schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
       ai: { apiKey: "do-not-overwrite" }
     });
+  });
+
+  it("backfills the commit panel height for existing schema documents", async () => {
+    const filePath = await createSettingsPath();
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
+        general: {
+          restoreLastView: true,
+          defaultTerminalKind: null
+        },
+        appearance: { theme: "dark" },
+        diff: {
+          fileView: "list",
+          layout: "unified",
+          wrap: false,
+          treeDirectoriesCollapsed: false
+        },
+        git: { fetchMode: "manual" },
+        ai: {
+          enabled: false,
+          apiUrl: "",
+          model: "",
+          apiKey: "",
+          prompt: "existing prompt"
+        },
+        navigation: {
+          lastContentView: "workspace",
+          workspaceTab: "overview",
+          repositoryTab: "overview"
+        },
+        updatedAt: "2026-09-14T00:00:00.000Z"
+      }),
+      "utf8"
+    );
+    const service = new AppSettingsService(filePath);
+
+    const loaded = await service.get();
+    expect(loaded.settings.diff.commitPanelHeight).toBe(
+      DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
+    );
+
+    await service.update({ diff: { wrap: true } });
+    const persisted = JSON.parse(
+      await readFile(filePath, "utf8")
+    ) as {
+      diff: { commitPanelHeight: number };
+    };
+    expect(persisted.diff.commitPanelHeight).toBe(
+      DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
+    );
   });
 
   async function createSettingsPath(): Promise<string> {

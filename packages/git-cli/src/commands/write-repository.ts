@@ -35,6 +35,30 @@ export function unstageArguments(
       ];
 }
 
+export function restoreWorktreeArguments(
+  paths: readonly string[]
+): string[] {
+  return [
+    "--literal-pathspecs",
+    "restore",
+    "--worktree",
+    "--",
+    ...paths
+  ];
+}
+
+export function removeUntrackedArguments(
+  paths: readonly string[]
+): string[] {
+  return [
+    "--literal-pathspecs",
+    "clean",
+    "-f",
+    "--",
+    ...paths
+  ];
+}
+
 export function createCommitArguments(
   subject: string,
   body?: string

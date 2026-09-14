@@ -32,6 +32,8 @@ export {
 } from "./commands/read-repository";
 export {
   createCommitArguments,
+  removeUntrackedArguments,
+  restoreWorktreeArguments,
   stageAllArguments,
   stageArguments,
   unstageArguments

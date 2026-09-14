@@ -390,18 +390,35 @@
       min-width: 0;
     }
 
-    .file-group-title {
-      display: grid;
-      grid-template-columns: 16px minmax(0, 1fr) auto;
+    .file-group-header {
+      display: flex;
       align-items: center;
-      width: 100%;
+      gap: 8px;
+      min-width: 0;
       height: 28px;
-      padding: 0 12px;
+      padding-right: 8px;
+      padding-left: 12px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .file-group-header:hover,
+    .file-group-header:focus-within {
+      background: var(--surface-hover);
+    }
+
+    .file-group-title {
+      display: flex;
+      flex: 1 1 auto;
+      align-items: center;
+      gap: 8px;
+      height: 100%;
+      min-width: 0;
+      padding: 0;
       color: var(--muted);
       text-align: left;
-      background: var(--surface);
+      background: transparent;
       border: 0;
-      border-bottom: 1px solid var(--border-soft);
       cursor: pointer;
       font-size: 11px;
       font-weight: 650;
@@ -410,19 +427,86 @@
 
     .file-group-title:hover {
       color: var(--text-soft);
-      background: var(--surface-hover);
     }
 
-    .file-group-title .group-count {
-      padding: 0 7px;
+    .file-group-tail {
+      position: relative;
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 2px;
+      min-width: calc(var(--icon-small) * 2 + 4px);
+      min-height: var(--control-compact);
+    }
+
+    .file-group-header .group-count {
+      position: absolute;
+      right: 0;
+      min-width: 20px;
+      height: 18px;
+      padding: 0 var(--space-1);
+      color: var(--muted);
       background: var(--surface-3);
       border-radius: 999px;
-      font-family: var(--font-mono);
+      transition: opacity var(--motion-micro) ease;
+      font-size: var(--font-size-caption);
+      font-weight: var(--font-weight-semibold);
+      line-height: 18px;
+      text-align: center;
+    }
+
+    .file-group-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--motion-micro) ease;
+    }
+
+    .file-group-header.has-actions:hover .file-group-actions,
+    .file-group-header.has-actions:focus-within .file-group-actions {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .file-group-header.has-actions:hover .group-count,
+    .file-group-header.has-actions:focus-within .group-count {
+      opacity: 0;
+    }
+
+    .file-group-actions .gn-button {
+      width: var(--gn-button-icon-size, 14px);
+      min-width: var(--gn-button-icon-size, 14px);
+      height: var(--gn-button-icon-size, 14px);
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+    }
+
+    .file-group-actions .gn-button:hover:not(:disabled),
+    .file-group-actions .gn-button:active:not(:disabled),
+    .file-group-actions .gn-button:disabled,
+    .file-group-actions .gn-button[data-selected="true"] {
+      color: var(--text);
+      background: transparent;
+      border-color: transparent;
+      box-shadow: none;
+    }
+
+    .file-group-actions .gn-button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
     }
 
     .file-item {
+      --diff-workspace-file-backdrop: transparent;
+      position: relative;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) var(--control-compact);
+      grid-template-columns: minmax(0, 1fr);
       align-items: center;
       gap: 8px;
       width: 100%;
@@ -434,13 +518,20 @@
       border-bottom: 1px solid var(--border-soft);
     }
 
-    .file-item:hover {
+    .file-item:hover,
+    .file-item:focus-within {
+      --diff-workspace-file-backdrop: var(--surface-hover);
       background: var(--surface-hover);
     }
 
     .file-item.active {
+      --diff-workspace-file-backdrop: color-mix(
+        in srgb,
+        var(--accent) 13%,
+        var(--surface)
+      );
       color: var(--text);
-      background: var(--accent-soft);
+      background: var(--diff-workspace-file-backdrop);
       box-shadow: inset 2px 0 0 var(--accent);
     }
 
@@ -534,6 +625,58 @@
       color: var(--accent);
       background: var(--accent-soft);
       border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+    }
+
+    .file-actions {
+      position: absolute;
+      top: 0;
+      right: 8px;
+      bottom: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 2px;
+      padding-left: var(--space-5);
+      opacity: 0;
+      pointer-events: none;
+      background: linear-gradient(
+        90deg,
+        transparent,
+        var(--diff-workspace-file-backdrop) var(--space-5)
+      );
+      transition: opacity var(--motion-micro) ease;
+    }
+
+    .file-item:hover .file-actions,
+    .file-item:focus-within .file-actions {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .file-actions .gn-button {
+      width: var(--gn-button-icon-size, 14px);
+      min-width: var(--gn-button-icon-size, 14px);
+      height: var(--gn-button-icon-size, 14px);
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+    }
+
+    .file-actions .gn-button:hover:not(:disabled),
+    .file-actions .gn-button:active:not(:disabled),
+    .file-actions .gn-button:disabled,
+    .file-actions .gn-button[data-selected="true"] {
+      color: var(--text);
+      background: transparent;
+      border-color: transparent;
+      box-shadow: none;
+    }
+
+    .file-actions .gn-button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
     }
 
     .file-tree-directory {
@@ -1137,7 +1280,8 @@
       plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
       search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
       wrap: '<path d="M4 6h11"/><path d="M4 10h13a3 3 0 0 1 0 6h-3"/><path d="m16 13-3 3 3 3"/><path d="M4 16h5"/>',
-      x: '<path d="m6 6 12 12"/><path d="m18 6-12 12"/>'
+      x: '<path d="m6 6 12 12"/><path d="m18 6-12 12"/>',
+      undo: '<path d="M9 7 4 12l5 5"/><path d="M4 12h9a7 7 0 0 1 7 7"/>'
     };
 
     const icon = (name, size = 16) =>
@@ -1969,16 +2113,28 @@
               </span>
             </span>
           </button>
-          ${renderButton({
-            label: action,
-            ariaLabel: `${action} ${file.path}`,
-            title: action,
-            size: "small",
-            variant: "icon",
-            icon: icon(file.staged ? "x" : "plus", 14),
-            className: "stage-toggle",
-            attributes: `data-file-path="${escapeHtml(file.path)}" data-stage-action="${action}"`
-          })}
+          <div class="file-actions">
+            ${file.staged ? "" : renderButton({
+              label: `放弃更改 ${file.path}`,
+              ariaLabel: `放弃更改 ${file.path}`,
+              title: "放弃更改",
+              size: "small",
+              variant: "icon",
+              icon: icon("undo", 14),
+              className: "stage-toggle",
+              attributes: `data-file-path="${escapeHtml(file.path)}" data-stage-action="放弃更改"`
+            })}
+            ${renderButton({
+              label: action,
+              ariaLabel: `${action} ${file.path}`,
+              title: action,
+              size: "small",
+              variant: "icon",
+              icon: icon(file.staged ? "x" : "plus", 14),
+              className: "stage-toggle",
+              attributes: `data-file-path="${escapeHtml(file.path)}" data-stage-action="${action}"`
+            })}
+          </div>
         </div>
       `;
     }
@@ -2136,16 +2292,42 @@
           : group.files.map((file) => renderFileRow(file)).join("");
         return `
           <section class="file-group">
-            <button
-              class="file-group-title"
-              type="button"
-              data-file-group="${group.mode}"
-              aria-expanded="${!collapsed}"
-            >
-              ${icon(collapsed ? "chevronRight" : "arrowDown", 12)}
-              <span>${group.label}</span>
-              <span class="group-count">${group.files.length}</span>
-            </button>
+            <div class="file-group-header has-actions">
+              <button
+                class="file-group-title"
+                type="button"
+                data-file-group="${group.mode}"
+                aria-expanded="${!collapsed}"
+              >
+                ${icon(collapsed ? "chevronRight" : "arrowDown", 12)}
+                <span>${group.label}</span>
+              </button>
+              <span class="file-group-tail">
+                <span class="group-count">${group.files.length}</span>
+                <span class="file-group-actions">
+                  ${group.mode === "staged" ? "" : renderButton({
+                    label: `放弃${group.label}分组的更改`,
+                    ariaLabel: `放弃${group.label}分组的更改`,
+                    title: `放弃更改（${group.files.length} 个文件）`,
+                    size: "small",
+                    variant: "icon",
+                    className: "group-stage-toggle",
+                    icon: icon("undo", 14),
+                    attributes: `data-group-action="discard" data-file-group="${group.mode}"`
+                  })}
+                  ${renderButton({
+                    label: `${group.mode === "staged" ? "取消暂存" : "暂存"}${group.label}分组的文件`,
+                    ariaLabel: `${group.mode === "staged" ? "取消暂存" : "暂存"}${group.label}分组的文件`,
+                    title: `${group.mode === "staged" ? "取消暂存" : "暂存"}（${group.files.length} 个文件）`,
+                    size: "small",
+                    variant: "icon",
+                    className: "group-stage-toggle",
+                    icon: icon(group.mode === "staged" ? "minus" : "plus", 14),
+                    attributes: `data-group-action="toggle-stage" data-file-group="${group.mode}"`
+                  })}
+                </span>
+              </span>
+            </div>
             ${collapsed ? "" : `<div>${rows}</div>`}
           </section>
         `;
@@ -2172,6 +2354,43 @@
           );
         });
       });
+      elements.fileList
+        .querySelectorAll("[data-group-action]")
+        .forEach((button) => {
+          button.addEventListener("click", (event) => {
+            event.stopPropagation();
+            const group = fileGroups().find(
+              (candidate) => candidate.mode === button.dataset.fileGroup
+            );
+            if (!group || group.files.length === 0) return;
+            if (button.dataset.groupAction === "discard") {
+              const discarded = new Set(
+                group.files.map((file) => file.path)
+              );
+              repository.files = repository.files.filter(
+                (file) => !discarded.has(file.path)
+              );
+              if (discarded.has(state.selectedPath)) {
+                state.selectedPath = repository.files[0]?.path || "";
+              }
+              renderFileList();
+              updatePanel();
+              showNotice(
+                `放弃更改：${discarded.size} 个文件（原型预览，不执行 Git 命令）`
+              );
+              return;
+            }
+            const nextStaged = group.mode !== "staged";
+            group.files.forEach((file) => {
+              file.staged = nextStaged;
+            });
+            renderFileList();
+            updatePanel();
+            showNotice(
+              `${nextStaged ? "暂存" : "取消暂存"}：${group.files.length} 个文件（原型预览，不执行 Git 命令）`
+            );
+          });
+        });
       elements.fileList.querySelectorAll(".file-tree-directory").forEach((button) => {
         button.addEventListener("click", () => {
           const key = button.dataset.treeKey;

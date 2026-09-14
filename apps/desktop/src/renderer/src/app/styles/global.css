@@ -208,15 +208,13 @@ p {
   background: var(--surface-hover);
 }
 
-.titlebar-file-menu,
-.titlebar-view-menu {
+.titlebar-file-menu {
   position: relative;
   display: flex;
   align-items: stretch;
 }
 
-.titlebar-file-menu > button,
-.titlebar-view-menu > button {
+.titlebar-file-menu > button {
   display: flex;
   align-items: center;
   padding: 0 var(--space-3);
@@ -227,9 +225,7 @@ p {
 }
 
 .titlebar-file-menu > button:hover,
-.titlebar-file-menu > button[aria-expanded="true"],
-.titlebar-view-menu > button:hover,
-.titlebar-view-menu > button[aria-expanded="true"] {
+.titlebar-file-menu > button[aria-expanded="true"] {
   color: var(--text);
   background: var(--surface-hover);
 }
@@ -2105,6 +2101,59 @@ p {
   border-bottom: 1px solid var(--border-soft);
 }
 
+.panel-header-action {
+  margin-left: auto;
+}
+
+.panel-header-toggle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: var(--control-large);
+  padding: 0 var(--space-4);
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  border-radius: 0;
+  cursor: pointer;
+  font: inherit;
+  user-select: none;
+  appearance: none;
+}
+
+.panel-header-toggle:hover {
+  background: var(--surface-hover);
+}
+
+.panel-header-toggle:focus-visible {
+  position: relative;
+  z-index: var(--z-navigation);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.panel-header-toggle .panel-caption {
+  flex: 1 1 auto;
+}
+
+.panel-collapse-indicator {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform var(--motion-micro) var(--ease-enter);
+}
+
+.panel-header-toggle[aria-expanded="false"]
+  .panel-collapse-indicator {
+  transform: rotate(-90deg);
+}
+
+.panel-collapsible-body[hidden] {
+  display: none;
+}
+
 .panel-title {
   display: flex;
   align-items: center;
@@ -2357,65 +2406,6 @@ p {
   color: var(--text);
   font-size: var(--font-size-body);
   font-weight: var(--font-weight-semibold);
-}
-
-.attention-list {
-  padding: var(--space-2);
-}
-
-.attention-item {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-3);
-  width: 100%;
-  min-height: 64px;
-  padding: var(--space-2) var(--space-3);
-  color: inherit;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-regular);
-}
-
-.attention-item:hover {
-  background: var(--surface-hover);
-}
-
-.attention-item > span:nth-child(2) {
-  min-width: 0;
-}
-
-.attention-symbol {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-regular);
-}
-
-.attention-symbol.yellow {
-  color: var(--yellow);
-  background: var(--yellow-soft);
-}
-
-.attention-name,
-.attention-detail {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.attention-name {
-  color: var(--text-soft);
-  font-weight: var(--font-weight-medium);
-}
-
-.attention-detail {
-  margin-top: var(--space-1);
-  color: var(--muted);
-  font-size: var(--font-size-caption);
 }
 
 .repository-overview-clean-state {
@@ -2687,6 +2677,42 @@ button.repository-status-row:disabled {
   font-size: var(--font-size-caption);
 }
 
+.workspace-branch-distribution {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.workspace-branch-distribution-item {
+  min-width: 0;
+  padding: var(--space-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-regular);
+}
+
+.workspace-branch-distribution-label,
+.workspace-branch-distribution-item > strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-branch-distribution-label {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  letter-spacing: 0.03em;
+}
+
+.workspace-branch-distribution-item > strong {
+  margin-top: var(--space-2);
+  color: var(--text);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+}
+
 .repository-status-branch,
 .repository-status-sync {
   display: block;
@@ -2831,64 +2857,6 @@ button.repository-status-row:disabled {
   border-radius: 999px;
 }
 
-.stage-card {
-  padding: var(--space-4);
-}
-
-.stage-card > strong {
-  display: block;
-  margin-top: var(--space-3);
-  color: var(--text);
-  font-size: var(--font-size-emphasis);
-}
-
-.stage-card p {
-  margin: var(--space-2) 0 0;
-  color: var(--muted);
-  font-size: var(--font-size-caption);
-}
-
-.scan-issue-list {
-  display: grid;
-  gap: var(--space-1);
-  padding: var(--space-2);
-}
-
-.scan-issue {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--space-2);
-  align-items: start;
-  min-height: 40px;
-  padding: var(--space-2);
-  color: var(--yellow);
-  border-radius: var(--radius-regular);
-}
-
-.scan-issue:hover {
-  background: var(--surface-hover);
-}
-
-.scan-issue > div {
-  min-width: 0;
-}
-
-.scan-issue strong,
-.scan-issue span {
-  display: block;
-}
-
-.scan-issue strong {
-  color: var(--text-soft);
-  font-size: var(--font-size-caption);
-}
-
-.scan-issue span {
-  color: var(--muted);
-  font-size: var(--font-size-caption);
-  overflow-wrap: anywhere;
-}
-
 .operation-list {
   display: grid;
 }
@@ -3015,24 +2983,6 @@ button.repository-status-row:disabled {
   border-radius: inherit;
   transform-origin: left center;
   transition: transform var(--motion-micro) var(--ease-enter);
-}
-
-.monitor-card {
-  padding: var(--space-4);
-}
-
-.monitor-card strong {
-  display: block;
-  color: var(--text);
-  font-size: var(--font-size-body);
-}
-
-.monitor-card p,
-.monitor-card small {
-  display: block;
-  margin: var(--space-2) 0 0;
-  color: var(--muted);
-  font-size: var(--font-size-caption);
 }
 
 .inspector {
@@ -3986,13 +3936,18 @@ button.repository-status-row:disabled {
   width: 220px;
   min-width: 120px;
   height: var(--control-compact);
-  margin-left: var(--space-2);
+  margin-left: auto;
   padding: 0 var(--space-2);
   color: var(--text);
   background: var(--surface-2);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-regular);
   font-size: var(--font-size-caption);
+}
+
+/* 筛选输入框与右侧操作按钮作为一组靠右排列 */
+.history-filter-input + .panel-header-action {
+  margin-left: 0;
 }
 
 .history-filter-input:focus {

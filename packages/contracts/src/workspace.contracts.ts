@@ -189,6 +189,7 @@ export interface WorkspaceOperationDto {
     | "status"
     | "stage"
     | "unstage"
+    | "discard"
     | "commit"
     | "fetch"
     | "pull"

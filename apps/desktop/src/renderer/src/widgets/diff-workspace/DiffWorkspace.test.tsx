@@ -189,26 +189,28 @@ describe("DiffWorkspace", () => {
       )?.value
     ).toBe("Share the workspace");
     expect(container.querySelector(".gn-textarea")).not.toBeNull();
+    const aiGenerateButton =
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="使用 AI 生成提交信息"]'
+      );
+    const commitActions = container.querySelector(
+      ".diff-workspace-commit-form-actions"
+    );
     expect(
-      findButton(container, "AI 生成").closest(
-        ".diff-workspace-commit-field-head"
-      )
-    ).not.toBeNull();
+      aiGenerateButton?.parentElement
+    ).toBe(commitActions);
+    expect(aiGenerateButton?.textContent).toBe("");
+    expect(aiGenerateButton?.dataset.iconOnly).toBe("true");
     expect(
-      findButton(container, "提交已暂存变更").dataset
-        .fullWidth
-    ).toBe("true");
+      findButton(container, "提交已暂存变更")
+        .parentElement
+    ).toBe(commitActions);
     expect(
-      findButton(
-        container,
-        "提交已暂存变更"
-      ).parentElement?.classList.contains(
-        "diff-workspace-commit-form"
-      )
-    ).toBe(true);
+      findButton(container, "提交已暂存变更").dataset.fullWidth
+    ).toBe("false");
 
     act(() => {
-      findButton(container, "AI 生成").click();
+      aiGenerateButton?.click();
     });
     expect(onGenerate).toHaveBeenCalledTimes(1);
 
@@ -383,6 +385,111 @@ describe("DiffWorkspace", () => {
       subject: "Update workspace state",
       body: "Explain the migration."
     });
+  });
+
+  it("keeps the AI commit entry visible when AI is disabled", () => {
+    act(() => {
+      root.render(
+        <DiffWorkspace
+          commit={{
+            ai: {
+              enabled: false,
+              busy: false,
+              onGenerate: vi.fn()
+            },
+            busy: false,
+            conflicted: 0,
+            message: "",
+            push: false,
+            staged: 1,
+            unstaged: 0,
+            untracked: 0,
+            submitting: false,
+            onMessageChange: vi.fn(),
+            onPushChange: vi.fn(),
+            onSubmit: vi.fn()
+          }}
+          configuration={repositoryDiffWorkspaceConfiguration}
+          files={files}
+          onSelectedFileChange={vi.fn()}
+          onStageFile={vi.fn()}
+          onUnstageFile={vi.fn()}
+          panelProps={{ content }}
+          selectedFileKey={files[0]?.key}
+        />
+      );
+    });
+
+    const aiGenerateButton =
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="使用 AI 生成提交信息"]'
+      );
+    expect(aiGenerateButton).not.toBeNull();
+    expect(aiGenerateButton?.disabled).toBe(true);
+    expect(aiGenerateButton?.title).toBe(
+      "请先在设置中启用 AI 提交信息"
+    );
+  });
+
+  it("renders the persisted commit panel height and exposes a keyboard resize control", () => {
+    const onCommitPanelHeightChange = vi.fn();
+
+    act(() => {
+      root.render(
+        <DiffWorkspace
+          commit={{
+            busy: false,
+            conflicted: 0,
+            commitPanelHeight: 240,
+            message: "Resize the commit panel",
+            onCommitPanelHeightChange,
+            onMessageChange: vi.fn(),
+            onPushChange: vi.fn(),
+            onSubmit: vi.fn(),
+            push: false,
+            staged: 1,
+            submitting: false,
+            untracked: 0,
+            unstaged: 0
+          }}
+          configuration={repositoryDiffWorkspaceConfiguration}
+          files={[files[0]!]}
+          onSelectedFileChange={vi.fn()}
+          onStageFile={vi.fn()}
+          onUnstageFile={vi.fn()}
+          panelProps={{
+            content
+          }}
+          selectedFileKey={files[0]?.key}
+        />
+      );
+    });
+
+    const composer = container.querySelector<HTMLElement>(
+      ".diff-workspace-commit"
+    );
+    expect(composer?.style.height).toBe("240px");
+
+    const resizeHandle = container.querySelector<HTMLElement>(
+      '[role="separator"][aria-label="调整提交区域高度"]'
+    );
+    expect(resizeHandle).not.toBeNull();
+    expect(resizeHandle?.getAttribute("aria-orientation")).toBe(
+      "horizontal"
+    );
+
+    act(() => {
+      resizeHandle?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          key: "ArrowUp"
+        })
+      );
+    });
+    expect(onCommitPanelHeightChange).toHaveBeenCalled();
+    expect(
+      onCommitPanelHeightChange.mock.calls[0]?.[0]
+    ).toBeGreaterThan(240);
   });
 
   it("enables committing all changes when the staged index is empty", () => {

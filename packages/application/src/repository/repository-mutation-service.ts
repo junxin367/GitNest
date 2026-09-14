@@ -114,6 +114,82 @@ export class RepositoryMutationService {
     };
   }
 
+  async discard(
+    target: RepositoryTarget,
+    paths: readonly string[]
+  ): Promise<RepositoryPathsMutationResult> {
+    const requestedPaths = validateMutationPaths(paths);
+    const completed = await this.#runtime.runWorktreeMutation(
+      target,
+      "discard",
+      async (worktreePath) => {
+        const snapshot =
+          await this.#gitReader.readRepositorySnapshot(
+            worktreePath
+          );
+        const trackedPaths: string[] = [];
+        const untrackedPaths: string[] = [];
+        const requested = new Set(requestedPaths);
+
+        for (const change of snapshot.changes) {
+          const pathsForChange = [
+            change.path,
+            ...(change.originalPath
+              ? [change.originalPath]
+              : [])
+          ].filter((path) => requested.has(path));
+          if (pathsForChange.length === 0) {
+            continue;
+          }
+
+          const eligible =
+            change.kind === "untracked" ||
+            change.kind === "unmerged" ||
+            change.worktreeStatus !== ".";
+          if (!eligible) {
+            continue;
+          }
+          if (change.kind === "untracked") {
+            untrackedPaths.push(...pathsForChange);
+          } else {
+            trackedPaths.push(...pathsForChange);
+          }
+        }
+
+        const unavailable = requestedPaths.filter(
+          (path) =>
+            !trackedPaths.includes(path) &&
+            !untrackedPaths.includes(path)
+        );
+        if (unavailable.length > 0) {
+          throw new GitError(
+            "INVALID_REQUEST",
+            "Requested paths are no longer eligible for discard.",
+            { unavailableCount: unavailable.length }
+          );
+        }
+
+        if (trackedPaths.length > 0) {
+          await this.#gitWriter.restoreWorktreePaths(
+            worktreePath,
+            [...new Set(trackedPaths)]
+          );
+        }
+        if (untrackedPaths.length > 0) {
+          await this.#gitWriter.removeUntrackedPaths(
+            worktreePath,
+            [...new Set(untrackedPaths)]
+          );
+        }
+      }
+    );
+
+    return {
+      target,
+      operationId: completed.operationId
+    };
+  }
+
   async commit(
     target: RepositoryTarget,
     subject: string,

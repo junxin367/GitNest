@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_DIFF_COMMIT_PANEL_HEIGHT,
+  MIN_DIFF_COMMIT_PANEL_HEIGHT
+} from "@gitnest/contracts";
+
+import {
   isTrustedSenderUrl,
   validateAccountRemovalImpactRequest,
   validateBindAccountRequest,
@@ -520,6 +525,47 @@ describe("application settings and AI IPC validation", () => {
     ).toThrowError(
       expect.objectContaining({ code: "INVALID_REQUEST" })
     );
+  });
+
+  it("validates the persisted commit panel height range", () => {
+    expect(
+      validateUpdateAppSettingsRequest({
+        diff: {
+          commitPanelHeight: MIN_DIFF_COMMIT_PANEL_HEIGHT
+        }
+      })
+    ).toEqual({
+      diff: {
+        commitPanelHeight: MIN_DIFF_COMMIT_PANEL_HEIGHT
+      }
+    });
+    expect(
+      validateUpdateAppSettingsRequest({
+        diff: {
+          commitPanelHeight: MAX_DIFF_COMMIT_PANEL_HEIGHT
+        }
+      })
+    ).toEqual({
+      diff: {
+        commitPanelHeight: MAX_DIFF_COMMIT_PANEL_HEIGHT
+      }
+    });
+
+    for (const commitPanelHeight of [
+      MIN_DIFF_COMMIT_PANEL_HEIGHT - 1,
+      MAX_DIFF_COMMIT_PANEL_HEIGHT + 1,
+      180.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY
+    ]) {
+      expect(() =>
+        validateUpdateAppSettingsRequest({
+          diff: { commitPanelHeight }
+        })
+      ).toThrowError(
+        expect.objectContaining({ code: "INVALID_REQUEST" })
+      );
+    }
   });
 });
 

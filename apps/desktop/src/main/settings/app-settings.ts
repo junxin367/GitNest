@@ -1,4 +1,7 @@
 import {
+  DEFAULT_DIFF_COMMIT_PANEL_HEIGHT,
+  MAX_DIFF_COMMIT_PANEL_HEIGHT,
+  MIN_DIFF_COMMIT_PANEL_HEIGHT,
   createDefaultAppSettings,
   type AppSettingsDto,
   type AppSettingsLoadDto,
@@ -12,6 +15,12 @@ const MAX_AI_API_URL_LENGTH = 2_048;
 const MAX_AI_MODEL_LENGTH = 256;
 const MAX_AI_API_KEY_LENGTH = 8_192;
 const MAX_AI_PROMPT_LENGTH = 12_000;
+type AppSettingsDiffDocument = Omit<
+  AppSettingsDto["diff"],
+  "commitPanelHeight"
+> & {
+  commitPanelHeight?: number;
+};
 
 export interface InternalAiSettings {
   enabled: boolean;
@@ -25,7 +34,7 @@ interface AppSettingsDocument {
   schemaVersion: typeof APP_SETTINGS_SCHEMA_VERSION;
   general: AppSettingsDto["general"];
   appearance: AppSettingsDto["appearance"];
-  diff: AppSettingsDto["diff"];
+  diff: AppSettingsDiffDocument;
   git: AppSettingsDto["git"];
   ai: InternalAiSettings;
   navigation: AppSettingsDto["navigation"];
@@ -160,6 +169,10 @@ function mergeSettings(
   patch: UpdateAppSettingsRequest,
   updatedAt: string
 ): AppSettingsDocument {
+  const diff = {
+    ...current.diff,
+    ...patch.diff
+  };
   return {
     ...current,
     general: {
@@ -171,8 +184,10 @@ function mergeSettings(
       ...patch.appearance
     },
     diff: {
-      ...current.diff,
-      ...patch.diff
+      ...diff,
+      commitPanelHeight: normalizeDiffCommitPanelHeight(
+        diff.commitPanelHeight
+      )
     },
     git: {
       ...current.git,
@@ -196,7 +211,12 @@ function toPublicSettings(
   return {
     general: { ...document.general },
     appearance: { ...document.appearance },
-    diff: { ...document.diff },
+    diff: {
+      ...document.diff,
+      commitPanelHeight: normalizeDiffCommitPanelHeight(
+        document.diff.commitPanelHeight
+      )
+    },
     git: { ...document.git },
     ai: {
       enabled: document.ai.enabled,
@@ -216,7 +236,12 @@ function cloneDocument(
     ...document,
     general: { ...document.general },
     appearance: { ...document.appearance },
-    diff: { ...document.diff },
+    diff: {
+      ...document.diff,
+      commitPanelHeight: normalizeDiffCommitPanelHeight(
+        document.diff.commitPanelHeight
+      )
+    },
     git: {
       ...document.git,
       pushStrategy: document.git.pushStrategy ?? "rebase"
@@ -266,8 +291,30 @@ function isDiffSettings(value: unknown): boolean {
     (value.fileView === "list" || value.fileView === "tree") &&
     (value.layout === "split" || value.layout === "unified") &&
     typeof value.wrap === "boolean" &&
-    typeof value.treeDirectoriesCollapsed === "boolean"
+    typeof value.treeDirectoriesCollapsed === "boolean" &&
+    (value.commitPanelHeight === undefined ||
+      isValidDiffCommitPanelHeight(value.commitPanelHeight))
   );
+}
+
+function isValidDiffCommitPanelHeight(
+  value: unknown
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value >= MIN_DIFF_COMMIT_PANEL_HEIGHT &&
+    value <= MAX_DIFF_COMMIT_PANEL_HEIGHT
+  );
+}
+
+function normalizeDiffCommitPanelHeight(
+  value: unknown
+): number {
+  return isValidDiffCommitPanelHeight(value)
+    ? value
+    : DEFAULT_DIFF_COMMIT_PANEL_HEIGHT;
 }
 
 function isGitSettings(value: unknown): boolean {

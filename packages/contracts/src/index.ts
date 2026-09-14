@@ -119,6 +119,9 @@ export type {
 } from "./worktree.contracts";
 export {
   DEFAULT_AI_COMMIT_PROMPT,
+  DEFAULT_DIFF_COMMIT_PANEL_HEIGHT,
+  MAX_DIFF_COMMIT_PANEL_HEIGHT,
+  MIN_DIFF_COMMIT_PANEL_HEIGHT,
   createDefaultAppSettings
 } from "./settings.contracts";
 export type {

@@ -590,8 +590,7 @@
       font-size: var(--font-size-caption);
     }
 
-    .titlebar-file-popover,
-    .titlebar-view-popover {
+    .titlebar-file-popover {
       display: grid;
       width: 222px;
       padding: var(--space-2);
@@ -601,8 +600,7 @@
       box-shadow: var(--shadow-popover);
     }
 
-    .titlebar-file-popover button,
-    .titlebar-view-popover button {
+    .titlebar-file-popover button {
       display: flex;
       align-items: center;
       gap: var(--space-2);
@@ -617,23 +615,15 @@
       line-height: 1;
     }
 
-    .titlebar-file-popover button:hover:not(:disabled),
-    .titlebar-view-popover button:hover:not(:disabled) {
+    .titlebar-file-popover button:hover:not(:disabled) {
       color: var(--text);
       background: var(--surface-hover);
     }
 
-    .titlebar-file-popover button:disabled,
-    .titlebar-view-popover button:disabled {
+    .titlebar-file-popover button:disabled {
       color: var(--color-text-disabled);
       cursor: not-allowed;
       opacity: 0.72;
-    }
-
-    .titlebar-menu-separator {
-      height: 1px;
-      margin: var(--space-2) 0;
-      background: var(--border-soft);
     }
 
     .workspace-switcher-menu {
@@ -2140,6 +2130,7 @@
       <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="m7 10 5-5 5 5M12 5v14"/></symbol>
       <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="m7 14 5 5 5-5M12 5v14"/></symbol>
       <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 7 4 12l5 5"/><path d="M4 12h9a7 7 0 0 1 7 7"/></symbol>
       <symbol id="i-commit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M3 12h6M15 12h6"/></symbol>
       <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10M8 9c5 0 8-1 8-3"/></symbol>
       <symbol id="i-diff" viewBox="0 0 24 24"><circle cx="7" cy="5" r="2"/><circle cx="17" cy="19" r="2"/><path d="M7 7v10M17 7v10M13 7h8M17 3v8"/></symbol>
@@ -2242,7 +2233,7 @@
           <div class="sample-title">
             <div>
               <h3>标题栏菜单条</h3>
-              <p>“文件 / 视图”为真实弹出菜单；“仓库 / 帮助”当前仅触发提示。</p>
+              <p>“文件”为真实弹出菜单；“帮助”当前仅触发提示。</p>
             </div>
             <span class="sample-index">01</span>
           </div>
@@ -2250,8 +2241,6 @@
             <div>
               <div class="trigger-strip">
                 <button class="active" type="button">文件</button>
-                <button type="button">仓库</button>
-                <button type="button">视图</button>
                 <button type="button">帮助</button>
               </div>
               <div class="titlebar-menu-pair" style="margin-top:12px">
@@ -2264,32 +2253,9 @@
                     </button>
                   </div>
                 </div>
-                <div class="titlebar-menu-demo">
-                  <strong>视图</strong>
-                  <div class="titlebar-view-popover" role="menu">
-                    <button type="button" role="menuitemcheckbox">
-                      <svg class="icon"><use href="#i-panel"></use></svg>
-                      <span>隐藏仓库目录</span>
-                    </button>
-                    <button type="button" role="menuitemcheckbox">
-                      <svg class="icon"><use href="#i-panel"></use></svg>
-                      <span>隐藏详情面板</span>
-                    </button>
-                    <div class="titlebar-menu-separator"></div>
-                    <button type="button" role="menuitem">
-                      <svg class="icon"><use href="#i-sun"></use></svg>
-                      <span>切换为浅色主题</span>
-                    </button>
-                    <div class="titlebar-menu-separator"></div>
-                    <button type="button" role="menuitem">
-                      <svg class="icon"><use href="#i-refresh"></use></svg>
-                      <span>重置布局</span>
-                    </button>
-                  </div>
-                </div>
                 <div class="placeholder-note">
                   <strong>当前缺少真实菜单层</strong>
-                  <p>“仓库”和“帮助”使用普通按钮，只显示 Toast 提示；没有菜单容器、菜单项或键盘菜单导航。</p>
+                  <p>“帮助”使用普通按钮，只显示 Toast 提示；没有菜单容器、菜单项或键盘菜单导航。</p>
                 </div>
               </div>
             </div>

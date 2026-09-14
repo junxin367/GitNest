@@ -1,7 +1,19 @@
-import { describe, expect, it } from "vitest";
+/** @vitest-environment jsdom */
+
+import React, { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi
+} from "vitest";
 
 import type { WorkspaceDetailsDto } from "@gitnest/contracts";
 
+import { WorkspaceOverviewPage } from "./WorkspaceOverviewPage";
 import {
   filterSnapshotsToTargets,
   getActiveWorkspaceEntry,
@@ -56,6 +68,77 @@ describe("Workspace overview state", () => {
         worktreeId: "worktree-a"
       }
     ]);
+  });
+});
+
+describe("Workspace overview collapsible panels", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    vi.stubGlobal("React", React);
+    (
+      globalThis as typeof globalThis & {
+        IS_REACT_ACT_ENVIRONMENT: boolean;
+      }
+    ).IS_REACT_ACT_ENVIRONMENT = true;
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("collapses repository status and recent commit lists from their headers", () => {
+    act(() => {
+      root.render(
+        <WorkspaceOverviewPage
+          busy={false}
+          error={null}
+          notice={null}
+          onAddDirectory={() => undefined}
+          onAddManualPath={async () => false}
+          onClearFeedback={() => undefined}
+          onSelectTarget={() => undefined}
+          operation={null}
+          snapshots={[]}
+          workspace={createWorkspace()}
+        />
+      );
+    });
+
+    const repositoryHeader = container.querySelector<HTMLButtonElement>(
+      '[aria-controls="workspace-overview-repository-status"]'
+    );
+    const recentHeader = container.querySelector<HTMLButtonElement>(
+      '[aria-controls="workspace-overview-recent-commits"]'
+    );
+    expect(repositoryHeader).not.toBeNull();
+    expect(recentHeader).not.toBeNull();
+
+    const repositoryBody = container.querySelector(
+      "#workspace-overview-repository-status"
+    );
+    const recentBody = container.querySelector(
+      "#workspace-overview-recent-commits"
+    );
+    expect(repositoryHeader?.getAttribute("aria-expanded")).toBe("true");
+    expect(recentHeader?.getAttribute("aria-expanded")).toBe("true");
+    expect(repositoryBody?.hasAttribute("hidden")).toBe(false);
+    expect(recentBody?.hasAttribute("hidden")).toBe(false);
+
+    act(() => {
+      repositoryHeader?.click();
+      recentHeader?.click();
+    });
+
+    expect(repositoryHeader?.getAttribute("aria-expanded")).toBe("false");
+    expect(recentHeader?.getAttribute("aria-expanded")).toBe("false");
+    expect(repositoryBody?.hasAttribute("hidden")).toBe(true);
+    expect(recentBody?.hasAttribute("hidden")).toBe(true);
   });
 });
 

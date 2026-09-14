@@ -67,6 +67,39 @@ export function repositoryTargetSelected(
   );
 }
 
+export function workspaceEntryContainsTarget(
+  entry: WorkspaceEntryDto,
+  target: RepositoryTargetDto
+): boolean {
+  const targets = [
+    ...entry.groups.flatMap((group) => group.targets),
+    ...(entry.kind === "workspace-meta-repository"
+      ? [entry.rootTarget]
+      : entry.kind === "standalone-repository"
+        ? [entry.target]
+        : [])
+  ];
+
+  return targets.some(
+    (candidate) =>
+      candidate.repositoryId === target.repositoryId &&
+      candidate.worktreeId === target.worktreeId
+  );
+}
+
+export function findWorkspaceEntryForTarget(
+  workspace: WorkspaceDetailsDto | null,
+  target: RepositoryTargetDto | undefined
+): WorkspaceEntryDto | undefined {
+  if (!workspace || !target) {
+    return undefined;
+  }
+
+  return workspace.entries.find((entry) =>
+    workspaceEntryContainsTarget(entry, target)
+  );
+}
+
 export function getSnapshotChangeCount(
   snapshot: RepositoryStatusSnapshotDto | undefined
 ): number {

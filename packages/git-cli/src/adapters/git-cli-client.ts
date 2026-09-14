@@ -72,6 +72,8 @@ import {
 } from "../commands/repository-operations";
 import {
   createCommitArguments,
+  removeUntrackedArguments,
+  restoreWorktreeArguments,
   stageAllArguments,
   stageArguments,
   unstageArguments
@@ -1322,6 +1324,62 @@ export class GitCliClient
         executable: executablePath,
         cwd: worktreePath,
         args: unstageArguments(relativePaths, hasHead),
+        signal: options.signal,
+        timeoutMs:
+          options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
+        outputLimitBytes: WRITE_OUTPUT_LIMIT_BYTES,
+        discardOutputAfterLimit: true,
+        writeIntent: true
+      });
+    } catch (error) {
+      throw mapRepositoryError(error, worktreePath);
+    }
+  }
+
+  async restoreWorktreePaths(
+    path: string,
+    paths: readonly string[],
+    options: GitWriteOptions = {}
+  ): Promise<void> {
+    const worktreePath = await validateDirectoryPath(path);
+    const relativePaths = validateRelativePathspecs(paths);
+    const executablePath = await this.#getExecutablePath(
+      options.signal
+    );
+
+    try {
+      await runProcess({
+        executable: executablePath,
+        cwd: worktreePath,
+        args: restoreWorktreeArguments(relativePaths),
+        signal: options.signal,
+        timeoutMs:
+          options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
+        outputLimitBytes: WRITE_OUTPUT_LIMIT_BYTES,
+        discardOutputAfterLimit: true,
+        writeIntent: true
+      });
+    } catch (error) {
+      throw mapRepositoryError(error, worktreePath);
+    }
+  }
+
+  async removeUntrackedPaths(
+    path: string,
+    paths: readonly string[],
+    options: GitWriteOptions = {}
+  ): Promise<void> {
+    const worktreePath = await validateDirectoryPath(path);
+    const relativePaths = validateRelativePathspecs(paths);
+    const executablePath = await this.#getExecutablePath(
+      options.signal
+    );
+
+    try {
+      await runProcess({
+        executable: executablePath,
+        cwd: worktreePath,
+        args: removeUntrackedArguments(relativePaths),
         signal: options.signal,
         timeoutMs:
           options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,

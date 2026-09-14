@@ -430,6 +430,10 @@ export function ApplicationSettingsPage({
                           : "默认展开"
                       }
                     />
+                    <Detail
+                      label="提交区域高度"
+                      value={`${appSettings.settings.diff.commitPanelHeight}px`}
+                    />
                   </dl>
                 </SettingsCard>
               </>
@@ -453,7 +457,7 @@ export function ApplicationSettingsPage({
                       <span className="settings-switch-thumb" />
                     </button>
                   }
-                  description="根据当前仓库的已暂存 Diff 生成提交信息，结果仍由你确认后提交。"
+                  description="根据当前提交范围生成提交信息，结果仍由你确认后提交。"
                   title="AI 提交信息"
                 >
                   <div className="settings-ai-field-grid">

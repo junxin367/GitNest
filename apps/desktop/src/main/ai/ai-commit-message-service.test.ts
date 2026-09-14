@@ -50,7 +50,7 @@ describe("normalizeAiEndpoint", () => {
 });
 
 describe("AiCommitMessageService", () => {
-  it("reads only staged diffs and returns text without performing Git mutations", async () => {
+  it("reads only staged diffs when the commit scope has staged changes", async () => {
     const readRepositoryDiff = vi.fn(
       async (
         _path: string,
@@ -123,20 +123,55 @@ describe("AiCommitMessageService", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects generation when the staged index is empty", async () => {
-    const fetchImpl = vi.fn<typeof fetch>();
-    const readRepositoryDiff = vi.fn();
+  it("reads unstaged and untracked diffs when the staged index is empty", async () => {
+    const readRepositoryDiff = vi.fn(
+      async (
+        _path: string,
+        options: { path: string; mode: string }
+      ) => ({
+        path: options.path,
+        mode: options.mode as "unstaged" | "untracked",
+        content: `diff --git a/${options.path} b/${options.path}`,
+        binary: false,
+        truncated: false,
+        additions: 1,
+        deletions: 0
+      })
+    );
+    const fetchImpl = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as {
+          messages: Array<{ role: string; content: string }>;
+        };
+        expect(body.messages[1]?.content).toContain(
+          "--- UNSTAGED FILE: src/unstaged.ts ---"
+        );
+        expect(body.messages[1]?.content).toContain(
+          "--- UNTRACKED FILE: docs/new.md ---"
+        );
+        return completionResponse(
+          "feat: update working tree behavior"
+        );
+      }
+    );
     const service = createService({
       fetchImpl,
       snapshot: {
         ...baseSnapshot(),
         unstaged: 1,
+        untracked: 1,
         changes: [
           {
             path: "src/unstaged.ts",
             indexStatus: ".",
             worktreeStatus: "M",
             kind: "ordinary"
+          },
+          {
+            path: "docs/new.md",
+            indexStatus: "?",
+            worktreeStatus: "?",
+            kind: "untracked"
           }
         ]
       },
@@ -145,13 +180,29 @@ describe("AiCommitMessageService", () => {
 
     await expect(
       service.generateCommitMessage(target)
-    ).rejects.toMatchObject({
-      code: "INVALID_REQUEST",
-      message:
-        "No staged changes are available for AI generation."
+    ).resolves.toEqual({
+      message: "feat: update working tree behavior",
+      stagedFiles: 2,
+      truncated: false
     });
-    expect(readRepositoryDiff).not.toHaveBeenCalled();
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(readRepositoryDiff).toHaveBeenCalledTimes(2);
+    expect(readRepositoryDiff).toHaveBeenNthCalledWith(
+      1,
+      "C:\\workspace\\repository-1",
+      {
+        path: "src/unstaged.ts",
+        mode: "unstaged"
+      }
+    );
+    expect(readRepositoryDiff).toHaveBeenNthCalledWith(
+      2,
+      "C:\\workspace\\repository-1",
+      {
+        path: "docs/new.md",
+        mode: "untracked"
+      }
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("uses a temporary key for connection tests without requiring AI generation to be enabled", async () => {

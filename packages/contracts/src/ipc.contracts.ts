@@ -254,6 +254,10 @@ export interface IpcContractMap {
     [request: RepositoryPathsMutationRequest],
     GitReadResult<RepositoryPathsMutationDto>
   >;
+  [IPC_CHANNELS.repositoryDiscard]: IpcContract<
+    [request: RepositoryPathsMutationRequest],
+    GitReadResult<RepositoryPathsMutationDto>
+  >;
   [IPC_CHANNELS.repositoryCreateCommit]: IpcContract<
     [request: CreateRepositoryCommitRequest],
     GitReadResult<RepositoryCommitMutationDto>

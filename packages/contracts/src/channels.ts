@@ -45,6 +45,7 @@ export const IPC_CHANNELS = {
   repositoryCancelQuery: "repository:cancel-query",
   repositoryStage: "repository:stage",
   repositoryUnstage: "repository:unstage",
+  repositoryDiscard: "repository:discard",
   repositoryCreateCommit: "repository:create-commit",
   repositoryCommandPreflight: "repository:command-preflight",
   repositoryCommandExecute: "repository:command-execute",

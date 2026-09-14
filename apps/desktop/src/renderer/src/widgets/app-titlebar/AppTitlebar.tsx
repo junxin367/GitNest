@@ -7,55 +7,34 @@ import { Icon } from "../../shared/ui/Icon";
 import {
   MenuItem,
   MenuPopover,
-  MenuSeparator
 } from "../../shared/ui/Menu";
 
 interface AppTitlebarProps {
   activeView: AppView;
-  hasRepository: boolean;
-  inspectorOpen: boolean;
-  layoutControlsDisabled: boolean;
   searchOpen: boolean;
   runtimeInfo: RuntimeInfo | null;
-  sidebarCollapsed: boolean;
-  theme: "dark" | "light";
   onCreateWorkspace(): void;
   onNavigate(view: AppView): void;
   onOpenSearch(): void;
-  onResetLayout(): void;
-  onToggleInspector(): void;
-  onToggleSidebar(): void;
-  onToggleTheme(): void;
 }
 
 export function AppTitlebar({
   activeView,
-  hasRepository,
-  inspectorOpen,
-  layoutControlsDisabled,
   searchOpen,
   runtimeInfo,
-  sidebarCollapsed,
-  theme,
   onCreateWorkspace,
   onNavigate,
   onOpenSearch,
-  onResetLayout,
-  onToggleInspector,
-  onToggleSidebar,
-  onToggleTheme
 }: AppTitlebarProps) {
   const [openMenu, setOpenMenu] = useState<
-    "file" | "view" | null
+"file" | null
   >(null);
   const fileMenuRef = useRef<HTMLDivElement>(null);
   const fileTriggerRef = useRef<HTMLButtonElement>(null);
-  const viewMenuRef = useRef<HTMLDivElement>(null);
-  const viewTriggerRef = useRef<HTMLButtonElement>(null);
   const menuSurfaceRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const menuRefs = [fileMenuRef, viewMenuRef];
+    const menuRefs = [fileMenuRef];
     const closeMenus = () => setOpenMenu(null);
     const closeFromOutside = (event: PointerEvent) => {
       const target = event.target;
@@ -134,24 +113,6 @@ export function AppTitlebar({
         </div>
         <Button variant="unstyled"
           aria-current={
-            activeView === "repository" ? "page" : undefined
-          }
-          className={
-            activeView === "repository" ? "active" : undefined
-          }
-          disabled={!hasRepository}
-          onClick={() => onNavigate("repository")}
-          title={
-            hasRepository
-              ? "打开当前仓库"
-              : "请先从 Workspace 选择一个仓库"
-          }
-          type="button"
-        >
-          仓库
-        </Button>
-        <Button variant="unstyled"
-          aria-current={
             activeView === "operations" ? "page" : undefined
           }
           className={
@@ -162,100 +123,6 @@ export function AppTitlebar({
         >
           操作中心
         </Button>
-        <div className="titlebar-view-menu" ref={viewMenuRef}>
-          <Button variant="unstyled"
-            aria-expanded={openMenu === "view"}
-            aria-haspopup="menu"
-            onClick={() =>
-              setOpenMenu((current) =>
-                current === "view" ? null : "view"
-              )
-            }
-            ref={viewTriggerRef}
-            type="button"
-          >
-            视图
-          </Button>
-          {openMenu === "view" && (
-            <MenuPopover
-              align="start"
-              anchor={viewTriggerRef.current}
-              aria-label="视图选项"
-              className="titlebar-view-popover"
-              ref={menuSurfaceRef}
-              side="bottom"
-            >
-              <MenuItem
-                aria-checked={
-                  !layoutControlsDisabled && !sidebarCollapsed
-                }
-                disabled={layoutControlsDisabled}
-                leading={
-                  <Icon
-                    name={
-                      sidebarCollapsed
-                        ? "sidebarExpand"
-                        : "sidebarCollapse"
-                    }
-                    size={14}
-                  />
-                }
-                onClick={() => {
-                  setOpenMenu(null);
-                  onToggleSidebar();
-                }}
-                role="menuitemcheckbox"
-              >
-                {sidebarCollapsed
-                  ? "显示仓库目录"
-                  : "隐藏仓库目录"}
-              </MenuItem>
-              <MenuItem
-                aria-checked={
-                  !layoutControlsDisabled && inspectorOpen
-                }
-                disabled={layoutControlsDisabled}
-                leading={<Icon name="panel" size={14} />}
-                onClick={() => {
-                  setOpenMenu(null);
-                  onToggleInspector();
-                }}
-                role="menuitemcheckbox"
-              >
-                {inspectorOpen
-                  ? "隐藏详情面板"
-                  : "显示详情面板"}
-              </MenuItem>
-              <MenuSeparator />
-              <MenuItem
-                leading={
-                  <Icon
-                    name={theme === "dark" ? "sun" : "moon"}
-                    size={14}
-                  />
-                }
-                onClick={() => {
-                  setOpenMenu(null);
-                  onToggleTheme();
-                }}
-              >
-                {theme === "dark"
-                  ? "切换为浅色主题"
-                  : "切换为深色主题"}
-              </MenuItem>
-              <MenuSeparator />
-              <MenuItem
-                leading={<Icon name="refresh" size={14} />}
-                onClick={() => {
-                  setOpenMenu(null);
-                  onResetLayout();
-                }}
-              >
-                重置布局
-              </MenuItem>
-            </MenuPopover>
-          )}
-        </div>
       </nav>
 
       <div className="titlebar-drag-region" />

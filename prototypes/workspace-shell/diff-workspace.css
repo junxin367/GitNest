@@ -110,24 +110,111 @@
   margin-top: var(--space-1);
 }
 
-.gn-diff-workspace__section-title {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
+.gn-diff-workspace__section-header {
+  display: flex;
   align-items: center;
   gap: var(--space-1);
-  width: 100%;
+  min-width: 0;
   min-height: 28px;
   padding: 0 var(--space-2);
+  background: color-mix(in srgb, var(--surface-2) 74%, transparent);
+}
+
+.gn-diff-workspace__section-header:hover,
+.gn-diff-workspace__section-header:focus-within {
+  background: var(--surface-hover);
+}
+
+.gn-diff-workspace__section-title {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  min-height: 28px;
+  padding: 0;
   color: var(--muted);
   text-align: left;
-  background: color-mix(in srgb, var(--surface-2) 74%, transparent);
+  background: transparent;
   border: 0;
   font-size: var(--font-size-caption);
 }
 
+.gn-diff-workspace__section-title > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .gn-diff-workspace__section-title:hover {
   color: var(--text-soft);
-  background: var(--surface-hover);
+}
+
+.gn-diff-workspace__section-tail {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  min-width: calc(var(--icon-small) * 2 + var(--space-1));
+  min-height: var(--control-compact);
+}
+
+.gn-diff-workspace__section-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-micro) ease;
+}
+
+.gn-diff-workspace__section-header.has-actions:hover
+  .gn-diff-workspace__section-actions,
+.gn-diff-workspace__section-header.has-actions:focus-within
+  .gn-diff-workspace__section-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.gn-diff-workspace__section-header.has-actions:hover
+  .gn-diff-workspace__section-count,
+.gn-diff-workspace__section-header.has-actions:focus-within
+  .gn-diff-workspace__section-count {
+  opacity: 0;
+}
+
+.gn-diff-workspace__section-actions .gn-button {
+  width: var(--gn-button-icon-size, 14px);
+  min-width: var(--gn-button-icon-size, 14px);
+  height: var(--gn-button-icon-size, 14px);
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.gn-diff-workspace__section-actions
+  .gn-button:hover:not(:disabled),
+.gn-diff-workspace__section-actions
+  .gn-button:active:not(:disabled),
+.gn-diff-workspace__section-actions
+  .gn-button:disabled,
+.gn-diff-workspace__section-actions
+  .gn-button[data-selected="true"] {
+  color: var(--text);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.gn-diff-workspace__section-actions
+  .gn-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .gn-diff-workspace__section-chevron {
@@ -140,19 +227,26 @@
 }
 
 .gn-diff-workspace__section-count {
-  min-width: 22px;
-  padding: 1px var(--space-1);
+  position: absolute;
+  right: 0;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 var(--space-1);
   color: var(--muted);
-  background: var(--canvas);
+  background: var(--surface-3);
   border-radius: 999px;
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  line-height: 18px;
+  transition: opacity var(--motion-micro) ease;
   text-align: center;
 }
 
 .gn-diff-workspace__file-row {
+  --diff-workspace-file-backdrop: transparent;
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--control-compact);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: var(--space-2);
   width: 100%;
@@ -173,12 +267,19 @@
   border: 0;
 }
 
-.gn-diff-workspace__file-row:hover {
+.gn-diff-workspace__file-row:hover,
+.gn-diff-workspace__file-row:focus-within {
+  --diff-workspace-file-backdrop: var(--surface-hover);
   background: var(--surface-hover);
 }
 
 .gn-diff-workspace__file-row.is-selected {
-  background: var(--accent-soft);
+  --diff-workspace-file-backdrop: color-mix(
+    in srgb,
+    var(--accent) 13%,
+    var(--surface)
+  );
+  background: var(--diff-workspace-file-backdrop);
   color: var(--text);
   box-shadow: inset 2px 0 0 var(--accent);
 }
@@ -251,18 +352,60 @@
   color: var(--red);
 }
 
-.gn-diff-workspace__stage-button.gn-button {
-  width: var(--control-compact);
-  min-width: var(--control-compact);
-  height: var(--control-compact);
+.gn-diff-workspace__file-actions {
+  position: absolute;
+  top: 0;
+  right: var(--space-2);
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  padding-left: var(--space-5);
   opacity: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--diff-workspace-file-backdrop) var(--space-5)
+  );
+  transition: opacity var(--motion-micro) var(--ease-enter);
 }
 
-.gn-diff-workspace__file-row:hover
-  .gn-diff-workspace__stage-button,
-.gn-diff-workspace__file-row.is-selected
-  .gn-diff-workspace__stage-button {
+.gn-diff-workspace__file-row:hover .gn-diff-workspace__file-actions,
+.gn-diff-workspace__file-row:focus-within .gn-diff-workspace__file-actions {
   opacity: 1;
+  pointer-events: auto;
+}
+
+.gn-diff-workspace__file-actions .gn-button {
+  width: var(--gn-button-icon-size, 14px);
+  min-width: var(--gn-button-icon-size, 14px);
+  height: var(--gn-button-icon-size, 14px);
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.gn-diff-workspace__file-actions
+  .gn-button:hover:not(:disabled),
+.gn-diff-workspace__file-actions
+  .gn-button:active:not(:disabled),
+.gn-diff-workspace__file-actions .gn-button:disabled,
+.gn-diff-workspace__file-actions
+  .gn-button[data-selected="true"] {
+  color: var(--text);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.gn-diff-workspace__file-actions
+  .gn-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .gn-diff-workspace__tree-directory {

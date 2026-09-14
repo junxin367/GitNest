@@ -312,13 +312,11 @@
       -webkit-app-region: no-drag;
     }
 
-    .titlebar-file-menu,
-    .titlebar-view-menu {
+    .titlebar-file-menu {
       position: relative;
     }
 
-    .titlebar-file-menu > summary,
-    .titlebar-view-menu > summary {
+    .titlebar-file-menu > summary {
       display: flex;
       align-items: center;
       height: var(--control-compact);
@@ -329,15 +327,12 @@
       list-style: none;
     }
 
-    .titlebar-file-menu > summary::-webkit-details-marker,
-    .titlebar-view-menu > summary::-webkit-details-marker {
+    .titlebar-file-menu > summary::-webkit-details-marker {
       display: none;
     }
 
     .titlebar-file-menu > summary:hover,
-    .titlebar-file-menu[open] > summary,
-    .titlebar-view-menu > summary:hover,
-    .titlebar-view-menu[open] > summary {
+    .titlebar-file-menu[open] > summary {
       color: var(--text);
       background: var(--surface-hover);
     }
@@ -2523,6 +2518,32 @@
       border-bottom: 1px solid var(--border-soft);
     }
 
+    .panel-header-toggle {
+      width: 100%;
+      color: inherit;
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+      user-select: none;
+    }
+
+    .panel-header-toggle:hover {
+      background: var(--surface-hover);
+    }
+
+    .panel-header-toggle:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+
+    .panel-collapse-indicator {
+      display: grid;
+      flex: 0 0 auto;
+      place-items: center;
+      margin-left: auto;
+      color: var(--muted);
+    }
+
     .panel-title {
       display: flex;
       align-items: center;
@@ -2582,12 +2603,17 @@
       margin-left: auto;
     }
 
+    /* 筛选输入框与右侧操作按钮作为一组靠右排列 */
+    .history-filter-input + .panel-header-action {
+      margin-left: 0;
+    }
+
     .history-filter-input {
       flex: 0 1 220px;
       width: 220px;
       min-width: 120px;
       height: var(--control-compact);
-      margin-left: var(--space-2);
+      margin-left: auto;
       padding: 0 var(--space-2);
       color: var(--text);
       background: var(--surface-2);
@@ -2633,66 +2659,6 @@
 
     .text-danger {
       color: var(--red);
-    }
-
-    .attention-list {
-      padding: var(--space-2);
-    }
-
-    .attention-item {
-      display: grid;
-      grid-template-columns: 34px minmax(0, 1fr) auto;
-      align-items: center;
-      gap: var(--space-3);
-      width: 100%;
-      min-height: 64px;
-      padding: var(--space-2) var(--space-3);
-      color: inherit;
-      text-align: left;
-      background: transparent;
-      border: 0;
-      border-radius: var(--radius-regular);
-      cursor: pointer;
-    }
-
-    .attention-item:hover {
-      background: var(--surface-hover);
-    }
-
-    .attention-symbol {
-      display: grid;
-      place-items: center;
-      width: 32px;
-      height: 32px;
-      border-radius: var(--radius-regular);
-    }
-
-    .attention-symbol.yellow {
-      color: var(--yellow);
-      background: var(--yellow-soft);
-    }
-
-    .attention-symbol.red {
-      color: var(--red);
-      background: var(--red-soft);
-    }
-
-    .attention-symbol.blue {
-      color: var(--blue);
-      background: var(--blue-soft);
-    }
-
-    .attention-name {
-      display: block;
-      color: var(--text-soft);
-      font-weight: var(--font-weight-medium);
-    }
-
-    .attention-detail {
-      display: block;
-      margin-top: var(--space-1);
-      color: var(--muted);
-      font-size: var(--font-size-caption);
     }
 
     .status-pill {
@@ -3396,18 +3362,35 @@
       font-weight: var(--font-weight-semibold);
     }
 
-    .file-section-title {
-      display: grid;
-      grid-template-columns: 16px minmax(0, 1fr) auto;
+    .file-section-header {
+      display: flex;
       align-items: center;
-      width: 100%;
+      gap: var(--space-2);
+      min-width: 0;
       height: var(--control-compact);
-      padding: 0 var(--space-3);
+      padding-right: var(--space-2);
+      padding-left: var(--space-3);
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .file-section-header:hover,
+    .file-section-header:focus-within {
+      background: var(--surface-hover);
+    }
+
+    .file-section-title {
+      display: flex;
+      flex: 1 1 auto;
+      align-items: center;
+      gap: var(--space-2);
+      height: 100%;
+      min-width: 0;
+      padding: 0;
       color: var(--muted);
       text-align: left;
-      background: var(--surface-2);
+      background: transparent;
       border: 0;
-      border-bottom: 1px solid var(--border-soft);
       cursor: pointer;
       font-size: var(--font-size-caption);
       font-weight: var(--font-weight-semibold);
@@ -3416,7 +3399,6 @@
 
     .file-section-title:hover {
       color: var(--text-soft);
-      background: var(--surface-hover);
     }
 
     .file-section-title:disabled,
@@ -3445,10 +3427,76 @@
     }
 
     .file-section-count {
-      padding: 0 var(--space-2);
+      position: absolute;
+      right: 0;
+      min-width: 20px;
+      height: 18px;
+      padding: 0 var(--space-1);
+      color: var(--muted);
       background: var(--surface-3);
       border-radius: 999px;
       font-size: var(--font-size-caption);
+      transition: opacity var(--motion-micro) ease;
+      font-weight: var(--font-weight-semibold);
+      line-height: 18px;
+      text-align: center;
+    }
+
+    .file-section-tail {
+      position: relative;
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 2px;
+      min-width: calc(var(--icon-small) * 2 + var(--space-1));
+      min-height: var(--control-compact);
+    }
+
+    .file-section-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--motion-micro) ease;
+    }
+
+    .file-section-header.has-actions:hover .file-section-actions,
+    .file-section-header.has-actions:focus-within .file-section-actions {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .file-section-header.has-actions:hover .file-section-count,
+    .file-section-header.has-actions:focus-within .file-section-count {
+      opacity: 0;
+    }
+
+    .file-section-actions .gn-button {
+      width: var(--gn-button-icon-size, 14px);
+      min-width: var(--gn-button-icon-size, 14px);
+      height: var(--gn-button-icon-size, 14px);
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+    }
+
+    .file-section-actions .gn-button:hover:not(:disabled),
+    .file-section-actions .gn-button:active:not(:disabled),
+    .file-section-actions .gn-button:disabled,
+    .file-section-actions .gn-button[data-selected="true"] {
+      color: var(--text);
+      background: transparent;
+      border-color: transparent;
+      box-shadow: none;
+    }
+
+    .file-section-actions .gn-button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
     }
 
     .file-section-body {
@@ -3490,8 +3538,10 @@
     }
 
     .file-row {
+      --diff-workspace-file-backdrop: transparent;
+      position: relative;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 22px;
+      grid-template-columns: minmax(0, 1fr);
       align-items: center;
       gap: var(--space-2);
       width: 100%;
@@ -3507,11 +3557,14 @@
     }
 
     .file-row:hover,
-    .file-row.active {
+    .file-row:focus-within {
+      --diff-workspace-file-backdrop: var(--surface-hover);
       background: var(--surface-hover);
     }
 
     .file-row.active {
+      --diff-workspace-file-backdrop: var(--surface-hover);
+      background: var(--surface-hover);
       box-shadow: 2px 0 0 var(--accent) inset;
     }
 
@@ -3678,6 +3731,58 @@
     .stage-toggle:hover {
       color: var(--accent);
       background: var(--accent-soft);
+    }
+
+    .file-actions {
+      position: absolute;
+      top: 0;
+      right: var(--space-2);
+      bottom: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 2px;
+      padding-left: var(--space-5);
+      opacity: 0;
+      pointer-events: none;
+      background: linear-gradient(
+        90deg,
+        transparent,
+        var(--diff-workspace-file-backdrop) var(--space-5)
+      );
+      transition: opacity var(--motion-micro) ease;
+    }
+
+    .file-row:hover .file-actions,
+    .file-row:focus-within .file-actions {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .file-actions .gn-button {
+      width: var(--gn-button-icon-size, 14px);
+      min-width: var(--gn-button-icon-size, 14px);
+      height: var(--gn-button-icon-size, 14px);
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+    }
+
+    .file-actions .gn-button:hover:not(:disabled),
+    .file-actions .gn-button:active:not(:disabled),
+    .file-actions .gn-button:disabled,
+    .file-actions .gn-button[data-selected="true"] {
+      color: var(--text);
+      background: transparent;
+      border-color: transparent;
+      box-shadow: none;
+    }
+
+    .file-actions .gn-button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
     }
 
     .diff-viewer-panel {
@@ -4149,7 +4254,7 @@
     .worktree-card {
       position: relative;
       width: 100%;
-      min-height: 160px;
+      min-height: 180px;
       padding: var(--space-4);
       color: inherit;
       text-align: left;
@@ -4523,14 +4628,51 @@
     }
 
     .changes-file-pane > .commit-composer {
+      display: flex;
+      flex-direction: column;
       min-width: 0;
-      max-height: 220px;
+      min-height: 160px;
+      max-height: 420px;
       margin-top: 0;
       overflow: auto;
       border: 0;
       border-top: 1px solid var(--border);
       border-radius: 0;
       box-shadow: none;
+    }
+
+    .commit-resize-handle {
+      position: relative;
+      height: 8px;
+      margin: 0;
+      cursor: ns-resize;
+      touch-action: none;
+      user-select: none;
+    }
+
+    .commit-resize-handle::after {
+      position: absolute;
+      top: 3px;
+      left: 50%;
+      width: 32px;
+      height: 2px;
+      content: "";
+      background: var(--border-soft);
+      border-radius: 999px;
+      transform: translateX(-50%);
+      transition: background var(--motion-fast), width var(--motion-fast);
+    }
+
+    .commit-resize-handle:hover::after,
+    .commit-resize-handle:focus-visible::after {
+      width: 48px;
+      background: var(--accent);
+    }
+
+    body.is-resizing-commit-panel,
+    body.is-resizing-commit-panel * {
+      cursor: ns-resize !important;
+      user-select: none !important;
     }
 
     .changes-file-pane > .commit-composer .panel-header {
@@ -4561,21 +4703,39 @@
     }
 
     .commit-form {
-      display: grid;
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
       gap: var(--space-2);
+      min-height: 0;
       padding: var(--space-2);
     }
 
-    .commit-form-field-head {
+    .commit-form-actions {
       display: flex;
       align-items: center;
-      justify-content: flex-end;
       gap: var(--space-2);
+      flex: 0 0 auto;
+      min-height: var(--control-compact);
+    }
+
+    .commit-form .gn-textarea-field {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .commit-form .gn-textarea {
+      flex: 1 1 auto;
+      min-height: 0;
     }
 
     .commit-ai-button.gn-button {
       flex: 0 0 auto;
-      min-height: var(--control-compact);
+      width: var(--control-compact);
+      min-width: var(--control-compact);
+      padding: 0;
     }
 
     .commit-form label {
@@ -4595,15 +4755,19 @@
       font-weight: var(--font-weight-regular);
     }
 
-    .commit-message {
-      min-height: 64px;
-      max-height: 140px;
+    .commit-form .commit-message {
+      flex: 1 1 auto;
+      min-height: 0;
+      max-height: none;
+      overflow: auto;
+      resize: none;
       font-size: var(--font-size-caption);
       line-height: 1.4;
     }
 
-    .commit-form > .gn-button {
-      width: 100%;
+    .commit-submit-button.gn-button {
+      flex: 1 1 auto;
+      width: auto;
       min-width: 0;
       min-height: var(--control-compact);
       height: var(--control-compact);
@@ -5432,6 +5596,10 @@
       line-height: var(--line-height-body);
     }
 
+    .workspace-tapd-dialog {
+      width: min(520px, 100%);
+    }
+
     .button.danger.primary {
       color: #fff;
       background: var(--red);
@@ -5450,7 +5618,6 @@
     .sidebar-add-directory,
     .context-tab,
     .repo-row,
-    .attention-item,
     .worktree-card,
     .command-result,
     .branch-name-button,
@@ -5565,7 +5732,6 @@
     .sidebar-add-directory:active,
     .context-tab:active,
     .repo-row:active,
-    .attention-item:active,
     .worktree-card:active,
     .command-result:active,
     .branch-name-button:active,
@@ -5834,11 +6000,6 @@
           <summary>文件</summary>
           <div class="titlebar-file-popover menu-surface" id="titlebarFileMenu" role="menu"></div>
         </details>
-        <button class="menu-button" onclick="showToast('仓库菜单', '分支、远程、Worktree 和高级 Git 操作。', 'repository')">仓库</button>
-        <details class="titlebar-view-menu" data-dropdown-id="titlebar-view" ontoggle="positionDetailsMenu(event.currentTarget, { side: 'bottom' })">
-          <summary>视图</summary>
-          <div class="titlebar-view-popover menu-surface" id="titlebarViewMenu" role="menu"></div>
-        </details>
         <button class="menu-button" onclick="showToast('帮助菜单', '快捷键、诊断信息和版本说明。', 'sparkle')">帮助</button>
       </div>
       <div class="title-spacer"></div>
@@ -5998,6 +6159,29 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="tapdKeywordOverlay" aria-hidden="true" inert onpointerdown="rememberTapdKeywordBackdropPointer(event)" onpointerup="closeTapdKeywordFromBackdrop(event)">
+    <div class="confirm-dialog workspace-entry-dialog workspace-tapd-dialog" role="dialog" aria-modal="true" aria-labelledby="tapdKeywordTitle" aria-describedby="tapdKeywordDescription">
+      <div class="confirm-dialog-body workspace-entry-dialog-body">
+        <span class="confirm-dialog-icon" id="tapdKeywordIcon"></span>
+        <div>
+          <h2 class="confirm-dialog-title" id="tapdKeywordTitle">设置 TAPD 关键字</h2>
+          <p id="tapdKeywordDescription"></p>
+        </div>
+      </div>
+      <form class="workspace-entry-dialog-form" id="tapdKeywordForm" onsubmit="saveTapdKeyword(event)">
+        <label class="workspace-entry-dialog-field" for="tapdKeywordInput">
+          <span>TAPD 关键字</span>
+          <input id="tapdKeywordInput" name="tapdKeyword" maxlength="120" autocomplete="off" spellcheck="false" placeholder="例如：TAPD-123456" data-modal-initial-focus="true" />
+          <small>使用 AI 生成提交信息时，关键字会自动放在提交信息第二行；留空即可移除。</small>
+        </label>
+      </form>
+      <div class="confirm-dialog-actions">
+        <button type="button" class="gn-button" data-full-width="false" data-icon-only="false" data-size="small" data-variant="default" id="tapdKeywordCancel" onclick="closeTapdKeywordDialog()"><span class="gn-button__label">取消</span></button>
+        <button type="submit" form="tapdKeywordForm" class="gn-button" data-full-width="false" data-icon-only="false" data-size="small" data-variant="primary" id="tapdKeywordAction"><span class="gn-button__label">保存关键字</span></button>
+      </div>
+    </div>
+  </div>
+
   <script src="./button.js"></script>
   <script src="./input.js"></script>
   <script src="./textarea.js"></script>
@@ -6029,6 +6213,7 @@
       conflict: '<path d="M6 3v7a4 4 0 0 0 4 4h8"/><path d="m15 11 3 3-3 3"/><path d="M6 21v-4a3 3 0 0 1 3-3"/>',
       clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
       history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+      undo: '<path d="M9 7 4 12l5 5"/><path d="M4 12h9a7 7 0 0 1 7 7"/>',
       file: '<path d="M6 2h8l4 4v16H6z"/><path d="M14 2v5h5"/>',
       fileCode: '<path d="M6 2h8l4 4v16H6z"/><path d="M14 2v5h5"/><path d="m10 11-2 2 2 2M14 11l2 2-2 2"/>',
       commit: '<circle cx="12" cy="12" r="3"/><path d="M3 12h6M15 12h6"/>',
@@ -6048,7 +6233,8 @@
       minimize: '<path d="M5 12h14"/>',
       maximize: '<rect x="5" y="5" width="14" height="14"/>',
       eye: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/>',
-      sparkle: '<path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/><path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>'
+      sparkle: '<path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/><path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
+      tag: '<path d="M20 13 13 20a2 2 0 0 1-2.8 0L4 13V4h9l7 7a2 2 0 0 1 0 2z"/><circle cx="8.5" cy="8.5" r="1.3"/>'
     };
 
     const icon = (name, size = 16) =>
@@ -6207,7 +6393,7 @@
     function repositionVisibleAnchoredMenus() {
       document
         .querySelectorAll(
-          ".titlebar-file-menu[open], .titlebar-view-menu[open], .toolbar-menu[open], .settings-tool-menu[open]"
+          ".titlebar-file-menu[open], .toolbar-menu[open], .settings-tool-menu[open]"
         )
         .forEach((details) =>
           positionDetailsMenu(details, { side: "bottom" })
@@ -7019,6 +7205,46 @@
       }
     })();
 
+    const tapdKeywordStorageKey =
+      `gitnest.workspace.tapd-keyword:${workspaceSnapshot.rootPath}:workspace-root`;
+    const normalizeTapdKeyword = (value) =>
+      String(value || "")
+        .trim()
+        .replace(/\s+/g, " ");
+    function applyTapdKeywordToCommitMessage(message, keyword) {
+      const normalizedKeyword = normalizeTapdKeyword(keyword);
+      if (!normalizedKeyword) {
+        return message;
+      }
+
+      const normalizedMessage = String(message || "").trim();
+      if (!normalizedMessage) {
+        return message;
+      }
+
+      const lines = normalizedMessage.split(/\r?\n/);
+      if (lines.some((line) => line.trim() === normalizedKeyword)) {
+        return normalizedMessage;
+      }
+      if (lines.length === 1) {
+        return `${lines[0]}\n${normalizedKeyword}`;
+      }
+      return [
+        lines[0],
+        normalizedKeyword,
+        ...lines.slice(1)
+      ].join("\n");
+    }
+    const savedTapdKeyword = (() => {
+      try {
+        return normalizeTapdKeyword(
+          localStorage.getItem(tapdKeywordStorageKey)
+        ).slice(0, 120);
+      } catch {
+        return "";
+      }
+    })();
+
     const sidebarRepositoryPreferencesStorageKey =
       `gitnest.sidebar-repository-preferences:${workspaceSnapshot.rootPath}`;
     const savedSidebarRepositoryPreferences = (() => {
@@ -7056,13 +7282,29 @@
       }
     })();
 
+    const diffCommitPanelHeightDefault = 180;
+    const diffCommitPanelHeightMin = 180;
+    const diffCommitPanelHeightMax = 420;
+
+    function clampDiffCommitPanelHeight(value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) {
+        return diffCommitPanelHeightDefault;
+      }
+      return Math.min(
+        diffCommitPanelHeightMax,
+        Math.max(diffCommitPanelHeightMin, Math.round(numeric))
+      );
+    }
+
     const toolPreferencesStorageKey = "gitnest.tool-preferences";
     const savedToolPreferences = (() => {
       const fallback = {
         defaultTerminal: "windows-terminal",
         workspaceApplication: "vscode",
         repositoryApplication: "vscode",
-        fileApplication: "vscode"
+        fileApplication: "vscode",
+        commitPanelHeight: diffCommitPanelHeightDefault
       };
       try {
         const value = localStorage.getItem(toolPreferencesStorageKey);
@@ -7070,7 +7312,10 @@
         const parsed = JSON.parse(value);
         return {
           ...fallback,
-          ...parsed
+          ...parsed,
+          commitPanelHeight: clampDiffCommitPanelHeight(
+            parsed?.commitPanelHeight
+          )
         };
       } catch {
         return fallback;
@@ -7085,7 +7330,7 @@
         model: "",
         apiKey: "",
         prompt:
-          "根据已暂存文件和代码变更，生成一条简洁准确的 Git 提交信息。使用 Conventional Commits 格式，使用中文，只返回提交信息，不要 Markdown。"
+          "根据下一次提交将包含的文件和代码变更，生成一条简洁准确的 Git 提交信息。使用 Conventional Commits 格式，使用中文，只返回提交信息，不要 Markdown。"
       };
       try {
         const value = localStorage.getItem(aiSettingsStorageKey);
@@ -7213,6 +7458,10 @@
       openInMenuOpen: false,
       selectedBranch: repositories[0].branch,
       commitDraft: { ...initialCommitDraft },
+      tapdKeyword: savedTapdKeyword,
+      commitPanelHeight: clampDiffCommitPanelHeight(
+        savedToolPreferences.commitPanelHeight
+      ),
       commitBaseline: JSON.stringify(initialCommitDraft),
       commitDirty: false,
       theme: savedTheme === "light" || savedTheme === "dark"
@@ -7222,6 +7471,8 @@
       operationProgress: 0,
       operationTimer: null,
       operationTrigger: null,
+      workspaceOverviewRepositoryStatusCollapsed: false,
+      workspaceOverviewRecentCommitsCollapsed: false,
       settingsRestoreLastView: true,
       settingsFetchMode: "manual",
       settingsPushStrategy: "rebase",
@@ -7265,6 +7516,8 @@
       renameGroupName: null,
       renameReturnFocus: null,
       renamePointerDownOnBackdrop: false,
+      tapdKeywordReturnFocus: null,
+      tapdKeywordPointerDownOnBackdrop: false,
       removedEntryIds: new Set(),
       removedRepositoryIds: new Set()
     };
@@ -7805,7 +8058,7 @@
       if (!entry || state.removedEntryIds.has(entryId)) return;
 
       const menuWidth = 222;
-      const menuHeight = 136;
+      const menuHeight = entryId === "workspace-root" ? 176 : 136;
       const position = getWorkspaceContextMenuPosition(event, menuWidth, menuHeight);
       state.contextMenuReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       state.contextMenu = {
@@ -8011,6 +8264,14 @@
             leading: icon("settings", 14),
             attributes: 'onclick="renameContextWorkspaceEntry()"'
           })}
+          ${context.entryId === "workspace-root" ? renderMenuItem({
+            label: "设置 TAPD 关键字",
+            leading: icon("tag", 14),
+            title: state.tapdKeyword
+              ? `当前关键字：${state.tapdKeyword}`
+              : "为当前 Workspace 配置 TAPD 关键字",
+            attributes: 'onclick="configureTapdKeywordFromContext()"'
+          }) : ""}
           ${renderMenuItem({
             label: "重新扫描",
             leading: icon("refresh", 14),
@@ -8136,6 +8397,16 @@
       runOperation("scan");
     }
 
+    function configureTapdKeywordFromContext() {
+      const context = state.contextMenu;
+      if (!context || context.entryId !== "workspace-root") return;
+
+      const returnFocus =
+        state.contextMenuReturnFocus || document.activeElement;
+      closeWorkspaceContextMenu({ restoreFocus: false });
+      openTapdKeywordDialog(returnFocus);
+    }
+
     function removeContextWorkspaceEntry() {
       const context = state.contextMenu;
       const entry = context ? workspaceEntryDetails(context.entryId) : null;
@@ -8169,6 +8440,91 @@
           showToast("已移出 Workspace", `${targetName} 已从设计预览配置中移除。`, "check");
         }
       });
+    }
+
+    function persistTapdKeyword() {
+      try {
+        if (state.tapdKeyword) {
+          localStorage.setItem(tapdKeywordStorageKey, state.tapdKeyword);
+        } else {
+          localStorage.removeItem(tapdKeywordStorageKey);
+        }
+      } catch {
+        // 文件预览环境可能禁用持久化。
+      }
+    }
+
+    function openTapdKeywordDialog(returnFocus = null) {
+      const overlay = document.getElementById("tapdKeywordOverlay");
+      const input = document.getElementById("tapdKeywordInput");
+      if (!overlay || !input) return;
+
+      state.tapdKeywordReturnFocus =
+        returnFocus instanceof HTMLElement ? returnFocus : null;
+      document.getElementById("tapdKeywordDescription").textContent =
+        `${workspaceEntryDisplayName("workspace-root")} · ${workspaceSnapshot.rootPath}`;
+      document.getElementById("tapdKeywordIcon").innerHTML = icon("tag", 22);
+      input.value = state.tapdKeyword;
+      document.querySelector(".app-shell").inert = true;
+      overlay.inert = false;
+      overlay.classList.add("open");
+      overlay.setAttribute("aria-hidden", "false");
+      document.body.classList.add("modal-open");
+      focusAfterInertSettles(input, state.tapdKeywordReturnFocus);
+    }
+
+    function rememberTapdKeywordBackdropPointer(event) {
+      state.tapdKeywordPointerDownOnBackdrop =
+        event.target === event.currentTarget;
+    }
+
+    function closeTapdKeywordFromBackdrop(event) {
+      const shouldClose =
+        state.tapdKeywordPointerDownOnBackdrop &&
+        event.target === event.currentTarget;
+      state.tapdKeywordPointerDownOnBackdrop = false;
+      if (shouldClose) closeTapdKeywordDialog();
+    }
+
+    function closeTapdKeywordDialog({ restoreFocus = true } = {}) {
+      const overlay = document.getElementById("tapdKeywordOverlay");
+      if (!overlay || !overlay.classList.contains("open")) return;
+
+      overlay.classList.remove("open");
+      overlay.setAttribute("aria-hidden", "true");
+      overlay.inert = true;
+      document.querySelector(".app-shell").inert = false;
+      document.body.classList.remove("modal-open");
+      const returnFocus = state.tapdKeywordReturnFocus;
+      state.tapdKeywordReturnFocus = null;
+      if (restoreFocus && returnFocus?.isConnected) returnFocus.focus();
+    }
+
+    function saveTapdKeyword(event) {
+      event.preventDefault();
+      const input = document.getElementById("tapdKeywordInput");
+      if (!input) return;
+
+      const value = normalizeTapdKeyword(input.value);
+      if (value.length > 120) {
+        showErrorToast("TAPD 关键字无效", "请输入不超过 120 个字符的单行关键字。");
+        input.focus();
+        return;
+      }
+
+      state.tapdKeyword = value;
+      persistTapdKeyword();
+      const returnFocus = state.tapdKeywordReturnFocus;
+      closeTapdKeywordDialog({ restoreFocus: false });
+      renderSidebar();
+      showToast(
+        value ? "TAPD 关键字已保存" : "TAPD 关键字已清除",
+        value
+          ? `AI 生成提交信息时将自动添加“${value}”。`
+          : "AI 生成提交信息时不再自动添加关键字。",
+        "check"
+      );
+      if (returnFocus?.isConnected) returnFocus.focus();
     }
 
     function openStandaloneEntry(repoId) {
@@ -8354,12 +8710,104 @@
             defaultTerminal: state.toolPreferences.defaultTerminal,
             workspaceApplication: state.toolPreferences.workspaceApplication,
             repositoryApplication: state.toolPreferences.repositoryApplication,
-            fileApplication: state.toolPreferences.fileApplication
+            fileApplication: state.toolPreferences.fileApplication,
+            commitPanelHeight: state.commitPanelHeight
           })
         );
       } catch {
         // 文件预览环境可能禁用持久化。
       }
+    }
+
+    function applyCommitPanelHeightToDom(height) {
+      const composer = document.querySelector(".commit-composer");
+      if (!composer) return;
+      composer.style.height = `${height}px`;
+      composer
+        .querySelector(".commit-resize-handle")
+        ?.setAttribute("aria-valuenow", String(height));
+    }
+
+    function setCommitPanelHeightPreference(value) {
+      const nextHeight = clampDiffCommitPanelHeight(value);
+      if (nextHeight === state.commitPanelHeight) {
+        applyCommitPanelHeightToDom(nextHeight);
+        return nextHeight;
+      }
+      state.commitPanelHeight = nextHeight;
+      persistToolPreferences();
+      applyCommitPanelHeightToDom(nextHeight);
+      return nextHeight;
+    }
+
+    let commitPanelResizeSession = null;
+
+    function startCommitPanelResize(event) {
+      if (event.button !== 0) return;
+      const handle = event.currentTarget;
+      const composer = handle?.closest(".commit-composer");
+      if (!composer) return;
+      commitPanelResizeSession = {
+        composer,
+        handle,
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        startHeight: state.commitPanelHeight
+      };
+      handle.setPointerCapture?.(event.pointerId);
+      document.body.classList.add("is-resizing-commit-panel");
+      event.preventDefault();
+    }
+
+    function moveCommitPanelResize(event) {
+      const session = commitPanelResizeSession;
+      if (!session || event.pointerId !== session.pointerId) return;
+      const nextHeight = clampDiffCommitPanelHeight(
+        session.startHeight + session.startY - event.clientY
+      );
+      session.composer.style.height = `${nextHeight}px`;
+      session.handle.setAttribute("aria-valuenow", String(nextHeight));
+      event.preventDefault();
+    }
+
+    function finishCommitPanelResize(event) {
+      const session = commitPanelResizeSession;
+      if (
+        !session ||
+        (event?.pointerId != null && event.pointerId !== session.pointerId)
+      ) {
+        return;
+      }
+      const renderedHeight = Number.parseFloat(session.composer.style.height);
+      const nextHeight = clampDiffCommitPanelHeight(
+        Number.isFinite(renderedHeight)
+          ? renderedHeight
+          : state.commitPanelHeight
+      );
+      if (session.handle.hasPointerCapture?.(session.pointerId)) {
+        session.handle.releasePointerCapture(session.pointerId);
+      }
+      commitPanelResizeSession = null;
+      document.body.classList.remove("is-resizing-commit-panel");
+      setCommitPanelHeightPreference(nextHeight);
+    }
+
+    function handleCommitPanelResizeKeydown(event) {
+      const step = event.shiftKey ? 32 : 8;
+      let nextHeight = state.commitPanelHeight;
+      if (event.key === "ArrowUp") {
+        nextHeight += step;
+      } else if (event.key === "ArrowDown") {
+        nextHeight -= step;
+      } else if (event.key === "Home") {
+        nextHeight = diffCommitPanelHeightMin;
+      } else if (event.key === "End") {
+        nextHeight = diffCommitPanelHeightMax;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      setCommitPanelHeightPreference(nextHeight);
     }
 
     function openInPreferenceKey(scope) {
@@ -8618,67 +9066,6 @@
       syncAccessibleHints();
     }
 
-    function closeTitlebarViewMenu() {
-      document
-        .querySelector(".titlebar-view-menu[open]")
-        ?.removeAttribute("open");
-    }
-
-    function renderTitlebarViewMenu() {
-      const menu = document.getElementById("titlebarViewMenu");
-      if (!menu) return;
-
-      const fullPageView =
-        state.view === "operations" ||
-        state.view === "settings";
-      const sidebarVisible =
-        !fullPageView &&
-        !state.sidebarCollapsed;
-      const inspectorVisible =
-        !fullPageView &&
-        state.inspectorOpen;
-      const disabled = fullPageView;
-
-      menu.innerHTML = [
-        renderMenuItem({
-          label: sidebarVisible ? "隐藏仓库目录" : "显示仓库目录",
-          leading: icon(
-            sidebarVisible ? "sidebarCollapse" : "sidebarExpand",
-            14
-          ),
-          role: "menuitemcheckbox",
-          disabled,
-          attributes: `aria-checked="${sidebarVisible}" onclick="toggleRepositorySidebar(); closeTitlebarViewMenu()"`
-        }),
-        renderMenuItem({
-          label: inspectorVisible ? "隐藏详情面板" : "显示详情面板",
-          leading: icon("panel", 14),
-          role: "menuitemcheckbox",
-          disabled,
-          attributes: `aria-checked="${inspectorVisible}" onclick="toggleInspector(); closeTitlebarViewMenu()"`
-        }),
-        renderMenuSeparator(),
-        renderMenuItem({
-          label:
-            state.theme === "dark"
-              ? "切换为浅色主题"
-              : "切换为深色主题",
-          leading: icon(
-            state.theme === "dark" ? "sun" : "moon",
-            14
-          ),
-          attributes:
-            'onclick="toggleTheme(); closeTitlebarViewMenu()"'
-        }),
-        renderMenuSeparator(),
-        renderMenuItem({
-          label: "重置布局",
-          leading: icon("refresh", 14),
-          attributes: 'onclick="resetViewLayout()"'
-        })
-      ].join("");
-    }
-
     function updateNavigationState() {
       const workspaceRail = document.getElementById("workspaceRail");
       const sidebarToggleRail = document.getElementById("sidebarToggleRail");
@@ -8708,7 +9095,6 @@
       document.querySelector(".workspace-frame").classList.toggle("sidebar-collapsed", sidebarHidden);
       document.querySelector(".workspace-frame").classList.toggle("operations-view", state.view === "operations");
       document.querySelector(".workspace-frame").classList.toggle("settings-view", state.view === "settings");
-      renderTitlebarViewMenu();
     }
 
     const settingsSections = [
@@ -8870,12 +9256,25 @@
         showErrorToast("AI 配置不完整", "请先填写 API URL、模型和 API Key。");
         return;
       }
-      if (currentRepo().staged <= 0) {
-        showErrorToast("没有已暂存变更", "AI 只读取 staged Diff，请先暂存要提交的文件。");
+      if (
+        currentRepo().staged <= 0 &&
+        currentRepo().unstaged + currentRepo().untracked <= 0
+      ) {
+        showErrorToast("没有可提交变更", "请先修改、暂存或新增要提交的文件。");
         return;
       }
-      state.commitDraft.message =
-        "feat: 更新已暂存变更\n\n根据当前 staged Diff 和 AI 提交提示词生成的提交说明。";
+      const summary =
+        currentRepo().staged > 0
+          ? "feat: 更新已暂存变更"
+          : "feat: 更新工作区变更";
+      const details =
+        currentRepo().staged > 0
+          ? "根据当前提交范围和 AI 提交提示词生成的提交说明。"
+          : "根据未暂存和未跟踪变更以及 AI 提交提示词生成的提交说明。";
+      state.commitDraft.message = applyTapdKeywordToCommitMessage(
+        `${summary}\n\n${details}`,
+        state.tapdKeyword
+      );
       state.commitDirty = true;
       renderChanges();
       showToast(
@@ -8973,7 +9372,7 @@
             <div class="settings-card-header">
               <div>
                 <div class="settings-card-title">AI 提交信息</div>
-                <div class="settings-card-description">提交前根据已暂存文件和提示词生成提交信息，结果仍需由你确认后提交。</div>
+                <div class="settings-card-description">提交前根据当前提交范围和提示词生成提交信息，结果仍需由你确认后提交。</div>
               </div>
               <button type="button" class="settings-switch ${state.aiSettings.enabled ? "active" : ""}" aria-label="启用 AI 生成入口" aria-pressed="${state.aiSettings.enabled}" onclick="toggleAiSettings()">
                 <span class="settings-switch-thumb"></span>
@@ -9250,6 +9649,7 @@
               <div class="detail-row"><span class="detail-label">Diff 布局</span><span class="detail-value">${state.settingsDiffLayout === "split" ? "并排" : "统一"}</span></div>
               <div class="detail-row"><span class="detail-label">自动换行</span><span class="detail-value">${state.settingsDiffWrap ? "开启" : "关闭"}</span></div>
               <div class="detail-row"><span class="detail-label">树形目录</span><span class="detail-value">${state.changeTreeDirectoriesCollapsedPreference ? "已收起" : "已展开"}</span></div>
+              <div class="detail-row"><span class="detail-label">提交区域高度</span><span class="detail-value">${state.commitPanelHeight}px</span></div>
               <div class="detail-row"><span class="detail-label">界面主题</span><span class="detail-value">${state.theme === "dark" ? "深色" : "浅色"}</span></div>
             </div>
           </div>
@@ -9363,6 +9763,10 @@
 
     function renderWorkspaceOverview() {
       const attentionRows = repositoriesByAttention();
+      const repositoryStatusCollapsed =
+        state.workspaceOverviewRepositoryStatusCollapsed;
+      const recentCommitsCollapsed =
+        state.workspaceOverviewRecentCommitsCollapsed;
       document.getElementById("mainContent").innerHTML = `
         <div class="page-scroll">
           ${workspaceHeader("Workspace 概览", `来自 ${workspaceSnapshot.rootPath} 的本地只读快照；未执行 Fetch，远程差异以现有跟踪引用为准。`)}
@@ -9377,37 +9781,44 @@
           <div class="dashboard-grid">
             <div>
               <section class="panel">
-                <div class="panel-header">
-                  <div class="panel-title">${icon("alert")}需要处理</div>
-                  <span class="panel-caption">按工作区改动和落后提交数排序</span>
-                  <button class="panel-action" onclick="setWorkspaceTab('repositories')">查看全部仓库</button>
-                </div>
-                <div class="attention-list">
-                  ${attentionItem("scportal", "yellow", "fileCode", "scportal", "test 分支存在 1 个未跟踪文件，同时落后 origin/test 4 个提交", "1 项变更", "yellow")}
-                  ${attentionItem("scportal-minapp", "blue", "arrowDown", "scportal-minapp", "test 相对本地 origin/test 跟踪引用落后 61 个提交", "↓ 61", "blue")}
-                  ${attentionItem("sc-prof-svr", "blue", "arrowDown", "ScProfSvr", "pre-production 相对本地上游引用落后 12 个提交", "↓ 12", "blue")}
-                  ${attentionItem("workspace-root", "red", "worktree", "sc_code", "登记的 11 个 Worktree 中有 3 个记录指向不存在的目录", "3 个可清理", "red")}
-                </div>
-              </section>
-
-              <section class="panel">
-                <div class="panel-header">
+                <div
+                  class="panel-header panel-header-toggle"
+                  role="button"
+                  tabindex="0"
+                  aria-expanded="${!repositoryStatusCollapsed}"
+                  aria-controls="workspace-overview-repository-list"
+                  onclick="toggleWorkspaceOverviewSection('repository-status', event)"
+                  onkeydown="handleWorkspaceOverviewSectionKeydown(event, 'repository-status')"
+                >
                   <div class="panel-title">${icon("repository")}仓库状态</div>
                   <span class="panel-caption">快照：${formatSnapshotDate(workspaceSnapshot.snapshotAt)}</span>
-                  <button class="panel-action" onclick="setWorkspaceTab('repositories')">管理仓库</button>
+                  <span class="panel-collapse-indicator" aria-hidden="true">${icon(repositoryStatusCollapsed ? "chevronRight" : "chevronDown", 14)}</span>
                 </div>
-                ${renderRepositoryTable(attentionRows.slice(0, 8))}
+                <div id="workspace-overview-repository-list"${repositoryStatusCollapsed ? " hidden" : ""}>
+                  ${renderRepositoryTable(attentionRows.slice(0, 8))}
+                </div>
               </section>
             </div>
 
             <div>
               <section class="panel">
-                <div class="panel-header">
+                <div
+                  class="panel-header panel-header-toggle"
+                  role="button"
+                  tabindex="0"
+                  aria-expanded="${!recentCommitsCollapsed}"
+                  aria-controls="workspace-overview-recent-commits"
+                  onclick="toggleWorkspaceOverviewSection('recent-commits', event)"
+                  onkeydown="handleWorkspaceOverviewSectionKeydown(event, 'recent-commits')"
+                >
                   <div class="panel-title">${icon("history")}各仓库最近提交</div>
                   <span class="panel-caption">每仓库采集 1 条</span>
+                  <span class="panel-collapse-indicator" aria-hidden="true">${icon(recentCommitsCollapsed ? "chevronRight" : "chevronDown", 14)}</span>
                 </div>
-                <div class="activity-list">
+                <div id="workspace-overview-recent-commits"${recentCommitsCollapsed ? " hidden" : ""}>
+                  <div class="activity-list">
                   ${renderSnapshotActivity(6)}
+                  </div>
                 </div>
               </section>
 
@@ -9439,19 +9850,6 @@
           <div class="metric-value">${value}</div>
           <div class="metric-foot">${foot}</div>
         </article>
-      `;
-    }
-
-    function attentionItem(id, tone, iconName, name, detail, label, pillTone) {
-      return `
-        <button type="button" class="attention-item" onclick="openRepository('${id}')">
-          <span class="attention-symbol ${tone}">${icon(iconName)}</span>
-          <span>
-            <span class="attention-name">${name}</span>
-            <span class="attention-detail">${detail}</span>
-          </span>
-          <span class="status-pill ${pillTone}">${label}</span>
-        </button>
       `;
     }
 
@@ -9966,9 +10364,24 @@
       const statusTone = conflicted > 0 ? "red" : staged > 0 ? "green" : "neutral";
       const statusText = conflicted > 0 ? `${conflicted} 个冲突` : `${staged} 个已暂存`;
       const canCommit = hasChanges && conflicted === 0 && Boolean(state.commitDraft.message.trim());
+      const hasCommitScope =
+        staged > 0 || repo.unstaged + repo.untracked > 0;
 
       return `
-        <article class="panel commit-composer">
+        <article class="panel commit-composer" style="height: ${state.commitPanelHeight}px">
+          <div
+            class="commit-resize-handle"
+            role="separator"
+            tabindex="0"
+            aria-orientation="horizontal"
+            aria-label="调整提交区域高度"
+            aria-valuemin="${diffCommitPanelHeightMin}"
+            aria-valuemax="${diffCommitPanelHeightMax}"
+            aria-valuenow="${state.commitPanelHeight}"
+            title="拖动调整提交区域高度"
+            onpointerdown="startCommitPanelResize(event)"
+            onkeydown="handleCommitPanelResizeKeydown(event)"
+          ></div>
           <header class="panel-header">
             <label class="commit-push-toggle" for="commitPush">
               <input id="commitPush" name="commit-push" type="checkbox" ${state.commitDraft.push ? "checked" : ""} onchange="updateCommitDraft()" />
@@ -9976,19 +10389,7 @@
             </label>
             <span class="status-pill ${statusTone}">${statusText}</span>
           </header>
-          <form class="commit-form" onsubmit="event.preventDefault(); completePreviewCommit(event.submitter || this.querySelector('button'))">
-            ${state.aiSettings.enabled ? `
-              <div class="commit-form-field-head">
-                ${renderButton({
-                  label: "AI 生成",
-                  size: "small",
-                  variant: "default",
-                  className: "commit-ai-button",
-                  icon: icon("sparkle", 13),
-                  attributes: 'onclick="generateCommitMessageWithAI()"'
-                })}
-              </div>
-            ` : ""}
+          <form class="commit-form" onsubmit="event.preventDefault(); completePreviewCommit(event.submitter || this.querySelector('.commit-submit-button'))">
             ${renderTextarea({
               id: "commitMessage",
               value: state.commitDraft.message,
@@ -10003,15 +10404,42 @@
               textareaClassName: "commit-message",
               attributes: 'oninput="updateCommitDraft()"'
             })}
-            ${renderButton({
-              label: staged > 0 ? "提交已暂存变更" : "提交全部变更",
-              size: "small",
-              variant: "primary",
-              fullWidth: true,
-              disabled: !canCommit,
-              icon: icon("check"),
-              type: "submit"
-            })}
+            <div class="commit-form-actions">
+              ${renderButton({
+                label: "AI 生成",
+                ariaLabel: "使用 AI 生成提交信息",
+                title: !state.aiSettings.enabled
+                  ? "请先在设置中启用 AI 提交信息"
+                  : !state.aiSettings.url.trim() ||
+                      !state.aiSettings.model.trim() ||
+                      !state.aiSettings.apiKey.trim()
+                    ? "请先在设置中完成 AI 提交信息配置"
+                    : !hasCommitScope
+                      ? "没有可提交的变更"
+                      : "根据当前提交范围生成提交信息",
+                size: "small",
+                variant: "default",
+                iconOnly: true,
+                disabled:
+                  !state.aiSettings.enabled ||
+                  !state.aiSettings.url.trim() ||
+                  !state.aiSettings.model.trim() ||
+                  !state.aiSettings.apiKey.trim() ||
+                  !hasCommitScope,
+                className: "commit-ai-button",
+                icon: icon("sparkle", 13),
+                attributes: 'onclick="generateCommitMessageWithAI()"'
+              })}
+              ${renderButton({
+                label: staged > 0 ? "提交已暂存变更" : "提交全部变更",
+                size: "small",
+                variant: "primary",
+                disabled: !canCommit,
+                className: "commit-submit-button",
+                icon: icon("check"),
+                type: "submit"
+              })}
+            </div>
           </form>
         </article>
       `;
@@ -10046,9 +10474,73 @@
         } else {
           nextCollapsed.add(mode);
         }
-        state.collapsedChangeSections = nextCollapsed;
+      state.collapsedChangeSections = nextCollapsed;
       }
       renderChanges();
+    }
+
+    function changeSectionFiles(mode) {
+      return filteredChangedFiles().filter((file) =>
+        mode === "untracked"
+          ? file.status === "untracked"
+          : mode === "staged"
+            ? file.status !== "untracked" && file.staged
+            : file.status !== "untracked" && !file.staged
+      );
+    }
+
+    function toggleChangeSectionStage(mode) {
+      const files = changeSectionFiles(mode);
+      if (!files.length) return;
+      const nextStaged = mode !== "staged";
+      files.forEach((file) => {
+        file.staged = nextStaged;
+      });
+      renderChanges();
+      showToast(
+        nextStaged ? "暂存" : "取消暂存",
+        `${files.length} 个文件（原型预览，不执行 Git 命令）`,
+        nextStaged ? "plus" : "minus"
+      );
+    }
+
+    function discardChangeSection(mode) {
+      const files = changeSectionFiles(mode);
+      if (!files.length) return;
+      const discarded = new Set(files.map((file) => file.path));
+      const repoId = currentRepo().id;
+      changedFilesByRepo[repoId] = currentChangedFiles().filter(
+        (file) => !discarded.has(file.path)
+      );
+      if (discarded.has(state.selectedFile)) {
+        state.selectedFile = "";
+      }
+      renderChanges();
+      showToast(
+        "放弃更改",
+        `${discarded.size} 个文件（原型预览，不执行 Git 命令）`,
+        "undo"
+      );
+    }
+
+    function discardChangeFile(path) {
+      const repoId = currentRepo().id;
+      const target = currentChangedFiles().find(
+        (file) => file.path === path
+      );
+      if (!target) return;
+      changedFilesByRepo[repoId] = currentChangedFiles().filter(
+        (file) => file.path !== path
+      );
+      if (state.selectedFile === path) {
+        state.selectedFile = "";
+      }
+      renderChanges();
+      showToast(
+        "放弃更改",
+        `${path}（原型预览，不执行 Git 命令）`,
+        "undo"
+      );
     }
 
     function toggleChangeViewMode() {
@@ -10159,16 +10651,28 @@
               </span>
             </span>
           </button>
-          ${renderButton({
-            label: `${file.staged ? "取消暂存" : "暂存"} ${file.path}`,
-            ariaLabel: `${file.staged ? "取消暂存" : "暂存"} ${file.path}`,
-            title: file.staged ? "取消暂存" : "暂存",
-            size: "small",
-            variant: "icon",
-            className: "stage-toggle",
-            icon: icon(file.staged ? "minus" : "plus", 12),
-            attributes: `onclick="event.stopPropagation(); showToast('${file.staged ? "取消暂存" : "暂存文件"}', '${file.path}', '${file.staged ? "minus" : "plus"}')"`
-          })}
+          <div class="file-actions">
+            ${file.staged ? "" : renderButton({
+              label: `放弃更改 ${file.path}`,
+              ariaLabel: `放弃更改 ${file.path}`,
+              title: "放弃更改",
+              size: "small",
+              variant: "icon",
+              className: "stage-toggle",
+              icon: icon("undo", 14),
+              attributes: `onclick="event.stopPropagation(); discardChangeFile(this.closest('.file-row').dataset.filePath)"`
+            })}
+            ${renderButton({
+              label: `${file.staged ? "取消暂存" : "暂存"} ${file.path}`,
+              ariaLabel: `${file.staged ? "取消暂存" : "暂存"} ${file.path}`,
+              title: file.staged ? "取消暂存" : "暂存",
+              size: "small",
+              variant: "icon",
+              className: "stage-toggle",
+              icon: icon(file.staged ? "minus" : "plus", 14),
+              attributes: `onclick="event.stopPropagation(); showToast('${file.staged ? "取消暂存" : "暂存文件"}', '${file.path}', '${file.staged ? "minus" : "plus"}')"`
+            })}
+          </div>
         </div>
       `;
     }
@@ -10296,13 +10800,47 @@
         (isEmpty &&
           !state.expandedEmptyChangeSections.has(mode));
       const bodyId = `change-file-section-${mode}`;
+      const isStagedSection = mode === "staged";
+      const canGroupStage = files.length > 0;
+      const canGroupDiscard = files.length > 0 && !isStagedSection;
+      const hasActions = canGroupStage || canGroupDiscard;
       return `
         <section class="file-section ${isCollapsed ? "collapsed" : ""}${isEmpty ? " empty" : ""}">
-          <button type="button" class="file-section-title" aria-expanded="${!isCollapsed}" aria-controls="${bodyId}" onclick="toggleChangeSection('${mode}')">
-            ${icon("chevronDown", 13)}
-            <span class="file-section-label">${title}</span>
-            <span class="file-section-count">${files.length}</span>
-          </button>
+          <div class="file-section-header${hasActions ? " has-actions" : ""}">
+            <button type="button" class="file-section-title" aria-expanded="${!isCollapsed}" aria-controls="${bodyId}" onclick="toggleChangeSection('${mode}')">
+              ${icon("chevronDown", 13)}
+              <span class="file-section-label">${title}</span>
+            </button>
+            <span class="file-section-tail">
+              <span class="file-section-count">${files.length}</span>
+              <span class="file-section-actions">
+                ${canGroupDiscard
+                  ? renderButton({
+                      label: `放弃${title}分组的更改`,
+                      ariaLabel: `放弃${title}分组的更改`,
+                      title: `放弃更改（${files.length} 个文件）`,
+                      size: "small",
+                      variant: "icon",
+                      className: "stage-toggle",
+                      icon: icon("undo", 14),
+                      attributes: `onclick="event.stopPropagation(); discardChangeSection('${mode}')"`
+                    })
+                  : ""}
+                ${canGroupStage
+                  ? renderButton({
+                      label: `${isStagedSection ? "取消暂存" : "暂存"}${title}分组的文件`,
+                      ariaLabel: `${isStagedSection ? "取消暂存" : "暂存"}${title}分组的文件`,
+                      title: `${isStagedSection ? "取消暂存" : "暂存"}（${files.length} 个文件）`,
+                      size: "small",
+                      variant: "icon",
+                      className: "stage-toggle",
+                      icon: icon(isStagedSection ? "minus" : "plus", 14),
+                      attributes: `onclick="event.stopPropagation(); toggleChangeSectionStage('${mode}')"`
+                    })
+                  : ""}
+              </span>
+            </span>
+          </div>
             <div class="file-section-body" id="${bodyId}" aria-hidden="${isCollapsed}" ${isCollapsed ? "inert" : ""}>
               <div class="file-section-body-inner">
                 ${isEmpty
@@ -10897,15 +11435,6 @@
       updateNavigationState();
     }
 
-    function resetViewLayout() {
-      state.sidebarCollapsed = false;
-      state.inspectorOpen = false;
-      updateNavigationState();
-      updateInspectorState();
-      closeTitlebarViewMenu();
-      showToast("布局已重置", "已显示仓库目录并收起详情面板。", "panel");
-    }
-
     function openRepository(id) {
       withCommitDraftGuard(() => {
         const repo = repositories.find((item) => item.id === id) || repositories[0];
@@ -10933,6 +11462,29 @@
         state.tab = tab;
         renderMain();
       });
+    }
+
+    function toggleWorkspaceOverviewSection(section, event) {
+      if (event?.target?.closest?.("a, button, input, select, textarea") &&
+          event.target !== event.currentTarget) {
+        return;
+      }
+      if (section === "repository-status") {
+        state.workspaceOverviewRepositoryStatusCollapsed =
+          !state.workspaceOverviewRepositoryStatusCollapsed;
+      } else if (section === "recent-commits") {
+        state.workspaceOverviewRecentCommitsCollapsed =
+          !state.workspaceOverviewRecentCommitsCollapsed;
+      } else {
+        return;
+      }
+      renderWorkspaceOverview();
+    }
+
+    function handleWorkspaceOverviewSectionKeydown(event, section) {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      toggleWorkspaceOverviewSection(section, event);
     }
 
     function setRepoTab(tab) {
@@ -11066,7 +11618,6 @@
       state.theme = state.theme === "dark" ? "light" : "dark";
       applyTheme();
       updateThemeIcon();
-      renderTitlebarViewMenu();
       showToast(state.theme === "dark" ? "已切换为深色主题" : "已切换为浅色主题", "布局、层级与状态颜色保持一致。", state.theme === "dark" ? "moon" : "sun");
     }
 
@@ -11097,7 +11648,6 @@
         button.setAttribute("aria-pressed", String(state.inspectorOpen));
       });
       setInspectorBackgroundInert(compactLayout && state.inspectorOpen);
-      renderTitlebarViewMenu();
     }
 
     function toggleInspector(force) {
@@ -11450,6 +12000,9 @@
       }
     });
     window.addEventListener("blur", closeOpenInMenu);
+    window.addEventListener("pointermove", moveCommitPanelResize);
+    window.addEventListener("pointerup", finishCommitPanelResize);
+    window.addEventListener("pointercancel", finishCommitPanelResize);
     window.addEventListener(
       "scroll",
       closeOpenInMenu,
@@ -11465,7 +12018,7 @@
       const target = event.target;
       const titlebarMenus = [
         ...document.querySelectorAll(
-          ".titlebar-file-menu[open], .titlebar-view-menu[open]"
+          ".titlebar-file-menu[open]"
         )
       ];
       const activeTitlebarMenu =
@@ -11537,7 +12090,7 @@
       if (event.key === "Escape") {
         document
           .querySelectorAll(
-            ".titlebar-file-menu[open], .titlebar-view-menu[open]"
+            ".titlebar-file-menu[open]"
           )
           .forEach((menu) => menu.removeAttribute("open"));
       }
@@ -11590,6 +12143,18 @@
           closeRenameEntryDialog();
         } else if (event.key === "Tab") {
           trapFocusWithin(event, renameOverlay);
+        }
+        return;
+      }
+
+      const tapdKeywordOverlay = document.getElementById("tapdKeywordOverlay");
+      const tapdKeywordOpen = tapdKeywordOverlay.classList.contains("open");
+      if (tapdKeywordOpen) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeTapdKeywordDialog();
+        } else if (event.key === "Tab") {
+          trapFocusWithin(event, tapdKeywordOverlay);
         }
         return;
       }

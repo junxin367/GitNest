@@ -312,15 +312,26 @@
               </span>
             </span>
           </button>
-          ${buttonMarkup({
-            label: mode === "staged" ? "取消暂存" : "暂存",
-            ariaLabel: `${mode === "staged" ? "取消暂存" : "暂存"} ${file.path}`,
-            title: mode === "staged" ? "取消暂存" : "暂存",
-            icon: iconMarkup(mode === "staged" ? "minus" : "plus"),
-            variant: "icon",
-            className: "gn-diff-workspace__stage-button",
-            attributes: `data-diff-workspace-action="toggle-stage" data-file-key="${escapeHtml(file.key)}"`
-          })}
+          <div class="gn-diff-workspace__file-actions">
+            ${buttonMarkup({
+              label: mode === "staged" ? "取消暂存" : "暂存",
+              ariaLabel: `${mode === "staged" ? "取消暂存" : "暂存"} ${file.path}`,
+              title: mode === "staged" ? "取消暂存" : "暂存",
+              icon: iconMarkup(mode === "staged" ? "minus" : "plus"),
+              variant: "icon",
+              className: "gn-diff-workspace__stage-button",
+              attributes: `data-diff-workspace-action="toggle-stage" data-file-key="${escapeHtml(file.key)}"`
+            })}
+            ${mode !== "staged" ? buttonMarkup({
+              label: `放弃更改 ${file.path}`,
+              ariaLabel: `放弃更改 ${file.path}`,
+              title: "放弃更改",
+              icon: iconMarkup("undo"),
+              variant: "icon",
+              className: "gn-diff-workspace__discard-button",
+              attributes: `data-diff-workspace-action="discard-file" data-file-key="${escapeHtml(file.key)}"`
+            }) : ""}
+          </div>
         </div>
       `;
     }
@@ -381,17 +392,41 @@
         : section.files.map((file) => this.renderFileRow(file)).join("");
       return `
         <section class="gn-diff-workspace__file-section${collapsed ? " is-collapsed" : ""}">
-          <button
-            type="button"
-            class="gn-diff-workspace__section-title"
-            data-diff-workspace-action="toggle-section"
-            data-section-mode="${section.mode}"
-            aria-expanded="${!collapsed}"
-          >
-            <span class="gn-diff-workspace__section-chevron">${iconMarkup("chevron-right")}</span>
-            <span>${section.title}</span>
-            <span class="gn-diff-workspace__section-count">${section.files.length}</span>
-          </button>
+          <div class="gn-diff-workspace__section-header has-actions">
+            <button
+              type="button"
+              class="gn-diff-workspace__section-title"
+              data-diff-workspace-action="toggle-section"
+              data-section-mode="${section.mode}"
+              aria-expanded="${!collapsed}"
+            >
+              <span class="gn-diff-workspace__section-chevron">${iconMarkup("chevron-right")}</span>
+              <span>${section.title}</span>
+            </button>
+            <span class="gn-diff-workspace__section-tail">
+              <span class="gn-diff-workspace__section-count">${section.files.length}</span>
+              <span class="gn-diff-workspace__section-actions">
+                ${section.mode === "staged" ? "" : buttonMarkup({
+                  label: `放弃${section.title}分组的更改`,
+                  ariaLabel: `放弃${section.title}分组的更改`,
+                  title: `放弃更改（${section.files.length} 个文件）`,
+                  icon: iconMarkup("undo"),
+                  variant: "icon",
+                  className: "gn-diff-workspace__discard-button",
+                  attributes: `data-diff-workspace-action="discard-section" data-section-mode="${section.mode}"`
+                })}
+                ${buttonMarkup({
+                  label: `${section.mode === "staged" ? "取消暂存" : "暂存"}${section.title}分组的文件`,
+                  ariaLabel: `${section.mode === "staged" ? "取消暂存" : "暂存"}${section.title}分组的文件`,
+                  title: `${section.mode === "staged" ? "取消暂存" : "暂存"}（${section.files.length} 个文件）`,
+                  icon: iconMarkup(section.mode === "staged" ? "minus" : "plus"),
+                  variant: "icon",
+                  className: "gn-diff-workspace__stage-button",
+                  attributes: `data-diff-workspace-action="toggle-section-stage" data-section-mode="${section.mode}"`
+                })}
+              </span>
+            </span>
+          </div>
           ${collapsed ? "" : `<div>${rows}</div>`}
         </section>
       `;
@@ -696,6 +731,61 @@
           this.state.collapsedSections.add(mode);
         }
         this.renderSidebar();
+      } else if (actionName === "toggle-section-stage") {
+        const mode = action.dataset.sectionMode;
+        const section = this.fileSections().find(
+          (candidate) => candidate.mode === mode
+        );
+        if (!section || section.files.length === 0) return;
+        const nextStaged = mode !== "staged";
+        section.files.forEach((file) => {
+          file.staged = nextStaged;
+        });
+        this.renderSidebar();
+        this.updatePanel();
+        global.showToast?.(
+          nextStaged ? "暂存" : "取消暂存",
+          `${section.files.length} 个文件（原型预览，不执行 Git 命令）`
+        );
+      } else if (actionName === "discard-section") {
+        const mode = action.dataset.sectionMode;
+        const section = this.fileSections().find(
+          (candidate) => candidate.mode === mode
+        );
+        if (!section || section.files.length === 0) return;
+        const discarded = new Set(
+          section.files.map((file) => file.key)
+        );
+        this.options.files = this.options.files.filter(
+          (file) => !discarded.has(file.key)
+        );
+        if (discarded.has(this.state.selectedKey)) {
+          this.state.selectedKey = this.options.files[0]?.key || "";
+        }
+        this.renderSidebar();
+        this.updatePanel();
+        global.showToast?.(
+          "放弃更改",
+          `${discarded.size} 个文件（原型预览，不执行 Git 命令）`
+        );
+      } else if (actionName === "discard-file") {
+        const key = action.dataset.fileKey;
+        const file = this.options.files.find(
+          (candidate) => candidate.key === key
+        );
+        if (!file) return;
+        this.options.files = this.options.files.filter(
+          (candidate) => candidate.key !== key
+        );
+        if (this.state.selectedKey === key) {
+          this.state.selectedKey = this.options.files[0]?.key || "";
+        }
+        this.renderSidebar();
+        this.updatePanel();
+        global.showToast?.(
+          "放弃更改",
+          `${file.path}（原型预览，不执行 Git 命令）`
+        );
       } else if (actionName === "toggle-directory") {
         const key = action.dataset.directoryKey;
         if (this.state.collapsedDirectories.has(key)) {

@@ -22,11 +22,16 @@ import { DiffViewerApp } from "./DiffViewerApp";
   IS_REACT_ACT_ENVIRONMENT: boolean;
 }).IS_REACT_ACT_ENVIRONMENT = true;
 
+let emitWorkspaceState:
+  | ((state: unknown) => void)
+  | undefined;
+
 describe("DiffViewerApp", () => {
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
+    emitWorkspaceState = undefined;
     vi.stubGlobal("React", React);
     vi.stubGlobal(
       "requestAnimationFrame",
@@ -262,6 +267,56 @@ describe("DiffViewerApp", () => {
       ])
     );
   });
+
+  it("refreshes changes and the selected diff when workspace state changes", async () => {
+    await act(async () => {
+      root.render(<DiffViewerApp />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelectorAll(".diff-workspace-file")
+      ).toHaveLength(4);
+    });
+    const bridge = window.gitnest;
+    const initialChangesCalls = vi.mocked(
+      bridge.repository.getChanges
+    ).mock.calls.length;
+    const initialDiffCalls = vi.mocked(
+      bridge.repository.getDiff
+    ).mock.calls.length;
+
+    emitWorkspaceState?.({
+      snapshots: [
+        {
+          repositoryId: "repository",
+          worktreeId: "worktree",
+          head: "head",
+          branch: "main",
+          ahead: 0,
+          behind: 0,
+          staged: 0,
+          unstaged: 1,
+          untracked: 0,
+          conflicted: 0,
+          refreshPending: false,
+          stale: false,
+          refreshedAt: new Date().toISOString()
+        }
+      ]
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        vi.mocked(bridge.repository.getChanges).mock.calls.length
+      ).toBeGreaterThan(initialChangesCalls);
+      expect(
+        vi.mocked(bridge.repository.getDiff).mock.calls.length
+      ).toBeGreaterThan(initialDiffCalls);
+    });
+  });
 });
 
 function findButton(
@@ -419,6 +474,16 @@ function createBridge(): typeof window.gitnest {
         value: {
           operationId: "unstage-operation"
         }
+      })
+    },
+    workspace: {
+      onStateChanged: vi.fn((listener: (state: unknown) => void) => {
+        emitWorkspaceState = listener;
+        return () => {
+          if (emitWorkspaceState === listener) {
+            emitWorkspaceState = undefined;
+          }
+        };
       })
     },
     window: {

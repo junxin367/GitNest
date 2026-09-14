@@ -2,6 +2,7 @@ import { Button } from "../../shared/ui/Button";
 import {
   useEffect,
   useMemo,
+  useRef,
   useState
 } from "react";
 
@@ -11,9 +12,11 @@ import type {
   OpenDiffViewerRequest,
   RepositoryDiffDto
 } from "@gitnest/contracts";
+import type { WorkspaceRuntimeStateDto } from "@gitnest/contracts";
 
 import {
   canStageChange,
+  canDiscardChange,
   canUnstageChange,
   useRepositoryMutations
 } from "../../entities/repository/useRepositoryMutations";
@@ -94,6 +97,10 @@ function DiffViewer({
   const [diffError, setDiffError] =
     useState<GitReadErrorDto | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const diffRequestKeyRef = useRef<string | null>(null);
   const [pathCopyStatus, setPathCopyStatus] =
     useState<DiffPathCopyStatus>("idle");
   const mutationHooks = useMemo(
@@ -202,15 +209,66 @@ function DiffViewer({
   ]);
 
   useEffect(() => {
+    let active = true;
+    const unsubscribe = window.gitnest.workspace.onStateChanged(
+      (state: WorkspaceRuntimeStateDto) => {
+        if (!active) {
+          return;
+        }
+        const snapshot = state.snapshots.find(
+          (candidate) =>
+            candidate.repositoryId === request.target.repositoryId &&
+            candidate.worktreeId === request.target.worktreeId
+        );
+        if (!snapshot) {
+          return;
+        }
+        if (refreshTimerRef.current) {
+          clearTimeout(refreshTimerRef.current);
+        }
+        refreshTimerRef.current = setTimeout(() => {
+          refreshTimerRef.current = null;
+          if (active) {
+            setRefreshVersion((version) => version + 1);
+          }
+        }, 120);
+      }
+    );
+
+    return () => {
+      active = false;
+      unsubscribe();
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+    };
+  }, [
+    request.target.repositoryId,
+    request.target.worktreeId
+  ]);
+
+  useEffect(() => {
     if (!selectedFile) {
       setDiff(null);
       setDiffLoading(false);
+      diffRequestKeyRef.current = null;
       return;
     }
 
+    const diffRequestKey = [
+      request.target.repositoryId,
+      request.target.worktreeId,
+      selectedFile.key
+    ].join("\u0001");
+    const preserveExistingDiff =
+      diffRequestKeyRef.current === diffRequestKey;
+    diffRequestKeyRef.current = diffRequestKey;
     const queryId = nextQueryId("diff-viewer-diff");
     let current = true;
-    setDiff(null);
+    if (!preserveExistingDiff) {
+      setDiff(null);
+    }
     setDiffError(null);
     setDiffLoading(true);
     setPathCopyStatus("idle");
@@ -250,6 +308,7 @@ function DiffViewer({
   }, [
     request.target.repositoryId,
     request.target.worktreeId,
+    refreshVersion,
     selectedFile?.key,
     selectedFile?.mode,
     selectedFile?.path
@@ -267,7 +326,7 @@ function DiffViewer({
         message: "当前工作区没有可查看的本地变更。",
         title: "工作区干净"
       }
-    : diffLoading
+    : diffLoading && !diff
       ? {
           busy: true,
           icon: "refresh",
@@ -360,6 +419,7 @@ function DiffViewer({
         canUnstageFile={(file) =>
           canUnstageChange(file.change)
         }
+        canDiscardFile={(file) => canDiscardChange(file.change)}
         changesLoading={changesLoading}
         className="diff-viewer-workspace"
         configuration={standaloneDiffWorkspaceConfiguration}
@@ -383,6 +443,24 @@ function DiffViewer({
         }
         onUnstageFile={(file) =>
           mutations.unstageChange(file.change)
+        }
+        onDiscardFile={(file) =>
+          mutations.discardChange(file.change)
+        }
+        onDiscardFiles={(files) =>
+          mutations.discardChanges(
+            files.map((file) => file.change)
+          )
+        }
+        onStageFiles={(files) =>
+          mutations.stageChanges(
+            files.map((file) => file.change)
+          )
+        }
+        onUnstageFiles={(files) =>
+          mutations.unstageChanges(
+            files.map((file) => file.change)
+          )
         }
         panelProps={{
           additions: diff?.additions,

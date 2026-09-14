@@ -38,6 +38,8 @@ interface DiffFileSection {
   files: DiffViewerFile[];
 }
 
+const MAX_GROUP_MUTATION_PATHS = 200;
+
 export interface DiffWorkspaceMessage {
   icon: Parameters<typeof DiffViewerState>[0]["icon"];
   title: string;
@@ -75,6 +77,29 @@ export interface DiffFileNavigatorProps {
         file: DiffViewerFile
       ) => void | boolean | Promise<void | boolean>)
     | undefined;
+  onDiscardFile?:
+    | ((
+        file: DiffViewerFile
+      ) => void | boolean | Promise<void | boolean>)
+    | undefined;
+  canDiscardFile?:
+    | ((file: DiffViewerFile) => boolean)
+    | undefined;
+  onStageFiles?:
+    | ((
+        files: readonly DiffViewerFile[]
+      ) => void | boolean | Promise<void | boolean>)
+    | undefined;
+  onUnstageFiles?:
+    | ((
+        files: readonly DiffViewerFile[]
+      ) => void | boolean | Promise<void | boolean>)
+    | undefined;
+  onDiscardFiles?:
+    | ((
+        files: readonly DiffViewerFile[]
+      ) => void | boolean | Promise<void | boolean>)
+    | undefined;
   canStageFile?:
     | ((file: DiffViewerFile) => boolean)
     | undefined;
@@ -103,6 +128,11 @@ export function DiffFileNavigator({
   onSelectedFileChange,
   onStageFile,
   onUnstageFile,
+  onDiscardFile,
+  canDiscardFile,
+  onStageFiles,
+  onUnstageFiles,
+  onDiscardFiles,
   canStageFile,
   canUnstageFile,
   onRefresh,
@@ -314,6 +344,10 @@ export function DiffFileNavigator({
         (canUnstageFile?.(file) ?? true)
       : Boolean(onStageFile) &&
         (canStageFile?.(file) ?? true);
+    const canDiscard =
+      !staged &&
+      Boolean(onDiscardFile) &&
+      (canDiscardFile?.(file) ?? true);
     const displayName =
       depth > 0 ? fileName(file.path) : file.path;
     const showStats =
@@ -367,29 +401,36 @@ export function DiffFileNavigator({
             ) : null}
           </span>
         </Button>
-        <Button
-          aria-label={`${
-            staged ? "取消暂存" : "暂存"
-          } ${file.path}`}
-          className="diff-workspace-stage-toggle"
-          disabled={!canToggle || mutationBusy}
-          icon={
-            <Icon
-              name={staged ? "minus" : "plus"}
-              size={12}
+        <div className="diff-workspace-file-actions">
+          {!staged ? (
+            <Button
+              aria-label={`放弃更改 ${file.path}`}
+              className="diff-workspace-discard-toggle"
+              disabled={!canDiscard || mutationBusy}
+              icon={<Icon name="undo" size={12} />}
+              onClick={() => void onDiscardFile?.(file)}
+              size="small"
+              title="放弃更改"
+              variant="icon"
             />
-          }
-          onClick={() => {
-            if (staged) {
-              void onUnstageFile?.(file);
-            } else {
-              void onStageFile?.(file);
-            }
-          }}
-          size="small"
-          title={staged ? "取消暂存" : "暂存"}
-          variant="icon"
-        />
+          ) : null}
+          <Button
+            aria-label={`${staged ? "取消暂存" : "暂存"} ${file.path}`}
+            className="diff-workspace-stage-toggle"
+            disabled={!canToggle || mutationBusy}
+            icon={<Icon name={staged ? "minus" : "plus"} size={12} />}
+            onClick={() => {
+              if (staged) {
+                void onUnstageFile?.(file);
+              } else {
+                void onStageFile?.(file);
+              }
+            }}
+            size="small"
+            title={staged ? "取消暂存" : "暂存"}
+            variant="icon"
+          />
+        </div>
       </div>
     );
   };
@@ -465,6 +506,78 @@ export function DiffFileNavigator({
           section
         )
       : section.files.map((file) => renderFileRow(file));
+
+  const renderSectionActions = (
+    section: DiffFileSection
+  ): ReactNode => {
+    const stagedSection = section.mode === "staged";
+    const toggleCandidates = stagedSection
+      ? section.files.filter(
+          (file) => canUnstageFile?.(file) ?? true
+        )
+      : section.files.filter(
+          (file) => canStageFile?.(file) ?? true
+        );
+    const discardCandidates = stagedSection
+      ? []
+      : section.files.filter(
+          (file) => canDiscardFile?.(file) ?? true
+        );
+    const canToggleGroup =
+      toggleCandidates.length > 0 &&
+      toggleCandidates.length <= MAX_GROUP_MUTATION_PATHS &&
+      Boolean(stagedSection ? onUnstageFiles : onStageFiles);
+    const canDiscardGroup =
+      discardCandidates.length > 0 &&
+      discardCandidates.length <= MAX_GROUP_MUTATION_PATHS &&
+      Boolean(onDiscardFiles);
+
+    if (!canToggleGroup && !canDiscardGroup) {
+      return null;
+    }
+
+    return (
+      <div className="diff-workspace-file-section-actions">
+        {canDiscardGroup ? (
+          <Button
+            aria-label={`放弃${section.title}分组的更改`}
+            className="diff-workspace-discard-toggle"
+            disabled={mutationBusy}
+            icon={<Icon name="undo" size={12} />}
+            onClick={() => void onDiscardFiles?.(discardCandidates)}
+            size="small"
+            title={`放弃更改（${discardCandidates.length} 个文件）`}
+            variant="icon"
+          />
+        ) : null}
+        {canToggleGroup ? (
+          <Button
+            aria-label={`${stagedSection ? "取消暂存" : "暂存"}${section.title}分组的文件`}
+            className="diff-workspace-stage-toggle"
+            disabled={mutationBusy}
+            icon={
+              <Icon
+                name={stagedSection ? "minus" : "plus"}
+                size={12}
+              />
+            }
+            onClick={() => {
+              if (stagedSection) {
+                void onUnstageFiles?.(toggleCandidates);
+              } else {
+                void onStageFiles?.(toggleCandidates);
+              }
+            }}
+            size="small"
+            title={`${
+              stagedSection ? "取消暂存" : "暂存"
+            }（${toggleCandidates.length} 个文件）`}
+            variant="icon"
+          />
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -598,6 +711,7 @@ export function DiffFileNavigator({
           sections.map((section) => {
             const collapsed = collapsedSections[section.mode];
             const bodyId = `diff-workspace-section-${section.mode}`;
+            const sectionActions = renderSectionActions(section);
             return (
               <section
                 className={`diff-workspace-file-section${
@@ -605,28 +719,37 @@ export function DiffFileNavigator({
                 }`}
                 key={section.mode}
               >
-                <Button variant="unstyled"
-                  aria-controls={bodyId}
-                  aria-expanded={!collapsed}
-                  className="diff-workspace-file-section-title"
-                  onClick={() =>
-                    setCollapsedSections((current) => ({
-                      ...current,
-                      [section.mode]: !current[section.mode]
-                    }))
-                  }
-                  type="button"
+                <div
+                  className={`diff-workspace-file-section-header${
+                    sectionActions ? " has-actions" : ""
+                  }`}
                 >
-                  <Icon
-                    className="diff-workspace-file-section-chevron"
-                    name="collapse"
-                    size={12}
-                  />
-                  <span>{section.title}</span>
-                  <span className="diff-workspace-file-section-count">
-                    {section.files.length}
-                  </span>
-                </Button>
+                  <Button variant="unstyled"
+                    aria-controls={bodyId}
+                    aria-expanded={!collapsed}
+                    className="diff-workspace-file-section-title"
+                    onClick={() =>
+                      setCollapsedSections((current) => ({
+                        ...current,
+                        [section.mode]: !current[section.mode]
+                      }))
+                    }
+                    type="button"
+                  >
+                    <Icon
+                      className="diff-workspace-file-section-chevron"
+                      name="collapse"
+                      size={12}
+                    />
+                    <span>{section.title}</span>
+                  </Button>
+                  <div className="diff-workspace-file-section-tail">
+                    <span className="diff-workspace-file-section-count">
+                      {section.files.length}
+                    </span>
+                    {sectionActions}
+                  </div>
+                </div>
                 {collapsed ? null : (
                   <div id={bodyId}>
                     {renderSectionRows(section)}

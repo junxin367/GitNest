@@ -28,11 +28,13 @@ import { WorktreeCommandDialog } from "../../features/worktree-command/WorktreeC
 import { useWorktreeCommands } from "../../features/worktree-command/useWorktreeCommands";
 import {
   canStageChange,
+  canDiscardChange,
   canUnstageChange,
   useRepositoryMutations
 } from "../../entities/repository/useRepositoryMutations";
 import {
   findTargetSnapshot,
+  findWorkspaceEntryForTarget,
   getSnapshotChangeCount,
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
@@ -53,6 +55,11 @@ import {
 } from "../../shared/ui/Menu";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import { RepositoryWorktrees } from "./RepositoryWorktrees";
+import {
+  applyTapdKeywordToCommitMessage,
+  readTapdKeywordPreference
+} from "../../widgets/workspace-sidebar/tapdKeywordPreferences";
+import { getRendererPreferenceStorage } from "../../widgets/workspace-sidebar/sidebarPreferences";
 import { ApplicationIcon } from "../../widgets/repository-header/OpenInControl";
 import {
   type DiffPanelState
@@ -214,12 +221,23 @@ export function RepositoryPage({
         });
         return;
       }
-      setCommitMessage(result.value.message);
+      const tapdKeyword = readTapdKeywordPreference(
+        getRendererPreferenceStorage(),
+        workspace?.id,
+        findWorkspaceEntryForTarget(workspace, target)?.id ??
+          workspace?.selectedEntryId
+      );
+      setCommitMessage(
+        applyTapdKeywordToCommitMessage(
+          result.value.message,
+          tapdKeyword
+        )
+      );
       setAiFeedback({
         title: "AI 提交信息已生成",
         message: result.value.truncated
-          ? `已根据 ${result.value.stagedFiles} 个暂存文件生成；输入 Diff 过大，已按上限截断。`
-          : `已根据 ${result.value.stagedFiles} 个暂存文件填入提交信息。`,
+          ? `已根据 ${result.value.stagedFiles} 个变更文件生成；输入 Diff 过大，已按上限截断。`
+          : `已根据 ${result.value.stagedFiles} 个变更文件填入提交信息。`,
         tone: "success"
       });
     } catch (reason) {
@@ -1219,6 +1237,7 @@ function RepositoryChanges({
         canUnstageFile={(file) =>
           canUnstageChange(file.change)
         }
+        canDiscardFile={(file) => canDiscardChange(file.change)}
         changesLoading={controller.loading.changes}
         commit={{
           ai: {
@@ -1235,10 +1254,12 @@ function RepositoryChanges({
               !appSettings.settings.ai.model ||
               !appSettings.settings.ai.prompt
                 ? "请先在设置中完成 AI 提交信息配置"
-                : "根据当前仓库的已暂存 Diff 生成提交信息",
+                : "根据当前提交范围生成提交信息",
             onGenerate: onGenerateAi
           },
           busy: mutations.active !== null || commands.busy,
+          commitPanelHeight:
+            appSettings.settings.diff.commitPanelHeight,
           conflicted:
             controller.changes?.snapshot.conflicted ?? 0,
           message: commitMessage,
@@ -1253,6 +1274,11 @@ function RepositoryChanges({
             (pushAfterCommit && commands.active === "push"),
           onMessageChange: onCommitMessageChange,
           onPushChange: onPushAfterCommitChange,
+          onCommitPanelHeightChange: (height) =>
+            void appSettings.update(
+              { diff: { commitPanelHeight: height } },
+              { silent: true }
+            ),
           onSubmit: async (message, push) => {
             const { subject, body } =
               parseCommitMessage(message);
@@ -1290,6 +1316,24 @@ function RepositoryChanges({
         }
         onUnstageFile={(file) =>
           mutations.unstageChange(file.change)
+        }
+        onDiscardFile={(file) =>
+          mutations.discardChange(file.change)
+        }
+        onDiscardFiles={(files) =>
+          mutations.discardChanges(
+            files.map((file) => file.change)
+          )
+        }
+        onStageFiles={(files) =>
+          mutations.stageChanges(
+            files.map((file) => file.change)
+          )
+        }
+        onUnstageFiles={(files) =>
+          mutations.unstageChanges(
+            files.map((file) => file.change)
+          )
         }
         openStandalone={{
           busy: diffViewerOpening,
@@ -2386,9 +2430,15 @@ function formatAiError(error: GitReadErrorDto): string {
     return "AI 请求超时，请检查服务地址或网络连接。";
   }
   if (error.code === "INVALID_REQUEST") {
-    return error.message.includes("staged")
-      ? "当前仓库没有可用于生成的已暂存变更。"
-      : error.message;
+    if (
+      error.message
+        .trim()
+        .toLowerCase()
+        .includes("no repository changes are available")
+    ) {
+      return "当前仓库没有可用于生成的变更。";
+    }
+    return error.message;
   }
   return error.message;
 }

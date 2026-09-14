@@ -1,29 +1,29 @@
 import { Button } from "../../shared/ui/Button";
 import {
+  useEffect,
   useMemo,
   useState,
   type FormEvent
 } from "react";
 
 import type {
+  CommitSummaryDto,
   RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
   WorkspaceDetailsDto,
-  WorkspaceErrorDto,
-  WorkspaceMonitorStateDto,
-  WorkspaceOperationDto
+  WorkspaceErrorDto
 } from "@gitnest/contracts";
 
 import {
   filterSnapshotsToTargets,
   findTargetSnapshot,
-  getActiveWorkspaceEntry,
   getSnapshotChangeCount,
   isWorkspaceDataBlocked,
   listActiveWorkspaceTargets,
   repositoryTargetSelected,
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
+import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
 import type { IconName } from "../../shared/ui/Icon";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
@@ -36,11 +36,11 @@ type LocalWorkspaceOperation =
   | "saving"
   | null;
 
+let workspaceOverviewHistorySequence = 0;
+
 interface WorkspaceOverviewPageProps {
   workspace: WorkspaceDetailsDto | null;
   snapshots: RepositoryStatusSnapshotDto[];
-  operations: WorkspaceOperationDto[];
-  monitor: WorkspaceMonitorStateDto | null;
   error: WorkspaceErrorDto | null;
   notice: string | null;
   operation: LocalWorkspaceOperation;
@@ -48,15 +48,12 @@ interface WorkspaceOverviewPageProps {
   onAddDirectory(): void;
   onAddManualPath(path: string): Promise<boolean>;
   onSelectTarget(target: RepositoryTargetDto): void;
-  onCancelOperation(operationId: string): void;
   onClearFeedback(): void;
 }
 
 export function WorkspaceOverviewPage({
   workspace,
   snapshots,
-  operations,
-  monitor,
   error,
   notice,
   operation,
@@ -64,15 +61,21 @@ export function WorkspaceOverviewPage({
   onAddDirectory,
   onAddManualPath,
   onSelectTarget,
-  onCancelOperation,
   onClearFeedback
 }: WorkspaceOverviewPageProps) {
   const [manualPathOpen, setManualPathOpen] = useState(false);
   const [manualPath, setManualPath] = useState("");
-  const activeEntry = useMemo(
-    () => getActiveWorkspaceEntry(workspace),
-    [workspace]
-  );
+  const [recentCommits, setRecentCommits] = useState<
+    Map<string, CommitSummaryDto>
+  >(() => new Map());
+  const [
+    repositoryStatusCollapsed,
+    setRepositoryStatusCollapsed
+  ] = useState(false);
+  const [
+    recentCommitsCollapsed,
+    setRecentCommitsCollapsed
+  ] = useState(false);
   const targets = useMemo(
     () => listActiveWorkspaceTargets(workspace),
     [workspace]
@@ -97,6 +100,113 @@ export function WorkspaceOverviewPage({
         : [],
     [scopedSnapshots, targets, workspace]
   );
+  const historyRevision = useMemo(
+    () =>
+      scopedSnapshots
+        .map(
+          (snapshot) =>
+            `${targetKey(snapshot)}:${snapshot.head}`
+        )
+        .sort()
+        .join("|"),
+    [scopedSnapshots]
+  );
+  useEffect(() => {
+    let active = true;
+    const queryIds = targets.map((target, index) => ({
+      queryId: `workspace-overview-history-${
+        ++workspaceOverviewHistorySequence
+      }-${index}`,
+      target
+    }));
+
+    setRecentCommits(new Map());
+    const repositoryBridge = window.gitnest?.repository;
+    if (!repositoryBridge || queryIds.length === 0) {
+      return () => {
+        active = false;
+      };
+    }
+
+    const loadRecentCommits = async () => {
+      const loaded = new Map<string, CommitSummaryDto>();
+
+      for (let index = 0; index < queryIds.length; index += 4) {
+        const batch = queryIds.slice(index, index + 4);
+        const results = await Promise.all(
+          batch.map(async ({ queryId, target }) => {
+            try {
+              const result = await repositoryBridge.getHistory({
+                queryId,
+                target,
+                limit: 1,
+                offset: 0
+              });
+              return result.ok
+                ? {
+                    key: targetKey(target),
+                    commit: result.value.page.commits[0]
+                  }
+                : null;
+            } catch {
+              return null;
+            }
+          })
+        );
+
+        if (!active) {
+          return;
+        }
+
+        for (const result of results) {
+          if (result?.commit) {
+            loaded.set(result.key, result.commit);
+          }
+        }
+        setRecentCommits(new Map(loaded));
+      }
+    };
+
+    void loadRecentCommits();
+    return () => {
+      active = false;
+      for (const { queryId } of queryIds) {
+        void repositoryBridge.cancelQuery({ queryId });
+      }
+    };
+  }, [historyRevision, targets]);
+  const recentRows = useMemo(
+    () =>
+      [...statusRows]
+        .sort((left, right) =>
+          compareRecentStatusRows(left, right, recentCommits)
+        )
+        .slice(0, 6),
+    [recentCommits, statusRows]
+  );
+  const branchDistribution = useMemo(() => {
+    const counts = new Map<string, number>();
+
+    for (const row of statusRows) {
+      const branch =
+        row.snapshot?.branch ??
+        row.worktree?.branch ??
+        "detached";
+      counts.set(branch, (counts.get(branch) ?? 0) + 1);
+    }
+
+    return [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort(
+        (left, right) =>
+          right.count - left.count ||
+          left.name.localeCompare(
+            right.name,
+            undefined,
+            { sensitivity: "base" }
+          )
+      );
+  }, [statusRows]);
   const dirtyRepositoryCount = scopedSnapshots.filter(
     (snapshot) => getSnapshotChangeCount(snapshot) > 0
   ).length;
@@ -180,52 +290,10 @@ export function WorkspaceOverviewPage({
       tone: "purple"
     }
   ];
-  const scanIssues =
-    activeEntry?.scanIssues.map((issue) => ({
-      entryName: activeEntry.displayName,
-      issue
-    })) ?? [];
-  const snapshotIssues =
-    activeEntry && workspace
-      ? scopedSnapshots
-          .filter(
-            (
-              snapshot
-            ): snapshot is RepositoryStatusSnapshotDto & {
-              error: NonNullable<
-                RepositoryStatusSnapshotDto["error"]
-              >;
-            } => Boolean(snapshot.error)
-          )
-          .map((snapshot) => {
-            const resolved = resolveWorkspaceTarget(
-              workspace,
-              snapshot
-            );
-            return {
-              entryName:
-                resolved.worktree?.name ??
-                resolved.repository?.name ??
-                "未知仓库",
-              issue: {
-                path: resolved.worktree?.path ?? "",
-                code: snapshot.error.code,
-                message: snapshot.error.message
-              }
-            };
-          })
-      : [];
-  const localProblems = [...scanIssues, ...snapshotIssues];
   const blockingError = isWorkspaceDataBlocked(
     workspace,
     error,
     operation
-  );
-  const activeOperations = operations.filter(
-    (item) =>
-      item.state === "queued" ||
-      item.state === "running" ||
-      item.state === "cancelling"
   );
 
   const submitManualPath = async (event: FormEvent) => {
@@ -364,11 +432,21 @@ export function WorkspaceOverviewPage({
       <section className="dashboard-grid">
         <div>
           <article className="panel">
-            <header className="panel-header">
-              <div className="panel-title">
+            <button
+              aria-controls="workspace-overview-repository-status"
+              aria-expanded={!repositoryStatusCollapsed}
+              className="panel-header panel-header-toggle"
+              onClick={() =>
+                setRepositoryStatusCollapsed(
+                  (collapsed) => !collapsed
+                )
+              }
+              type="button"
+            >
+              <span className="panel-title">
                 <Icon name="repository" />
                 仓库状态
-              </div>
+              </span>
               <span className="panel-caption">
                 {statusRows.length > 0
                   ? `${freshCount}/${statusRows.length} 已刷新`
@@ -376,309 +454,342 @@ export function WorkspaceOverviewPage({
                     ? `${workspace.entries.length} 个顶层条目`
                     : "正在恢复…"}
               </span>
-            </header>
-            {statusRows.length > 0 && workspace ? (
-              <div
-                aria-label="仓库状态"
-                className="repository-status-table"
-                role="list"
-              >
+              <Icon
+                className="panel-collapse-indicator"
+                name="chevron"
+                size={14}
+              />
+            </button>
+            <div
+              aria-hidden={repositoryStatusCollapsed}
+              className="panel-collapsible-body"
+              hidden={repositoryStatusCollapsed}
+              id="workspace-overview-repository-status"
+            >
+              {statusRows.length > 0 && workspace ? (
                 <div
-                  aria-hidden="true"
-                  className="repository-status-row repository-status-head"
+                  aria-label="仓库状态"
+                  className="repository-status-table"
+                  role="list"
                 >
-                  <span>仓库</span>
-                  <span>分支</span>
-                  <span>工作区</span>
-                  <span>远程同步</span>
-                </div>
-                {statusRows.map(
-                  ({ target, repository, worktree, snapshot }) => {
-                    const name =
-                      worktree?.name ??
-                      repository?.name ??
-                      "未知仓库";
-                    const branch =
-                      snapshot?.branch ??
-                      worktree?.branch ??
-                      "detached";
-                    const state = workspaceStatusLabel(snapshot);
-                    const sync = syncLabel(snapshot);
-                    const selected = repositoryTargetSelected(
-                      workspace.selectedTarget,
-                      target
-                    );
-
-                    return (
-                      <div
-                        className="repository-status-item"
-                        key={`${target.repositoryId}:${target.worktreeId}`}
-                        role="listitem"
-                      >
-                        <Button variant="unstyled"
-                          aria-current={
-                            selected ? "true" : undefined
-                          }
-                          aria-label={`${name}，分支 ${branch}，工作区 ${state}，同步 ${sync}`}
-                          className={`repository-status-row${
-                            selected ? " selected" : ""
-                          }`}
-                          onClick={() => onSelectTarget(target)}
-                          type="button"
-                        >
-                          <span className="table-name">
-                            <span
-                              className={`repository-state ${snapshotTone(snapshot)}`}
-                            >
-                              <Icon name="repository" size={13} />
-                            </span>
-                            <span
-                              className="table-name-copy"
-                              title={name}
-                            >
-                              {name}
-                              <small
-                                title={worktree?.path ?? "路径不可用"}
-                              >
-                                {worktree?.path ?? "路径不可用"}
-                              </small>
-                            </span>
-                          </span>
-                          <span
-                            className="repository-status-branch"
-                            title={branch}
-                          >
-                            {branch}
-                          </span>
-                          <span>
-                            <span
-                              className={`status-pill ${snapshotPillTone(snapshot)}`}
-                            >
-                              {state}
-                            </span>
-                          </span>
-                          <span
-                            className="repository-status-sync"
-                            title={sync}
-                          >
-                            {sync}
-                          </span>
-                        </Button>
-                      </div>
-                    );
-                  }
-                )}
-              </div>
-            ) : (
-              <div className="empty-state workspace-empty-state">
-                <span className="empty-state-icon">
-                  <Icon name="folder" size={20} />
-                </span>
-                <div>
-                  <strong>
-                    {operation === "loading"
-                      ? "正在恢复 Workspace"
-                      : "尚未添加本地目录"}
-                  </strong>
-                  <p>
-                    使用目录选择器、手动输入绝对路径，或把目录拖入窗口。
-                  </p>
-                  <Button size="small" variant="primary"
-                    disabled={busy}
-                    onClick={onAddDirectory}
-                    type="button"
+                  <div
+                    aria-hidden="true"
+                    className="repository-status-row repository-status-head"
                   >
-                    <Icon name="plus" />
-                    添加第一个目录
-                  </Button>
-                </div>
-              </div>
-            )}
-          </article>
-
-          <article className="panel">
-            <header className="panel-header">
-              <div className="panel-title">
-                <Icon name="operations" />
-                操作中心
-              </div>
-              <span className="panel-caption">
-                {activeOperations.length} 个运行中 · 最近{" "}
-                {operations.length} 个
-              </span>
-            </header>
-            {operations.length > 0 ? (
-              <div className="operation-list">
-                {operations.slice(0, 5).map((item) => (
-                  <div className="operation-row" key={item.id}>
-                    <span
-                      className={`operation-icon state-${item.state}`}
-                    >
-                      <Icon
-                        name={
-                          item.state === "failed"
-                            ? "warning"
-                            : item.state === "succeeded"
-                              ? "check"
-                              : "refresh"
-                        }
-                        size={14}
-                      />
-                    </span>
-                    <div>
-                      <strong>
-                        {operationKindLabel(item.kind)}
-                      </strong>
-                      <span>{item.message}</span>
-                      <div
-                        aria-label={`${operationKindLabel(item.kind)}进度`}
-                        aria-valuemax={100}
-                        aria-valuemin={0}
-                        aria-valuenow={Math.round(
-                          Math.max(0, Math.min(item.progress, 1)) *
-                            100
-                        )}
-                        className="operation-progress"
-                        role="progressbar"
-                      >
-                        <span
-                          style={{
-                            transform: `scaleX(${Math.max(
-                              0,
-                              Math.min(item.progress, 1)
-                            )})`
-                          }}
-                        />
-                      </div>
-                    </div>
-                    <div className="operation-controls">
-                      <span className="operation-state">
-                        {operationStateLabel(item.state)}
-                      </span>
-                      {isCancellableRepositoryOperation(item) && (
-                        <Button variant="unstyled"
-                          aria-label={`取消${operationKindLabel(item.kind)}`}
-                          className="operation-cancel-button"
-                          disabled={item.state === "cancelling"}
-                          onClick={() =>
-                            onCancelOperation(item.id)
-                          }
-                          type="button"
-                        >
-                          <Icon name="close" size={12} />
-                          {item.state === "cancelling"
-                            ? "取消中"
-                            : "取消"}
-                        </Button>
-                      )}
-                    </div>
+                    <span>仓库</span>
+                    <span>分支</span>
+                    <span>工作区</span>
+                    <span>远程同步</span>
                   </div>
-                ))}
-              </div>
-            ) : (
-              <div className="empty-state">
-                <span className="empty-state-icon">
-                  <Icon name="check" size={20} />
-                </span>
-                <div>
-                  <strong>当前没有后台操作</strong>
-                  <p>
-                    启动刷新、手动刷新和文件变化会统一显示于此。
-                  </p>
+                  {statusRows.map(
+                    ({ target, repository, worktree, snapshot }) => {
+                      const name =
+                        worktree?.name ??
+                        repository?.name ??
+                        "未知仓库";
+                      const branch =
+                        snapshot?.branch ??
+                        worktree?.branch ??
+                        "detached";
+                      const state = workspaceStatusLabel(snapshot);
+                      const sync = syncLabel(snapshot);
+                      const selected = repositoryTargetSelected(
+                        workspace.selectedTarget,
+                        target
+                      );
+
+                      return (
+                        <div
+                          className="repository-status-item"
+                          key={`${target.repositoryId}:${target.worktreeId}`}
+                          role="listitem"
+                        >
+                          <Button variant="unstyled"
+                            aria-current={
+                              selected ? "true" : undefined
+                            }
+                            aria-label={`${name}，分支 ${branch}，工作区 ${state}，同步 ${sync}`}
+                            className={`repository-status-row${
+                              selected ? " selected" : ""
+                            }`}
+                            onClick={() => onSelectTarget(target)}
+                            type="button"
+                          >
+                            <span className="table-name">
+                              <span
+                                className={`repository-state ${snapshotTone(snapshot)}`}
+                              >
+                                <Icon name="repository" size={13} />
+                              </span>
+                              <span
+                                className="table-name-copy"
+                                title={name}
+                              >
+                                {name}
+                                <small
+                                  title={worktree?.path ?? "路径不可用"}
+                                >
+                                  {worktree?.path ?? "路径不可用"}
+                                </small>
+                              </span>
+                            </span>
+                            <span
+                              className="repository-status-branch"
+                              title={branch}
+                            >
+                              {branch}
+                            </span>
+                            <span>
+                              <span
+                                className={`status-pill ${snapshotPillTone(snapshot)}`}
+                              >
+                                {state}
+                              </span>
+                            </span>
+                            <span
+                              className="repository-status-sync"
+                              title={sync}
+                            >
+                              {sync}
+                            </span>
+                          </Button>
+                        </div>
+                      );
+                    }
+                  )}
                 </div>
-              </div>
-            )}
+              ) : (
+                <div className="empty-state workspace-empty-state">
+                  <span className="empty-state-icon">
+                    <Icon name="folder" size={20} />
+                  </span>
+                  <div>
+                    <strong>
+                      {operation === "loading"
+                        ? "正在恢复 Workspace"
+                        : "尚未添加本地目录"}
+                    </strong>
+                    <p>
+                      使用目录选择器、手动输入绝对路径，或把目录拖入窗口。
+                    </p>
+                    <Button size="small" variant="primary"
+                      disabled={busy}
+                      onClick={onAddDirectory}
+                      type="button"
+                    >
+                      <Icon name="plus" />
+                      添加第一个目录
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
           </article>
         </div>
 
         <div>
-          <article className="panel">
-            <header className="panel-header">
-              <div className="panel-title">
-                <Icon
-                  name={
-                    monitor?.mode === "polling"
-                      ? "warning"
-                      : "activity"
-                  }
-                />
-                刷新监控
-              </div>
-              <span
-                className={`status-pill ${
-                  monitor?.mode === "polling"
-                    ? "yellow"
-                    : monitor?.mode === "watching"
-                      ? "green"
-                      : "neutral"
-                }`}
-              >
-                {monitorModeLabel(monitor)}
-              </span>
-            </header>
-            <div className="monitor-card">
-              <strong>
-                {monitor?.mode === "watching"
-                  ? `${monitor.watchedTargets} 个仓库已监听`
-                  : monitor?.mode === "polling"
-                    ? "已启用低频轮询"
-                    : "监听尚未启动"}
-              </strong>
-              <p>{monitor?.message ?? "正在初始化刷新状态。"}</p>
-              {monitor?.lastEventAt && (
-                <small>
-                  最近文件事件：{formatUpdatedAt(monitor.lastEventAt)}
-                </small>
-              )}
-            </div>
-          </article>
-
-          <article className="panel">
-            <header className="panel-header">
-              <div className="panel-title">
-                <Icon
-                  name={
-                    localProblems.length > 0
-                      ? "warning"
-                      : "check"
-                  }
-                />
-                局部问题
-              </div>
-              <span className="panel-caption">
-                {localProblems.length} 个
-              </span>
-            </header>
-            {localProblems.length > 0 ? (
-              <div className="scan-issue-list">
-                {localProblems
-                  .slice(0, 5)
-                  .map(({ entryName, issue }) => (
-                  <div
-                    className="scan-issue"
-                    key={`${entryName}:${issue.path}:${issue.code}`}
-                  >
-                    <Icon name="warning" size={14} />
-                    <div>
-                      <strong>{entryName}</strong>
-                      <span title={issue.path}>{issue.message}</span>
-                    </div>
-                  </div>
-                  ))}
-              </div>
-            ) : (
-              <div className="stage-card">
-                <span className="status-pill green">状态正常</span>
-                <strong>未发现局部问题</strong>
-                <p>
-                  当前扫描结果和仓库状态读取均未报告异常。
-                </p>
-              </div>
-            )}
-          </article>
+          <WorkspaceRecentCommitsPanel
+            collapsed={recentCommitsCollapsed}
+            recentCommits={recentCommits}
+            rows={recentRows}
+            onToggle={() =>
+              setRecentCommitsCollapsed(
+                (collapsed) => !collapsed
+              )
+            }
+            onSelectTarget={onSelectTarget}
+          />
+          <WorkspaceBranchDistributionPanel
+            distribution={branchDistribution}
+            totalRows={statusRows.length}
+          />
         </div>
       </section>
     </div>
+  );
+}
+
+function WorkspaceRecentCommitsPanel({
+  collapsed,
+  recentCommits,
+  rows,
+  onSelectTarget,
+  onToggle
+}: {
+  collapsed: boolean;
+  recentCommits: Map<string, CommitSummaryDto>;
+  rows: StatusRow[];
+  onSelectTarget(target: RepositoryTargetDto): void;
+  onToggle(): void;
+}) {
+  return (
+    <article className="panel">
+      <button
+        aria-controls="workspace-overview-recent-commits"
+        aria-expanded={!collapsed}
+        className="panel-header panel-header-toggle"
+        onClick={onToggle}
+        type="button"
+      >
+        <span className="panel-title">
+          <Icon name="history" />
+          各仓库最近提交
+        </span>
+        <span className="panel-caption">
+          每仓库采集 1 条
+        </span>
+        <Icon
+          className="panel-collapse-indicator"
+          name="chevron"
+          size={14}
+        />
+      </button>
+      <div
+        aria-hidden={collapsed}
+        className="panel-collapsible-body"
+        hidden={collapsed}
+        id="workspace-overview-recent-commits"
+      >
+        {rows.length > 0 ? (
+          <div className="workspace-activity-list">
+            {rows.map(
+              ({ target, repository, worktree, snapshot }, index) => {
+                const name =
+                  worktree?.name ??
+                  repository?.name ??
+                  "未知仓库";
+                const commit = recentCommits.get(targetKey(target));
+                const detail = commit
+                  ? `${commit.shortHash} · ${commit.subject}`
+                  : snapshot
+                    ? `${shortHead(snapshot.head)} · ${workspaceActivityStatus(
+                        snapshot
+                      )}`
+                    : "等待状态刷新";
+                const time = commit
+                  ? formatCommitTimestamp(commit.authoredAt)
+                  : snapshot
+                    ? formatCommitTimestamp(snapshot.refreshedAt)
+                    : "—";
+
+                return (
+                  <Button variant="unstyled"
+                    aria-label={`${name} 的 HEAD 最近提交，${detail}，${time}`}
+                    className={`workspace-activity-row${
+                      index === rows.length - 1 ? " last" : ""
+                    }`}
+                    disabled={!snapshot}
+                    key={`${target.repositoryId}:${target.worktreeId}`}
+                    onClick={() => onSelectTarget(target)}
+                    type="button"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`workspace-activity-marker ${snapshotTone(
+                        snapshot
+                      )}`}
+                    >
+                      <Icon name="commit" size={12} />
+                    </span>
+                    <span className="workspace-activity-copy">
+                      <span className="workspace-activity-title">
+                        <strong>{name}</strong> 的 HEAD 最近提交
+                      </span>
+                      <span className="workspace-activity-sub">
+                        {commit ? (
+                          <>
+                            <code>{commit.shortHash}</code>
+                            {" · "}
+                            {commit.subject}
+                          </>
+                        ) : snapshot ? (
+                          <>
+                            <code>{shortHead(snapshot.head)}</code>
+                            {" · "}
+                            {workspaceActivityStatus(snapshot)}
+                          </>
+                        ) : (
+                          "等待状态刷新"
+                        )}
+                      </span>
+                    </span>
+                    <time
+                      className="workspace-activity-meta"
+                      dateTime={
+                        commit?.authoredAt ??
+                        snapshot?.refreshedAt
+                      }
+                    >
+                      {time}
+                    </time>
+                  </Button>
+                );
+              }
+            )}
+          </div>
+        ) : (
+          <div className="empty-state workspace-empty-state">
+            <span className="empty-state-icon">
+              <Icon name="history" size={20} />
+            </span>
+            <div>
+              <strong>暂无最近提交</strong>
+              <p>完成 Workspace 扫描后，这里会显示各仓库的 HEAD 提交。</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function WorkspaceBranchDistributionPanel({
+  distribution,
+  totalRows
+}: {
+  distribution: BranchDistributionRow[];
+  totalRows: number;
+}) {
+  return (
+    <article className="panel">
+      <header className="panel-header">
+        <div className="panel-title">
+          <Icon name="branch" />
+          分支分布
+        </div>
+        <span className="panel-caption">
+          {totalRows} 个当前分支
+        </span>
+      </header>
+      {distribution.length > 0 ? (
+        <div className="workspace-branch-distribution">
+          {distribution.map((item) => (
+            <div
+              className="workspace-branch-distribution-item"
+              key={item.name}
+            >
+              <div
+                className="workspace-branch-distribution-label"
+                title={item.name}
+              >
+                {item.name}
+              </div>
+              <strong>{item.count}</strong>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state workspace-empty-state">
+          <span className="empty-state-icon">
+            <Icon name="branch" size={20} />
+          </span>
+          <div>
+            <strong>暂无分支数据</strong>
+            <p>完成 Workspace 扫描后，这里会显示当前分支分布。</p>
+          </div>
+        </div>
+      )}
+    </article>
   );
 }
 
@@ -688,6 +799,62 @@ type StatusRow = {
   worktree: ReturnType<typeof resolveWorkspaceTarget>["worktree"];
   snapshot: RepositoryStatusSnapshotDto | undefined;
 };
+
+type BranchDistributionRow = {
+  name: string;
+  count: number;
+};
+
+function compareRecentStatusRows(
+  left: StatusRow,
+  right: StatusRow,
+  recentCommits: Map<string, CommitSummaryDto>
+): number {
+  return (
+    commitTimestamp(
+      recentCommits.get(targetKey(right.target)),
+      right.snapshot
+    ) -
+      commitTimestamp(
+        recentCommits.get(targetKey(left.target)),
+        left.snapshot
+      ) ||
+    (left.worktree?.name ?? left.repository?.name ?? "").localeCompare(
+      right.worktree?.name ?? right.repository?.name ?? "",
+      undefined,
+      { sensitivity: "base" }
+    )
+  );
+}
+
+function snapshotTimestamp(
+  snapshot: RepositoryStatusSnapshotDto | undefined
+): number {
+  if (!snapshot) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const timestamp = new Date(snapshot.refreshedAt).getTime();
+  return Number.isNaN(timestamp)
+    ? Number.NEGATIVE_INFINITY
+    : timestamp;
+}
+
+function commitTimestamp(
+  commit: CommitSummaryDto | undefined,
+  snapshot: RepositoryStatusSnapshotDto | undefined
+): number {
+  const authoredAt = commit
+    ? new Date(commit.authoredAt).getTime()
+    : Number.NaN;
+  if (!Number.isNaN(authoredAt)) {
+    return authoredAt;
+  }
+  return snapshotTimestamp(snapshot);
+}
+
+function targetKey(target: RepositoryTargetDto): string {
+  return `${target.repositoryId}:${target.worktreeId}`;
+}
 
 function compareStatusRows(
   left: StatusRow,
@@ -787,94 +954,18 @@ function syncLabel(
   return `↑${snapshot.ahead} ↓${snapshot.behind}`;
 }
 
-function operationStateLabel(
-  state: WorkspaceOperationDto["state"]
+function workspaceActivityStatus(
+  snapshot: RepositoryStatusSnapshotDto
 ): string {
-  return {
-    queued: "排队中",
-    running: "运行中",
-    cancelling: "取消中",
-    succeeded: "已完成",
-    failed: "部分失败",
-    cancelled: "已取消",
-    interrupted: "已中断"
-  }[state];
-}
-
-function operationKindLabel(
-  kind: WorkspaceOperationDto["kind"]
-): string {
-  return {
-    scan: "Workspace 扫描",
-    status: "仓库状态刷新",
-    stage: "暂存文件",
-    unstage: "取消暂存",
-    commit: "创建提交",
-    fetch: "获取远程更新",
-    pull: "快进拉取",
-    push: "推送分支",
-    "switch-branch": "切换分支",
-    "create-branch": "创建分支",
-    "rename-branch": "重命名分支",
-    "delete-branch": "删除分支",
-    "worktree-create": "创建 Worktree",
-    "worktree-lock": "锁定 Worktree",
-    "worktree-unlock": "解锁 Worktree",
-    "worktree-move": "移动 Worktree",
-    "worktree-repair": "修复 Worktree 登记",
-    "worktree-prune": "Prune Worktree 登记",
-    "worktree-remove": "移除 Worktree"
-  }[kind];
-}
-
-function isCancellableRepositoryOperation(
-  operation: WorkspaceOperationDto
-): boolean {
-  return (
-    (
-      operation.state === "queued" ||
-      operation.state === "running" ||
-      operation.state === "cancelling"
-    ) &&
-    [
-      "fetch",
-      "pull",
-      "push",
-      "switch-branch",
-      "create-branch",
-      "rename-branch",
-      "delete-branch",
-      "worktree-create",
-      "worktree-lock",
-      "worktree-unlock",
-      "worktree-move",
-      "worktree-repair",
-      "worktree-prune",
-      "worktree-remove"
-    ].includes(operation.kind)
-  );
-}
-
-function monitorModeLabel(
-  monitor: WorkspaceMonitorStateDto | null
-): string {
-  if (monitor?.mode === "watching") {
-    return "监听中";
+  if (snapshot.error) {
+    return "读取失败";
   }
-  if (monitor?.mode === "polling") {
-    return "轮询";
+  if (snapshot.refreshPending) {
+    return "正在刷新";
   }
-  return "未启动";
+  return `${snapshot.branch ?? "detached"} · ${syncLabel(snapshot)}`;
 }
 
-function formatUpdatedAt(value: string): string {
-  const date = new Date(value);
-
-  return Number.isNaN(date.getTime())
-    ? "时间未知"
-    : date.toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit"
-      });
+function shortHead(head: string): string {
+  return head ? head.slice(0, 7) : "—";
 }

@@ -73,6 +73,29 @@ export interface DiffWorkspaceProps {
   onFileViewChange?:
     | ((value: DiffFileViewDto) => void)
     | undefined;
+  onDiscardFile?:
+    | ((
+        file: DiffViewerFile
+      ) => void | boolean | Promise<void | boolean>)
+    | undefined;
+  canDiscardFile?:
+    | ((file: DiffViewerFile) => boolean)
+    | undefined;
+  onStageFiles?:
+    | ((
+        files: readonly DiffViewerFile[]
+      ) => void | boolean | Promise<void | boolean>)
+    | undefined;
+  onUnstageFiles?:
+    | ((
+        files: readonly DiffViewerFile[]
+      ) => void | boolean | Promise<void | boolean>)
+    | undefined;
+  onDiscardFiles?:
+    | ((
+        files: readonly DiffViewerFile[]
+      ) => void | boolean | Promise<void | boolean>)
+    | undefined;
   className?: string | undefined;
 }
 
@@ -83,6 +106,11 @@ export function DiffWorkspace({
   onSelectedFileChange,
   onStageFile,
   onUnstageFile,
+  onDiscardFile,
+  canDiscardFile,
+  onStageFiles,
+  onUnstageFiles,
+  onDiscardFiles,
   canStageFile,
   canUnstageFile,
   mutationBusy,
@@ -162,6 +190,11 @@ export function DiffWorkspace({
           onSelectedFileChange={onSelectedFileChange}
           onStageFile={onStageFile}
           onUnstageFile={onUnstageFile}
+          onDiscardFile={onDiscardFile}
+          canDiscardFile={canDiscardFile}
+          onStageFiles={onStageFiles}
+          onUnstageFiles={onUnstageFiles}
+          onDiscardFiles={onDiscardFiles}
           selectedFileKey={selectedFileKey}
           treePreference={treePreference}
           fileView={fileView}

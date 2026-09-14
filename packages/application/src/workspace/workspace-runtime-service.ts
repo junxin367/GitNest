@@ -44,6 +44,7 @@ export interface WorkspaceOperation {
     | "status"
     | "stage"
     | "unstage"
+    | "discard"
     | "commit"
     | "fetch"
     | "pull"
@@ -99,6 +100,7 @@ export interface WorkspaceRefreshAccepted {
 export type WorktreeMutationKind =
   | "stage"
   | "unstage"
+  | "discard"
   | "commit";
 
 export interface WorktreeMutationCompleted<Result> {
@@ -2174,6 +2176,13 @@ function mutationOperationMessage(
       succeeded: "所选路径已取消暂存。",
       failed: "取消暂存失败："
     },
+    discard: {
+      queued: "放弃更改操作正在排队。",
+      running: "正在放弃所选文件的更改…",
+      refreshing: "放弃更改完成，正在刷新仓库状态…",
+      succeeded: "所选文件的更改已放弃。",
+      failed: "放弃更改失败："
+    },
     commit: {
       queued: "提交操作正在排队。",
       running: "正在创建提交并执行 Git Hooks…",
@@ -2214,6 +2223,7 @@ function workspaceOperationLabel(
     status: "仓库状态刷新",
     stage: "暂存",
     unstage: "取消暂存",
+    discard: "放弃更改",
     commit: "提交",
     fetch: "Fetch",
     pull: "Pull",

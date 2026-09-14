@@ -25,6 +25,16 @@ export interface GitMutationClient {
     paths: readonly string[],
     options?: GitWriteOptions
   ): Promise<void>;
+  restoreWorktreePaths(
+    path: string,
+    paths: readonly string[],
+    options?: GitWriteOptions
+  ): Promise<void>;
+  removeUntrackedPaths(
+    path: string,
+    paths: readonly string[],
+    options?: GitWriteOptions
+  ): Promise<void>;
   createCommit(
     path: string,
     options: CreateCommitOptions

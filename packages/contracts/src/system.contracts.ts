@@ -291,6 +291,9 @@ export interface GitNestBridge {
     unstage(
       request: RepositoryPathsMutationRequest
     ): Promise<GitReadResult<RepositoryPathsMutationDto>>;
+    discard(
+      request: RepositoryPathsMutationRequest
+    ): Promise<GitReadResult<RepositoryPathsMutationDto>>;
     createCommit(
       request: CreateRepositoryCommitRequest
     ): Promise<GitReadResult<RepositoryCommitMutationDto>>;

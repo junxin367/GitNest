@@ -91,27 +91,85 @@
   min-width: 0;
 }
 
-.diff-workspace-file-section-title {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
+.diff-workspace-file-section-header {
+  display: flex;
   align-items: center;
-  width: 100%;
+  gap: var(--space-2);
+  min-width: 0;
   height: 28px;
-  padding: 0 var(--space-3);
+  padding-right: var(--space-2);
+  padding-left: var(--space-3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.diff-workspace-file-section-header:hover,
+.diff-workspace-file-section-header:focus-within {
+  background: var(--surface-hover);
+}
+
+.diff-workspace-file-section-title {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-2);
+  height: 100%;
+  min-width: 0;
+  padding: 0;
   color: var(--muted);
   text-align: left;
-  background: var(--surface);
+  background: transparent;
   border: 0;
-  border-bottom: 1px solid var(--border-soft);
   cursor: pointer;
   font-size: calc(var(--font-size-caption) - 1px);
   font-weight: var(--font-weight-semibold);
   letter-spacing: 0.02em;
 }
 
+.diff-workspace-file-section-title > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .diff-workspace-file-section-title:hover {
   color: var(--text-soft);
-  background: var(--surface-hover);
+}
+
+.diff-workspace-file-section-tail {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  min-width: calc(var(--icon-small) * 2 + var(--space-1));
+  min-height: var(--control-compact);
+}
+
+.diff-workspace-file-section-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-micro) var(--ease-enter);
+}
+
+.diff-workspace-file-section-header.has-actions:hover
+  .diff-workspace-file-section-actions,
+.diff-workspace-file-section-header.has-actions:focus-within
+  .diff-workspace-file-section-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.diff-workspace-file-section-header.has-actions:hover
+  .diff-workspace-file-section-count,
+.diff-workspace-file-section-header.has-actions:focus-within
+  .diff-workspace-file-section-count {
+  opacity: 0;
 }
 
 .diff-workspace-file-section-chevron {
@@ -124,15 +182,25 @@
 }
 
 .diff-workspace-file-section-count {
-  padding: 0 7px;
+  position: absolute;
+  right: 0;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 var(--space-1);
+  color: var(--muted);
   background: var(--surface-3);
   border-radius: 999px;
-  font-family: var(--font-mono);
+  transition: opacity var(--motion-micro) var(--ease-enter);
+  font-size: var(--font-size-caption);
+  line-height: 18px;
+  text-align: center;
 }
 
 .diff-workspace-file {
+  --diff-workspace-file-backdrop: transparent;
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--control-compact);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: var(--space-2);
   width: 100%;
@@ -146,13 +214,46 @@
   border-bottom: 1px solid var(--border-soft);
 }
 
-.diff-workspace-file:hover {
+.diff-workspace-file:hover,
+.diff-workspace-file:focus-within {
+  --diff-workspace-file-backdrop: var(--surface-hover);
   background: var(--surface-hover);
 }
 
+.diff-workspace-file-actions {
+  position: absolute;
+  top: 0;
+  right: var(--space-2);
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  padding-left: var(--space-5);
+  opacity: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--diff-workspace-file-backdrop) var(--space-5)
+  );
+  transition: opacity var(--motion-micro) var(--ease-enter);
+}
+
+.diff-workspace-file:hover .diff-workspace-file-actions,
+.diff-workspace-file:focus-within .diff-workspace-file-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .diff-workspace-file.selected {
+  --diff-workspace-file-backdrop: color-mix(
+    in srgb,
+    var(--accent) 13%,
+    var(--surface)
+  );
   color: var(--text);
-  background: var(--accent-soft);
+  background: var(--diff-workspace-file-backdrop);
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
@@ -245,20 +346,65 @@
   font-style: normal;
 }
 
-.diff-workspace-stage-toggle.gn-button {
-  width: var(--control-compact);
-  min-width: var(--control-compact);
-  height: var(--control-compact);
+.diff-workspace-file-actions .gn-button {
+  width: var(--gn-button-icon-size, 14px);
+  min-width: var(--gn-button-icon-size, 14px);
+  height: var(--gn-button-icon-size, 14px);
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
 }
 
-.diff-workspace-stage-toggle.gn-button:hover:not(:disabled) {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-color: color-mix(
-    in srgb,
-    var(--accent) 28%,
-    transparent
-  );
+.diff-workspace-file-actions
+  .gn-button:hover:not(:disabled),
+.diff-workspace-file-actions
+  .gn-button:active:not(:disabled),
+.diff-workspace-file-actions .gn-button:disabled,
+.diff-workspace-file-actions
+  .gn-button[data-selected="true"] {
+  color: var(--text);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.diff-workspace-file-actions
+  .gn-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.diff-workspace-file-section-actions .gn-button {
+  width: var(--gn-button-icon-size, 14px);
+  min-width: var(--gn-button-icon-size, 14px);
+  height: var(--gn-button-icon-size, 14px);
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.diff-workspace-file-section-actions
+  .gn-button:hover:not(:disabled),
+.diff-workspace-file-section-actions
+  .gn-button:active:not(:disabled),
+.diff-workspace-file-section-actions
+  .gn-button:disabled,
+.diff-workspace-file-section-actions
+  .gn-button[data-selected="true"] {
+  color: var(--text);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.diff-workspace-file-section-actions
+  .gn-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .diff-workspace-tree-directory {
@@ -321,11 +467,47 @@
 }
 
 .diff-workspace-commit {
+  display: grid;
+  grid-template-rows: 8px auto minmax(0, 1fr);
   min-width: 0;
-  max-height: 220px;
+  min-height: 0;
   overflow: auto;
   background: var(--surface);
   border-top: 1px solid var(--border);
+}
+
+.diff-workspace-commit-resizer {
+  display: grid;
+  place-items: center;
+  height: 8px;
+  margin-top: -1px;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.diff-workspace-commit-resizer > span {
+  width: 32px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--border-soft);
+  opacity: 0;
+  transition:
+    opacity var(--motion-micro) var(--ease-enter),
+    background var(--motion-micro) var(--ease-enter);
+}
+
+.diff-workspace-commit-resizer:hover > span,
+.diff-workspace-commit-resizer:focus-visible > span,
+.diff-workspace-commit.is-resizing
+  .diff-workspace-commit-resizer
+  > span {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.diff-workspace-commit.is-resizing {
+  user-select: none;
 }
 
 .diff-workspace-commit-header {
@@ -361,31 +543,55 @@
 }
 
 .diff-workspace-commit-form {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
+  min-height: 0;
+  overflow: hidden;
   padding: var(--space-2);
 }
 
+.diff-workspace-commit-form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-compact);
+}
+
+.diff-workspace-commit-form > .gn-textarea-field {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.diff-workspace-commit-form
+  > .gn-textarea-field
+  > .gn-textarea {
+  height: 100%;
+  min-height: 0;
+}
+
 .diff-workspace-commit-message {
-  min-height: 64px;
-  max-height: 140px;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  resize: none;
   font-size: var(--font-size-caption);
   line-height: 1.4;
 }
 
-.diff-workspace-commit-field-head {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
-}
-
 .diff-workspace-commit-ai.gn-button {
   flex: 0 0 auto;
+  width: var(--control-compact);
+  min-width: var(--control-compact);
+  padding: 0;
 }
 
-.diff-workspace-commit-form > .gn-button {
-  width: 100%;
+.diff-workspace-commit-submit.gn-button {
+  flex: 1 1 auto;
+  width: auto;
   min-width: 0;
   min-height: var(--control-compact);
   height: var(--control-compact);

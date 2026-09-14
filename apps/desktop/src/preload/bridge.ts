@@ -94,6 +94,8 @@ export function createGitNestBridge(
         invoke(IPC_CHANNELS.repositoryStage, request),
       unstage: (request) =>
         invoke(IPC_CHANNELS.repositoryUnstage, request),
+      discard: (request) =>
+        invoke(IPC_CHANNELS.repositoryDiscard, request),
       createCommit: (request) =>
         invoke(IPC_CHANNELS.repositoryCreateCommit, request),
       preflightCommand: (request) =>

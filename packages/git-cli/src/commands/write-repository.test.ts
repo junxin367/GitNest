@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   createCommitArguments,
+  removeUntrackedArguments,
+  restoreWorktreeArguments,
   stageAllArguments,
   stageArguments,
   unstageArguments
@@ -56,5 +58,22 @@ describe("repository write commands", () => {
       "Body line"
     ]);
     expect(args).not.toContain("--no-verify");
+  });
+
+  it("restores tracked worktree paths and removes untracked paths literally", () => {
+    expect(restoreWorktreeArguments(["src/入口.ts"])).toEqual([
+      "--literal-pathspecs",
+      "restore",
+      "--worktree",
+      "--",
+      "src/入口.ts"
+    ]);
+    expect(removeUntrackedArguments(["new.txt"])).toEqual([
+      "--literal-pathspecs",
+      "clean",
+      "-f",
+      "--",
+      "new.txt"
+    ]);
   });
 });

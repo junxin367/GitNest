@@ -588,6 +588,7 @@ function operationKindLabel(
     status: "仓库状态刷新",
     stage: "暂存文件",
     unstage: "取消暂存",
+    discard: "放弃更改",
     commit: "创建提交",
     fetch: "Fetch",
     pull: "Pull",

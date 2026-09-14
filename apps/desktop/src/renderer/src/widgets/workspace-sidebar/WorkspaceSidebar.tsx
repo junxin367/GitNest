@@ -37,6 +37,7 @@ import {
 } from "../../shared/ui/Menu";
 import {
   WorkspaceGroupRenameDialog,
+  WorkspaceEntryTapdKeywordDialog,
   WorkspaceEntryRemoveDialog,
   WorkspaceEntryRenameDialog
 } from "./WorkspaceEntryDialogs";
@@ -45,6 +46,10 @@ import {
   readChangedRepositoriesOnlyPreference,
   writeChangedRepositoriesOnlyPreference
 } from "./sidebarPreferences";
+import {
+  readTapdKeywordPreference,
+  writeTapdKeywordPreference
+} from "./tapdKeywordPreferences";
 
 interface WorkspaceSidebarProps {
   activeView: AppView;
@@ -92,6 +97,11 @@ interface GroupRenameState {
   groupId: string;
   automaticName: string;
   displayName: string;
+}
+
+interface TapdKeywordState {
+  entryId: string;
+  keyword: string;
 }
 
 function getWorkspaceContextMenuPosition(
@@ -154,6 +164,8 @@ export function WorkspaceSidebar({
     useState<Set<string>>(() => new Set());
   const [renameGroup, setRenameGroup] =
     useState<GroupRenameState | null>(null);
+  const [tapdKeyword, setTapdKeyword] =
+    useState<TapdKeywordState | null>(null);
   const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] =
     useState(false);
   const [repositoryMenuOpen, setRepositoryMenuOpen] =
@@ -171,6 +183,8 @@ export function WorkspaceSidebar({
   const [removeTarget, setRemoveTarget] =
     useState<RepositoryTargetDto | null>(null);
   const [removeSubmitting, setRemoveSubmitting] =
+    useState(false);
+  const [tapdKeywordSubmitting, setTapdKeywordSubmitting] =
     useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const workspaceSwitcherRef = useRef<HTMLDivElement>(null);
@@ -419,6 +433,9 @@ export function WorkspaceSidebar({
     removeTargetDetails?.worktree?.name ??
     removeTargetDetails?.repository?.name;
   const removeTargetPath = removeTargetDetails?.worktree?.path;
+  const tapdKeywordEntry = workspace?.entries.find(
+    (entry) => entry.id === tapdKeyword?.entryId
+  );
 
   useEffect(() => {
     setShowChangedRepositoriesOnly(
@@ -577,7 +594,11 @@ export function WorkspaceSidebar({
     event.stopPropagation();
 
     const menuWidth = 222;
-    const menuHeight = 136;
+    const menuHeight =
+      target || workspace?.entries.find((entry) => entry.id === entryId)
+        ?.kind !== "workspace-meta-repository"
+        ? 136
+        : 176;
     const position = getWorkspaceContextMenuPosition(
       event.clientX,
       event.clientY,
@@ -622,6 +643,50 @@ export function WorkspaceSidebar({
     setContextMenu(null);
     setRenameSubmitting(false);
     setRenameEntryId(contextEntry.id);
+  };
+
+  const startTapdKeyword = () => {
+    if (
+      !contextEntry ||
+      contextGroup ||
+      contextMenu?.target ||
+      contextEntry.kind !== "workspace-meta-repository" ||
+      !workspaceId
+    ) {
+      return;
+    }
+
+    setContextMenu(null);
+    setTapdKeywordSubmitting(false);
+    setTapdKeyword({
+      entryId: contextEntry.id,
+      keyword: readTapdKeywordPreference(
+        getRendererPreferenceStorage(),
+        workspaceId,
+        contextEntry.id
+      )
+    });
+  };
+
+  const confirmTapdKeyword = async (
+    keyword: string
+  ): Promise<boolean> => {
+    if (!tapdKeyword || !workspaceId) {
+      return false;
+    }
+
+    setTapdKeywordSubmitting(true);
+    try {
+      writeTapdKeywordPreference(
+        getRendererPreferenceStorage(),
+        workspaceId,
+        tapdKeyword.entryId,
+        keyword
+      );
+      return true;
+    } finally {
+      setTapdKeywordSubmitting(false);
+    }
   };
 
   const startGroupRename = () => {
@@ -1258,8 +1323,8 @@ export function WorkspaceSidebar({
           >
             {contextGroup ? (
               <>
-                <MenuItem
-                  leading={<Icon name="settings" size={14} />}
+                  <MenuItem
+                    leading={<Icon name="tag" size={14} />}
                   onClick={startGroupRename}
                 >
                   重命名分组
@@ -1287,6 +1352,15 @@ export function WorkspaceSidebar({
                 >
                   修改显示名称
                 </MenuItem>
+                {!contextMenu.target &&
+                  contextEntry.kind === "workspace-meta-repository" && (
+                    <MenuItem
+                      leading={<Icon name="tag" size={14} />}
+                      onClick={startTapdKeyword}
+                    >
+                      设置 TAPD 关键字
+                    </MenuItem>
+                  )}
                 <MenuItem
                   disabled={busy}
                   leading={<Icon name="refresh" size={14} />}
@@ -1326,6 +1400,15 @@ export function WorkspaceSidebar({
           entry={renameEntry}
           onCancel={() => setRenameEntryId(null)}
           onConfirm={confirmRename}
+        />
+      )}
+      {tapdKeyword && tapdKeywordEntry && (
+        <WorkspaceEntryTapdKeywordDialog
+          busy={tapdKeywordSubmitting}
+          entry={tapdKeywordEntry}
+          initialKeyword={tapdKeyword.keyword}
+          onCancel={() => setTapdKeyword(null)}
+          onConfirm={confirmTapdKeyword}
         />
       )}
       {removeEntry && (

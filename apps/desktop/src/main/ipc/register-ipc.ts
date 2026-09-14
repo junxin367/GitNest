@@ -17,6 +17,8 @@ import {
 } from "node:path";
 
 import {
+  MAX_DIFF_COMMIT_PANEL_HEIGHT,
+  MIN_DIFF_COMMIT_PANEL_HEIGHT,
   IPC_CHANNELS,
   type AiCommitMessageDto,
   type AiConnectionTestResultDto,
@@ -739,6 +741,19 @@ export function registerIpcHandlers(
   );
 
   registerHandler(
+    IPC_CHANNELS.repositoryDiscard,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input =
+          validateRepositoryPathsMutationRequest(request);
+        return services.repositoryMutations.discard(
+          input.target,
+          input.paths
+        );
+      })
+  );
+
+  registerHandler(
     IPC_CHANNELS.repositoryCreateCommit,
     (_event, request) =>
       captureGitRead(() => {
@@ -994,6 +1009,13 @@ export function validateUpdateAppSettingsRequest(
         request.diff.treeDirectoriesCollapsed
       );
     }
+    if ("commitPanelHeight" in request.diff) {
+      diff.commitPanelHeight = requireIntegerInRange(
+        request.diff.commitPanelHeight,
+        MIN_DIFF_COMMIT_PANEL_HEIGHT,
+        MAX_DIFF_COMMIT_PANEL_HEIGHT
+      );
+    }
     result.diff = diff;
   }
 
@@ -1185,6 +1207,22 @@ function invalidSettingsRequest(): GitError {
 
 function requireBoolean(value: unknown): boolean {
   if (typeof value !== "boolean") {
+    throw invalidSettingsRequest();
+  }
+  return value;
+}
+
+function requireIntegerInRange(
+  value: unknown,
+  minimum: number,
+  maximum: number
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < minimum ||
+    value > maximum
+  ) {
     throw invalidSettingsRequest();
   }
   return value;
