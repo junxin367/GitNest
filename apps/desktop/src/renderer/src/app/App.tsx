@@ -412,7 +412,6 @@ export function App() {
         跳到主内容
       </a>
       <AppTitlebar
-        activeView={view}
         onCreateWorkspace={() =>
           void workspace.chooseDirectory()
         }

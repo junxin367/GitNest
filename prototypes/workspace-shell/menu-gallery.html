@@ -2131,6 +2131,8 @@
       <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="m7 14 5 5 5-5M12 5v14"/></symbol>
       <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
       <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 7 4 12l5 5"/><path d="M4 12h9a7 7 0 0 1 7 7"/></symbol>
+      <symbol id="i-activity" viewBox="0 0 24 24"><path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19V3"/></symbol>
+      <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/><path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
       <symbol id="i-commit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M3 12h6M15 12h6"/></symbol>
       <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10M8 9c5 0 8-1 8-3"/></symbol>
       <symbol id="i-diff" viewBox="0 0 24 24"><circle cx="7" cy="5" r="2"/><circle cx="17" cy="19" r="2"/><path d="M7 7v10M17 7v10M13 7h8M17 3v8"/></symbol>
@@ -2233,7 +2235,7 @@
           <div class="sample-title">
             <div>
               <h3>标题栏菜单条</h3>
-              <p>“文件”为真实弹出菜单；“帮助”当前仅触发提示。</p>
+              <p>“文件”与“帮助”均为真实弹出菜单，共享菜单容器、分隔线与键盘导航。</p>
             </div>
             <span class="sample-index">01</span>
           </div>
@@ -2253,9 +2255,23 @@
                     </button>
                   </div>
                 </div>
-                <div class="placeholder-note">
-                  <strong>当前缺少真实菜单层</strong>
-                  <p>“帮助”使用普通按钮，只显示 Toast 提示；没有菜单容器、菜单项或键盘菜单导航。</p>
+                <div class="titlebar-menu-demo">
+                  <strong>帮助</strong>
+                  <div class="titlebar-file-popover" role="menu">
+                    <button type="button" role="menuitem">
+                      <svg class="icon"><use href="#i-search"></use></svg>
+                      <span>快捷键与命令面板</span>
+                    </button>
+                    <button type="button" role="menuitem">
+                      <svg class="icon"><use href="#i-activity"></use></svg>
+                      <span>诊断信息</span>
+                    </button>
+                    <div class="menu-separator"></div>
+                    <button type="button" role="menuitem" disabled>
+                      <svg class="icon"><use href="#i-sparkle"></use></svg>
+                      <span>版本 v1.0.0</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

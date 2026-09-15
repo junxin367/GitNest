@@ -332,6 +332,7 @@ function registerRepository(
 
   const worktreeIds: string[] = [];
   let primaryWorktreeId: string | undefined;
+  let primaryWorktreeName: string | undefined;
 
   for (const probedWorktree of probeWorktrees) {
     const normalizedWorktree = fileSystem.normalizePath(
@@ -384,14 +385,21 @@ function registerRepository(
 
     if (probedWorktree.primary) {
       primaryWorktreeId = worktreeId;
+      primaryWorktreeName = worktree.name;
     }
   }
 
   const uniqueWorktreeIds = [...new Set(worktreeIds)];
   const existingRepository = repositories.get(repositoryId);
+  const identityName = fileSystem.basename(normalizedIdentityPath.path);
   const repository: WorkspaceRepository = {
     id: repositoryId,
-    name: fileSystem.basename(normalizedIdentityPath.path),
+    // 共享同一 Git common directory 的多个 Worktree 会归入同一仓库实例，
+    // 仓库名只能由主 Worktree 决定，否则会被后处理的 linked Worktree 覆盖。
+    name:
+      primaryWorktreeName ??
+      existingRepository?.name ??
+      identityName,
     commonDir: normalizedCommonDir.path,
     canonicalCommonDir: normalizedCommonDir.canonicalPath,
     ...(primaryWorktreeId

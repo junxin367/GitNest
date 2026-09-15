@@ -7,10 +7,10 @@ import { Icon } from "../../shared/ui/Icon";
 import {
   MenuItem,
   MenuPopover,
+  MenuSeparator,
 } from "../../shared/ui/Menu";
 
 interface AppTitlebarProps {
-  activeView: AppView;
   searchOpen: boolean;
   runtimeInfo: RuntimeInfo | null;
   onCreateWorkspace(): void;
@@ -18,23 +18,31 @@ interface AppTitlebarProps {
   onOpenSearch(): void;
 }
 
+type OpenMenu = "file" | "help" | null;
+
 export function AppTitlebar({
-  activeView,
   searchOpen,
   runtimeInfo,
   onCreateWorkspace,
   onNavigate,
   onOpenSearch,
 }: AppTitlebarProps) {
-  const [openMenu, setOpenMenu] = useState<
-"file" | null
-  >(null);
+  const [openMenu, setOpenMenu] =
+    useState<OpenMenu>(null);
   const fileMenuRef = useRef<HTMLDivElement>(null);
+  const helpMenuRef = useRef<HTMLDivElement>(null);
   const fileTriggerRef = useRef<HTMLButtonElement>(null);
+  const helpTriggerRef = useRef<HTMLButtonElement>(null);
   const menuSurfaceRef = useRef<HTMLDivElement>(null);
+  const appVersion = runtimeInfo?.appVersion ?? "1.0.0";
+  const toggleMenu = (menu: Exclude<OpenMenu, null>) =>
+    setOpenMenu((current) =>
+      current === menu ? null : menu
+    );
+  const closeMenu = () => setOpenMenu(null);
 
   useEffect(() => {
-    const menuRefs = [fileMenuRef];
+    const menuRefs = [fileMenuRef, helpMenuRef];
     const closeMenus = () => setOpenMenu(null);
     const closeFromOutside = (event: PointerEvent) => {
       const target = event.target;
@@ -80,11 +88,7 @@ export function AppTitlebar({
           <Button variant="unstyled"
             aria-expanded={openMenu === "file"}
             aria-haspopup="menu"
-            onClick={() =>
-              setOpenMenu((current) =>
-                current === "file" ? null : "file"
-              )
-            }
+            onClick={() => toggleMenu("file")}
             ref={fileTriggerRef}
             type="button"
           >
@@ -102,7 +106,7 @@ export function AppTitlebar({
               <MenuItem
                 leading={<Icon name="plus" size={14} />}
                 onClick={() => {
-                  setOpenMenu(null);
+                  closeMenu();
                   onCreateWorkspace();
                 }}
               >
@@ -111,18 +115,50 @@ export function AppTitlebar({
             </MenuPopover>
           )}
         </div>
-        <Button variant="unstyled"
-          aria-current={
-            activeView === "operations" ? "page" : undefined
-          }
-          className={
-            activeView === "operations" ? "active" : undefined
-          }
-          onClick={() => onNavigate("operations")}
-          type="button"
-        >
-          操作中心
-        </Button>
+        <div className="titlebar-help-menu" ref={helpMenuRef}>
+          <Button variant="unstyled"
+            aria-expanded={openMenu === "help"}
+            aria-haspopup="menu"
+            onClick={() => toggleMenu("help")}
+            ref={helpTriggerRef}
+            type="button"
+          >
+            帮助
+          </Button>
+          {openMenu === "help" && (
+            <MenuPopover
+              align="start"
+              anchor={helpTriggerRef.current}
+              aria-label="帮助"
+              className="titlebar-file-popover"
+              ref={menuSurfaceRef}
+              side="bottom"
+            >
+              <MenuItem
+                leading={<Icon name="search" size={14} />}
+                onClick={() => {
+                  closeMenu();
+                  onOpenSearch();
+                }}
+              >
+                快捷键与命令面板
+              </MenuItem>
+              <MenuItem
+                leading={<Icon name="activity" size={14} />}
+                onClick={() => {
+                  closeMenu();
+                  onNavigate("settings");
+                }}
+              >
+                诊断信息
+              </MenuItem>
+              <MenuSeparator />
+              <MenuItem disabled leading={<Icon name="sparkle" size={14} />}>
+                版本 v{appVersion}
+              </MenuItem>
+            </MenuPopover>
+          )}
+        </div>
       </nav>
 
       <div className="titlebar-drag-region" />

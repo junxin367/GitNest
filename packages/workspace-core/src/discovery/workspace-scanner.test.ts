@@ -171,6 +171,46 @@ describe("WorkspaceAssembler", () => {
     );
     expect(rootRepository?.worktreeIds).toHaveLength(2);
   });
+
+  it("keeps the primary worktree name when the same repository is also discovered through a linked worktree", () => {
+    const fileSystem = new FakeWindowsFileSystem();
+    const root = rootDefinition(fileSystem, "C:\\root", 0);
+    const scan: WorkspaceRootScan = {
+      root,
+      repositories: [
+        discovery(
+          fileSystem,
+          root.path,
+            "C:\\root",
+            repository("C:\\root", "C:\\root\\.git", [
+            worktree("C:\\root", true),
+            worktree("C:\\root\\linked", false)
+          ])
+        ),
+        discovery(
+          fileSystem,
+          root.path,
+          "C:\\root\\linked",
+          repository("C:\\root\\linked", "C:\\root\\.git", [
+            worktree("C:\\root", true),
+            worktree("C:\\root\\linked", false)
+          ])
+        )
+      ],
+      issues: [],
+      scannedAt: "2026-09-04T10:00:00.000Z"
+    };
+    const assembled = new WorkspaceAssembler(fileSystem).assemble({
+      current: createEmptyWorkspace("2026-09-04T09:00:00.000Z"),
+      roots: [root],
+      scans: [scan],
+      updatedAt: "2026-09-04T10:00:00.000Z"
+    });
+
+    expect(assembled.repositories).toHaveLength(1);
+    expect(assembled.repositories[0]?.name).toBe("root");
+    expect(assembled.worktrees).toHaveLength(2);
+  });
 });
 
 class FakeWindowsFileSystem implements WorkspaceFileSystem {

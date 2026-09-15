@@ -6,7 +6,12 @@ import type {
   WorkspaceRepositoryDto,
   WorkspaceWorktreeDto
 } from "@gitnest/contracts";
-import { useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState
+} from "react";
 
 import type { WorkspaceTab } from "../../app/navigation";
 import {
@@ -15,6 +20,21 @@ import {
 } from "../../entities/workspace/model";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
+import {
+  MenuItem,
+  MenuPopover
+} from "../../shared/ui/Menu";
+import {
+  WORKTREE_FACET_OPTIONS,
+  activeWorktreeFilterCount,
+  createWorktreeFilterState,
+  isWorktreeSnapshotDirty,
+  matchesWorktreeFilters,
+  toggleWorktreeFacet,
+  worktreeFacetIds,
+  type WorktreeFacet,
+  type WorktreeFilterState
+} from "../../shared/lib/worktreeFilters";
 
 type CollectionTab = Exclude<WorkspaceTab, "overview">;
 
@@ -134,9 +154,335 @@ export function WorkspaceCollectionPage({
         title="跨仓 Worktrees"
         description={`聚合仓库实际登记 ${workspace.worktrees.length} 个 Worktree；其中 ${workspace.worktrees.filter((worktree) => worktree.isPrunable).length} 个记录指向不存在的目录。`}
       />
-      {workspace.worktrees.length > 0 ? (
+      <WorkspaceWorktreesPanel
+        busy={busy}
+        onAddDirectory={onAddDirectory}
+        onSelectTarget={onSelectTarget}
+        repositories={workspace.repositories}
+        snapshots={snapshots}
+        worktrees={workspace.worktrees}
+      />
+    </div>
+  );
+}
+
+function WorkspaceWorktreesPanel({
+  busy,
+  onAddDirectory,
+  onSelectTarget,
+  repositories,
+  snapshots,
+  worktrees
+}: {
+  busy: boolean;
+  onAddDirectory(): void;
+  onSelectTarget(target: RepositoryTargetDto): void;
+  repositories: WorkspaceRepositoryDto[];
+  snapshots: RepositoryStatusSnapshotDto[];
+  worktrees: WorkspaceWorktreeDto[];
+}) {
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filters, setFilters] = useState<WorktreeFilterState>(
+    createWorktreeFilterState
+  );
+  const [repoMenuOpen, setRepoMenuOpen] = useState(false);
+  const repoMenuRootRef = useRef<HTMLDivElement>(null);
+  const repoMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const repoMenuRef = useRef<HTMLDivElement>(null);
+  const setRepoMenuRef = useCallback((node: HTMLDivElement | null) => {
+    repoMenuRef.current = node;
+  }, []);
+  const snapshotFor = (worktree: WorkspaceWorktreeDto) =>
+    snapshots.find(
+      (snapshot) =>
+        snapshot.repositoryId === worktree.repositoryId &&
+        snapshot.worktreeId === worktree.id
+    );
+  const visibleWorktrees = worktrees.filter((worktree) =>
+    matchesWorktreeFilters(worktree, snapshotFor(worktree), filters)
+  );
+  const activeFilterCount = activeWorktreeFilterCount(filters);
+  const facetCounts = worktrees.reduce<
+    Record<WorktreeFacet, number>
+  >(
+    (counts, worktree) => {
+      for (const facet of worktreeFacetIds(worktree)) {
+        counts[facet] += 1;
+      }
+      return counts;
+    },
+    { primary: 0, linked: 0, detached: 0, locked: 0, prunable: 0 }
+  );
+  const dirtyCount = worktrees.filter((worktree) =>
+    isWorktreeSnapshotDirty(snapshotFor(worktree))
+  ).length;
+  const repositoryOptions = repositories
+    .filter((repository) =>
+      worktrees.some(
+        (worktree) => worktree.repositoryId === repository.id
+      )
+    )
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const repositoryNames = new Map(
+    repositories.map((repository) => [
+      repository.id,
+      repository.name
+    ])
+  );
+  const selectedRepositoryName =
+    repositoryNames.get(filters.repositoryId) ?? "全部仓库";
+
+  useEffect(() => {
+    if (!repoMenuOpen) {
+      return;
+    }
+
+    const close = () => setRepoMenuOpen(false);
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !repoMenuRootRef.current?.contains(event.target) &&
+        !repoMenuRef.current?.contains(event.target)
+      ) {
+        close();
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      setRepoMenuOpen(false);
+      repoMenuTriggerRef.current?.focus();
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("blur", close);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    // 菜单首帧仍为 visibility:hidden，定位完成后才可聚焦；等一帧再聚焦当前选中项。
+    const focusFrame = window.requestAnimationFrame(() => {
+      const items =
+        repoMenuRef.current?.querySelectorAll<HTMLButtonElement>(
+          '[role^="menuitem"]'
+        ) ?? [];
+      const checked = [...items].find(
+        (item) => item.getAttribute("aria-checked") === "true"
+      );
+      (checked ?? items[0])?.focus();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [repoMenuOpen]);
+
+  if (worktrees.length === 0) {
+    return (
+      <section className="panel">
+        <WorkspaceEmptyState
+          busy={busy}
+          onAddDirectory={onAddDirectory}
+        />
+      </section>
+    );
+  }
+
+  return (
+    <div className="worktree-collection">
+      <div className="worktree-toolbar">
+        <span className="worktree-toolbar-title">
+          <Icon name="worktree" size={14} />
+          已登记 Worktrees
+        </span>
+        <span className="worktree-toolbar-count">
+          共 {worktrees.length} 个
+          {activeFilterCount === 0
+            ? ""
+            : ` · 已筛出 ${visibleWorktrees.length} 个`}
+        </span>
+        {filterOpen && (
+          <Input
+            appearance="unstyled"
+            aria-label="筛选跨仓 Worktree"
+            autoFocus
+            className="worktree-filter-input"
+            onChange={(event) =>
+              setFilters((current) => ({
+                ...current,
+                query: event.target.value
+              }))
+            }
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") {
+                return;
+              }
+              event.preventDefault();
+              setFilterOpen(false);
+              setFilters((current) => ({
+                ...current,
+                query: ""
+              }));
+            }}
+            placeholder="筛选分支、路径或状态"
+            value={filters.query}
+          />
+        )}
+        <Button size="small"
+          aria-expanded={filterOpen}
+          className={`panel-header-action${
+            filterOpen ? " worktree-filter-open" : ""
+          }`}
+          onClick={() => setFilterOpen((open) => !open)}
+          type="button"
+        >
+          <Icon name="filter" size={13} />
+          筛选
+        </Button>
+        {repositoryOptions.length > 1 && (
+          <div className="worktree-repo-menu" ref={repoMenuRootRef}>
+            <Button variant="unstyled"
+              aria-expanded={repoMenuOpen}
+              aria-haspopup="menu"
+              aria-label="按仓库筛选 Worktree"
+              className="worktree-repo-menu-trigger"
+              onClick={() => setRepoMenuOpen((open) => !open)}
+              ref={repoMenuTriggerRef}
+              type="button"
+            >
+              <span className="worktree-repo-menu-trigger-value">
+                {selectedRepositoryName}
+              </span>
+              <Icon name="chevron" size={14} />
+            </Button>
+            {repoMenuOpen && (
+              <MenuPopover
+                align="end"
+                anchor={repoMenuTriggerRef.current}
+                aria-label="按仓库筛选 Worktree"
+                className="worktree-repo-menu-surface"
+                ref={setRepoMenuRef}
+                side="bottom"
+              >
+                <MenuItem
+                  aria-checked={filters.repositoryId === ""}
+                  className={
+                    filters.repositoryId === "" ? "is-selected" : undefined
+                  }
+                  onClick={() => {
+                    setFilters((current) => ({
+                      ...current,
+                      repositoryId: ""
+                    }));
+                    setRepoMenuOpen(false);
+                    repoMenuTriggerRef.current?.focus();
+                  }}
+                  role="menuitemradio"
+                >
+                  全部仓库
+                </MenuItem>
+                {repositoryOptions.map((repository) => (
+                  <MenuItem
+                    aria-checked={filters.repositoryId === repository.id}
+                    className={
+                      filters.repositoryId === repository.id
+                        ? "is-selected"
+                        : undefined
+                    }
+                    key={repository.id}
+                    onClick={() => {
+                      setFilters((current) => ({
+                        ...current,
+                        repositoryId: repository.id
+                      }));
+                      setRepoMenuOpen(false);
+                      repoMenuTriggerRef.current?.focus();
+                    }}
+                    role="menuitemradio"
+                  >
+                    {repository.name}
+                  </MenuItem>
+                ))}
+              </MenuPopover>
+            )}
+          </div>
+        )}
+      </div>
+      <div
+        aria-label="按状态筛选 Worktree"
+        className="worktree-filter-bar"
+        role="group"
+      >
+        <span className="worktree-filter-bar-label">状态</span>
+        {WORKTREE_FACET_OPTIONS.map((option) => {
+          const selected = filters.facets.includes(option.id);
+          return (
+            <Button variant="unstyled"
+              aria-pressed={selected}
+              className={`worktree-filter-chip${
+                selected ? " selected" : ""
+              }`}
+              disabled={facetCounts[option.id] === 0}
+              key={option.id}
+              onClick={() =>
+                setFilters((current) => ({
+                  ...current,
+                  facets: toggleWorktreeFacet(
+                    current.facets,
+                    option.id
+                  )
+                }))
+              }
+              type="button"
+            >
+              {option.label}
+              <span className="worktree-filter-chip-count">
+                {facetCounts[option.id]}
+              </span>
+            </Button>
+          );
+        })}
+        <Button variant="unstyled"
+          aria-pressed={filters.onlyDirty}
+          className={`worktree-filter-chip worktree-filter-chip-dirty${
+            filters.onlyDirty ? " selected" : ""
+          }`}
+          disabled={dirtyCount === 0 && !filters.onlyDirty}
+          onClick={() =>
+            setFilters((current) => ({
+              ...current,
+              onlyDirty: !current.onlyDirty
+            }))
+          }
+          type="button"
+        >
+          仅看有变更
+          <span className="worktree-filter-chip-count">
+            {dirtyCount}
+          </span>
+        </Button>
+        {activeFilterCount > 0 && (
+          <Button variant="unstyled"
+            className="worktree-filter-clear"
+            onClick={() => {
+              setFilters(createWorktreeFilterState());
+              setFilterOpen(false);
+            }}
+            type="button"
+          >
+            清除筛选（{activeFilterCount}）
+          </Button>
+        )}
+      </div>
+      {visibleWorktrees.length > 0 ? (
         <div className="worktree-grid">
-          {workspace.worktrees.map((worktree) => {
+          {visibleWorktrees.map((worktree) => {
             const target = {
               repositoryId: worktree.repositoryId,
               worktreeId: worktree.id
@@ -145,18 +491,20 @@ export function WorkspaceCollectionPage({
               <WorkspaceWorktreeCard
                 key={worktree.id}
                 onSelect={() => onSelectTarget(target)}
+                repositoryName={
+                  repositoryNames.get(worktree.repositoryId) ?? ""
+                }
                 worktree={worktree}
               />
             );
           })}
         </div>
       ) : (
-        <section className="panel">
-          <WorkspaceEmptyState
-            busy={busy}
-            onAddDirectory={onAddDirectory}
-          />
-        </section>
+        <div className="worktree-filter-empty">
+          <Icon name="search" size={18} />
+          <strong>没有匹配的 Worktree</strong>
+          <span>可修改筛选关键词后重试。</span>
+        </div>
       )}
     </div>
   );
@@ -419,9 +767,11 @@ function RepositoryTable({
 
 function WorkspaceWorktreeCard({
   onSelect,
+  repositoryName,
   worktree
 }: {
   onSelect(): void;
+  repositoryName: string;
   worktree: WorkspaceWorktreeDto;
 }) {
   const statusTone = worktree.isPrunable
@@ -432,19 +782,18 @@ function WorkspaceWorktreeCard({
         ? "green"
         : "neutral";
   const statusLabel = worktree.isPrunable
-    ? "可清理记录"
+    ? "可清理登记"
     : worktree.isPrimary
         ? "主工作目录"
         : worktree.isDetached
-          ? "Detached"
+          ? "游离 HEAD"
           : "已登记";
-  const title = worktree.branch || "detached HEAD";
+  const title = worktree.branch || "游离 HEAD";
   const locationLabel = worktree.isPrunable ? "目录不存在" : "目录存在";
-  const actionLabel = worktree.isPrunable ? "可 Prune" : "登记路径";
 
   return (
     <article
-      aria-label={`${title}，${statusLabel}，提交 ${shortHead(
+      aria-label={`${repositoryName ? `${repositoryName} 的 ` : ""}${title}，${statusLabel}，提交 ${shortHead(
         worktree.head
       )}，${locationLabel}，${worktree.path}`}
       className={`worktree-card worktree-summary-card${
@@ -462,14 +811,14 @@ function WorkspaceWorktreeCard({
     >
       <div className="worktree-card-head">
         <span className="worktree-symbol">
-          <Icon name="worktree" size={20} />
-        </span>
+            <Icon name="worktree" size={16} />
+          </span>
         <span className="worktree-card-head-copy">
           <span className="worktree-title" title={title}>
             {title}
           </span>
           <span className="worktree-branch">
-            <Icon name="commit" size={11} />
+              <Icon name="commit" size={16} />
             <span>{shortHead(worktree.head)}</span>
           </span>
         </span>
@@ -481,6 +830,12 @@ function WorkspaceWorktreeCard({
         {worktree.path}
       </div>
       <div className="worktree-foot">
+        {repositoryName && (
+          <span className="worktree-repository-tag">
+              <Icon name="repository" size={16} />
+            {repositoryName}
+          </span>
+        )}
         <span
           className={`worktree-location-status${
             worktree.isPrunable ? " missing" : ""
@@ -488,18 +843,13 @@ function WorkspaceWorktreeCard({
         >
           {locationLabel}
         </span>
-        <span className="spacer" />
-        <span
-          className={`worktree-foot-action${
-            worktree.isPrunable ? " prune" : ""
-          }`}
-        >
-          <Icon
-            name={worktree.isPrunable ? "warning" : "external"}
-            size={12}
-          />
-          {actionLabel}
-        </span>
+          <span className="spacer" />
+          {!worktree.isPrunable && (
+            <span className="worktree-foot-action">
+              <Icon name="external" size={16} />
+              登记路径
+            </span>
+          )}
       </div>
     </article>
   );
@@ -706,6 +1056,7 @@ function workspaceActivitySearchValues(
 function shortHead(head: string): string {
   return head ? head.slice(0, 7) : "—";
 }
+
 
 function formatWorkspaceTimestamp(value: string): string {
   const date = new Date(value);

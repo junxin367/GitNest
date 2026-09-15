@@ -285,7 +285,7 @@ export function WorkspaceOverviewPage({
     {
       label: "Worktrees",
       value: String(activeWorktrees.length),
-      foot: `${prunableWorktreeCount} 个可清理 · ${detachedWorktreeCount} 个 detached`,
+      foot: `${prunableWorktreeCount} 个可清理 · ${detachedWorktreeCount} 个游离 HEAD`,
       icon: "worktree",
       tone: "purple"
     }

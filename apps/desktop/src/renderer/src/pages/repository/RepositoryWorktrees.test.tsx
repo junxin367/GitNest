@@ -115,9 +115,149 @@ describe("RepositoryWorktrees summary card", () => {
       ".worktree-summary-card"
     );
 
-    expect(card?.getAttribute("aria-disabled")).toBe("true");
-    act(() => card?.click());
-    expect(onOpenDirectory).not.toHaveBeenCalled();
+      expect(card?.getAttribute("aria-disabled")).toBe("true");
+      act(() => card?.click());
+      expect(onOpenDirectory).not.toHaveBeenCalled();
+    });
+
+  it("renders worktree status labels in Chinese", () => {
+    act(() => {
+      root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={false}
+          onOpenDirectory={vi.fn()}
+          repositoryId="repository"
+          snapshots={[]}
+          worktreeId="worktree"
+          workspace={workspace}
+        />
+      );
+    });
+
+    const labels = [
+      ...container.querySelectorAll(".metric-card .metric-label span")
+    ]
+      .map((element) => element.textContent?.trim())
+      .filter(Boolean);
+
+    expect(labels).toEqual([
+      "已登记",
+      "目录存在",
+      "可清理",
+      "游离 HEAD"
+    ]);
+    expect(container.textContent).not.toContain("Detached");
+  });
+
+  it("filters the registered worktrees and reports the match count", () => {
+    act(() => {
+      root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={false}
+          onOpenDirectory={vi.fn()}
+          repositoryId="repository"
+          snapshots={[]}
+          worktreeId="worktree"
+          workspace={workspaceWithTwoWorktrees}
+        />
+      );
+    });
+
+    const filterButton = [
+      ...container.querySelectorAll("button")
+    ].find((button) => button.textContent?.trim() === "筛选");
+    expect(filterButton).toBeTruthy();
+    expect(container.querySelector(".worktree-filter-input")).toBeNull();
+
+    act(() => filterButton?.click());
+    const input = container.querySelector<HTMLInputElement>(
+      ".worktree-filter-input"
+    );
+    expect(input).toBeTruthy();
+
+    act(() => {
+      if (!input) {
+        return;
+      }
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value"
+      )?.set;
+      setter?.call(input, "feature");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain("已筛出 1/2 个目录");
+    expect(
+      container.querySelectorAll(".worktree-management-card").length
+    ).toBe(1);
+
+    act(() => {
+      if (!input) {
+        return;
+      }
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value"
+      )?.set;
+      setter?.call(input, "zzz-no-match");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    expect(container.querySelector(".worktree-filter-empty")).toBeTruthy();
+  });
+
+  it("filters worktrees by status facet with counts", () => {
+    act(() => {
+      root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={false}
+          onOpenDirectory={vi.fn()}
+          repositoryId="repository"
+          snapshots={[]}
+          worktreeId="worktree"
+          workspace={workspaceWithTwoWorktrees}
+        />
+      );
+    });
+
+    const chips = [
+      ...container.querySelectorAll(".worktree-filter-chip")
+    ];
+    expect(chips.map((chip) => chip.textContent?.trim())).toEqual([
+      "主工作目录1",
+      "已登记1",
+      "游离 HEAD0",
+      "已锁定0",
+      "可清理登记0",
+      "仅看有变更0"
+    ]);
+
+    const primaryChip = container.querySelector<HTMLButtonElement>(
+      ".worktree-filter-chip[aria-pressed=\"false\"]"
+    );
+    expect(primaryChip?.textContent?.trim()).toBe("主工作目录1");
+
+    act(() => primaryChip?.click());
+
+    expect(primaryChip?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.textContent).toContain("已筛出 1/2 个目录");
+    expect(
+      container.querySelectorAll(".worktree-management-card").length
+    ).toBe(1);
+
+    const clearButton = [
+      ...container.querySelectorAll("button")
+    ].find((button) => button.textContent?.includes("清除筛选"));
+    expect(clearButton?.textContent?.trim()).toBe("清除筛选（1）");
+    act(() => clearButton?.click());
+    expect(container.textContent).not.toContain("已筛出");
+    expect(
+      container.querySelectorAll(".worktree-management-card").length
+    ).toBe(2);
   });
 });
 
@@ -172,4 +312,57 @@ const workspace: WorkspaceDetailsDto = {
     worktreeId: "worktree"
   },
   updatedAt: "2026-09-10T00:00:00.000Z"
+};
+
+const workspaceWithTwoWorktrees: WorkspaceDetailsDto = {
+  ...workspace,
+  entries: [],
+  id: "workspace",
+  name: "Workspace",
+  schemaVersion: 1,
+  selectedTarget: {
+    repositoryId: "repository",
+    worktreeId: "worktree"
+  },
+  updatedAt: "2026-09-10T00:00:00.000Z",
+  repositories: [
+    {
+      id: "repository",
+      name: "core",
+      commonDir: "C:\\repo\\.git",
+      canonicalCommonDir: "c:\\repo\\.git",
+      primaryWorktreeId: "worktree",
+      worktreeIds: ["worktree", "linked"]
+    }
+  ],
+  worktrees: [
+    {
+      id: "worktree",
+      repositoryId: "repository",
+      name: "core",
+      path: "C:\\repo",
+      canonicalPath: "c:\\repo",
+      head: "1234567890abcdef",
+      branch: "main",
+      isPrimary: true,
+      isBare: false,
+      isDetached: false,
+      isLocked: false,
+      isPrunable: false
+    },
+    {
+      id: "linked",
+      repositoryId: "repository",
+      name: "feature-worktree",
+      path: "C:\\repo-feature",
+      canonicalPath: "c:\\repo-feature",
+      head: "abcdef1234567890",
+      branch: "feature/worktree",
+      isPrimary: false,
+      isBare: false,
+      isDetached: false,
+      isLocked: false,
+      isPrunable: false
+    }
+  ]
 };

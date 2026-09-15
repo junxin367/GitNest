@@ -190,17 +190,21 @@ p {
 
 .titlebar-menu {
   display: flex;
-  align-items: stretch;
-  align-self: stretch;
+  align-items: center;
+  align-self: center;
+  gap: var(--space-1);
   -webkit-app-region: no-drag;
 }
 
 .titlebar-menu button {
-  padding: 0 var(--space-3);
+  height: var(--control-compact);
+  padding: 0 var(--space-2);
   color: var(--muted);
   background: transparent;
   border: 0;
-  font-size: var(--font-size-caption);
+  border-radius: var(--radius-small);
+  cursor: pointer;
+  font-size: var(--font-size-body);
 }
 
 .titlebar-menu button:hover {
@@ -211,21 +215,30 @@ p {
 .titlebar-file-menu {
   position: relative;
   display: flex;
-  align-items: stretch;
+  align-items: center;
 }
 
-.titlebar-file-menu > button {
+.titlebar-help-menu {
+  position: relative;
   display: flex;
   align-items: center;
-  padding: 0 var(--space-3);
+}
+
+.titlebar-file-menu > button,
+.titlebar-help-menu > button {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-2);
   color: var(--muted);
   background: transparent;
   cursor: pointer;
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-body);
 }
 
 .titlebar-file-menu > button:hover,
-.titlebar-file-menu > button[aria-expanded="true"] {
+.titlebar-file-menu > button[aria-expanded="true"],
+.titlebar-help-menu > button:hover,
+.titlebar-help-menu > button[aria-expanded="true"] {
   color: var(--text);
   background: var(--surface-hover);
 }
@@ -330,11 +343,6 @@ p {
   height: 1px;
   margin: var(--space-2) 0;
   background: var(--border-soft);
-}
-
-.titlebar-menu button.active {
-  color: var(--accent-strong);
-  background: var(--accent-soft);
 }
 
 .titlebar-drag-region {
@@ -1625,9 +1633,6 @@ p {
 
 .page-scroll > :not(.command-dialog-backdrop) {
   width: 100%;
-  max-width: var(--page-max-width);
-  margin-right: auto;
-  margin-left: auto;
 }
 
 .page-scroll.repository-page-changes {
@@ -4757,8 +4762,55 @@ button.repository-status-row:disabled {
 
 .worktree-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 350px), 1fr));
   gap: var(--space-3);
+}
+
+.worktree-grid > * {
+  max-width: 400px;
+}
+
+.worktree-collection {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.worktree-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-large);
+  padding: 0 var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-large);
+}
+
+.worktree-toolbar-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+  font-weight: var(--font-weight-semibold);
+}
+
+.worktree-toolbar-count {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+
+.worktree-toolbar .worktree-filter-input {
+  margin-left: auto;
+}
+
+/* 筛选按钮在面板头部靠 auto 外边距右推；跟在输入框后时不再重复取剩余空间，
+   否则两者各占一半，输入框会与按钮脱开。
+*/
+.worktree-toolbar
+  .worktree-filter-input
+  + .panel-header-action {
+  margin-left: 0;
 }
 
 .worktree-card:not(.worktree-summary-card) {
@@ -4971,12 +5023,30 @@ button.repository-status-row:disabled {
   white-space: nowrap;
 }
 
+/* 上面的通用规则会把带图标的胶囊压回 block，这里用更高优先级恢复。
+   优先级必须高于 .worktree-summary-card .worktree-foot > span。 */
+.worktree-summary-card
+  .worktree-foot
+  > .worktree-repository-tag,
+.worktree-summary-card
+  .worktree-foot
+  > .worktree-foot-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.worktree-summary-card
+  .worktree-foot
+  > .worktree-repository-tag {
+  color: var(--text-soft);
+}
+
 .worktree-summary-card .worktree-foot .spacer {
   flex: 1 1 auto;
 }
 
-.worktree-location-status.missing,
-.worktree-foot-action.prune {
+.worktree-location-status.missing {
   color: var(--red);
 }
 
@@ -5147,8 +5217,21 @@ button.repository-status-row:disabled {
 .worktree-inventory-header {
   display: flex;
   align-items: end;
-  justify-content: space-between;
   gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.worktree-inventory-header > span {
+  margin-right: auto;
+}
+
+/* 筛选按钮默认靠 auto 外边距右推；跟在输入框后时不再重复取剩余空间，
+   否则输入框会被遗在计数后面。
+*/
+.worktree-inventory-header
+  .worktree-filter-input
+  + .panel-header-action {
+  margin-left: 0;
 }
 
 .worktree-inventory-header h2 {
@@ -5160,6 +5243,166 @@ button.repository-status-row:disabled {
 .worktree-inventory-header > span {
   color: var(--muted);
   font-size: var(--font-size-caption);
+}
+
+.worktree-filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.worktree-filter-bar-label {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+
+.worktree-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 26px;
+  padding: 0 var(--space-2);
+  color: var(--text-soft);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: var(--font-size-caption);
+}
+
+.worktree-filter-chip:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.worktree-filter-chip.selected {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+}
+
+.worktree-filter-chip-count {
+  padding: 0 var(--space-1);
+  color: var(--muted);
+  background: var(--surface-3);
+  border-radius: 999px;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  line-height: 16px;
+}
+
+.worktree-filter-chip.selected .worktree-filter-chip-count {
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.worktree-filter-clear {
+  height: 26px;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-small);
+  font-size: var(--font-size-caption);
+}
+
+.worktree-filter-clear:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.worktree-repo-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  max-width: 220px;
+  height: var(--control-compact);
+  padding: 0 var(--space-2);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-regular);
+  cursor: pointer;
+  font-size: var(--font-size-caption);
+}
+
+.worktree-repo-menu-trigger:hover:not(:disabled),
+.worktree-repo-menu-trigger[aria-expanded="true"] {
+  background: var(--surface-hover);
+  border-color: var(--border);
+}
+
+.worktree-repo-menu-trigger-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worktree-repo-menu-surface {
+  gap: var(--space-1);
+  width: min(240px, calc(100vw - var(--space-6)));
+  max-height: 260px;
+  overflow: auto;
+}
+
+.worktree-repo-menu-surface .menu-item.is-selected {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.worktree-repository-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 160px;
+  overflow: hidden;
+  color: var(--text-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worktree-filter-input {
+  flex: 0 1 240px;
+  width: 240px;
+  min-width: 120px;
+  height: var(--control-compact);
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-regular);
+  font-size: var(--font-size-caption);
+}
+
+.worktree-filter-input:focus {
+  border-color: var(--accent);
+}
+
+.panel-header-action.worktree-filter-open {
+  color: var(--accent);
+  background: var(--surface-hover);
+}
+
+.worktree-filter-empty {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-1);
+  min-height: 150px;
+  padding: var(--space-5) var(--space-3);
+  color: var(--muted);
+  text-align: center;
+}
+
+.worktree-filter-empty .icon {
+  color: var(--accent);
+}
+
+.worktree-filter-empty strong {
+  color: var(--text);
 }
 
 .worktree-management-card {
@@ -5268,6 +5511,8 @@ button.repository-status-row:disabled {
 
 .application-settings-page {
   max-width: 1120px;
+  margin-right: auto;
+  margin-left: auto;
 }
 
 .application-settings-page .page-heading {
