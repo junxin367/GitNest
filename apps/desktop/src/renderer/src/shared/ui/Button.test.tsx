@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { Button } from "./Button";
+import { Skeleton, SkeletonSurface } from "./Skeleton";
 
 describe("Button", () => {
   it("renders the shared size, variant, and selected contract", () => {
@@ -54,5 +55,30 @@ describe("Button", () => {
     expect(markup).toContain(">最小化</button>");
     expect(markup).not.toContain("gn-button");
     expect(markup).not.toContain("gn-button__label");
+  });
+
+  it("renders the shared skeleton shape and accessible surface contracts", () => {
+    const markup = renderToStaticMarkup(
+      <SkeletonSurface
+        as="section"
+        className="page-skeleton"
+        label="正在读取页面"
+      >
+        <Skeleton height={32} variant="circle" width={32} />
+        <Skeleton variant="text" width="60%" />
+        <Skeleton height={96} variant="block" />
+      </SkeletonSurface>
+    );
+
+    expect(markup).toContain(
+      'class="gn-skeleton-surface page-skeleton"'
+    );
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain('aria-busy="true"');
+    expect(markup).toContain('aria-label="正在读取页面"');
+    expect(markup).toContain('data-variant="circle"');
+    expect(markup).toContain('data-variant="text"');
+    expect(markup).toContain('data-variant="block"');
+    expect(markup).toContain('aria-hidden="true"');
   });
 });

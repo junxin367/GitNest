@@ -5,10 +5,14 @@
  * - unified / split 布局；
  * - 自动换行；
  * - hunk 导航；
+ * - 按变更块独立展开上下文；
  * - 路径复制；
  * - 面板内 Ctrl+F 搜索。
  */
 (function attachGitNestDiffPanel(global) {
+  const DEFAULT_CONTEXT_LINES = 3;
+  const CONTEXT_STEP = 10;
+
   function escapeHtml(value) {
     return String(value ?? "")
       .replace(/&/g, "&amp;")
@@ -45,8 +49,64 @@
         : normalizedLayouts[0],
       showToolbar: config.showToolbar !== false,
       allowWrap: Boolean(config.allowWrap),
-      showHunkNavigation: Boolean(config.showHunkNavigation)
+      showHunkNavigation: Boolean(config.showHunkNavigation),
+      allowContextExpansion: Boolean(config.allowContextExpansion)
     };
+  }
+
+  function rowsForContext(
+    rows,
+    hunkContexts = {}
+  ) {
+    if (!rows.length) return rows;
+
+    const prefix = [];
+    const hunks = [];
+    let currentHunk = null;
+    rows.forEach((row) => {
+      if (row.kind === "hunk") {
+        currentHunk = {
+          header: row,
+          body: []
+        };
+        hunks.push(currentHunk);
+      } else if (currentHunk) {
+        currentHunk.body.push(row);
+      } else {
+        prefix.push(row);
+      }
+    });
+
+    return [
+      ...prefix,
+      ...hunks.flatMap((hunk, hunkIndex) => {
+        const context = hunkContexts[hunkIndex] || {
+          beforeLines: DEFAULT_CONTEXT_LINES,
+          afterLines: DEFAULT_CONTEXT_LINES,
+          full: false
+        };
+        const changedIndexes = hunk.body
+          .map((row, index) => row.kind === "context" ? -1 : index)
+          .filter((index) => index >= 0);
+        if (!changedIndexes.length || context.full) {
+          return [hunk.header, ...hunk.body];
+        }
+        const firstChanged = changedIndexes[0];
+        const lastChanged = changedIndexes[changedIndexes.length - 1];
+        const start = Math.max(
+          0,
+          firstChanged - context.beforeLines
+        );
+        const end = Math.min(
+          hunk.body.length,
+          lastChanged + context.afterLines + 1
+        );
+        return [
+          hunk.header,
+          ...hunk.body.slice(start, end)
+        ];
+      })
+    ];
   }
 
   function statsForRows(rows) {
@@ -145,6 +205,11 @@
       this.options = {
         path: rawOptions.path || "",
         rows: Array.isArray(rawOptions.rows) ? rawOptions.rows : [],
+        fullRows: Array.isArray(rawOptions.fullRows)
+          ? rawOptions.fullRows
+          : null,
+        binary: Boolean(rawOptions.binary),
+        truncated: Boolean(rawOptions.truncated),
         headerActions:
           typeof rawOptions.headerActions === "string"
             ? rawOptions.headerActions
@@ -158,7 +223,8 @@
         searchOpen: false,
         searchQuery: "",
         activeSearchHit: 0,
-        pathCopied: false
+        pathCopied: false,
+        hunkContexts: {}
       };
       this.copyResetTimer = 0;
       this.splitScrollCleanup = null;
@@ -167,6 +233,24 @@
       this.element.addEventListener("click", this.handleClick);
       this.element.addEventListener("keydown", this.handleKeydown);
       this.render();
+    }
+
+    visibleRows() {
+      if (!this.options.fullRows) return this.options.rows;
+      return rowsForContext(
+        this.options.fullRows,
+        this.state.hunkContexts
+      );
+    }
+
+    canExpandContext() {
+      return (
+        this.options.config.allowContextExpansion &&
+        !this.options.binary &&
+        !this.options.truncated &&
+        this.options.fullRows &&
+        this.options.fullRows.length > this.options.rows.length
+      );
     }
 
     normalizedActiveSearchHit(hits) {
@@ -191,17 +275,55 @@
       return this.state.activeHunk;
     }
 
-    renderHunk(row, rowIndex, hits, activeSearchHit, activeHunk) {
-      const hunkIndex = this.options.rows
+    renderHunk(
+      row,
+      rowIndex,
+      hits,
+      activeSearchHit,
+      activeHunk,
+      showContextControls = true
+    ) {
+      const hunkIndex = this.visibleRows()
         .slice(0, rowIndex + 1)
         .filter((item) => item.kind === "hunk").length - 1;
+      const hunkText = highlightedText(
+        row.text,
+        `${rowIndex}:hunk`,
+        hits,
+        activeSearchHit
+      );
+      const context = this.state.hunkContexts[hunkIndex] || {
+        beforeLines: DEFAULT_CONTEXT_LINES,
+        afterLines: DEFAULT_CONTEXT_LINES,
+        full: false
+      };
+      const expanded =
+        context.full ||
+        context.beforeLines > DEFAULT_CONTEXT_LINES ||
+        context.afterLines > DEFAULT_CONTEXT_LINES;
+      const contextTrigger =
+        showContextControls && this.canExpandContext()
+          ? `
+              <button
+                class="gn-diff-panel__hunk-trigger"
+                type="button"
+                data-diff-action="context-${expanded ? "reset" : "around"}"
+                data-diff-hunk-index="${hunkIndex}"
+                aria-label="${expanded ? `收起第 ${hunkIndex + 1} 个变更块上下文` : `展开第 ${hunkIndex + 1} 个变更块上下各 ${CONTEXT_STEP} 行`}"
+                aria-expanded="${expanded}"
+                title="${expanded ? "点击收起当前变更块，恢复默认 3 行上下文" : `点击查看当前变更块上方和下方各 ${CONTEXT_STEP} 行代码`}"
+              >
+                <code>${hunkText}</code>
+              </button>
+            `
+          : `<code>${hunkText}</code>`;
       return `
         <div
           class="gn-diff-panel__wide-row${hunkIndex === activeHunk ? " is-current" : ""}"
           data-diff-hunk="${hunkIndex}"
         >
           ${iconMarkup("diff")}
-          <code>${highlightedText(row.text, `${rowIndex}:hunk`, hits, activeSearchHit)}</code>
+          ${contextTrigger}
         </div>
       `;
     }
@@ -340,7 +462,8 @@
       side,
       hits,
       activeSearchHit,
-      activeHunk
+      activeHunk,
+      showContextControls
     ) {
       if (row.kind === "hunk") {
         return this.renderHunk(
@@ -348,7 +471,8 @@
           rowIndex,
           hits,
           activeSearchHit,
-          activeHunk
+          activeHunk,
+          showContextControls
         );
       }
 
@@ -411,7 +535,8 @@
           side,
           hits,
           activeSearchHit,
-          activeHunk
+          activeHunk,
+          true
         )
       ).join("");
 
@@ -625,8 +750,10 @@
 
     render({ focusSearch = false, scrollToSearchHit = false, scrollToHunk = false } = {}) {
       this.teardownSplitScrolling();
-      const rows = this.options.rows;
-      const stats = statsForRows(rows);
+      const rows = this.visibleRows();
+      const stats = statsForRows(
+        this.options.fullRows || this.options.rows
+      );
       const hits = collectSearchHits(rows, this.state.searchQuery);
       const activeSearchHit = this.normalizedActiveSearchHit(hits);
       const activeHunk = this.normalizedActiveHunk(stats);
@@ -780,7 +907,7 @@
 
     moveSearch(direction) {
       const hits = collectSearchHits(
-        this.options.rows,
+        this.visibleRows(),
         this.state.searchQuery
       );
       if (!hits.length) return;
@@ -789,9 +916,49 @@
     }
 
     moveHunk(direction) {
-      const stats = statsForRows(this.options.rows);
+      const stats = statsForRows(this.visibleRows());
       if (!stats.hunks) return;
       this.state.activeHunk += direction;
+      this.render({ scrollToHunk: true });
+    }
+
+    expandContext(direction, hunkIndex) {
+      if (!this.canExpandContext()) return;
+      const current = this.state.hunkContexts[hunkIndex] || {
+        beforeLines: DEFAULT_CONTEXT_LINES,
+        afterLines: DEFAULT_CONTEXT_LINES,
+        full: false
+      };
+      if (direction === "reset") {
+        delete this.state.hunkContexts[hunkIndex];
+      } else if (direction === "around") {
+        this.state.hunkContexts[hunkIndex] = {
+          beforeLines: CONTEXT_STEP,
+          afterLines: CONTEXT_STEP,
+          full: false
+        };
+      } else if (direction === "all") {
+        this.state.hunkContexts[hunkIndex] = {
+          beforeLines: Number.MAX_SAFE_INTEGER,
+          afterLines: Number.MAX_SAFE_INTEGER,
+          full: true
+        };
+      } else if (direction === "up") {
+        this.state.hunkContexts[hunkIndex] = {
+          ...current,
+          beforeLines: current.beforeLines + CONTEXT_STEP,
+          full: false
+        };
+      } else if (direction === "down") {
+        this.state.hunkContexts[hunkIndex] = {
+          ...current,
+          afterLines: current.afterLines + CONTEXT_STEP,
+          full: false
+        };
+      }
+      this.state.activeHunk = Number.isFinite(hunkIndex)
+        ? hunkIndex
+        : this.state.activeHunk;
       this.render({ scrollToHunk: true });
     }
 
@@ -835,6 +1002,11 @@
         this.moveHunk(1);
       } else if (actionName === "copy-path") {
         void this.copyPath();
+      } else if (actionName.startsWith("context-")) {
+        this.expandContext(
+          actionName.slice("context-".length),
+          Number(action.dataset.diffHunkIndex)
+        );
       }
     }
 
@@ -850,10 +1022,26 @@
 
     update(nextOptions = {}) {
       if (Object.prototype.hasOwnProperty.call(nextOptions, "path")) {
+        const pathChanged =
+          this.options.path !== (nextOptions.path || "");
         this.options.path = nextOptions.path || "";
+        if (pathChanged) {
+          this.state.hunkContexts = {};
+        }
       }
       if (Array.isArray(nextOptions.rows)) {
         this.options.rows = nextOptions.rows;
+      }
+      if (Object.prototype.hasOwnProperty.call(nextOptions, "fullRows")) {
+        this.options.fullRows = Array.isArray(nextOptions.fullRows)
+          ? nextOptions.fullRows
+          : null;
+      }
+      if (Object.prototype.hasOwnProperty.call(nextOptions, "binary")) {
+        this.options.binary = Boolean(nextOptions.binary);
+      }
+      if (Object.prototype.hasOwnProperty.call(nextOptions, "truncated")) {
+        this.options.truncated = Boolean(nextOptions.truncated);
       }
       if (typeof nextOptions.headerActions === "string") {
         this.options.headerActions = nextOptions.headerActions;

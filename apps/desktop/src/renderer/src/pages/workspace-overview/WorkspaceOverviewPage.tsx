@@ -27,6 +27,10 @@ import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
 import type { IconName } from "../../shared/ui/Icon";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
+import {
+  Skeleton,
+  SkeletonBoundary
+} from "../../shared/ui/Skeleton";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 
 type LocalWorkspaceOperation =
@@ -343,7 +347,14 @@ export function WorkspaceOverviewPage({
   }
 
   return (
-    <div className="page-scroll">
+    <SkeletonBoundary
+      fallback={<WorkspaceOverviewSkeleton />}
+      hasContent={Boolean(workspace)}
+      label="正在读取 Workspace 概览"
+      loading={operation === "loading"}
+      surfaceClassName="page-scroll gn-page-skeleton workspace-overview-skeleton"
+    >
+      <div className="page-scroll">
       <section className="page-heading">
         <div>
           <span className="eyebrow">多仓库工作区</span>
@@ -605,7 +616,54 @@ export function WorkspaceOverviewPage({
           />
         </div>
       </section>
-    </div>
+      </div>
+    </SkeletonBoundary>
+  );
+}
+
+function WorkspaceOverviewSkeleton() {
+  return (
+    <>
+      <div className="gn-skeleton-heading">
+        <Skeleton />
+        <Skeleton />
+        <Skeleton />
+      </div>
+      <div className="gn-skeleton-metric-grid">
+        {Array.from({ length: 4 }, (_, index) => (
+          <div className="gn-skeleton-card" key={index}>
+            <Skeleton height={12} variant="text" width="42%" />
+            <Skeleton height={28} width="28%" />
+            <Skeleton height={10} variant="text" width="76%" />
+          </div>
+        ))}
+      </div>
+      <div className="dashboard-grid">
+        {Array.from({ length: 2 }, (_, panelIndex) => (
+          <div className="gn-skeleton-panel" key={panelIndex}>
+            <div className="gn-skeleton-panel-header">
+              <Skeleton height={14} width="34%" />
+              <Skeleton
+                height={10}
+                variant="text"
+                width="18%"
+              />
+            </div>
+            <div className="gn-skeleton-list">
+              {Array.from({ length: 4 }, (_, rowIndex) => (
+                <div className="gn-skeleton-row" key={rowIndex}>
+                  <div className="gn-skeleton-row-copy">
+                    <Skeleton height={11} />
+                    <Skeleton height={9} variant="text" />
+                  </div>
+                  <Skeleton height={18} width="100%" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 

@@ -4,13 +4,20 @@ export type {
   RemoteBranchRef
 } from "./domain/repository-commands";
 export type {
+  CommitHistoryComparison,
+  CommitHistoryComparisonSide,
+  CommitHistoryEntry,
   CommitDetails,
   CommitFileStat,
   CommitHistoryPage,
+  CommitHistoryScope,
   RepositoryBranches,
   RepositoryChanges,
   RepositoryDiff,
-  RepositoryDiffMode
+  RepositoryDiffMode,
+  RepositoryMediaKind,
+  RepositoryMediaPreview,
+  RepositoryMediaUnavailableReason
 } from "./domain/repository-queries";
 export type {
   CreatedCommit
@@ -35,7 +42,10 @@ export {
   parseCommitNumstat
 } from "./parsers/commit-details";
 export { parseRepositoryDiff } from "./parsers/diff";
-export { parseCommitHistory } from "./parsers/history";
+export {
+  parseCommitHistory,
+  parseComparedCommitHistory
+} from "./parsers/history";
 export {
   parseStatusPorcelainV2,
   reconcileStatOnlyUnstagedChanges

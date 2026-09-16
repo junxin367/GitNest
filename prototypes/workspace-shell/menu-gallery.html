@@ -2977,7 +2977,7 @@
           <div class="sample-title">
             <div>
               <h3>操作按钮状态</h3>
-              <p>以下示例统一使用 32px small；按钮层级通过颜色和语义区分。</p>
+              <p>以下示例统一使用 32px small；hover 仅将当前背景色提亮 12%，文字和边框颜色保持不变。</p>
             </div>
             <span class="sample-index">17</span>
           </div>
@@ -3000,7 +3000,7 @@
           <div class="sample-specs">
             <div class="sample-spec"><span>Shared size</span><strong>32px / small</strong></div>
             <div class="sample-spec"><span>Padding</span><strong>12px</strong></div>
-            <div class="sample-spec"><span>Primary</span><strong>blue</strong></div>
+            <div class="sample-spec"><span>Primary</span><strong>blue / white</strong></div>
             <div class="sample-spec"><span>Danger</span><strong>red / red-soft</strong></div>
           </div>
         </article>
@@ -3596,6 +3596,37 @@
         { kind: "context", oldNo: 95, newNo: 103, text: "            .build();" },
         { kind: "context", oldNo: 96, newNo: 104, text: "    }" }
       ];
+      const workspaceStateFullRows = [
+        workspaceStateRows[0],
+        { kind: "context", oldNo: 50, newNo: 50, text: "    private final GitClient gitClient;" },
+        { kind: "context", oldNo: 51, newNo: 51, text: "    private final Clock clock;" },
+        { kind: "context", oldNo: 52, newNo: 52, text: "" },
+        { kind: "context", oldNo: 53, newNo: 53, text: "    WorkspaceStateService(GitClient gitClient, Clock clock) {" },
+        { kind: "context", oldNo: 54, newNo: 54, text: "        this.gitClient = gitClient;" },
+        { kind: "context", oldNo: 55, newNo: 55, text: "        this.clock = clock;" },
+        ...workspaceStateRows.slice(1, 15),
+        { kind: "context", oldNo: 61, newNo: 69, text: "" },
+        { kind: "context", oldNo: 62, newNo: 70, text: "    private WorkspaceSnapshot loadCachedSnapshot(Path root) {" },
+        { kind: "context", oldNo: 63, newNo: 71, text: "        return snapshotCache.get(root);" },
+        { kind: "context", oldNo: 64, newNo: 72, text: "    }" },
+        { kind: "context", oldNo: 65, newNo: 73, text: "" },
+        { kind: "context", oldNo: 66, newNo: 74, text: "    private Instant collectedAt() {" },
+        { kind: "context", oldNo: 67, newNo: 75, text: "        return clock.instant();" },
+        { kind: "context", oldNo: 68, newNo: 76, text: "    }" },
+        workspaceStateRows[15],
+        { kind: "context", oldNo: 85, newNo: 92, text: "    private WorkspaceSnapshot emptySnapshot(Path root) {" },
+        { kind: "context", oldNo: 86, newNo: 93, text: "        if (root == null) {" },
+        { kind: "context", oldNo: 87, newNo: 94, text: "            return WorkspaceSnapshot.empty();" },
+        { kind: "context", oldNo: 88, newNo: 95, text: "        }" },
+        { kind: "context", oldNo: 89, newNo: 96, text: "" },
+        { kind: "context", oldNo: 90, newNo: 97, text: "        // 保留构建快照所需的完整方法上下文" },
+        ...workspaceStateRows.slice(16),
+        { kind: "context", oldNo: 97, newNo: 105, text: "" },
+        { kind: "context", oldNo: 98, newNo: 106, text: "    private boolean isRepository(Path root) {" },
+        { kind: "context", oldNo: 99, newNo: 107, text: "        return Files.exists(root.resolve(\".git\"));" },
+        { kind: "context", oldNo: 100, newNo: 108, text: "    }" },
+        { kind: "context", oldNo: 101, newNo: 109, text: "}" }
+      ];
       const diffWorkspace = GitNestDiffWorkspace.create({
         ariaLabel: "完整 Diff Workspace 组件示例",
         selectedKey: "workspace-state",
@@ -3604,7 +3635,8 @@
           defaultLayout: "unified",
           showToolbar: false,
           allowWrap: false,
-          showHunkNavigation: false
+          showHunkNavigation: false,
+          allowContextExpansion: true
         },
         features: {
           allowTreeView: true,
@@ -3642,7 +3674,8 @@
             status: "modified",
             staged: false,
             language: "Java",
-            rows: workspaceStateRows
+            rows: workspaceStateRows,
+            fullRows: workspaceStateFullRows
           },
           {
             key: "workspace-test",
@@ -3686,13 +3719,14 @@
       if (standaloneMount) {
         const standaloneWorkspace = GitNestDiffWorkspace.create({
           ariaLabel: "独立 Diff 窗口配置示例",
-          selectedKey: "workspace-test",
+          selectedKey: "workspace-state",
           config: {
             layouts: ["split", "unified"],
             defaultLayout: "split",
             showToolbar: true,
             allowWrap: true,
-            showHunkNavigation: true
+            showHunkNavigation: true,
+            allowContextExpansion: true
           },
           features: {
             allowTreeView: true,

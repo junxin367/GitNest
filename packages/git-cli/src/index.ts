@@ -24,9 +24,14 @@ export {
 } from "./commands/repository-operations";
 export {
   BRANCH_ARGUMENTS,
+  compareHistoryCountArguments,
+  compareHistoryMergeBaseArguments,
+  compareHistoryPageArguments,
   diffArguments,
   historyArguments,
   historyPageArguments,
+  stagedFileContentArguments,
+  stagedFileSizeArguments,
   STATUS_ARGUMENTS,
   WORKTREE_ARGUMENTS
 } from "./commands/read-repository";
@@ -54,6 +59,8 @@ export {
   createReadOnlyProcessEnvironment,
   createWritableProcessEnvironment,
   runProcess,
+  runProcessBuffer,
+  type ProcessBufferResult,
   type ProcessRequest,
   type ProcessResult
 } from "./process/git-process-runner";

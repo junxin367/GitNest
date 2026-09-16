@@ -40,6 +40,13 @@ export const BRANCH_ARGUMENTS = [
   "refs/remotes"
 ] as const;
 
+export const MERGED_REMOTE_BRANCH_ARGUMENTS = [
+  "for-each-ref",
+  "--merged=HEAD",
+  "--format=%(refname)",
+  "refs/remotes"
+] as const;
+
 export const WORKTREE_ARGUMENTS = [
   "worktree",
   "list",
@@ -59,7 +66,8 @@ export function historyArguments(limit: number): string[] {
 
 export function historyPageArguments(
   limit: number,
-  offset: number
+  offset: number,
+  ref?: string
 ): string[] {
   return [
     "log",
@@ -67,8 +75,48 @@ export function historyPageArguments(
     `--skip=${offset}`,
     "--date=iso-strict",
     "--decorate=short",
-    "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P%x1f%D%x1e"
+    "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P%x1f%D%x1e",
+    ...(ref ? [ref] : [])
   ];
+}
+
+export function compareHistoryPageArguments(
+  limit: number,
+  offset: number,
+  leftRef: string,
+  rightRef: string
+): string[] {
+  return [
+    "log",
+    `--max-count=${limit}`,
+    `--skip=${offset}`,
+    "--left-right",
+    "--boundary",
+    "--topo-order",
+    "--date=iso-strict",
+    "--decorate=short",
+    "--format=%m%x1f%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P%x1f%D%x1e",
+    `${leftRef}...${rightRef}`
+  ];
+}
+
+export function compareHistoryCountArguments(
+  leftRef: string,
+  rightRef: string
+): string[] {
+  return [
+    "rev-list",
+    "--left-right",
+    "--count",
+    `${leftRef}...${rightRef}`
+  ];
+}
+
+export function compareHistoryMergeBaseArguments(
+  leftRef: string,
+  rightRef: string
+): string[] {
+  return ["merge-base", leftRef, rightRef];
 }
 
 export function diffArguments(
@@ -99,6 +147,14 @@ export function diffArguments(
   }
 
   return [...base, "--", path];
+}
+
+export function stagedFileSizeArguments(path: string): string[] {
+  return ["cat-file", "-s", `:${path}`];
+}
+
+export function stagedFileContentArguments(path: string): string[] {
+  return ["show", `:${path}`];
 }
 
 export function commitMetadataArguments(

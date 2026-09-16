@@ -5,13 +5,16 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
-  type MouseEvent
+  type FormEvent
 } from "react";
 
 import type {
+  BranchDto,
+  CommitHistoryComparisonSideDto,
   GitReadErrorDto,
   RepositoryCommitDto,
+  RepositoryHistoryPageDto,
+  RepositoryHistoryScopeDto,
   RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
   WorkspaceDetailsDto,
@@ -39,20 +42,24 @@ import {
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
 import { Icon } from "../../shared/ui/Icon";
-import { LayerPortal } from "../../shared/ui/LayerPortal";
 import {
   buildDiffViewerFiles,
   type DiffViewerFile
 } from "../../shared/model/diffViewModel";
 import { copyTextToClipboard } from "../../shared/lib/copyTextToClipboard";
 import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
+import { useMinimumLoadingIndicator } from "../../shared/lib/useMinimumLoadingIndicator";
 import { Input } from "../../shared/ui/Input";
 import {
-  Menu,
   MenuHeading,
   MenuItem,
-  MenuPopover
+  MenuPopover,
+  MenuSeparator
 } from "../../shared/ui/Menu";
+import {
+  Skeleton,
+  SkeletonBoundary
+} from "../../shared/ui/Skeleton";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import { RepositoryWorktrees } from "./RepositoryWorktrees";
 import {
@@ -60,12 +67,14 @@ import {
   readTapdKeywordPreference
 } from "../../widgets/workspace-sidebar/tapdKeywordPreferences";
 import { getRendererPreferenceStorage } from "../../widgets/workspace-sidebar/sidebarPreferences";
-import { ApplicationIcon } from "../../widgets/repository-header/OpenInControl";
 import {
+  DEFAULT_DIFF_CONTEXT_LINES,
+  type DiffContextRequest,
   type DiffPanelState
 } from "../../widgets/diff-workspace/DiffPanel";
 import {
   DiffWorkspace,
+  DiffWorkspaceSkeleton,
   parseCommitMessage
 } from "../../widgets/diff-workspace/DiffWorkspace";
 import { repositoryDiffWorkspaceConfiguration } from "../../widgets/diff-workspace/diffWorkspaceConfiguration";
@@ -84,12 +93,6 @@ interface RepositoryPageProps {
   onCommitSelectionChange?(
     commit: RepositoryCommitDto["commit"] | null
   ): void;
-}
-
-interface ChangeFileContextMenuState {
-  path: string;
-  x: number;
-  y: number;
 }
 
 interface BranchMenuState {
@@ -582,6 +585,7 @@ export function RepositoryPage({
           branch={snapshot?.branch}
           controller={details}
           onCopyCommitId={copyCommitId}
+          repositoryKey={`${target.repositoryId}:${target.worktreeId}`}
         />
       )}
       {tab === "branches" && (
@@ -795,11 +799,9 @@ function RepositoryOverview({
               最近提交
             </div>
             <span className="panel-caption">
-              {historyLoading && !latestCommit
-                ? "读取中…"
-                : commits.length
-                  ? `快照采集 ${commits.length} 条`
-                  : "暂无提交"}
+              {commits.length
+                ? `快照采集 ${commits.length} 条`
+                : "暂无提交"}
             </span>
             <Button variant="unstyled"
               className="panel-action"
@@ -809,100 +811,100 @@ function RepositoryOverview({
               打开历史视图
             </Button>
           </header>
-          {historyLoading && !latestCommit ? (
-            <div
-              className="repository-overview-loading"
-              role="status"
-            >
-              <Icon name="refresh" size={18} />
-              正在读取最近提交…
-            </div>
-          ) : latestCommit ? (
-            <div className="repository-overview-commit-list">
-              {commits.map((commit) => (
-                <Button variant="unstyled"
-                  aria-current={
-                    controller.selectedCommitHash ===
-                    commit.hash
-                      ? "true"
-                      : undefined
-                  }
-                  className="repository-overview-commit-row"
-                  key={commit.hash}
-                  onClick={() => {
-                    void controller.selectCommit(commit.hash);
-                    onOpenTab("history");
-                  }}
-                  type="button"
-                >
-                  <span className="repository-overview-commit-graph">
-                    <span className="repository-overview-commit-node" />
-                  </span>
-                  <span className="repository-overview-commit-message">
-                    <strong>{commit.subject}</strong>
-                    <span className="repository-overview-commit-refs">
-                      {(commit.refs ?? []).length > 0
-                        ? (commit.refs ?? []).map((ref) => (
-                            <span
-                              className={`repository-overview-ref-label${
-                                ref.startsWith("origin")
-                                  ? " remote"
-                                  : ""
-                              }`}
-                              key={ref}
-                            >
-                              {ref}
-                            </span>
-                          ))
-                        : (
-                            <span className="repository-overview-ref-label">
-                              {snapshot?.branch ?? "detached"}
-                            </span>
-                          )}
+          <SkeletonBoundary
+            fallback={<RepositoryRecentCommitsSkeleton />}
+            hasContent={Boolean(latestCommit)}
+            label="正在读取最近提交"
+            loading={historyLoading}
+            surfaceClassName="repository-overview-skeleton"
+          >
+            {latestCommit ? (
+              <div className="repository-overview-commit-list">
+                {commits.map((commit) => (
+                  <Button variant="unstyled"
+                    aria-current={
+                      controller.selectedCommitHash ===
+                      commit.hash
+                        ? "true"
+                        : undefined
+                    }
+                    className="repository-overview-commit-row"
+                    key={commit.hash}
+                    onClick={() => {
+                      void controller.selectCommit(commit.hash);
+                      onOpenTab("history");
+                    }}
+                    type="button"
+                  >
+                    <span className="repository-overview-commit-graph">
+                      <span className="repository-overview-commit-node" />
                     </span>
-                  </span>
-                  <time
-                    className="repository-overview-commit-time"
-                    dateTime={commit.authoredAt}
-                  >
-                    {formatCommitTimestamp(commit.authoredAt)}
-                  </time>
-                  <span className="repository-overview-commit-author">
-                    {commit.authorName}
-                  </span>
-                  <code
-                    className="repository-overview-commit-id"
-                    aria-label={`复制 Commit ID ${commit.hash}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void onCopyCommitId(commit.hash);
-                    }}
-                    onKeyDown={(event) => {
-                      if (
-                        event.key !== "Enter" &&
-                        event.key !== " "
-                      ) {
-                        return;
-                      }
-                      event.preventDefault();
-                      event.stopPropagation();
-                      void onCopyCommitId(commit.hash);
-                    }}
-                    role="button"
-                    tabIndex={0}
-                    title={`Commit ID ${commit.hash}`}
-                  >
-                    {commit.shortHash}
-                  </code>
-                </Button>
-              ))}
-            </div>
-          ) : (
-            <div className="repository-overview-loading">
-              <Icon name="history" size={18} />
-              暂无提交历史
-            </div>
-          )}
+                    <span className="repository-overview-commit-message">
+                      <strong>{commit.subject}</strong>
+                      <span className="repository-overview-commit-refs">
+                        {(commit.refs ?? []).length > 0
+                          ? (commit.refs ?? []).map((ref) => (
+                              <span
+                                className={`repository-overview-ref-label${
+                                  ref.startsWith("origin")
+                                    ? " remote"
+                                    : ""
+                                }`}
+                                key={ref}
+                              >
+                                {ref}
+                              </span>
+                            ))
+                          : (
+                              <span className="repository-overview-ref-label">
+                                {snapshot?.branch ?? "detached"}
+                              </span>
+                            )}
+                      </span>
+                    </span>
+                    <time
+                      className="repository-overview-commit-time"
+                      dateTime={commit.authoredAt}
+                    >
+                      {formatCommitTimestamp(commit.authoredAt)}
+                    </time>
+                    <span className="repository-overview-commit-author">
+                      {commit.authorName}
+                    </span>
+                    <code
+                      className="repository-overview-commit-id"
+                      aria-label={`复制 Commit ID ${commit.hash}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void onCopyCommitId(commit.hash);
+                      }}
+                      onKeyDown={(event) => {
+                        if (
+                          event.key !== "Enter" &&
+                          event.key !== " "
+                        ) {
+                          return;
+                        }
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void onCopyCommitId(commit.hash);
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      title={`Commit ID ${commit.hash}`}
+                    >
+                      {commit.shortHash}
+                    </code>
+                  </Button>
+                ))}
+              </div>
+            ) : (
+              <div className="repository-overview-loading">
+                <Icon name="history" size={18} />
+                暂无提交历史
+              </div>
+            )}
+          </SkeletonBoundary>
         </article>
       </section>
     </>
@@ -953,12 +955,23 @@ function RepositoryChanges({
     files[0];
   const selected = selectedFile?.change;
   const diff = controller.diff?.diff;
+  const diffContextLines =
+    controller.selectedChange?.contextLines ??
+    DEFAULT_DIFF_CONTEXT_LINES;
   const selectedDiff =
     selectedFile &&
     controller.selectedChange?.path === selectedFile.path &&
     controller.selectedChange.mode === selectedFile.mode
       ? diff
       : undefined;
+  const changesLoading =
+    controller.loading.changes && !controller.changes;
+  const diffLoading =
+    controller.loading.diff && !selectedDiff;
+  const showChangesSkeleton =
+    useMinimumLoadingIndicator(changesLoading);
+  const showDiffSkeleton =
+    useMinimumLoadingIndicator(diffLoading);
   const workspaceFiles = useMemo(
     () =>
       files.map((file) =>
@@ -985,18 +998,7 @@ function RepositoryChanges({
   const [diffViewerError, setDiffViewerError] = useState<
     string | null
   >(null);
-  const [changeFileContextMenu, setChangeFileContextMenu] =
-    useState<ChangeFileContextMenuState | null>(null);
-  const [changeFileOpenInMenuOpen, setChangeFileOpenInMenuOpen] =
-    useState(false);
-  const changeFileContextMenuRef = useRef<HTMLDivElement>(null);
-  const changeFileOpenInMenuRef =
-    useRef<HTMLDivElement>(null);
-  const changeFileOpenInCloseTimerRef =
-    useRef<number | null>(null);
-  const treeScopeKey = controller.changes
-    ? `${workspaceId ?? ""}\u0001${controller.changes.target.repositoryId}:${controller.changes.target.worktreeId}`
-    : "";
+  const changesScopeKey = `${workspaceId ?? ""}\u0001${target.repositoryId}:${target.worktreeId}`;
 
   const openSelectedDiffViewer = async () => {
     if (!selectedDiff || diffViewerOpening) {
@@ -1021,160 +1023,36 @@ function RepositoryChanges({
       setDiffViewerOpening(false);
     }
   };
-
-  const openChangeFileContextMenu = (
-    event: MouseEvent<HTMLDivElement>,
-    file: DiffViewerFile
-  ) => {
-    event.preventDefault();
-    event.stopPropagation();
-
-    const viewportPadding = 8;
-    const menuWidth = 222;
-    const menuHeight = 52;
-    const maxX = Math.max(
-      viewportPadding,
-      window.innerWidth - menuWidth - viewportPadding
-    );
-    const maxY = Math.max(
-      viewportPadding,
-      window.innerHeight - menuHeight - viewportPadding
-    );
-
-    setChangeFileOpenInMenuOpen(false);
-    setChangeFileContextMenu({
-      path: file.path,
-      x: Math.max(
-        viewportPadding,
-        Math.min(event.clientX, maxX)
-      ),
-      y: Math.max(
-        viewportPadding,
-        Math.min(event.clientY, maxY)
-      )
-    });
-    void controller.selectChange(file.change, file.mode);
-  };
-
-  const openChangeFileOpenInMenu = () => {
-    if (changeFileOpenInCloseTimerRef.current !== null) {
-      window.clearTimeout(
-        changeFileOpenInCloseTimerRef.current
-      );
-      changeFileOpenInCloseTimerRef.current = null;
-    }
-    setChangeFileOpenInMenuOpen(true);
-  };
-
-  const scheduleChangeFileOpenInMenuClose = () => {
-    if (changeFileOpenInCloseTimerRef.current !== null) {
-      window.clearTimeout(
-        changeFileOpenInCloseTimerRef.current
-      );
-    }
-    changeFileOpenInCloseTimerRef.current = window.setTimeout(
-      () => {
-        changeFileOpenInCloseTimerRef.current = null;
-        setChangeFileOpenInMenuOpen(false);
-      },
-      120
-    );
-  };
-
-  useEffect(() => {
-    setChangeFileContextMenu(null);
-    setChangeFileOpenInMenuOpen(false);
-  }, [treeScopeKey]);
-
-  useEffect(
-    () => () => {
-      if (changeFileOpenInCloseTimerRef.current !== null) {
-        window.clearTimeout(
-          changeFileOpenInCloseTimerRef.current
-        );
-      }
-    },
-    []
-  );
-
-  useEffect(() => {
-    if (!changeFileContextMenu) {
+  const requestDiffContext = ({
+    contextLines
+  }: DiffContextRequest) => {
+    if (!selectedFile || contextLines <= diffContextLines) {
       return;
     }
 
-    const closeFromOutside = (
-      event: globalThis.PointerEvent
-    ) => {
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        (changeFileContextMenuRef.current?.contains(target) ||
-          changeFileOpenInMenuRef.current?.contains(target))
-      ) {
-        return;
+    void controller.selectChange(
+      selectedFile.change,
+      selectedFile.mode,
+      {
+        contextLines,
+        preserveDiff: true
       }
-      setChangeFileContextMenu(null);
-      setChangeFileOpenInMenuOpen(false);
-    };
-    const closeFromKeyboard = (
-      event: globalThis.KeyboardEvent
-    ) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setChangeFileContextMenu(null);
-        setChangeFileOpenInMenuOpen(false);
-      }
-    };
-    const closeFromViewport = () => {
-      setChangeFileContextMenu(null);
-      setChangeFileOpenInMenuOpen(false);
-    };
-    const focusFrame = window.requestAnimationFrame(() => {
-      changeFileContextMenuRef.current
-        ?.querySelector<HTMLButtonElement>("[role='menuitem']")
-        ?.focus();
-    });
+    );
+  };
 
-    document.addEventListener(
-      "pointerdown",
-      closeFromOutside
+  if (showChangesSkeleton) {
+    return (
+      <div className="changes-page">
+        <DiffWorkspaceSkeleton
+          className="changes-layout"
+          commitPanelHeight={
+            appSettings.settings.diff.commitPanelHeight
+          }
+          label="正在读取工作区变更…"
+          showCommit
+        />
+      </div>
     );
-    document.addEventListener(
-      "keydown",
-      closeFromKeyboard
-    );
-    document.addEventListener(
-      "scroll",
-      closeFromViewport,
-      true
-    );
-    window.addEventListener("blur", closeFromViewport);
-    window.addEventListener("resize", closeFromViewport);
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      document.removeEventListener(
-        "pointerdown",
-        closeFromOutside
-      );
-      document.removeEventListener(
-        "keydown",
-        closeFromKeyboard
-      );
-      document.removeEventListener(
-        "scroll",
-        closeFromViewport,
-        true
-      );
-      window.removeEventListener("blur", closeFromViewport);
-      window.removeEventListener(
-        "resize",
-        closeFromViewport
-      );
-    };
-  }, [changeFileContextMenu]);
-
-  if (controller.loading.changes && !controller.changes) {
-    return <RepositoryLoading label="正在读取工作区变更…" />;
   }
 
   if (!controller.changes && controller.error) {
@@ -1198,11 +1076,11 @@ function RepositoryChanges({
   }
 
   const diffPanelState: DiffPanelState | undefined =
-    controller.loading.diff && !selectedDiff
+    showDiffSkeleton
       ? {
           busy: true,
           icon: "refresh",
-          message: "正在生成所选文件的文本差异。",
+          message: "正在读取所选文件内容。",
           title: "读取 Diff…"
         }
       : controller.diffNotice === "change-removed"
@@ -1211,7 +1089,8 @@ function RepositoryChanges({
             message: "该变更在重新读取仓库状态后已不存在。",
             title: "状态已更新"
           }
-        : selectedDiff?.mode === "unstaged" &&
+        : !selectedDiff?.media &&
+            selectedDiff?.mode === "unstaged" &&
             selectedDiff.content.length === 0
           ? {
               icon: "fileCode",
@@ -1298,10 +1177,10 @@ function RepositoryChanges({
           }
         }}
         configuration={repositoryDiffWorkspaceConfiguration}
+        externalApplications={externalApplications}
         fileView={appSettings.settings.diff.fileView}
         files={workspaceFiles}
         mutationBusy={mutations.active !== null}
-        onFileContextMenu={openChangeFileContextMenu}
         onFileViewChange={(fileView) =>
           void appSettings.update(
             { diff: { fileView } },
@@ -1348,10 +1227,13 @@ function RepositoryChanges({
           binary: selectedDiff?.binary,
           className: "repository-diff-panel",
           content: selectedDiff?.content,
+          contextLines: diffContextLines,
+          contextLoading: controller.loading.diff,
           deletions: selectedDiff?.deletions,
           emptyPathLabel: "选择一个文件",
-          emptyStatsLabel: "按需读取文本 Diff",
+          emptyStatsLabel: "",
           maxLines: 4_000,
+          media: selectedDiff?.media,
           state: diffPanelState,
           statsAvailable: Boolean(selectedDiff),
           truncated: selectedDiff?.truncated,
@@ -1366,14 +1248,15 @@ function RepositoryChanges({
             void appSettings.update(
               { diff: { wrap } },
               { silent: true }
-            )
+            ),
+          onContextRequest: requestDiffContext
         }}
         selectedFileKey={selectedFileKey}
         treePreference={{
           initiallyCollapsed:
             appSettings.settings.diff
               .treeDirectoriesCollapsed,
-          scopeKey: treeScopeKey,
+          scopeKey: changesScopeKey,
           onCollapsedPreferenceChange: (collapsed) =>
             void appSettings.update(
               {
@@ -1385,91 +1268,545 @@ function RepositoryChanges({
             )
         }}
       />
-      {changeFileContextMenu && (
-        <LayerPortal>
-          <Menu
-            aria-label={`${changeFileContextMenu.path} 文件操作`}
-            className="workspace-context-menu change-file-context-menu"
-            ref={changeFileContextMenuRef}
-            style={{
-              left: changeFileContextMenu.x,
-              top: changeFileContextMenu.y
-            }}
+    </div>
+  );
+}
+
+interface HistoryScopeControlsProps {
+  branches: BranchDto[];
+  currentBranchName: string | undefined;
+  loading: boolean;
+  scope: RepositoryHistoryScopeDto | null;
+  onChange(scope: RepositoryHistoryScopeDto | null): void;
+}
+
+type HistoryCompareDraft = {
+  leftRef: string;
+  rightRef: string;
+};
+
+function HistoryScopeControls({
+  branches,
+  currentBranchName,
+  loading,
+  scope,
+  onChange
+}: HistoryScopeControlsProps) {
+  const currentBranch =
+    branches.find((branch) => branch.current) ??
+    branches.find(
+      (branch) =>
+        !branch.remote && branch.name === currentBranchName
+    );
+  const selectedSingleRef =
+    scope?.kind === "ref"
+      ? scope.ref
+      : currentBranch?.fullName ?? "";
+  const selectedSingleBranch = branches.find(
+    (branch) => branch.fullName === selectedSingleRef
+  );
+  const lastSingleScopeRef =
+    useRef<RepositoryHistoryScopeDto | null>(null);
+  const [compareDraft, setCompareDraft] =
+    useState<HistoryCompareDraft | null>(null);
+
+  useEffect(() => {
+    if (scope?.kind !== "compare" && !compareDraft) {
+      lastSingleScopeRef.current = scope;
+    }
+  }, [compareDraft, scope]);
+
+  useEffect(() => {
+    if (scope?.kind === "compare") {
+      setCompareDraft(null);
+    }
+  }, [scope]);
+
+  const comparison =
+    scope?.kind === "compare" ? scope : compareDraft;
+  const beginComparison = () => {
+    if (!selectedSingleRef) {
+      return;
+    }
+    lastSingleScopeRef.current =
+      scope?.kind === "ref" ? scope : null;
+    const upstream = selectedSingleBranch?.upstream
+      ? branches.find(
+          (branch) =>
+            branch.name === selectedSingleBranch.upstream
+        )
+      : undefined;
+
+    if (
+      upstream &&
+      upstream.fullName !== selectedSingleRef
+    ) {
+      onChange({
+        kind: "compare",
+        leftRef: upstream.fullName,
+        rightRef: selectedSingleRef
+      });
+      return;
+    }
+    setCompareDraft({
+      leftRef: "",
+      rightRef: selectedSingleRef
+    });
+  };
+  const updateComparison = (
+    side: "left" | "right",
+    ref: string
+  ) => {
+    const current = comparison ?? {
+      leftRef: "",
+      rightRef: selectedSingleRef
+    };
+    const next = {
+      ...current,
+      [side === "left" ? "leftRef" : "rightRef"]: ref
+    };
+
+    if (
+      next.leftRef &&
+      next.rightRef &&
+      next.leftRef !== next.rightRef
+    ) {
+      setCompareDraft(null);
+      onChange({
+        kind: "compare",
+        leftRef: next.leftRef,
+        rightRef: next.rightRef
+      });
+      return;
+    }
+    setCompareDraft(next);
+  };
+  const leaveComparison = () => {
+    setCompareDraft(null);
+    onChange(lastSingleScopeRef.current);
+  };
+
+  if (comparison) {
+    return (
+      <div
+        className="history-scope-controls comparison"
+        aria-label="比较分支提交历史"
+      >
+        <HistoryRefPicker
+          branches={branches}
+          disabledRef={comparison.rightRef}
+          label="基准"
+          loading={loading}
+          onChange={(ref) =>
+            updateComparison("left", ref)
+          }
+          selectedRef={comparison.leftRef}
+        />
+        <HistoryRefPicker
+          branches={branches}
+          disabledRef={comparison.leftRef}
+          label="目标"
+          loading={loading}
+          onChange={(ref) =>
+            updateComparison("right", ref)
+          }
+          selectedRef={comparison.rightRef}
+        />
+        <Button
+          className="history-compare-exit"
+          onClick={leaveComparison}
+          size="small"
+          type="button"
+        >
+          退出比较
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="history-scope-controls"
+      aria-label="选择提交历史范围"
+    >
+      <HistoryRefPicker
+        branches={branches}
+        label="查看"
+        loading={loading}
+        onChange={(ref) =>
+          onChange({ kind: "ref", ref })
+        }
+        selectedRef={selectedSingleRef}
+        selectedName={
+          selectedSingleBranch?.name ??
+          currentBranchName ??
+          "当前分支"
+        }
+      />
+      <Button
+        disabled={loading || branches.length < 2}
+        onClick={beginComparison}
+        size="small"
+        title="比较两个本地或远程跟踪分支的差异提交"
+        type="button"
+      >
+        <Icon name="diff" size={13} />
+        比较
+      </Button>
+    </div>
+  );
+}
+
+interface HistoryRefPickerProps {
+  branches: BranchDto[];
+  disabledRef?: string;
+  label: string;
+  loading: boolean;
+  selectedRef: string;
+  selectedName?: string;
+  onChange(ref: string): void;
+}
+
+type HistoryRefGroup = "local" | "remote";
+
+interface HistoryRefBranch {
+  fullName: string;
+  merged?: boolean;
+  name: string;
+  remote: boolean;
+  upstream?: string | null;
+}
+
+interface HistoryRefFilterOptions {
+  selectedRef?: string;
+  showMergedRemote?: boolean;
+}
+
+export function groupHistoryRefBranches<
+  TBranch extends HistoryRefBranch
+>(
+  branches: TBranch[],
+  query: string,
+  activeGroup: HistoryRefGroup,
+  {
+    selectedRef = "",
+    showMergedRemote = false
+  }: HistoryRefFilterOptions = {}
+) {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const matches = normalizedQuery
+    ? branches.filter((branch) =>
+        [
+          branch.name,
+          branch.fullName,
+          branch.upstream ?? ""
+        ].some((value) =>
+          value
+            .toLocaleLowerCase()
+            .includes(normalizedQuery)
+        )
+      )
+    : branches;
+  const searching = normalizedQuery.length > 0;
+  const localBranchCount = branches.filter(
+    (branch) => !branch.remote
+  ).length;
+  const remoteBranchCount = branches.filter(
+    (branch) => branch.remote
+  ).length;
+  const remoteMatches = matches.filter(
+    (branch) => branch.remote
+  );
+  const mergedRemoteCount = branches.filter(
+    (branch) =>
+      branch.remote &&
+      branch.merged === true &&
+      branch.fullName !== selectedRef
+  ).length;
+
+  return {
+    localBranchCount,
+    localBranches:
+      searching || activeGroup === "local"
+        ? matches.filter((branch) => !branch.remote)
+        : [],
+    mergedRemoteCount,
+    remoteBranchCount,
+    remoteBranches:
+      searching || activeGroup === "remote"
+        ? remoteMatches.filter(
+            (branch) =>
+              searching ||
+              showMergedRemote ||
+              branch.merged !== true ||
+              branch.fullName === selectedRef
+          )
+        : [],
+    searching
+  };
+}
+
+export function historyRefOptionClassName(
+  selected: boolean
+) {
+  return selected
+    ? "history-ref-option is-selected"
+    : "history-ref-option";
+}
+
+function HistoryRefPicker({
+  branches,
+  disabledRef,
+  label,
+  loading,
+  selectedRef,
+  selectedName,
+  onChange
+}: HistoryRefPickerProps) {
+  const [anchor, setAnchor] =
+    useState<HTMLButtonElement | null>(null);
+  const [activeGroup, setActiveGroup] =
+    useState<HistoryRefGroup>("local");
+  const [query, setQuery] = useState("");
+  const [showMergedRemote, setShowMergedRemote] =
+    useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const {
+    localBranchCount,
+    localBranches,
+    mergedRemoteCount,
+    remoteBranchCount,
+    remoteBranches,
+    searching
+  } = groupHistoryRefBranches(
+    branches,
+    query,
+    activeGroup,
+    {
+      selectedRef,
+      showMergedRemote
+    }
+  );
+  const visibleBranchCount =
+    localBranches.length + remoteBranches.length;
+  const selected = branches.find(
+    (branch) => branch.fullName === selectedRef
+  );
+
+  useEffect(() => {
+    if (!anchor) {
+      return;
+    }
+    const closeForPointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (anchor.contains(target) ||
+          menuRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setAnchor(null);
+      setQuery("");
+    };
+    const closeForEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      setAnchor(null);
+      setQuery("");
+      anchor.focus();
+    };
+    document.addEventListener("pointerdown", closeForPointer);
+    document.addEventListener("keydown", closeForEscape);
+    return () => {
+      document.removeEventListener(
+        "pointerdown",
+        closeForPointer
+      );
+      document.removeEventListener(
+        "keydown",
+        closeForEscape
+      );
+    };
+  }, [anchor]);
+
+  const selectRef = (ref: string) => {
+    onChange(ref);
+    setAnchor(null);
+    setQuery("");
+    anchor?.focus();
+  };
+  const renderGroup = (
+    heading: string,
+    items: BranchDto[]
+  ) =>
+    items.length ? (
+      <>
+        {searching && <MenuHeading>{heading}</MenuHeading>}
+        {items.map((branch) => (
+          <MenuItem
+            aria-checked={
+              branch.fullName === selectedRef
+            }
+            className={historyRefOptionClassName(
+              branch.fullName === selectedRef
+            )}
+            disabled={branch.fullName === disabledRef}
+            key={branch.fullName}
+            leading={<Icon name="branch" size={14} />}
+            onClick={() => selectRef(branch.fullName)}
+            role="menuitemradio"
+            title={
+              branch.fullName === disabledRef
+                ? "比较范围不能选择同一个分支"
+                : branch.fullName
+            }
           >
-            <div
-              className="workspace-context-open-in"
-              onBlurCapture={scheduleChangeFileOpenInMenuClose}
-              onFocusCapture={openChangeFileOpenInMenu}
-              onPointerEnter={openChangeFileOpenInMenu}
-              onPointerLeave={scheduleChangeFileOpenInMenuClose}
-            >
-              <MenuItem
-                aria-expanded={changeFileOpenInMenuOpen}
-                aria-haspopup="menu"
-                className="workspace-context-open-in-trigger"
-                leading={<Icon name="external" size={14} />}
-                onClick={() =>
-                  setChangeFileOpenInMenuOpen((open) => !open)
-                }
-                title="选择用于打开此文件的应用"
-                trailing={<Icon name="collapse" size={14} />}
-              >
-                打开方式
-              </MenuItem>
-              {changeFileOpenInMenuOpen && (
-                <MenuPopover
-                  align="start"
-                  anchor={changeFileContextMenuRef.current}
-                  aria-label="选择用于打开此文件的应用"
-                  className="workspace-context-open-in-submenu"
-                  onBlurCapture={
-                    scheduleChangeFileOpenInMenuClose
-                  }
-                  onFocusCapture={openChangeFileOpenInMenu}
-                  onPointerEnter={openChangeFileOpenInMenu}
-                  onPointerLeave={
-                    scheduleChangeFileOpenInMenuClose
-                  }
-                  ref={changeFileOpenInMenuRef}
-                  side="right"
-                >
-                  <MenuHeading>Open in</MenuHeading>
-                  {externalApplications.profiles.length > 0 ? (
-                    externalApplications.profiles.map((profile) => (
-                      <MenuItem
-                        disabled={
-                          externalApplications.active !== null
-                        }
-                        key={profile.kind}
-                        leading={
-                          <ApplicationIcon profile={profile} />
-                        }
-                        onClick={() => {
-                          const path =
-                            changeFileContextMenu.path;
-                          setChangeFileOpenInMenuOpen(false);
-                          setChangeFileContextMenu(null);
-                          void externalApplications.openFile(
-                            profile.kind,
-                            path
-                          );
-                        }}
-                      >
-                        {profile.label}
-                      </MenuItem>
-                    ))
-                  ) : (
-                    <span className="workspace-context-open-in-empty">
-                      {externalApplications.loading
-                        ? "正在检测可用应用…"
-                        : "未检测到可用应用"}
-                    </span>
-                  )}
-                </MenuPopover>
+            <span className="history-ref-option-copy">
+              <strong>{branch.name}</strong>
+              {!branch.remote && branch.upstream && (
+                <small>跟踪 {branch.upstream}</small>
               )}
+            </span>
+          </MenuItem>
+        ))}
+      </>
+    ) : null;
+
+  return (
+    <div className="history-ref-picker">
+      <span className="history-ref-picker-label">{label}</span>
+      <Button
+        aria-expanded={Boolean(anchor)}
+        aria-haspopup="menu"
+        className="history-ref-trigger"
+        disabled={loading && branches.length === 0}
+        onClick={(event) => {
+          const nextAnchor = anchor
+            ? null
+            : event.currentTarget;
+          setAnchor(nextAnchor);
+          setQuery("");
+          if (nextAnchor) {
+            setActiveGroup("local");
+            setShowMergedRemote(false);
+          }
+        }}
+        size="small"
+        title={
+          selected?.remote
+            ? `${selected.name} · 本地远程引用快照`
+            : selected?.fullName ?? selectedName
+        }
+        type="button"
+      >
+        <Icon name="branch" size={13} />
+        <span>
+          {selected?.name ??
+            selectedName ??
+            (loading ? "读取分支…" : "选择分支")}
+        </span>
+        <Icon name="chevron" size={12} />
+      </Button>
+      {anchor && (
+        <MenuPopover
+          align="start"
+          anchor={anchor}
+          aria-label={`${label}分支`}
+          className="history-ref-menu"
+          ref={menuRef}
+          side="bottom"
+        >
+          <div className="history-ref-menu-header">
+            <Input
+              appearance="unstyled"
+              aria-label={`搜索${label}分支`}
+              autoFocus
+              className="history-ref-search"
+              onChange={(event) =>
+                setQuery(event.target.value)
+              }
+              placeholder="搜索本地或远程分支"
+              value={query}
+            />
+            <div className="history-ref-breadcrumb-row">
+              <div
+                aria-label="分支类型"
+                className="history-ref-breadcrumb"
+                role="tablist"
+              >
+                <button
+                  aria-selected={activeGroup === "local"}
+                  className={
+                    activeGroup === "local"
+                      ? "is-active"
+                      : undefined
+                  }
+                  onClick={() => {
+                    setActiveGroup("local");
+                    setQuery("");
+                  }}
+                  role="tab"
+                  type="button"
+                >
+                  <span>本地分支</span>
+                  <span className="history-ref-count">
+                    {localBranchCount}
+                  </span>
+                </button>
+                <span aria-hidden="true">/</span>
+                <button
+                  aria-selected={activeGroup === "remote"}
+                  className={
+                    activeGroup === "remote"
+                      ? "is-active"
+                      : undefined
+                  }
+                  onClick={() => {
+                    setActiveGroup("remote");
+                    setQuery("");
+                  }}
+                  role="tab"
+                  type="button"
+                >
+                  <span>远程分支</span>
+                  <span className="history-ref-count">
+                    {remoteBranchCount}
+                  </span>
+                </button>
+              </div>
+              {activeGroup === "remote" &&
+                !searching &&
+                mergedRemoteCount > 0 && (
+                  <button
+                    aria-pressed={showMergedRemote}
+                    className="history-ref-merged-toggle"
+                    onClick={() =>
+                      setShowMergedRemote(
+                        (current) => !current
+                      )
+                    }
+                    type="button"
+                  >
+                    {showMergedRemote
+                      ? "隐藏已合并"
+                      : `显示已合并 ${mergedRemoteCount}`}
+                  </button>
+                )}
             </div>
-          </Menu>
-        </LayerPortal>
+          </div>
+          {renderGroup("本地分支", localBranches)}
+          {searching &&
+            localBranches.length > 0 &&
+            remoteBranches.length > 0 && <MenuSeparator />}
+          {renderGroup("远程分支", remoteBranches)}
+          {visibleBranchCount === 0 && (
+            <span className="history-ref-empty">
+              没有匹配的分支
+            </span>
+          )}
+        </MenuPopover>
       )}
     </div>
   );
@@ -1478,13 +1815,46 @@ function RepositoryChanges({
 function RepositoryHistory({
   branch,
   controller,
-  onCopyCommitId
+  onCopyCommitId,
+  repositoryKey
 }: {
   branch: string | undefined;
   controller: ReturnType<typeof useRepositoryDetails>;
   onCopyCommitId(hash: string): Promise<void>;
+  repositoryKey: string;
 }) {
-  const commits = controller.history?.page.commits ?? [];
+  const controllerHistoryKey = controller.history
+    ? `${controller.history.target.repositoryId}:${controller.history.target.worktreeId}`
+    : null;
+  const history =
+    controllerHistoryKey === repositoryKey
+      ? controller.history
+      : null;
+  const historyLifecycleRef = useRef({
+    repositoryKey,
+    hasLoaded: false
+  });
+  if (
+    historyLifecycleRef.current.repositoryKey !== repositoryKey
+  ) {
+    historyLifecycleRef.current = {
+      repositoryKey,
+      hasLoaded: false
+    };
+  }
+  if (history) {
+    historyLifecycleRef.current.hasLoaded = true;
+  }
+  const hasLoadedHistory =
+    historyLifecycleRef.current.hasLoaded;
+  const loadingRegion = resolveHistoryLoadingRegion({
+    hasCurrentHistory: Boolean(history),
+    hasLoadedHistory,
+    loading: controller.loading.history
+  });
+  const commits = history?.page.commits ?? [];
+  const branches = controller.branches?.branches ?? [];
+  const comparison = history?.page.comparison;
   const selected = controller.commit?.commit;
   const showCommitDetail = Boolean(
     controller.historyDetailOpen &&
@@ -1494,6 +1864,11 @@ function RepositoryHistory({
   );
   const [filterOpen, setFilterOpen] = useState(false);
   const [filterQuery, setFilterQuery] = useState("");
+  const scopeKey = historyScopeKey(controller.historyScope);
+  useEffect(() => {
+    setFilterOpen(false);
+    setFilterQuery("");
+  }, [scopeKey]);
   const normalizedFilter = filterQuery.trim().toLocaleLowerCase();
   const visibleCommits = normalizedFilter
     ? commits.filter((item) =>
@@ -1510,152 +1885,153 @@ function RepositoryHistory({
       )
     : commits;
 
-  if (controller.loading.history && commits.length === 0) {
-    return <RepositoryLoading label="正在读取提交历史…" />;
-  }
-
-  if (!controller.history && controller.error) {
+  if (
+    !controller.loading.history &&
+    !history &&
+    !hasLoadedHistory &&
+    controller.error
+  ) {
     return <RepositoryReadFailure label="提交历史暂时不可用" />;
   }
 
-  if (commits.length === 0) {
-    return (
-      <div className="empty-state repository-empty-state">
-        <span className="empty-state-icon">
-          <Icon name="activity" size={20} />
-        </span>
-        <div>
-          <strong>暂无提交历史</strong>
-          <p>空仓库在首次提交后会显示历史。</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <section
-      className={`history-layout${
-        showCommitDetail ? " has-detail" : ""
-      }`}
+    <SkeletonBoundary
+      fallback={<RepositoryHistorySkeleton />}
+      hasContent={false}
+      label="正在读取提交历史"
+      loading={loadingRegion === "page"}
+      surfaceAs="section"
+      surfaceClassName="history-layout repository-history-skeleton"
     >
-      <div className="history-list">
-        <header className="panel-header">
-          <div className="panel-title">
-            <Icon name="history" />
-            提交历史
-          </div>
-          <span className="panel-caption">
-            只读快照 · 最近 {commits.length} 条 HEAD 提交
-          </span>
-          {filterOpen && (
-            <Input
-              appearance="unstyled"
-              aria-label="筛选提交历史"
-              autoFocus
-              className="history-filter-input"
-              onKeyDown={(event) => {
-                if (event.key !== "Escape") {
-                  return;
+      <section
+        className={`history-layout${
+          showCommitDetail ? " has-detail" : ""
+        }`}
+      >
+        <div className="history-list">
+          <header className="panel-header">
+            <div className="panel-title">
+              <Icon name="history" />
+              提交历史
+            </div>
+            <span className="panel-caption">
+              {loadingRegion === "content"
+                ? "正在读取所选引用…"
+                : historyScopeCaption(
+                    controller.historyScope,
+                    commits.length,
+                    branch
+                  )}
+            </span>
+            <div className="history-header-actions">
+              <HistoryScopeControls
+                branches={branches}
+                currentBranchName={branch}
+                loading={controller.loading.branches}
+                onChange={(scope) =>
+                  void controller.selectHistoryScope(scope)
                 }
-                event.preventDefault();
-                setFilterOpen(false);
-                setFilterQuery("");
-              }}
-              onChange={(event) =>
-                setFilterQuery(event.target.value)
-              }
-              placeholder="筛选提交、作者或 Hash"
-              value={filterQuery}
-            />
-          )}
-          <Button size="small"
-            aria-expanded={filterOpen}
-            className="panel-header-action"
-            onClick={() => setFilterOpen((open) => !open)}
-            type="button"
-          >
-            <Icon name="filter" size={13} />
-            筛选
-          </Button>
-        </header>
-        <div className="commit-list">
-          {visibleCommits.map((item, index) => {
-            const displayRef = getPrimaryCommitRef(
-              item.refs,
-              branch
-            );
-
-            return (
-              <div
-                aria-current={
-                  controller.historyDetailOpen &&
-                  item.hash === controller.selectedCommitHash
-                    ? "true"
-                    : undefined
-                }
-                className={`commit-row${
-                  controller.historyDetailOpen &&
-                  item.hash === controller.selectedCommitHash
-                    ? " selected"
-                    : ""
-                }`}
-                key={item.hash}
-                onClick={() =>
-                  void controller.selectCommit(item.hash)
-                }
-                onKeyDown={(event) => {
-                  if (
-                    event.key !== "Enter" &&
-                    event.key !== " "
-                  ) {
-                    return;
+                scope={controller.historyScope}
+              />
+              <div className="history-filter-controls">
+                {filterOpen && (
+                  <Input
+                    appearance="unstyled"
+                    aria-label="筛选提交历史"
+                    autoFocus
+                    className="history-filter-input"
+                    onKeyDown={(event) => {
+                      if (event.key !== "Escape") {
+                        return;
+                      }
+                      event.preventDefault();
+                      setFilterOpen(false);
+                      setFilterQuery("");
+                    }}
+                    onChange={(event) =>
+                      setFilterQuery(event.target.value)
+                    }
+                    placeholder="筛选提交、作者或 Hash"
+                    value={filterQuery}
+                  />
+                )}
+                <Button
+                  aria-expanded={filterOpen}
+                  className="panel-header-action"
+                  onClick={() =>
+                    setFilterOpen((open) => !open)
                   }
-                  event.preventDefault();
-                  void controller.selectCommit(item.hash);
-                }}
-                role="button"
-                tabIndex={0}
-              >
-                <span
-                  className={`commit-graph ${
-                    index === 2 ? "branch " : ""
-                  }lane-${index % 3}`}
+                  size="small"
+                  type="button"
                 >
-                  <span className="commit-node" />
-                </span>
-                <span className="commit-message">
-                  <strong className="commit-subject">
-                    {item.subject}
-                  </strong>
-                  <span className="commit-meta">
-                    <span
-                      className={`ref-label${
-                        displayRef.startsWith("origin/")
-                          ? " remote"
-                          : ""
-                      }`}
-                      title={displayRef}
-                    >
-                      {displayRef}
-                    </span>
+                  <Icon name="filter" size={13} />
+                  筛选
+                </Button>
+              </div>
+            </div>
+          </header>
+          <SkeletonBoundary
+            fallback={<RepositoryHistoryRowsSkeleton />}
+            hasContent={false}
+            label="正在切换提交历史"
+            loading={loadingRegion === "content"}
+            surfaceClassName="history-content-region repository-history-content-skeleton"
+          >
+            <div className="history-content-region">
+              {comparison && (
+                <div className="history-comparison-summary">
+                  <span className="history-comparison-side left">
+                    {historyRefDisplayName(comparison.leftRef)}
+                    <strong>{comparison.leftOnly}</strong>
+                    条独有
                   </span>
-                </span>
-                <time
-                  className="commit-time"
-                  dateTime={item.authoredAt}
-                >
-                  {formatCommitTimestamp(item.authoredAt)}
-                </time>
-                <span className="commit-author">
-                  {item.authorName}
-                </span>
-                <code
-                  className="commit-id"
-                  aria-label={`复制 Commit ID ${item.hash}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void onCopyCommitId(item.hash);
-                  }}
+                  <span className="history-comparison-side right">
+                    {historyRefDisplayName(comparison.rightRef)}
+                    <strong>{comparison.rightOnly}</strong>
+                    条独有
+                  </span>
+                  <span className="history-comparison-base">
+                    共同基点
+                    <code>
+                      {comparison.mergeBase?.slice(0, 7) ?? "无"}
+                    </code>
+                  </span>
+                  <span className="history-comparison-note">
+                    仅显示差异提交与共同基点
+                  </span>
+                </div>
+              )}
+              <div className="commit-list">
+            {visibleCommits.map((item, index) => {
+              const displayRef = item.comparisonSide
+                ? comparisonSideLabel(
+                    item.comparisonSide,
+                    comparison
+                  )
+                : getPrimaryCommitRef(item.refs, branch);
+
+              return (
+                <div
+                  aria-current={
+                    controller.historyDetailOpen &&
+                    item.hash === controller.selectedCommitHash
+                      ? "true"
+                      : undefined
+                  }
+                  className={`commit-row${
+                    controller.historyDetailOpen &&
+                    item.hash === controller.selectedCommitHash
+                      ? " selected"
+                      : ""
+                  }${
+                    item.comparisonSide
+                      ? ` comparison-${item.comparisonSide}`
+                      : ""
+                  }`}
+                  key={item.hash}
+                  onClick={() =>
+                    void controller.selectCommit(item.hash)
+                  }
                   onKeyDown={(event) => {
                     if (
                       event.key !== "Enter" &&
@@ -1664,96 +2040,255 @@ function RepositoryHistory({
                       return;
                     }
                     event.preventDefault();
-                    event.stopPropagation();
-                    void onCopyCommitId(item.hash);
+                    void controller.selectCommit(item.hash);
                   }}
                   role="button"
                   tabIndex={0}
-                  title={`点击复制 Commit ID ${item.hash}`}
                 >
-                  {item.shortHash}
-                </code>
+                  <span
+                    className={`commit-graph ${
+                      item.comparisonSide
+                        ? `comparison-${item.comparisonSide}`
+                        : `${index === 2 ? "branch " : ""}lane-${index % 3}`
+                    }`}
+                  >
+                    <span className="commit-node" />
+                  </span>
+                  <span className="commit-message">
+                    <strong className="commit-subject">
+                      {item.subject}
+                    </strong>
+                    <span className="commit-meta">
+                      <span
+                        className={`ref-label${
+                          displayRef.startsWith("origin/")
+                            ? " remote"
+                            : ""
+                        }${
+                          item.comparisonSide
+                            ? ` comparison-${item.comparisonSide}`
+                            : ""
+                        }`}
+                        title={displayRef}
+                      >
+                        {displayRef}
+                      </span>
+                    </span>
+                  </span>
+                  <time
+                    className="commit-time"
+                    dateTime={item.authoredAt}
+                  >
+                    {formatCommitTimestamp(item.authoredAt)}
+                  </time>
+                  <span className="commit-author">
+                    {item.authorName}
+                  </span>
+                  <code
+                    className="commit-id"
+                    aria-label={`复制 Commit ID ${item.hash}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void onCopyCommitId(item.hash);
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key !== "Enter" &&
+                        event.key !== " "
+                      ) {
+                        return;
+                      }
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void onCopyCommitId(item.hash);
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    title={`点击复制 Commit ID ${item.hash}`}
+                  >
+                    {item.shortHash}
+                  </code>
+                </div>
+              );
+            })}
+            {controller.error && !history ? (
+              <div className="history-filter-empty error">
+                <Icon name="warning" size={18} />
+                <strong>提交历史切换失败</strong>
+                <span>{controller.error.message}</span>
               </div>
-            );
-          })}
-          {visibleCommits.length === 0 && (
-            <div className="history-filter-empty">
-              <Icon name="search" size={18} />
-              <strong>没有匹配的提交</strong>
-              <span>可修改筛选关键词后重试。</span>
-            </div>
-          )}
-          {controller.history?.page.nextOffset !== undefined && (
-            <Button variant="unstyled"
-              aria-busy={controller.loading.history}
-              className="load-more-button"
-              disabled={controller.loading.history}
-              onClick={() => void controller.loadMoreHistory()}
-              type="button"
-            >
-              {controller.loading.history
-                ? "加载中…"
-                : "加载更多"}
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {showCommitDetail && (
-        <article
-          aria-labelledby="historyCommitDetailTitle"
-          className="commit-detail history-commit-detail panel"
-        >
-          <header className="panel-header">
-            <div
-              className="panel-title"
-              id="historyCommitDetailTitle"
-            >
-              <Icon name="commit" />
-              提交详情
-            </div>
-          </header>
-          {controller.loading.commit ? (
-            <RepositoryLoading label="正在读取提交详情…" compact />
-          ) : selected ? (
-            <div className="commit-detail-body">
-              <h2>{selected.subject}</h2>
-              <div className="commit-detail-meta">
-                <span>{selected.authorName}</span>
-                <code>{selected.hash}</code>
+            ) : visibleCommits.length === 0 ? (
+              <div className="history-filter-empty">
+                <Icon
+                  name={normalizedFilter ? "search" : "history"}
+                  size={18}
+                />
+                <strong>
+                  {normalizedFilter
+                    ? "没有匹配的提交"
+                    : comparison
+                      ? "两个分支没有差异提交"
+                      : "该引用暂无提交历史"}
+                </strong>
                 <span>
-                  {formatCommitTimestamp(selected.authoredAt)}
+                  {normalizedFilter
+                    ? "可修改筛选关键词后重试。"
+                    : comparison
+                      ? "双方当前指向相同历史，或没有可展示的独有提交。"
+                      : "可选择其他本地或远程引用查看。"}
                 </span>
               </div>
-              {selected.refs.length > 0 && (
-                <details
-                  className="commit-refs commit-refs-collapsible"
-                  key={selected.hash}
-                >
-                  <summary>
-                    分支（{selected.refs.length}）
-                  </summary>
-                  <div className="commit-ref-list">
-                    {selected.refs.map((ref) => (
-                      <span key={ref}>{ref}</span>
-                    ))}
+            ) : null}
+            {history?.page.nextOffset !== undefined && (
+              <Button variant="unstyled"
+                aria-busy={controller.loading.history}
+                className="load-more-button"
+                disabled={controller.loading.history}
+                onClick={() => void controller.loadMoreHistory()}
+                type="button"
+              >
+                {controller.loading.history
+                  ? "加载中…"
+                  : "加载更多"}
+              </Button>
+            )}
+              </div>
+            </div>
+          </SkeletonBoundary>
+        </div>
+
+        {showCommitDetail && (
+          <article
+            aria-labelledby="historyCommitDetailTitle"
+            className="commit-detail history-commit-detail panel"
+          >
+            <header className="panel-header">
+              <div
+                className="panel-title"
+                id="historyCommitDetailTitle"
+              >
+                <Icon name="commit" />
+                提交详情
+              </div>
+            </header>
+            <SkeletonBoundary
+              fallback={<RepositoryCommitDetailSkeleton />}
+              hasContent={Boolean(selected)}
+              label="正在读取提交详情"
+              loading={controller.loading.commit}
+              surfaceClassName="repository-commit-detail-skeleton"
+            >
+              {selected ? (
+                <div className="commit-detail-body">
+                  <h2>{selected.subject}</h2>
+                  <div className="commit-detail-meta">
+                    <span>{selected.authorName}</span>
+                    <code>{selected.hash}</code>
+                    <span>
+                      {formatCommitTimestamp(selected.authoredAt)}
+                    </span>
                   </div>
-                </details>
+                  {selected.refs.length > 0 && (
+                    <details
+                      className="commit-refs commit-refs-collapsible"
+                      key={selected.hash}
+                    >
+                      <summary>
+                        分支（{selected.refs.length}）
+                      </summary>
+                      <div className="commit-ref-list">
+                        {selected.refs.map((ref) => (
+                          <span key={ref}>{ref}</span>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                  <p className="selected-commit-body">
+                    {selected.body}
+                  </p>
+                </div>
+              ) : (
+                <div className="diff-empty">
+                  <Icon name="activity" size={20} />
+                  <strong>选择提交查看详情</strong>
+                </div>
               )}
-              <p className="selected-commit-body">
-                {selected.body}
-              </p>
-            </div>
-          ) : (
-            <div className="diff-empty">
-              <Icon name="activity" size={20} />
-              <strong>选择提交查看详情</strong>
-            </div>
-          )}
-        </article>
-      )}
-    </section>
+            </SkeletonBoundary>
+          </article>
+        )}
+      </section>
+    </SkeletonBoundary>
   );
+}
+
+function historyScopeKey(
+  scope: RepositoryHistoryScopeDto | null
+): string {
+  if (!scope) {
+    return "head";
+  }
+  return scope.kind === "ref"
+    ? `ref:${scope.ref}`
+    : `compare:${scope.leftRef}:${scope.rightRef}`;
+}
+
+export function resolveHistoryLoadingRegion({
+  hasCurrentHistory,
+  hasLoadedHistory,
+  loading
+}: {
+  hasCurrentHistory: boolean;
+  hasLoadedHistory: boolean;
+  loading: boolean;
+}): "content" | "page" | "ready" {
+  if (!loading || hasCurrentHistory) {
+    return "ready";
+  }
+  return hasLoadedHistory ? "content" : "page";
+}
+
+function historyScopeCaption(
+  scope: RepositoryHistoryScopeDto | null,
+  commitCount: number,
+  currentBranch: string | undefined
+): string {
+  if (!scope) {
+    return `只读快照 · 最近 ${commitCount} 条 ${
+      currentBranch ?? "HEAD"
+    } 提交`;
+  }
+  if (scope.kind === "ref") {
+    return `只读快照 · 最近 ${commitCount} 条 ${historyRefDisplayName(
+      scope.ref
+    )} 提交`;
+  }
+  return `只读对比 · ${historyRefDisplayName(
+    scope.leftRef
+  )} ↔ ${historyRefDisplayName(scope.rightRef)}`;
+}
+
+function historyRefDisplayName(ref: string): string {
+  return ref
+    .replace(/^refs\/heads\//, "")
+    .replace(/^refs\/remotes\//, "");
+}
+
+function comparisonSideLabel(
+  side: CommitHistoryComparisonSideDto,
+  comparison: RepositoryHistoryPageDto["page"]["comparison"]
+): string {
+  if (side === "base") {
+    return "共同基点";
+  }
+  const ref =
+    side === "left"
+      ? comparison?.leftRef
+      : comparison?.rightRef;
+  return ref
+    ? historyRefDisplayName(ref)
+    : side === "left"
+      ? "基准分支"
+      : "目标分支";
 }
 
 function getPrimaryCommitRef(
@@ -1900,11 +2435,11 @@ function RepositoryBranches({
       });
   };
 
-  if (controller.loading.branches && branches.length === 0) {
-    return <RepositoryLoading label="正在读取分支…" />;
-  }
-
-  if (!controller.branches && controller.error) {
+  if (
+    !controller.loading.branches &&
+    !controller.branches &&
+    controller.error
+  ) {
     return <RepositoryReadFailure label="分支列表暂时不可用" />;
   }
 
@@ -1923,75 +2458,82 @@ function RepositoryBranches({
     : false;
 
   return (
-    <div className="repository-branches-page">
-      <header className="panel-header sticky-panel-header">
-        <div className="panel-title">
-          <Icon name="branch" />
-          分支管理
-        </div>
-        <span className="panel-caption">
-          快照采集当前本地分支 {localCount} 条
-        </span>
-        <Button size="small"
-          aria-controls="new-branch-form"
-          aria-expanded={createFormOpen}
-          className="branch-header-action"
-          onClick={() => setCreateFormOpen((open) => !open)}
-          type="button"
-        >
-          <Icon
-            name={createFormOpen ? "close" : "plus"}
-            size={13}
-          />
-          {createFormOpen ? "收起" : "新建分支"}
-        </Button>
-      </header>
-      {createFormOpen && (
-        <div className="branch-management-toolbar">
-          <form id="new-branch-form" onSubmit={createBranch}>
-            <label htmlFor="new-branch-name">
-              从当前 HEAD 创建分支
-            </label>
-            <div>
-              <Input
-                fullWidth
-                id="new-branch-name"
-                maxLength={255}
-                onChange={(event) =>
-                  setNewBranch(event.target.value)
-                }
-                placeholder="例如 feature/safe-sync"
-                size="small"
-                spellCheck={false}
-                value={newBranch}
-              />
-              <Button size="small" variant="primary"
-                aria-busy={commands.active === "create-branch"}
-                disabled={
-                  commands.busy || !newBranch.trim()
-                }
-                type="submit"
-              >
-                <Icon
-                  name={
-                    commands.active === "create-branch"
-                      ? "refresh"
-                      : "plus"
+    <SkeletonBoundary
+      fallback={<RepositoryBranchesSkeleton />}
+      hasContent={branches.length > 0}
+      label="正在读取分支"
+      loading={controller.loading.branches}
+      surfaceClassName="repository-branches-page repository-branches-skeleton"
+    >
+      <div className="repository-branches-page">
+        <header className="panel-header sticky-panel-header">
+          <div className="panel-title">
+            <Icon name="branch" />
+            分支管理
+          </div>
+          <span className="panel-caption">
+            快照采集当前本地分支 {localCount} 条
+          </span>
+          <Button size="small"
+            aria-controls="new-branch-form"
+            aria-expanded={createFormOpen}
+            className="branch-header-action"
+            onClick={() => setCreateFormOpen((open) => !open)}
+            type="button"
+          >
+            <Icon
+              name={createFormOpen ? "close" : "plus"}
+              size={13}
+            />
+            {createFormOpen ? "收起" : "新建分支"}
+          </Button>
+        </header>
+        {createFormOpen && (
+          <div className="branch-management-toolbar">
+            <form id="new-branch-form" onSubmit={createBranch}>
+              <label htmlFor="new-branch-name">
+                从当前 HEAD 创建分支
+              </label>
+              <div>
+                <Input
+                  fullWidth
+                  id="new-branch-name"
+                  maxLength={255}
+                  onChange={(event) =>
+                    setNewBranch(event.target.value)
                   }
+                  placeholder="例如 feature/safe-sync"
+                  size="small"
+                  spellCheck={false}
+                  value={newBranch}
                 />
-                {commands.active === "create-branch"
-                  ? "预检中…"
-                  : "创建"}
-              </Button>
-            </div>
-          </form>
-          <p>
-            分支写操作都会先展示目标、路径与引用影响；GitNest
-            不会自动 Stash。
-          </p>
-        </div>
-      )}
-      <div className="branches-table" role="table">
+                <Button size="small" variant="primary"
+                  aria-busy={commands.active === "create-branch"}
+                  disabled={
+                    commands.busy || !newBranch.trim()
+                  }
+                  type="submit"
+                >
+                  <Icon
+                    name={
+                      commands.active === "create-branch"
+                        ? "refresh"
+                        : "plus"
+                    }
+                  />
+                  {commands.active === "create-branch"
+                    ? "预检中…"
+                    : "创建"}
+                </Button>
+              </div>
+            </form>
+            <p>
+              分支写操作都会先展示目标、路径与引用影响；GitNest
+              不会自动 Stash。
+            </p>
+          </div>
+        )}
+        <div className="branches-table" role="table">
         <div className="branches-row branches-head" role="row">
           <span role="columnheader">分支</span>
           <span role="columnheader">类型</span>
@@ -2152,16 +2694,16 @@ function RepositoryBranches({
             <span>空仓库在首次提交后会显示本地分支。</span>
           </div>
         )}
-      </div>
-      {branchMenu && branchMenuBranch && (
-        <MenuPopover
-          align="end"
-          anchor={branchMenu.anchor}
-          aria-label={`${branchMenuBranch.name} 分支操作`}
-          className="branch-row-floating-menu"
-          ref={branchMenuRef}
-          side="bottom"
-        >
+        </div>
+        {branchMenu && branchMenuBranch && (
+          <MenuPopover
+            align="end"
+            anchor={branchMenu.anchor}
+            aria-label={`${branchMenuBranch.name} 分支操作`}
+            className="branch-row-floating-menu"
+            ref={branchMenuRef}
+            side="bottom"
+          >
             <MenuItem
               disabled={
                 commands.busy ||
@@ -2231,9 +2773,10 @@ function RepositoryBranches({
             >
               删除
             </MenuItem>
-        </MenuPopover>
-      )}
-    </div>
+          </MenuPopover>
+        )}
+      </div>
+    </SkeletonBoundary>
   );
 }
 
@@ -2294,25 +2837,121 @@ function normalizeWorktreePath(path: string): string {
     .toLocaleLowerCase("en-US");
 }
 
-function RepositoryLoading({
-  label,
-  compact = false
-}: {
-  label: string;
-  compact?: boolean;
-}) {
+function RepositoryRecentCommitsSkeleton() {
   return (
-    <div
-      className={`repository-loading${
-        compact ? " compact" : ""
-      }`}
-      role="status"
-    >
-      <span className="empty-state-icon spinning">
-        <Icon name="refresh" size={18} />
-      </span>
-      <span>{label}</span>
+    <div className="gn-skeleton-list repository-recent-commits-skeleton">
+      {[88, 72, 80, 64].map((width, index) => (
+        <div className="gn-skeleton-row" key={width}>
+          <Skeleton variant="circle" width={12} height={12} />
+          <span className="gn-skeleton-row-copy">
+            <Skeleton
+              variant="text"
+              width={`${width}%`}
+              height={14}
+            />
+            <Skeleton variant="text" width="42%" height={11} />
+          </span>
+          <Skeleton variant="text" width={74} height={12} />
+          <Skeleton variant="text" width={58} height={12} />
+          <Skeleton
+            variant="text"
+            width={52 + index * 2}
+            height={12}
+          />
+        </div>
+      ))}
     </div>
+  );
+}
+
+function RepositoryHistorySkeleton() {
+  return (
+    <div className="history-list repository-history-list-skeleton">
+      <div className="gn-skeleton-panel-header">
+        <Skeleton variant="text" width={132} height={16} />
+        <Skeleton variant="text" width={196} height={13} />
+        <Skeleton width={152} height={30} />
+      </div>
+      <div className="history-content-region">
+        <RepositoryHistoryRowsSkeleton />
+      </div>
+    </div>
+  );
+}
+
+function RepositoryHistoryRowsSkeleton() {
+  return (
+    <div className="gn-skeleton-list repository-history-rows-skeleton">
+      {[78, 92, 70, 84, 66, 88, 74].map((width, index) => (
+        <div className="gn-skeleton-row" key={`${width}-${index}`}>
+          <Skeleton variant="circle" width={12} height={12} />
+          <span className="gn-skeleton-row-copy">
+            <Skeleton
+              variant="text"
+              width={`${width}%`}
+              height={14}
+            />
+            <Skeleton
+              variant="text"
+              width={`${32 + index * 4}%`}
+              height={11}
+            />
+          </span>
+          <Skeleton variant="text" width={82} height={12} />
+          <Skeleton variant="text" width={68} height={12} />
+          <Skeleton variant="text" width={54} height={12} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RepositoryCommitDetailSkeleton() {
+  return (
+    <div className="gn-skeleton-panel-body repository-commit-skeleton-body">
+      <Skeleton variant="text" width="76%" height={24} />
+      <div className="repository-commit-skeleton-meta">
+        <Skeleton variant="text" width={90} height={12} />
+        <Skeleton variant="text" width="58%" height={12} />
+        <Skeleton variant="text" width={118} height={12} />
+      </div>
+      <Skeleton variant="text" width="92%" height={13} />
+      <Skeleton variant="text" width="86%" height={13} />
+      <Skeleton variant="text" width="64%" height={13} />
+    </div>
+  );
+}
+
+function RepositoryBranchesSkeleton() {
+  return (
+    <>
+      <div className="gn-skeleton-panel-header">
+        <Skeleton variant="text" width={112} height={16} />
+        <Skeleton variant="text" width={184} height={13} />
+        <Skeleton width={96} height={30} />
+      </div>
+      <div className="gn-skeleton-list repository-branches-skeleton-table">
+        {[82, 68, 76, 60, 72, 64].map((width, index) => (
+          <div
+            className="gn-skeleton-row repository-branches-skeleton-row"
+            key={`${width}-${index}`}
+          >
+            <span className="gn-skeleton-row-copy">
+              <Skeleton
+                variant="text"
+                width={`${width}%`}
+                height={14}
+              />
+            </span>
+            <Skeleton variant="text" width={48} height={20} />
+            <Skeleton variant="text" width={92} height={12} />
+            <Skeleton variant="text" width={54} height={12} />
+            <Skeleton variant="text" width={88} height={12} />
+            <Skeleton variant="circle" width={24} height={24} />
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 

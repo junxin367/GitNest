@@ -77,11 +77,7 @@ describe("DiffViewerApp", () => {
   });
 
   it("uses the prototype layout, shared search, filter, and compact tree", async () => {
-    await act(async () => {
-      root.render(<DiffViewerApp />);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await renderDiffViewer(root);
 
     await vi.waitFor(() => {
       expect(
@@ -269,11 +265,7 @@ describe("DiffViewerApp", () => {
   });
 
   it("refreshes changes and the selected diff when workspace state changes", async () => {
-    await act(async () => {
-      root.render(<DiffViewerApp />);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await renderDiffViewer(root);
 
     await vi.waitFor(() => {
       expect(
@@ -317,7 +309,155 @@ describe("DiffViewerApp", () => {
       ).toBeGreaterThan(initialDiffCalls);
     });
   });
+
+  it("toggles the selected hunk context from its marker", async () => {
+    await renderDiffViewer(root);
+
+    const getDiff = vi.mocked(
+      window.gitnest.repository.getDiff
+    );
+    await vi.waitFor(() => {
+      expect(getDiff).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: "src/main/java/App.java",
+          mode: "unstaged",
+          contextLines: 3
+        })
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(
+          '[aria-label="展开第 1 个变更块上下各 10 行"]'
+        )
+      ).not.toBeNull();
+    });
+    const hunkTrigger = container.querySelector<HTMLButtonElement>(
+      '[aria-label="展开第 1 个变更块上下各 10 行"]'
+    );
+    if (!hunkTrigger) {
+      throw new Error("Hunk context trigger was not rendered.");
+    }
+    await act(async () => {
+      hunkTrigger.click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => {
+      expect(getDiff).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          contextLines: 10
+        })
+      );
+      expect(
+        container.querySelector(
+          '[aria-label="收起第 1 个变更块上下文"]'
+        )
+      ).not.toBeNull();
+    });
+
+    const callsBeforeReset = getDiff.mock.calls.length;
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="收起第 1 个变更块上下文"]'
+        )
+        ?.click();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => {
+      expect(getDiff).toHaveBeenCalledTimes(callsBeforeReset);
+      expect(
+        container.querySelector(
+          '[aria-label="展开第 1 个变更块上下各 10 行"]'
+        )
+      ).not.toBeNull();
+      expect(container.textContent).not.toContain("展开本段");
+    });
+  });
+
+  it("opens the shared file context menu in the standalone window", async () => {
+    await renderDiffViewer(root);
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelectorAll(".diff-workspace-file")
+      ).toHaveLength(4);
+      expect(
+        vi.mocked(
+          window.gitnest.system.listExternalApplications
+        )
+      ).toHaveBeenCalled();
+    });
+
+    const fileRow = Array.from(
+      container.querySelectorAll<HTMLDivElement>(
+        ".diff-workspace-file"
+      )
+    ).find((candidate) =>
+      candidate.textContent?.includes("Config.java")
+    );
+    if (!fileRow) {
+      throw new Error("Config.java file row was not rendered.");
+    }
+
+    const contextMenuEvent = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 120,
+      clientY: 80
+    });
+    act(() => {
+      fileRow.dispatchEvent(contextMenuEvent);
+    });
+    expect(contextMenuEvent.defaultPrevented).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(
+        Array.from(
+          document.body.querySelectorAll<HTMLButtonElement>(
+            "button"
+          )
+        ).some(
+          (candidate) =>
+            candidate.textContent?.trim() === "VS Code"
+        )
+      ).toBe(true);
+    });
+    await act(async () => {
+      findButton(document.body, "VS Code").click();
+      await Promise.resolve();
+    });
+
+    expect(
+      window.gitnest.system.openExternalApplication
+    ).toHaveBeenCalledWith({
+      context: {
+        scope: "file",
+        target: {
+          repositoryId: "repository",
+          worktreeId: "worktree"
+        },
+        path: "src/main/java/Config.java"
+      },
+      kind: "vscode"
+    });
+  });
 });
+
+async function renderDiffViewer(root: Root) {
+  await act(async () => {
+    root.render(<DiffViewerApp />);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  await act(
+    () =>
+      new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 520);
+      })
+  );
+}
 
 function findButton(
   root: ParentNode,
@@ -414,6 +554,18 @@ function createBridge(): typeof window.gitnest {
             ...appSettings.ai,
             apiKeyConfigured: false
           }
+        }
+      })
+    },
+    system: {
+      listExternalApplications: vi.fn().mockResolvedValue({
+        ok: true,
+        value: [{ kind: "vscode", label: "VS Code" }]
+      }),
+      openExternalApplication: vi.fn().mockResolvedValue({
+        ok: true,
+        value: {
+          kind: "vscode"
         }
       })
     },

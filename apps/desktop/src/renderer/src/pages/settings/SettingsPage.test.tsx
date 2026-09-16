@@ -25,6 +25,32 @@ describe("SettingsPage account states", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("uses shared skeleton rows while account metadata is initially loading", () => {
+    vi.stubGlobal("React", React);
+    try {
+      const html = renderToStaticMarkup(
+        <SettingsPage
+          accounts={{
+            ...accountControllerWithReadError(),
+            active: "loading",
+            error: null
+          }}
+          gitEnvironment={null}
+          terminalProfiles={[]}
+          workspace={null}
+        />
+      );
+
+      expect(html).toContain("gn-skeleton-surface");
+      expect(html).toContain(
+        'aria-label="正在读取账号元数据"'
+      );
+      expect(html).not.toContain("empty-state-icon spinning");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 function accountControllerWithReadError(): AccountController {

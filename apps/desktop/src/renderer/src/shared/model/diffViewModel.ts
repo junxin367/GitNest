@@ -54,6 +54,11 @@ export interface DiffViewModel {
   hunkCount: number;
 }
 
+export interface DiffHunkContextRange {
+  beforeLines: number;
+  afterLines: number;
+}
+
 export interface DiffSearchHit {
   index: number;
   segmentKey: string;
@@ -275,6 +280,169 @@ export function parseDiffViewModel(
   };
 }
 
+export function buildLocalizedDiffContent(
+  compactContent: string,
+  sourceContent: string,
+  contextRanges: Readonly<
+    Record<number, DiffHunkContextRange>
+  >
+): string {
+  const requestedHunks = Object.keys(contextRanges);
+  if (
+    requestedHunks.length === 0 ||
+    !compactContent ||
+    !sourceContent ||
+    compactContent === sourceContent
+  ) {
+    return compactContent || sourceContent;
+  }
+
+  const compact = parseExpandableDiffDocument(compactContent);
+  const source = parseExpandableDiffDocument(sourceContent);
+  if (compact.hunks.length === 0 || source.hunks.length === 0) {
+    return compactContent;
+  }
+
+  const sourceRecords = source.hunks.flatMap((hunk) =>
+    hunk.records.map((record) => ({
+      ...record,
+      sourceHunkIndex: hunk.index
+    }))
+  );
+  const sourceRecordIndexes = new Map<string, number>();
+  sourceRecords.forEach((record, index) => {
+    const identity = expandableRecordIdentity(record);
+    if (identity) {
+      sourceRecordIndexes.set(identity, index);
+    }
+  });
+
+  const mappedHunks = compact.hunks.map((hunk) => {
+    const numberedRecords = hunk.records.filter(
+      (record) => expandableRecordIdentity(record) !== undefined
+    );
+    const changedRecords = hunk.records.filter(
+      (record) =>
+        record.kind === "added" || record.kind === "removed"
+    );
+    const compactStartIndex = sourceRecordIndex(
+      numberedRecords[0],
+      sourceRecordIndexes
+    );
+    const compactEndIndex = sourceRecordIndex(
+      numberedRecords.at(-1),
+      sourceRecordIndexes
+    );
+    const firstChangedIndex = sourceRecordIndex(
+      changedRecords[0],
+      sourceRecordIndexes
+    );
+    const lastChangedIndex = sourceRecordIndex(
+      changedRecords.at(-1),
+      sourceRecordIndexes
+    );
+
+    return {
+      hunk,
+      compactStartIndex,
+      compactEndIndex,
+      firstChangedIndex,
+      lastChangedIndex
+    };
+  });
+
+  if (
+    mappedHunks.some(
+      ({
+        compactStartIndex,
+        compactEndIndex,
+        firstChangedIndex,
+        lastChangedIndex
+      }) =>
+        compactStartIndex === undefined ||
+        compactEndIndex === undefined ||
+        firstChangedIndex === undefined ||
+        lastChangedIndex === undefined
+    )
+  ) {
+    return compactContent;
+  }
+
+  const selectedRanges = mappedHunks.map((mapped, hunkIndex) => {
+    const request = contextRanges[hunkIndex];
+    if (!request) {
+      return {
+        start: mapped.compactStartIndex!,
+        end: mapped.compactEndIndex!,
+        expanded: false
+      };
+    }
+
+    const sourceHunkIndex =
+      sourceRecords[mapped.firstChangedIndex!]?.sourceHunkIndex;
+    let start = expandContextStart(
+      sourceRecords,
+      mapped.firstChangedIndex!,
+      sourceHunkIndex,
+      request.beforeLines
+    );
+    let end = expandContextEnd(
+      sourceRecords,
+      mapped.lastChangedIndex!,
+      sourceHunkIndex,
+      request.afterLines
+    );
+    const previousCompactEnd =
+      mappedHunks[hunkIndex - 1]?.compactEndIndex;
+    const nextCompactStart =
+      mappedHunks[hunkIndex + 1]?.compactStartIndex;
+    if (previousCompactEnd !== undefined) {
+      start = Math.max(start, previousCompactEnd + 1);
+    }
+    if (nextCompactStart !== undefined) {
+      end = Math.min(end, nextCompactStart - 1);
+    }
+
+    return { start, end, expanded: true };
+  });
+
+  for (
+    let hunkIndex = 1;
+    hunkIndex < selectedRanges.length;
+    hunkIndex += 1
+  ) {
+    const previous = selectedRanges[hunkIndex - 1]!;
+    const current = selectedRanges[hunkIndex]!;
+    if (current.start <= previous.end) {
+      current.start = Math.min(
+        current.end,
+        previous.end + 1
+      );
+    }
+  }
+
+  const renderedHunks = mappedHunks.map(
+    ({ hunk }, hunkIndex) => {
+      const selected = selectedRanges[hunkIndex]!;
+      if (!selected.expanded) {
+        return renderExpandableHunk(hunk);
+      }
+
+      const records = sourceRecords
+        .slice(selected.start, selected.end + 1)
+        .map(({ sourceHunkIndex: _sourceHunkIndex, ...record }) => record);
+      return renderExpandableHunk({
+        ...hunk,
+        records
+      });
+    }
+  );
+
+  return [...compact.prefixLines, ...renderedHunks]
+    .filter((part) => part.length > 0)
+    .join("\n");
+}
+
 export function collectDiffViewerSearchHits(
   model: DiffViewModel,
   layout: DiffViewerLayout,
@@ -400,10 +568,13 @@ function parseHunkHeader(
   | {
       oldLineNumber: number;
       newLineNumber: number;
+      oldLineCount: number;
+      newLineCount: number;
+      suffix: string;
     }
   | undefined {
   const match = line.match(
-    /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/
+    /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/
   );
   if (!match) {
     return undefined;
@@ -411,6 +582,241 @@ function parseHunkHeader(
 
   return {
     oldLineNumber: Number(match[1]),
-    newLineNumber: Number(match[2])
+    oldLineCount: match[2] === undefined ? 1 : Number(match[2]),
+    newLineNumber: Number(match[3]),
+    newLineCount: match[4] === undefined ? 1 : Number(match[4]),
+    suffix: match[5] ?? ""
   };
+}
+
+type ExpandableDiffRecordKind =
+  | "context"
+  | "added"
+  | "removed"
+  | "meta";
+
+interface ExpandableDiffRecord {
+  kind: ExpandableDiffRecordKind;
+  raw: string;
+  oldLineNumber?: number;
+  newLineNumber?: number;
+}
+
+interface ExpandableDiffHunk {
+  index: number;
+  oldLineNumber: number;
+  newLineNumber: number;
+  suffix: string;
+  records: ExpandableDiffRecord[];
+}
+
+interface ExpandableDiffDocument {
+  prefixLines: string[];
+  hunks: ExpandableDiffHunk[];
+}
+
+function parseExpandableDiffDocument(
+  content: string
+): ExpandableDiffDocument {
+  const lines = content.split(/\r?\n/);
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+
+  const prefixLines: string[] = [];
+  const hunks: ExpandableDiffHunk[] = [];
+  let currentHunk: ExpandableDiffHunk | undefined;
+  let oldLineNumber = 0;
+  let newLineNumber = 0;
+
+  for (const line of lines) {
+    const header = parseHunkHeader(line);
+    if (header) {
+      currentHunk = {
+        index: hunks.length,
+        oldLineNumber: header.oldLineNumber,
+        newLineNumber: header.newLineNumber,
+        suffix: header.suffix,
+        records: []
+      };
+      hunks.push(currentHunk);
+      oldLineNumber = header.oldLineNumber;
+      newLineNumber = header.newLineNumber;
+      continue;
+    }
+
+    if (!currentHunk) {
+      prefixLines.push(line);
+      continue;
+    }
+
+    if (line.startsWith("-") && !line.startsWith("---")) {
+      currentHunk.records.push({
+        kind: "removed",
+        raw: line,
+        oldLineNumber
+      });
+      oldLineNumber += 1;
+      continue;
+    }
+
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      currentHunk.records.push({
+        kind: "added",
+        raw: line,
+        newLineNumber
+      });
+      newLineNumber += 1;
+      continue;
+    }
+
+    if (line.startsWith(" ")) {
+      currentHunk.records.push({
+        kind: "context",
+        raw: line,
+        oldLineNumber,
+        newLineNumber
+      });
+      oldLineNumber += 1;
+      newLineNumber += 1;
+      continue;
+    }
+
+    currentHunk.records.push({
+      kind: "meta",
+      raw: line
+    });
+  }
+
+  return { prefixLines, hunks };
+}
+
+function expandableRecordIdentity(
+  record: ExpandableDiffRecord | undefined
+): string | undefined {
+  if (!record || record.kind === "meta") {
+    return undefined;
+  }
+  return [
+    record.kind,
+    record.oldLineNumber ?? "",
+    record.newLineNumber ?? ""
+  ].join(":");
+}
+
+function sourceRecordIndex(
+  record: ExpandableDiffRecord | undefined,
+  indexes: ReadonlyMap<string, number>
+): number | undefined {
+  const identity = expandableRecordIdentity(record);
+  return identity === undefined ? undefined : indexes.get(identity);
+}
+
+function expandContextStart(
+  records: readonly (ExpandableDiffRecord & {
+    sourceHunkIndex: number;
+  })[],
+  firstChangedIndex: number,
+  sourceHunkIndex: number | undefined,
+  beforeLines: number
+): number {
+  let index = firstChangedIndex;
+  let remaining = Math.max(0, beforeLines);
+  while (index > 0 && remaining > 0) {
+    const previous = records[index - 1];
+    if (
+      !previous ||
+      previous.sourceHunkIndex !== sourceHunkIndex ||
+      previous.kind !== "context"
+    ) {
+      break;
+    }
+    index -= 1;
+    remaining -= 1;
+  }
+  return index;
+}
+
+function expandContextEnd(
+  records: readonly (ExpandableDiffRecord & {
+    sourceHunkIndex: number;
+  })[],
+  lastChangedIndex: number,
+  sourceHunkIndex: number | undefined,
+  afterLines: number
+): number {
+  let index = lastChangedIndex;
+  let remaining = Math.max(0, afterLines);
+  while (index + 1 < records.length) {
+    const next = records[index + 1];
+    if (!next || next.sourceHunkIndex !== sourceHunkIndex) {
+      break;
+    }
+    if (next.kind === "meta") {
+      index += 1;
+      continue;
+    }
+    if (remaining <= 0 || next.kind !== "context") {
+      break;
+    }
+    index += 1;
+    remaining -= 1;
+  }
+  return index;
+}
+
+function renderExpandableHunk(
+  hunk: ExpandableDiffHunk
+): string {
+  const oldLineCount = hunk.records.reduce(
+    (count, record) =>
+      count +
+      (record.kind === "context" ||
+      record.kind === "removed"
+        ? 1
+        : 0),
+    0
+  );
+  const newLineCount = hunk.records.reduce(
+    (count, record) =>
+      count +
+      (record.kind === "context" || record.kind === "added"
+        ? 1
+        : 0),
+    0
+  );
+  const firstOldLine = hunk.records.find(
+    (record) => record.oldLineNumber !== undefined
+  )?.oldLineNumber;
+  const firstNewLine = hunk.records.find(
+    (record) => record.newLineNumber !== undefined
+  )?.newLineNumber;
+  const oldStart =
+    firstOldLine ??
+    (oldLineCount === 0
+      ? Math.max(0, hunk.oldLineNumber)
+      : hunk.oldLineNumber);
+  const newStart =
+    firstNewLine ??
+    (newLineCount === 0
+      ? Math.max(0, hunk.newLineNumber)
+      : hunk.newLineNumber);
+  const header = `@@ -${formatHunkRange(
+    oldStart,
+    oldLineCount
+  )} +${formatHunkRange(
+    newStart,
+    newLineCount
+  )} @@${hunk.suffix}`;
+
+  return [header, ...hunk.records.map((record) => record.raw)].join(
+    "\n"
+  );
+}
+
+function formatHunkRange(
+  start: number,
+  count: number
+): string {
+  return count === 1 ? String(start) : `${start},${count}`;
 }

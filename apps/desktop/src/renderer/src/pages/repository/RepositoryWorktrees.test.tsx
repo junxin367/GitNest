@@ -150,6 +150,49 @@ describe("RepositoryWorktrees summary card", () => {
     expect(container.textContent).not.toContain("Detached");
   });
 
+  it("removes the header prune shortcut while keeping the safety action", () => {
+    const workspaceWithPrunableWorktree: WorkspaceDetailsDto = {
+      ...workspaceWithTwoWorktrees,
+      worktrees: workspaceWithTwoWorktrees.worktrees.map(
+        (worktree, index) =>
+          index === 1
+            ? {
+                ...worktree,
+                isPrunable: true,
+                pruneReason: "登记路径已失效"
+              }
+            : worktree
+      )
+    };
+
+    act(() => {
+      root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={false}
+          onOpenDirectory={vi.fn()}
+          repositoryId="repository"
+          snapshots={[]}
+          worktreeId="worktree"
+          workspace={workspaceWithPrunableWorktree}
+        />
+      );
+    });
+
+    const headingActions = container.querySelector(
+      ".worktree-page-heading .page-actions"
+    );
+
+    expect(headingActions?.textContent).not.toContain("Prune 预览");
+    expect(headingActions?.textContent).toContain("新建 Worktree");
+
+    const createButton =
+      headingActions?.querySelector<HTMLButtonElement>("button");
+    act(() => createButton?.click());
+
+    expect(container.textContent).toContain("预检 Prune (1)");
+  });
+
   it("filters the registered worktrees and reports the match count", () => {
     act(() => {
       root.render(

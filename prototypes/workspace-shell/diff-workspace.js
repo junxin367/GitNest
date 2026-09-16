@@ -55,7 +55,10 @@
       language: file.language || "Text",
       additions: Number.isFinite(file.additions) ? file.additions : null,
       deletions: Number.isFinite(file.deletions) ? file.deletions : null,
-      rows: Array.isArray(file.rows) ? file.rows : []
+      rows: Array.isArray(file.rows) ? file.rows : [],
+      fullRows: Array.isArray(file.fullRows) ? file.fullRows : null,
+      binary: Boolean(file.binary),
+      truncated: Boolean(file.truncated)
     }));
   }
 
@@ -174,7 +177,8 @@
           defaultLayout: "unified",
           showToolbar: false,
           allowWrap: false,
-          showHunkNavigation: false
+          showHunkNavigation: false,
+          allowContextExpansion: true
         }
       };
       this.state = {
@@ -305,7 +309,6 @@
             <strong class="gn-diff-workspace__file-name" title="${escapeHtml(file.path)}">${escapeHtml(primaryLabel)}</strong>
             <span class="gn-diff-workspace__file-meta">
               <span class="gn-diff-workspace__status-code ${file.status === "untracked" ? "untracked" : ""}">${statusCode}</span>
-              <span class="gn-diff-workspace__file-secondary">${escapeHtml(modeLabel(mode))}</span>
               <span class="gn-diff-workspace__file-stats" aria-label="新增 ${stats.additions} 行，删除 ${stats.deletions} 行">
                 <span class="additions">+${stats.additions}</span>
                 <span class="deletions">-${stats.deletions}</span>
@@ -631,6 +634,9 @@
         ariaLabel: "所选文件 Diff",
         path: selected?.path || "",
         rows: selected?.rows || [],
+        fullRows: selected?.fullRows || null,
+        binary: selected?.binary,
+        truncated: selected?.truncated,
         headerActions: this.options.features.openStandaloneDiff
           ? buttonMarkup({
               label: "在独立窗口中打开 Diff",
@@ -651,7 +657,10 @@
       const selected = this.selectedFile();
       this.panel.update({
         path: selected?.path || "",
-        rows: selected?.rows || []
+        rows: selected?.rows || [],
+        fullRows: selected?.fullRows || null,
+        binary: selected?.binary,
+        truncated: selected?.truncated
       });
       this.renderStatusbar();
     }
@@ -707,6 +716,166 @@
       }
     }
 
+    openDiscardConfirmation(files, onConfirm, scope = "file") {
+      this.discardDialogCleanup?.({ restoreFocus: false });
+      const document = this.element.ownerDocument;
+      const previousFocus =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      const untrackedCount = files.filter(
+        (file) => fileMode(file) === "untracked"
+      ).length;
+      const singleFile = scope === "file" ? files[0] : null;
+      const title = singleFile
+        ? untrackedCount > 0
+          ? "永久删除未跟踪文件？"
+          : `放弃对“${singleFile.path}”的更改？`
+        : `放弃 ${files.length} 个文件的更改？`;
+      const targetSummary = singleFile
+        ? singleFile.path
+        : `${files.length} 个文件${
+            untrackedCount > 0
+              ? ` · ${untrackedCount} 个未跟踪文件`
+              : ""
+          }`;
+      const warning = untrackedCount > 0
+        ? `正式应用中，其中 ${untrackedCount} 个未跟踪文件将从磁盘永久删除，不会移入回收站，且无法撤销。`
+        : "正式应用中，工作区中的修改将被还原，此操作无法撤销。";
+      const titleId = `${this.instanceId}-discard-title`;
+      const descriptionId = `${this.instanceId}-discard-description`;
+      const overlay = document.createElement("div");
+      overlay.className = "gn-diff-discard-overlay";
+      overlay.innerHTML = `
+        <section
+          class="gn-diff-discard-dialog"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="${titleId}"
+          aria-describedby="${descriptionId}"
+        >
+          <header class="gn-diff-discard-dialog__header">
+            <span class="gn-diff-discard-dialog__icon">
+              ${iconMarkup("alert")}
+            </span>
+            <div>
+              <span class="gn-diff-discard-dialog__eyebrow">危险操作</span>
+              <h2 id="${titleId}">${escapeHtml(title)}</h2>
+              <p id="${descriptionId}">确认后将立即处理当前工作区内容。</p>
+            </div>
+          </header>
+          <div class="gn-diff-discard-dialog__body">
+            <div class="gn-diff-discard-dialog__warning">
+              ${iconMarkup("alert")}
+              <span>${escapeHtml(warning)}</span>
+            </div>
+            <div class="gn-diff-discard-dialog__target">
+              <span>${singleFile ? "目标文件" : "影响范围"}</span>
+              <code title="${escapeHtml(targetSummary)}">${escapeHtml(targetSummary)}</code>
+            </div>
+          </div>
+          <footer class="gn-diff-discard-dialog__footer">
+            <p>当前为原型预览，不执行 Git 命令。</p>
+            <div>
+              ${buttonMarkup({
+                label: "取消",
+                attributes: 'data-diff-discard-action="cancel"'
+              })}
+              ${buttonMarkup({
+                label:
+                  untrackedCount > 0
+                    ? "永久删除并放弃"
+                    : "确认放弃",
+                icon: iconMarkup("alert"),
+                variant: "danger",
+                emphasis: "strong",
+                attributes: 'data-diff-discard-action="confirm"'
+              })}
+            </div>
+          </footer>
+        </section>
+      `;
+
+      const close = ({ restoreFocus = true } = {}) => {
+        document.removeEventListener("keydown", handleKeyDown);
+        overlay.remove();
+        if (this.discardDialogCleanup === close) {
+          this.discardDialogCleanup = null;
+        }
+        if (restoreFocus && previousFocus?.isConnected) {
+          previousFocus.focus();
+        }
+      };
+      const handleKeyDown = (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          close();
+          return;
+        }
+        if (event.key !== "Tab") return;
+        const focusable = [
+          ...overlay.querySelectorAll("button:not([disabled])")
+        ];
+        const first = focusable[0];
+        const last = focusable.at(-1);
+        if (!first || !last) return;
+        if (
+          event.shiftKey &&
+          (document.activeElement === first ||
+            !overlay.contains(document.activeElement))
+        ) {
+          event.preventDefault();
+          last.focus();
+        } else if (
+          !event.shiftKey &&
+          (document.activeElement === last ||
+            !overlay.contains(document.activeElement))
+        ) {
+          event.preventDefault();
+          first.focus();
+        }
+      };
+
+      overlay.addEventListener("pointerup", (event) => {
+        if (event.target === overlay) {
+          close();
+        }
+      });
+      overlay
+        .querySelector('[data-diff-discard-action="cancel"]')
+        ?.addEventListener("click", () => close());
+      overlay
+        .querySelector('[data-diff-discard-action="confirm"]')
+        ?.addEventListener("click", () => {
+          close({ restoreFocus: false });
+          onConfirm();
+        });
+      document.addEventListener("keydown", handleKeyDown);
+      document.body.append(overlay);
+      this.discardDialogCleanup = close;
+      overlay
+        .querySelector('[data-diff-discard-action="cancel"]')
+        ?.focus();
+    }
+
+    discardFiles(files) {
+      const discarded = new Set(files.map((file) => file.key));
+      this.options.files = this.options.files.filter(
+        (file) => !discarded.has(file.key)
+      );
+      if (discarded.has(this.state.selectedKey)) {
+        this.state.selectedKey = this.options.files[0]?.key || "";
+      }
+      this.renderSidebar();
+      this.updatePanel();
+      global.showToast?.(
+        "放弃更改",
+        files.length === 1
+          ? `${files[0].path}（原型预览，不执行 Git 命令）`
+          : `${discarded.size} 个文件（原型预览，不执行 Git 命令）`
+      );
+    }
+
     handleClick(event) {
       const action = event.target.closest("[data-diff-workspace-action]");
       if (!action || !this.element.contains(action)) return;
@@ -753,20 +922,11 @@
           (candidate) => candidate.mode === mode
         );
         if (!section || section.files.length === 0) return;
-        const discarded = new Set(
-          section.files.map((file) => file.key)
-        );
-        this.options.files = this.options.files.filter(
-          (file) => !discarded.has(file.key)
-        );
-        if (discarded.has(this.state.selectedKey)) {
-          this.state.selectedKey = this.options.files[0]?.key || "";
-        }
-        this.renderSidebar();
-        this.updatePanel();
-        global.showToast?.(
-          "放弃更改",
-          `${discarded.size} 个文件（原型预览，不执行 Git 命令）`
+        const files = [...section.files];
+        this.openDiscardConfirmation(
+          files,
+          () => this.discardFiles(files),
+          "group"
         );
       } else if (actionName === "discard-file") {
         const key = action.dataset.fileKey;
@@ -774,17 +934,10 @@
           (candidate) => candidate.key === key
         );
         if (!file) return;
-        this.options.files = this.options.files.filter(
-          (candidate) => candidate.key !== key
-        );
-        if (this.state.selectedKey === key) {
-          this.state.selectedKey = this.options.files[0]?.key || "";
-        }
-        this.renderSidebar();
-        this.updatePanel();
-        global.showToast?.(
-          "放弃更改",
-          `${file.path}（原型预览，不执行 Git 命令）`
+        this.openDiscardConfirmation(
+          [file],
+          () => this.discardFiles([file]),
+          "file"
         );
       } else if (actionName === "toggle-directory") {
         const key = action.dataset.directoryKey;
@@ -853,6 +1006,7 @@
     }
 
     destroy() {
+      this.discardDialogCleanup?.({ restoreFocus: false });
       this.panel?.destroy();
       this.element.removeEventListener("click", this.handleClick);
       this.element.removeEventListener("input", this.handleInput);

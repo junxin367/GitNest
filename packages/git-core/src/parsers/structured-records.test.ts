@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { parseBranches } from "./branches";
-import { parseCommitHistory } from "./history";
+import {
+  parseComparedCommitHistory,
+  parseCommitHistory
+} from "./history";
 import { parseWorktrees } from "./worktrees";
 
 describe("structured Git parsers", () => {
@@ -49,6 +52,29 @@ describe("structured Git parsers", () => {
         parentHashes: ["parent1", "parent2"],
         refs: ["HEAD -> main", "origin/main"]
       }
+    ]);
+  });
+
+  it("parses branch-comparison side and merge-base markers", () => {
+    const output = [
+      "<\x1fleft123\x1fleft123\x1fJune\x1fjune@example.com\x1f2026-09-15T10:00:00+08:00\x1fLeft commit\x1fbase123\x1fmain\x1e",
+      "\n>\x1fright12\x1fright12\x1fJune\x1fjune@example.com\x1f2026-09-15T11:00:00+08:00\x1fRight commit\x1fbase123\x1fdevelop\x1e",
+      "\n-\x1fbase123\x1fbase123\x1fJune\x1fjune@example.com\x1f2026-09-14T10:00:00+08:00\x1fMerge base\x1f\x1f\x1e"
+    ].join("");
+
+    expect(parseComparedCommitHistory(output)).toEqual([
+      expect.objectContaining({
+        hash: "left123",
+        comparisonSide: "left"
+      }),
+      expect.objectContaining({
+        hash: "right12",
+        comparisonSide: "right"
+      }),
+      expect.objectContaining({
+        hash: "base123",
+        comparisonSide: "base"
+      })
     ]);
   });
 

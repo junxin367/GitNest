@@ -1,11 +1,25 @@
-import { lstat, open, stat } from "node:fs/promises";
-import { isAbsolute, normalize, resolve } from "node:path";
+import {
+  lstat,
+  open,
+  readFile,
+  realpath,
+  stat
+} from "node:fs/promises";
+import {
+  extname,
+  isAbsolute,
+  normalize,
+  relative,
+  resolve,
+  sep
+} from "node:path";
 
 import {
   GitError,
   parseBranches,
   parseCommitMetadata,
   parseCommitNumstat,
+  parseComparedCommitHistory,
   parseCommitHistory,
   parseRepositoryDiff,
   parseStatusPorcelainV2,
@@ -39,6 +53,8 @@ import {
   type RepositoryDiff,
   type RepositoryIdentity,
   type RepositoryInspection,
+  type RepositoryMediaKind,
+  type RepositoryMediaPreview,
   type RepositorySnapshot,
   type Worktree
 } from "@gitnest/git-core";
@@ -47,9 +63,15 @@ import {
   BRANCH_ARGUMENTS,
   commitMetadataArguments,
   commitNumstatArguments,
+  compareHistoryCountArguments,
+  compareHistoryMergeBaseArguments,
+  compareHistoryPageArguments,
   diffArguments,
   historyArguments,
   historyPageArguments,
+  MERGED_REMOTE_BRANCH_ARGUMENTS,
+  stagedFileContentArguments,
+  stagedFileSizeArguments,
   STAGED_DIFF_STAT_ARGUMENTS,
   STATUS_ARGUMENTS,
   UNSTAGED_DIFF_PATH_ARGUMENTS,
@@ -92,7 +114,7 @@ import { findGitExecutable } from "../environment/find-git-executable";
 import { readGitEnvironment } from "../environment/read-git-environment";
 import {
   runProcess,
-  type ProcessResult
+  runProcessBuffer
 } from "../process/git-process-runner";
 
 const DEFAULT_HISTORY_LIMIT = 50;
@@ -100,7 +122,7 @@ const MAX_HISTORY_LIMIT = 500;
 const DEFAULT_HISTORY_PAGE_LIMIT = 50;
 const MAX_HISTORY_PAGE_LIMIT = 100;
 const DEFAULT_DIFF_CONTEXT_LINES = 3;
-const MAX_DIFF_CONTEXT_LINES = 20;
+const MAX_DIFF_CONTEXT_LINES = 100_000;
 const DIFF_OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024;
 const COMMIT_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024;
 const WRITE_OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024;
@@ -115,6 +137,40 @@ const MAX_COMMIT_BODY_LENGTH = 100_000;
 const MAX_WORKTREE_PATHS = 200;
 const MAX_WORKTREE_PATH_LENGTH = 32_767;
 const MAX_WORKTREE_LOCK_REASON_LENGTH = 512;
+const MEDIA_PREVIEW_LIMIT_BYTES = 50 * 1024 * 1024;
+
+interface MediaDescriptor {
+  kind: RepositoryMediaKind;
+  mimeType: string;
+}
+
+const MEDIA_DESCRIPTORS: Readonly<
+  Record<string, MediaDescriptor>
+> = {
+  ".aac": { kind: "audio", mimeType: "audio/aac" },
+  ".apng": { kind: "image", mimeType: "image/apng" },
+  ".avif": { kind: "image", mimeType: "image/avif" },
+  ".bmp": { kind: "image", mimeType: "image/bmp" },
+  ".flac": { kind: "audio", mimeType: "audio/flac" },
+  ".gif": { kind: "image", mimeType: "image/gif" },
+  ".ico": { kind: "image", mimeType: "image/x-icon" },
+  ".jpeg": { kind: "image", mimeType: "image/jpeg" },
+  ".jpg": { kind: "image", mimeType: "image/jpeg" },
+  ".m4a": { kind: "audio", mimeType: "audio/mp4" },
+  ".m4v": { kind: "video", mimeType: "video/x-m4v" },
+  ".mov": { kind: "video", mimeType: "video/quicktime" },
+  ".mp3": { kind: "audio", mimeType: "audio/mpeg" },
+  ".mp4": { kind: "video", mimeType: "video/mp4" },
+  ".oga": { kind: "audio", mimeType: "audio/ogg" },
+  ".ogg": { kind: "audio", mimeType: "audio/ogg" },
+  ".ogv": { kind: "video", mimeType: "video/ogg" },
+  ".opus": { kind: "audio", mimeType: "audio/ogg" },
+  ".png": { kind: "image", mimeType: "image/png" },
+  ".svg": { kind: "image", mimeType: "image/svg+xml" },
+  ".wav": { kind: "audio", mimeType: "audio/wav" },
+  ".webm": { kind: "video", mimeType: "video/webm" },
+  ".webp": { kind: "image", mimeType: "image/webp" }
+};
 
 export interface GitRemoteCommandEnvironmentLease {
   environment: Readonly<
@@ -289,12 +345,34 @@ export class GitCliClient
         );
       }
 
-      return parseRepositoryDiff(
+      const diff = parseRepositoryDiff(
         relativePath,
         options.mode,
         result.stdout,
         Boolean(result.outputTruncated)
       );
+      const mediaDescriptor = options.includeMedia
+        ? MEDIA_DESCRIPTORS[extname(relativePath).toLowerCase()]
+        : undefined;
+
+      if (!mediaDescriptor) {
+        return diff;
+      }
+
+      return {
+        ...diff,
+        media: await readRepositoryMediaPreview(
+          relativePath,
+          options.mode,
+          mediaDescriptor,
+          {
+            executable: executablePath,
+            cwd: worktreePath,
+            signal: options.signal,
+            timeoutMs: options.timeoutMs
+          }
+        )
+      };
     } catch (error) {
       throw mapRepositoryError(error, worktreePath);
     }
@@ -308,25 +386,119 @@ export class GitCliClient
     const executablePath = await this.#getExecutablePath(options.signal);
     const limit = clampHistoryPageLimit(options.limit);
     const offset = clampHistoryOffset(options.offset);
+    const commandOptions = {
+      executable: executablePath,
+      cwd: worktreePath,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs
+    };
 
     try {
       if (
+        !options.scope &&
         !(await repositoryHasHead({
-          executable: executablePath,
-          cwd: worktreePath,
-          signal: options.signal,
-          timeoutMs: options.timeoutMs
+          ...commandOptions
         }))
       ) {
         return { commits: [] };
       }
 
+      if (options.scope?.kind === "compare") {
+        const leftRef = await resolveHistoryRef(
+          commandOptions,
+          options.scope.leftRef
+        );
+        const rightRef = await resolveHistoryRef(
+          commandOptions,
+          options.scope.rightRef
+        );
+        if (leftRef === rightRef) {
+          throw new GitError(
+            "INVALID_REQUEST",
+            "Compared history requires two different refs."
+          );
+        }
+
+        const [historyResult, countResult, mergeBaseResult] =
+          await Promise.all([
+            runProcess({
+              ...commandOptions,
+              args: compareHistoryPageArguments(
+                limit + 1,
+                offset,
+                leftRef,
+                rightRef
+              ),
+              outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
+            }),
+            runProcess({
+              ...commandOptions,
+              args: compareHistoryCountArguments(
+                leftRef,
+                rightRef
+              ),
+              outputLimitBytes: 4_096
+            }),
+            runProcess({
+              ...commandOptions,
+              args: compareHistoryMergeBaseArguments(
+                leftRef,
+                rightRef
+              ),
+              allowFailure: true,
+              outputLimitBytes: 4_096
+            })
+          ]);
+
+        assertAllowFailureIsRepository(mergeBaseResult);
+        if (
+          mergeBaseResult.exitCode !== 0 &&
+          !(
+            mergeBaseResult.exitCode === 1 &&
+            !mergeBaseResult.stderr.trim()
+          )
+        ) {
+          throw commandFailure(
+            "Git merge-base",
+            mergeBaseResult
+          );
+        }
+        const commits = parseComparedCommitHistory(
+          historyResult.stdout
+        );
+        const hasMore = commits.length > limit;
+        const { leftOnly, rightOnly } =
+          parseHistoryComparisonCounts(countResult.stdout);
+        const mergeBase =
+          mergeBaseResult.exitCode === 0
+            ? mergeBaseResult.stdout.trim().split(/\r?\n/)[0]
+            : undefined;
+
+        return {
+          commits: commits.slice(0, limit),
+          ...(hasMore
+            ? { nextOffset: offset + limit }
+            : {}),
+          comparison: {
+            leftRef,
+            rightRef,
+            leftOnly,
+            rightOnly,
+            ...(mergeBase ? { mergeBase } : {})
+          }
+        };
+      }
+
+      const ref =
+        options.scope?.kind === "ref"
+          ? await resolveHistoryRef(
+              commandOptions,
+              options.scope.ref
+            )
+          : undefined;
       const result = await runProcess({
-        executable: executablePath,
-        cwd: worktreePath,
-        args: historyPageArguments(limit + 1, offset),
-        signal: options.signal,
-        timeoutMs: options.timeoutMs,
+        ...commandOptions,
+        args: historyPageArguments(limit + 1, offset, ref),
         outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
       });
       const commits = parseCommitHistory(result.stdout);
@@ -391,7 +563,7 @@ export class GitCliClient
         signal: options.signal,
         timeoutMs: options.timeoutMs
       });
-      return parseBranches(result.stdout).map((branch) => ({
+      const branches = parseBranches(result.stdout).map((branch) => ({
         ...branch,
         ...(branch.worktreePath
           ? {
@@ -401,6 +573,36 @@ export class GitCliClient
             }
           : {})
       }));
+      if (!branches.some((branch) => branch.remote)) {
+        return branches;
+      }
+      const mergedResult = await runProcess({
+        executable: executablePath,
+        cwd: worktreePath,
+        args: MERGED_REMOTE_BRANCH_ARGUMENTS,
+        allowFailure: true,
+        signal: options.signal,
+        timeoutMs: options.timeoutMs
+      });
+      assertAllowFailureIsRepository(mergedResult);
+      if (mergedResult.exitCode !== 0) {
+        return branches;
+      }
+      const mergedRemoteRefs = new Set(
+        mergedResult.stdout
+          .split(/\r?\n/)
+          .map((value) => value.trim())
+          .filter(Boolean)
+      );
+
+      return branches.map((branch) =>
+        branch.remote
+          ? {
+              ...branch,
+              merged: mergedRemoteRefs.has(branch.fullName)
+            }
+          : branch
+      );
     } catch (error) {
       throw mapRepositoryError(error, worktreePath);
     }
@@ -1599,6 +1801,186 @@ interface CommandOptions {
   timeoutMs?: number | undefined;
 }
 
+async function readRepositoryMediaPreview(
+  path: string,
+  mode: ReadRepositoryDiffOptions["mode"],
+  descriptor: MediaDescriptor,
+  options: CommandOptions
+): Promise<RepositoryMediaPreview> {
+  if (mode === "staged") {
+    return readStagedMediaPreview(path, descriptor, options);
+  }
+  return readWorktreeMediaPreview(path, descriptor, options);
+}
+
+async function readStagedMediaPreview(
+  path: string,
+  descriptor: MediaDescriptor,
+  options: CommandOptions
+): Promise<RepositoryMediaPreview> {
+  const sizeResult = await runProcess({
+    ...options,
+    args: stagedFileSizeArguments(path),
+    allowFailure: true,
+    outputLimitBytes: 4_096
+  });
+  assertAllowFailureIsRepository(sizeResult);
+  if (sizeResult.exitCode !== 0) {
+    return unavailableMedia(descriptor, "missing");
+  }
+
+  const normalizedSize = sizeResult.stdout.trim();
+  if (!/^\d+$/.test(normalizedSize)) {
+    throw new GitError(
+      "INVALID_GIT_OUTPUT",
+      "Git returned an invalid staged media size."
+    );
+  }
+  const size = Number(normalizedSize);
+  if (!Number.isSafeInteger(size)) {
+    throw new GitError(
+      "INVALID_GIT_OUTPUT",
+      "Git returned an unsupported staged media size."
+    );
+  }
+  if (size > MEDIA_PREVIEW_LIMIT_BYTES) {
+    return unavailableMedia(
+      descriptor,
+      "too-large",
+      size
+    );
+  }
+
+  const contentResult = await runProcessBuffer({
+    ...options,
+    args: stagedFileContentArguments(path),
+    allowFailure: true,
+    outputLimitBytes: MEDIA_PREVIEW_LIMIT_BYTES + 1,
+    truncateOutput: true
+  });
+  assertAllowFailureIsRepository(contentResult);
+  if (
+    contentResult.outputTruncated ||
+    contentResult.stdout.byteLength > MEDIA_PREVIEW_LIMIT_BYTES
+  ) {
+    return unavailableMedia(descriptor, "too-large");
+  }
+  if (contentResult.exitCode !== 0) {
+    return unavailableMedia(descriptor, "missing");
+  }
+
+  assertReadNotCancelled(options.signal);
+  return availableMedia(descriptor, contentResult.stdout);
+}
+
+async function readWorktreeMediaPreview(
+  path: string,
+  descriptor: MediaDescriptor,
+  options: CommandOptions
+): Promise<RepositoryMediaPreview> {
+  assertReadNotCancelled(options.signal);
+  const candidatePath = resolve(options.cwd, path);
+
+  try {
+    const [worktreeRealPath, fileRealPath] = await Promise.all([
+      realpath(options.cwd),
+      realpath(candidatePath)
+    ]);
+    const pathFromWorktree = relative(
+      worktreeRealPath,
+      fileRealPath
+    );
+    if (
+      !pathFromWorktree ||
+      pathFromWorktree === ".." ||
+      pathFromWorktree.startsWith(`..${sep}`) ||
+      isAbsolute(pathFromWorktree)
+    ) {
+      return unavailableMedia(descriptor, "not-file");
+    }
+
+    const info = await lstat(candidatePath);
+    if (info.isSymbolicLink() || !info.isFile()) {
+      return unavailableMedia(descriptor, "not-file");
+    }
+    if (info.size > MEDIA_PREVIEW_LIMIT_BYTES) {
+      return unavailableMedia(
+        descriptor,
+        "too-large",
+        info.size
+      );
+    }
+
+    const content = await readFile(fileRealPath);
+    assertReadNotCancelled(options.signal);
+    if (content.byteLength > MEDIA_PREVIEW_LIMIT_BYTES) {
+      return unavailableMedia(
+        descriptor,
+        "too-large",
+        content.byteLength
+      );
+    }
+    return availableMedia(descriptor, content);
+  } catch (error) {
+    if (isMissingFilesystemPath(error)) {
+      return unavailableMedia(descriptor, "missing");
+    }
+    if (error instanceof GitError) {
+      throw error;
+    }
+    throw new GitError(
+      "COMMAND_FAILED",
+      "Unable to read the selected media file.",
+      {
+        cause:
+          error instanceof Error
+            ? error.message
+            : String(error)
+      }
+    );
+  }
+}
+
+function availableMedia(
+  descriptor: MediaDescriptor,
+  content: Uint8Array
+): RepositoryMediaPreview {
+  const bytes = Uint8Array.from(content);
+  return {
+    status: "available",
+    ...descriptor,
+    size: bytes.byteLength,
+    content: bytes
+  };
+}
+
+function unavailableMedia(
+  descriptor: MediaDescriptor,
+  reason: Extract<
+    RepositoryMediaPreview,
+    { status: "unavailable" }
+  >["reason"],
+  size?: number
+): RepositoryMediaPreview {
+  return {
+    status: "unavailable",
+    ...descriptor,
+    reason,
+    ...(size === undefined ? {} : { size })
+  };
+}
+
+function isMissingFilesystemPath(error: unknown): boolean {
+  if (
+    !error ||
+    typeof error !== "object" ||
+    !("code" in error)
+  ) {
+    return false;
+  }
+  return error.code === "ENOENT" || error.code === "ENOTDIR";
+}
+
 async function reconcileRepositorySnapshot(
   snapshot: RepositorySnapshot,
   options: CommandOptions,
@@ -1821,6 +2203,79 @@ function assertReadNotCancelled(signal?: AbortSignal): void {
   }
 }
 
+async function resolveHistoryRef(
+  options: CommandOptions,
+  value: string
+): Promise<string> {
+  const ref = validateHistoryRefInput(value);
+  const result = await runProcess({
+    ...options,
+    args: resolveRevisionArguments(ref),
+    allowFailure: true,
+    outputLimitBytes: 4_096
+  });
+  assertAllowFailureIsRepository(result);
+
+  if (result.exitCode !== 0) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      `History ref does not resolve to a commit: ${ref}`,
+      {
+        exitCode: result.exitCode,
+        stderr: result.stderr.slice(0, 2_048)
+      }
+    );
+  }
+  return ref;
+}
+
+function validateHistoryRefInput(value: string): string {
+  const ref = value.trim();
+  const allowedPrefix =
+    ref.startsWith("refs/heads/") ||
+    ref.startsWith("refs/remotes/");
+  const invalidSyntax =
+    !ref ||
+    ref.length > 1_024 ||
+    /[\x00-\x20\x7f~^:?*[\]\\]/.test(ref) ||
+    ref.includes("..") ||
+    ref.includes("@{") ||
+    ref.includes("//") ||
+    ref.endsWith("/") ||
+    ref.endsWith(".") ||
+    ref.split("/").some(
+      (segment) =>
+        segment === "." ||
+        segment === ".." ||
+        segment.endsWith(".lock")
+    );
+
+  if (!allowedPrefix || invalidSyntax) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "History refs must be exact local or remote-tracking refs."
+    );
+  }
+  return ref;
+}
+
+function parseHistoryComparisonCounts(output: string): {
+  leftOnly: number;
+  rightOnly: number;
+} {
+  const match = output.trim().match(/^(\d+)\s+(\d+)$/);
+  if (!match) {
+    throw new GitError(
+      "INVALID_GIT_OUTPUT",
+      "Git comparison counts are invalid."
+    );
+  }
+  return {
+    leftOnly: Number(match[1]),
+    rightOnly: Number(match[2])
+  };
+}
+
 async function repositoryHasHead(
   options: CommandOptions
 ): Promise<boolean> {
@@ -1926,8 +2381,13 @@ function parseRemoteBranchRefs(
   );
 }
 
+interface ProcessFailureResult {
+  exitCode: number;
+  stderr: string;
+}
+
 function assertAllowFailureIsRepository(
-  result: ProcessResult
+  result: ProcessFailureResult
 ): void {
   if (
     result.exitCode !== 0 &&
@@ -1939,7 +2399,7 @@ function assertAllowFailureIsRepository(
 
 function commandFailure(
   label: string,
-  result: ProcessResult
+  result: ProcessFailureResult
 ): GitError {
   return new GitError(
     "COMMAND_FAILED",

@@ -398,6 +398,11 @@
       background: var(--surface-hover);
     }
 
+    .menu-item.is-selected {
+      color: var(--text);
+      background: var(--accent-soft);
+    }
+
     .menu-item:disabled {
       color: var(--color-text-disabled);
       cursor: not-allowed;
@@ -1092,6 +1097,7 @@
       border: 1px solid transparent;
       border-radius: var(--radius-regular);
       cursor: pointer;
+      transition: none;
     }
 
     .repo-row:hover {
@@ -1161,8 +1167,7 @@
       white-space: nowrap;
     }
 
-    .repo-row.active .repo-name,
-    .repo-row:hover .repo-name {
+    .repo-row.active .repo-name {
       color: var(--text);
     }
 
@@ -2610,6 +2615,251 @@
       margin-left: auto;
     }
 
+    .history-list .sticky-panel-header {
+      flex-wrap: wrap;
+      padding-top: var(--space-2);
+      padding-bottom: var(--space-2);
+    }
+
+    .history-header-actions,
+    .history-scope-controls,
+    .history-filter-controls {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-width: 0;
+    }
+
+    .history-header-actions {
+      flex: 1 1 auto;
+      flex-wrap: nowrap;
+      justify-content: flex-end;
+      margin-left: auto;
+    }
+
+    .history-scope-controls {
+      flex: 0 1 auto;
+      flex-wrap: nowrap;
+    }
+
+    .history-scope-controls.comparison {
+      gap: var(--space-1);
+    }
+
+    .history-filter-controls {
+      flex: 0 1 auto;
+      flex-wrap: nowrap;
+      margin-left: auto;
+    }
+
+    .history-ref-picker-label {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+      white-space: nowrap;
+    }
+
+    .history-ref-picker {
+      position: relative;
+    }
+
+    .history-ref-picker > summary {
+      list-style: none;
+    }
+
+    .history-ref-picker > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .history-ref-trigger {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      max-width: 190px;
+      height: var(--control-compact);
+      padding: 0 var(--space-2);
+      color: var(--text-soft);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+      cursor: pointer;
+      font-size: var(--font-size-caption);
+    }
+
+    .history-ref-trigger:hover,
+    .history-ref-picker[open] > .history-ref-trigger {
+      color: var(--text);
+      background: var(--surface-hover);
+      border-color: var(--border);
+    }
+
+    .history-ref-trigger > span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .history-ref-trigger > .icon:last-child {
+      flex: 0 0 auto;
+      margin-left: auto;
+    }
+
+    .history-ref-menu {
+      width: min(320px, calc(100vw - 16px));
+      max-height: min(380px, calc(100vh - 32px));
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+
+    .history-ref-menu-header {
+      position: sticky;
+      top: 0;
+      z-index: var(--z-selected);
+      display: grid;
+      gap: var(--space-1);
+      margin-bottom: var(--space-2);
+      padding-bottom: var(--space-1);
+      background: var(--surface);
+    }
+
+    .history-ref-search {
+      width: 100%;
+      height: var(--control-compact);
+      padding: 0 var(--space-2);
+      color: var(--text);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+      font-size: var(--font-size-caption);
+    }
+
+    .history-ref-breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      min-width: 0;
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .history-ref-breadcrumb-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-2);
+      min-width: 0;
+    }
+
+    .history-ref-breadcrumb button {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-1);
+      min-height: 24px;
+      padding: 0 var(--space-2);
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-small);
+    }
+
+    .history-ref-breadcrumb button:hover,
+    .history-ref-breadcrumb button:focus-visible {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .history-ref-breadcrumb button.is-active {
+      color: var(--accent-strong);
+      background: var(--accent-soft);
+    }
+
+    .history-ref-count {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .history-ref-breadcrumb button.is-active .history-ref-count {
+      color: currentColor;
+    }
+
+    .history-ref-merged-toggle {
+      flex: 0 0 auto;
+      min-height: 24px;
+      padding: 0 var(--space-2);
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-small);
+      font-size: var(--font-size-caption);
+      white-space: nowrap;
+    }
+
+    .history-ref-merged-toggle:hover,
+    .history-ref-merged-toggle:focus-visible,
+    .history-ref-merged-toggle[aria-pressed="true"] {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .history-ref-group {
+      display: grid;
+    }
+
+    .history-ref-group[hidden] {
+      display: none;
+    }
+
+    .history-ref-option {
+      grid-template-columns: 22px minmax(0, 1fr);
+      min-width: 0;
+      min-height: var(--control-default);
+    }
+
+    .history-ref-option[hidden] {
+      display: none;
+    }
+
+    .history-ref-option-copy {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+    }
+
+    .history-ref-option-copy strong,
+    .history-ref-option-copy small {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .history-ref-option-copy strong {
+      color: var(--text-soft);
+      font-weight: var(--font-weight-medium);
+    }
+
+    .history-ref-option.is-selected
+      .history-ref-option-copy
+      strong {
+      color: var(--text);
+    }
+
+    .history-ref-option-copy small {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .history-ref-empty {
+      padding: var(--space-4) var(--space-2);
+      color: var(--muted);
+      text-align: center;
+      font-size: var(--font-size-caption);
+    }
+
+    .history-compare-exit {
+      white-space: nowrap;
+    }
+
     /* 筛选输入框与右侧操作按钮作为一组靠右排列 */
     .history-filter-input + .panel-header-action {
       margin-left: 0;
@@ -2629,8 +2879,55 @@
       font-size: var(--font-size-caption);
     }
 
+    .history-filter-controls .history-filter-input,
+    .history-filter-controls .panel-header-action {
+      margin-left: 0;
+    }
+
     .history-filter-input:focus {
       border-color: var(--accent);
+    }
+
+    .history-comparison-summary {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      min-height: var(--control-default);
+      padding: var(--space-1) var(--space-4);
+      color: var(--muted);
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--border-soft);
+      font-size: var(--font-size-caption);
+    }
+
+    .history-comparison-side,
+    .history-comparison-base {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-1);
+      white-space: nowrap;
+    }
+
+    .history-comparison-side strong {
+      font-family: var(--font-mono);
+    }
+
+    .history-comparison-side.left strong {
+      color: var(--purple);
+    }
+
+    .history-comparison-side.right strong {
+      color: var(--blue);
+    }
+
+    .history-comparison-base code {
+      color: var(--text-soft);
+      font-family: var(--font-mono);
+    }
+
+    .history-comparison-note {
+      margin-left: auto;
+      white-space: nowrap;
     }
 
     .history-filter-empty {
@@ -3155,6 +3452,28 @@
       color: var(--blue);
       background: var(--blue-soft);
       border-color: color-mix(in srgb, var(--blue) 20%, transparent);
+    }
+
+    .ref-label.comparison-left {
+      color: var(--purple);
+      background: color-mix(in srgb, var(--purple) 13%, transparent);
+      border-color: color-mix(in srgb, var(--purple) 30%, transparent);
+    }
+
+    .ref-label.comparison-right {
+      color: var(--blue);
+      background: var(--blue-soft);
+      border-color: color-mix(in srgb, var(--blue) 30%, transparent);
+    }
+
+    .ref-label.comparison-base {
+      color: var(--muted);
+      background: var(--surface-3);
+      border-color: var(--border);
+    }
+
+    .commit-row.comparison-base {
+      border-top: 1px dashed var(--border);
     }
 
     .commit-author {
@@ -3750,19 +4069,19 @@
       justify-content: flex-end;
       gap: 2px;
       padding-left: var(--space-5);
-      opacity: 0;
+      visibility: hidden;
       pointer-events: none;
       background: linear-gradient(
         90deg,
         transparent,
         var(--diff-workspace-file-backdrop) var(--space-5)
       );
-      transition: opacity var(--motion-micro) ease;
+      transition: none;
     }
 
     .file-row:hover .file-actions,
     .file-row:focus-within .file-actions {
-      opacity: 1;
+      visibility: visible;
       pointer-events: auto;
     }
 
@@ -3775,6 +4094,7 @@
       background: transparent;
       border: 0;
       box-shadow: none;
+      transition: none;
     }
 
     .file-actions .gn-button:hover:not(:disabled),
@@ -4033,6 +4353,106 @@
       line-height: 20px;
     }
 
+    .diff-content-skeleton {
+      display: grid;
+      grid-template-rows: 32px minmax(0, 1fr);
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    .diff-content-skeleton-hunk {
+      display: flex;
+      align-items: center;
+      padding: 0 var(--space-3);
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .diff-content-skeleton-code {
+      min-height: 0;
+      overflow: hidden;
+      padding-top: var(--space-2);
+    }
+
+    .diff-content-skeleton-row {
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr);
+      align-items: center;
+      gap: var(--space-3);
+      min-height: 24px;
+      padding: 0 var(--space-4) 0 var(--space-2);
+    }
+
+    .diff-content-skeleton-block {
+      position: relative;
+      display: block;
+      overflow: hidden;
+      background: color-mix(
+        in srgb,
+        var(--surface-3) 82%,
+        var(--surface)
+      );
+      border-radius: var(--radius-small);
+    }
+
+    .diff-content-skeleton-block::after {
+      position: absolute;
+      inset: 0;
+      content: "";
+      background: linear-gradient(
+        90deg,
+        transparent,
+        color-mix(in srgb, var(--surface-hover) 82%, transparent),
+        transparent
+      );
+      transform: translateX(-100%);
+      animation: diff-content-skeleton-shimmer 1.35s ease-in-out infinite;
+    }
+
+    .diff-content-skeleton-hunk-line {
+      width: min(220px, 42%);
+      height: 9px;
+    }
+
+    .diff-content-skeleton-line-number {
+      justify-self: end;
+      width: 42px;
+      height: 8px;
+    }
+
+    .diff-content-skeleton-code-line {
+      width: 72%;
+      height: 9px;
+    }
+
+    .diff-content-skeleton-row.is-long
+      .diff-content-skeleton-code-line {
+      width: 88%;
+    }
+
+    .diff-content-skeleton-row.is-short
+      .diff-content-skeleton-code-line {
+      width: 44%;
+    }
+
+    @keyframes diff-content-skeleton-shimmer {
+      to {
+        transform: translateX(100%);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .diff-content-skeleton-block::after {
+        animation: none;
+        opacity: 0.28;
+        transform: none;
+      }
+    }
+
     .diff-viewer-unified {
       min-width: max(100%, 760px);
       width: max-content;
@@ -4120,10 +4540,43 @@
       scroll-margin-top: var(--space-3);
     }
 
-    .diff-viewer-wide-row > code {
+    .diff-viewer-wide-row > code,
+    .diff-viewer-wide-row > .diff-viewer-hunk-trigger {
+      flex: 1 1 auto;
       min-width: max-content;
+    }
+
+    .diff-viewer-wide-row > code {
       color: inherit;
       white-space: pre;
+    }
+
+    .diff-viewer-hunk-trigger {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 2px;
+      color: inherit;
+      background: transparent;
+      border: 0;
+      border-radius: 2px;
+      cursor: pointer;
+      font: inherit;
+      text-align: left;
+    }
+
+    .diff-viewer-hunk-trigger > code {
+      color: inherit;
+      font: inherit;
+      white-space: pre;
+    }
+
+    .diff-viewer-hunk-trigger:hover {
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+    }
+
+    .diff-viewer-hunk-trigger:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
     }
 
     .diff-search-match {
@@ -5813,7 +6266,6 @@
     .quick-button,
     .sidebar-add-directory,
     .context-tab,
-    .repo-row,
     .worktree-card,
     .command-result,
     .branch-name-button,
@@ -5941,6 +6393,12 @@
       transform: translateY(1px);
     }
 
+    .file-select-button:active,
+    .repo-row:active {
+      opacity: 1;
+      transform: none;
+    }
+
     @media (max-width: 1500px) and (min-width: 1241px) {
       .workspace-frame {
         grid-template-columns: 52px 286px minmax(0, 1fr);
@@ -5956,6 +6414,41 @@
 
       .dashboard-grid {
         grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 1360px) {
+      .history-header-actions {
+        flex: 1 0 100%;
+        flex-wrap: nowrap;
+        width: 100%;
+        margin-left: 0;
+        gap: var(--space-1);
+        justify-content: flex-start;
+      }
+
+      .history-scope-controls,
+      .history-scope-controls.comparison,
+      .history-filter-controls {
+        flex: 0 1 auto;
+        flex-wrap: nowrap;
+        justify-content: flex-start;
+        min-width: 0;
+      }
+
+      .history-filter-controls {
+        width: auto;
+        margin-left: 0;
+      }
+
+      .history-ref-trigger {
+        max-width: min(160px, 18vw);
+      }
+
+      .history-filter-input {
+        flex-basis: min(180px, 20vw);
+        width: min(180px, 20vw);
+        min-width: 100px;
       }
     }
 
@@ -6703,7 +7196,8 @@
         layouts: Object.freeze(["unified"]),
         defaultLayout: "unified",
         allowWrap: false,
-        showHunkNavigation: false
+        showHunkNavigation: false,
+        allowContextExpansion: true
       }),
       extensions: Object.freeze({
         openStandaloneDiff: true,
@@ -6899,9 +7393,12 @@
         body: "本次只读快照采集了最近提交的元数据；未读取提交文件清单。",
         author: override.author || repo.lastAuthor,
         time: formatSnapshotDate(override.date || repo.lastDate),
-        refs: [repo.branch],
-        color: groupColors[repositoryGroupName(repo)] || "var(--accent)",
-        files: []
+        refs: override.refs || [repo.branch],
+        color: override.color || groupColors[repositoryGroupName(repo)] || "var(--accent)",
+        files: [],
+        ...(override.comparisonSide
+          ? { comparisonSide: override.comparisonSide }
+          : {})
       };
     }
 
@@ -6948,7 +7445,10 @@
       filterChanges("", 0);
     }
 
-    function diffPreviewLines(file) {
+    const defaultDiffContextLines = 3;
+    const diffContextStep = 10;
+
+    function diffPreviewFullLines(file) {
       const fileName = file.name || file.path.split(/[\\/]/).pop() || file.path;
       const path = file.path.replace(/\\/g, "/");
       const isMarkdown = /\.md$/i.test(fileName);
@@ -6963,14 +7463,136 @@
         ];
       }
 
+      const beforeContext = isMarkdown
+        ? [
+            "## 背景",
+            "",
+            "该文档用于说明当前仓库的变更预览。",
+            "",
+            "## 配置",
+            "",
+            `目标文件：${path}`,
+            "",
+            "## Diff 查看",
+            "",
+            `### ${fileName}`
+          ]
+        : [
+            "public final class DiffPreviewService {",
+            "  private final RepositoryClient repositoryClient;",
+            "",
+            "  DiffPreviewService(RepositoryClient repositoryClient) {",
+            "    this.repositoryClient = repositoryClient;",
+            "  }",
+            "",
+            "  String resolveSourcePath() {",
+            "    // 根据当前文件生成预览",
+            `    // ${fileName}`,
+            "    String repositoryRoot = repositoryClient.root();"
+          ];
+      const afterContext = isMarkdown
+        ? [
+            "变更仅用于当前原型交互演示。",
+            "",
+            "展开上下文可以继续查看相邻段落。",
+            "",
+            "### 搜索",
+            "",
+            "使用 Ctrl+F 在当前 Diff 中搜索。",
+            "",
+            "### 说明",
+            "",
+            "该页面不会执行真实 Git 命令。",
+            "",
+            "返回文件变更列表。"
+          ]
+        : [
+            "    return sourcePath;",
+            "  }",
+            "",
+            "  boolean isDiffSearchEnabled() {",
+            "    return includeDiffSearch;",
+            "  }",
+            "",
+            "  String repositoryRoot() {",
+            "    return repositoryClient.root();",
+            "  }",
+            "",
+            "  // 文件级上下文结束",
+            "}"
+          ];
+
       return [
-        { kind: "hunk", oldLine: "", newLine: "", code: "@@ -18,6 +18,8 @@" },
-        { kind: "context", oldLine: "18", newLine: "18", code: isMarkdown ? `# ${fileName}` : `// ${fileName}` },
+        { kind: "hunk", oldLine: "", newLine: "", code: "@@ -8,25 +8,27 @@" },
+        ...beforeContext.map((code, index) => ({
+          kind: "context",
+          oldLine: String(index + 8),
+          newLine: String(index + 8),
+          code
+        })),
         { kind: "deleted", oldLine: "19", newLine: "", code: isMarkdown ? "仅展示 Git 状态。" : "const includeDiffSearch = false;" },
         { kind: "added", oldLine: "", newLine: "19", code: isMarkdown ? "展示原型 Diff 预览，可用 Ctrl+F 搜索。" : "const includeDiffSearch = true;" },
         { kind: "added", oldLine: "", newLine: "20", code: isMarkdown ? `来源文件：${path}` : `const sourcePath = "${path}";` },
-        { kind: "context", oldLine: "20", newLine: "21", code: isMarkdown ? "变更仅用于当前原型交互演示。" : "return sourcePath;" }
+        ...afterContext.map((code, index) => ({
+          kind: "context",
+          oldLine: String(index + 20),
+          newLine: String(index + 21),
+          code
+        }))
       ];
+    }
+
+    function diffPreviewLines(file) {
+      const fullLines = diffPreviewFullLines(file);
+      if (file.status === "untracked") {
+        return fullLines;
+      }
+
+      const hunks = [];
+      let current = null;
+      fullLines.forEach((line) => {
+        if (line.kind === "hunk") {
+          current = { header: line, body: [] };
+          hunks.push(current);
+        } else if (current) {
+          current.body.push(line);
+        }
+      });
+      return hunks.flatMap((hunk, hunkIndex) => {
+        const context = state.diffHunkContexts[hunkIndex] || {
+          beforeLines: defaultDiffContextLines,
+          afterLines: defaultDiffContextLines,
+          full: false
+        };
+        const changedIndexes = hunk.body
+          .map((line, index) => line.kind === "context" ? -1 : index)
+          .filter((index) => index >= 0);
+        if (!changedIndexes.length || context.full) {
+          return [hunk.header, ...hunk.body];
+        }
+
+        const start = Math.max(
+          0,
+          changedIndexes[0] - context.beforeLines
+        );
+        const end = Math.min(
+          hunk.body.length,
+          changedIndexes[changedIndexes.length - 1] +
+            context.afterLines +
+            1
+        );
+        return [hunk.header, ...hunk.body.slice(start, end)];
+      });
+    }
+
+    function canExpandDiffPreview(file) {
+      return Boolean(
+        file &&
+        file.status !== "untracked" &&
+        repositoryDiffWorkspaceConfiguration.document
+          .allowContextExpansion &&
+        diffPreviewFullLines(file).length > 10
+      );
     }
 
     function diffPreviewStats(file) {
@@ -7035,7 +7657,13 @@
       }).join("")}${escapeHtml(text.slice(cursor))}`;
     }
 
-    function renderDiffPreviewLine(line, lineIndex, matches, activeMatch) {
+    function renderDiffPreviewLine(
+      line,
+      lineIndex,
+      matches,
+      activeMatch,
+      selected
+    ) {
       const code = renderDiffSearchText(
         line.code,
         lineIndex,
@@ -7043,10 +7671,36 @@
         activeMatch
       );
       if (line.kind === "hunk") {
+        const hunkIndex = diffPreviewLines(selected)
+          .slice(0, lineIndex + 1)
+          .filter((item) => item.kind === "hunk").length - 1;
+        const context = state.diffHunkContexts[hunkIndex] || {
+          beforeLines: defaultDiffContextLines,
+          afterLines: defaultDiffContextLines,
+          full: false
+        };
+        const expanded =
+          context.full ||
+          context.beforeLines > defaultDiffContextLines ||
+          context.afterLines > defaultDiffContextLines;
+        const hunkLabel = canExpandDiffPreview(selected)
+          ? `
+              <button
+                class="diff-viewer-hunk-trigger"
+                type="button"
+                onclick="expandDiffContext('${expanded ? "reset" : "around"}', ${hunkIndex})"
+                aria-label="${expanded ? `收起第 ${hunkIndex + 1} 个变更块上下文` : `展开第 ${hunkIndex + 1} 个变更块上下各 ${diffContextStep} 行`}"
+                aria-expanded="${expanded}"
+                title="${expanded ? "点击收起当前变更块，恢复默认 3 行上下文" : `点击查看当前变更块上方和下方各 ${diffContextStep} 行代码`}"
+              >
+                <code>${code}</code>
+              </button>
+            `
+          : `<code>${code}</code>`;
         return `
-          <div class="diff-viewer-wide-row hunk">
+          <div class="diff-viewer-wide-row hunk" data-hunk-index="${hunkIndex}">
             ${icon("diff", 14)}
-            <code>${code}</code>
+            ${hunkLabel}
           </div>
         `;
       }
@@ -7099,17 +7753,52 @@
       `;
     }
 
+    function renderDiffContentSkeleton() {
+      const widths = [
+        "short",
+        "medium",
+        "long",
+        "medium",
+        "short",
+        "long",
+        "medium",
+        "long",
+        "short",
+        "medium"
+      ];
+
+      return `
+        <div class="diff-content-skeleton" aria-hidden="true">
+          <div class="diff-content-skeleton-hunk">
+            <span class="diff-content-skeleton-block diff-content-skeleton-hunk-line"></span>
+          </div>
+          <div class="diff-content-skeleton-code">
+            ${widths.map((width) => `
+              <div class="diff-content-skeleton-row is-${width}">
+                <span class="diff-content-skeleton-block diff-content-skeleton-line-number"></span>
+                <span class="diff-content-skeleton-block diff-content-skeleton-code-line"></span>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+
     function renderDiffPreview(selected) {
       const lines = selected ? diffPreviewLines(selected) : [];
       const matches = collectDiffSearchMatches(lines, state.diffSearchQuery);
       const activeMatch = normalizeDiffSearchActiveMatch(matches);
 
       return `
-        ${state.diffSearchOpen ? renderDiffSearchPopover(matches, activeMatch) : ""}
-        <div class="diff-viewer-code" tabindex="0" role="region" aria-label="文件 Diff">
-          ${selected ? `
+        ${state.diffSearchOpen && !state.diffLoading && !state.diffSkeletonVisible ? renderDiffSearchPopover(matches, activeMatch) : ""}
+        <div class="diff-viewer-code" tabindex="0" role="region" aria-label="文件 Diff" aria-busy="${state.diffLoading || state.diffSkeletonVisible}">
+          ${state.diffLoading || state.diffSkeletonVisible
+            ? state.diffSkeletonVisible
+              ? renderDiffContentSkeleton()
+              : ""
+            : selected ? `
             <div class="diff-viewer-unified">
-              ${lines.map((line, lineIndex) => renderDiffPreviewLine(line, lineIndex, matches, activeMatch)).join("")}
+              ${lines.map((line, lineIndex) => renderDiffPreviewLine(line, lineIndex, matches, activeMatch, selected)).join("")}
             </div>
           ` : `
             <div class="change-filter-empty">
@@ -7131,7 +7820,6 @@
       const openStandaloneAction =
         selected && config.extensions.openStandaloneDiff
           ? `
-              <span class="diff-viewer-file-header-separator" aria-hidden="true"></span>
               <span class="diff-viewer-header-action-slot">
                 <a
                   class="icon-button diff-open-external"
@@ -7173,7 +7861,8 @@
                     <strong>+${stats.additions}</strong>
                     <em>-${stats.deletions}</em>
                   </span>
-                ` : `<span class="diff-viewer-stats muted">按需读取文本 Diff</span>`}
+                ` : ""}
+                ${stats && openStandaloneAction ? `<span class="diff-viewer-file-header-separator" aria-hidden="true"></span>` : ""}
                 ${openStandaloneAction}
               </div>
             </header>
@@ -7255,6 +7944,56 @@
       scrollToCurrentDiffSearchMatch();
     }
 
+    function expandDiffContext(direction, hunkIndex) {
+      const selected = currentChangedFiles().find(
+        (file) => file.path === state.selectedFile
+      );
+      if (!canExpandDiffPreview(selected)) return;
+
+      const current = state.diffHunkContexts[hunkIndex] || {
+        beforeLines: defaultDiffContextLines,
+        afterLines: defaultDiffContextLines,
+        full: false
+      };
+      if (direction === "reset") {
+        delete state.diffHunkContexts[hunkIndex];
+      } else if (direction === "around") {
+        state.diffHunkContexts[hunkIndex] = {
+          beforeLines: diffContextStep,
+          afterLines: diffContextStep,
+          full: false
+        };
+      } else if (direction === "all") {
+        state.diffHunkContexts[hunkIndex] = {
+          beforeLines: Number.MAX_SAFE_INTEGER,
+          afterLines: Number.MAX_SAFE_INTEGER,
+          full: true
+        };
+      } else if (direction === "up") {
+        state.diffHunkContexts[hunkIndex] = {
+          ...current,
+          beforeLines: current.beforeLines + diffContextStep,
+          full: false
+        };
+      } else if (direction === "down") {
+        state.diffHunkContexts[hunkIndex] = {
+          ...current,
+          afterLines: current.afterLines + diffContextStep,
+          full: false
+        };
+      }
+
+      renderChanges();
+      requestAnimationFrame(() => {
+        document
+          .querySelector(`.diff-viewer-wide-row.hunk[data-hunk-index="${hunkIndex}"]`)
+          ?.scrollIntoView({
+            block: "center",
+            inline: "nearest"
+          });
+      });
+    }
+
     function handleDiffSearchKeydown(event) {
       if (event.key === "Enter") {
         event.preventDefault();
@@ -7267,30 +8006,117 @@
       }
     }
 
+    function historyRefDisplayName(ref) {
+      return String(ref || "")
+        .replace(/^refs\/heads\//, "")
+        .replace(/^refs\/remotes\//, "");
+    }
+
+    function historyBranchOptions(repo = currentRepo()) {
+      const localNames = branchSwitchOptions(repo).map((branch) => branch.name);
+      const local = localNames.map((name) => ({
+        fullName: `refs/heads/${name}`,
+        name,
+        remote: false,
+        current: name === repo.branch,
+        upstream: `origin/${name}`
+      }));
+      const remoteNames = [
+        repo.upstream,
+        ...localNames.map((name) => `origin/${name}`)
+      ].filter(Boolean);
+      const remote = [...new Set(remoteNames)].map((name) => ({
+        fullName: `refs/remotes/${name}`,
+        name,
+        remote: true,
+        merged:
+          name === repo.upstream ||
+          /\/(?:main|master)$/.test(name),
+        current: false,
+        upstream: ""
+      }));
+      return [...local, ...remote];
+    }
+
+    function defaultHistoryRef() {
+      return `refs/heads/${currentRepo().branch}`;
+    }
+
+    function currentHistorySingleRef() {
+      return state.historyScope?.kind === "ref"
+        ? state.historyScope.ref
+        : state.historyLastSingleRef || defaultHistoryRef();
+    }
+
+    function historyUpstreamRef(ref) {
+      const branches = historyBranchOptions();
+      const selected = branches.find((branch) => branch.fullName === ref);
+      if (!selected || selected.remote || !selected.upstream) return "";
+      return branches.find(
+        (branch) => branch.remote && branch.name === selected.upstream
+      )?.fullName || "";
+    }
+
     function currentCommits() {
+      if (state.historyScope?.kind === "compare") {
+        return comparedHistoryCommits(state.historyScope);
+      }
+      return commitsForHistoryRef(
+        state.historyScope?.kind === "ref"
+          ? state.historyScope.ref
+          : defaultHistoryRef()
+      );
+    }
+
+    function commitsForHistoryRef(ref) {
       const repo = currentRepo();
+      const branchName = historyRefDisplayName(ref);
+      const isCurrent = branchName === repo.branch;
+      const seed = [...branchName].reduce(
+        (total, character) => total + character.charCodeAt(0),
+        0
+      );
+      const branchRepo = isCurrent
+        ? repo
+        : {
+            ...repo,
+            branch: branchName,
+            head: `${repo.head.slice(0, 4)}${(seed % 0xfff)
+              .toString(16)
+              .padStart(3, "0")}`,
+            lastSubject: `feat(${branchName}): 更新分支功能`
+          };
       const overrides = recentCommitOverrides[repo.id];
       const seededCommits = overrides
-        ? overrides.map((override) => repoCommit(repo, override))
+        ? overrides.map((override) =>
+            repoCommit(branchRepo, {
+              ...override,
+              refs: [branchName]
+            })
+          )
         : [
-            repoCommit(repo),
-            repoCommit(repo, {
-              hash: `${repo.head.slice(0, 5)}a1`,
-              subject: `chore(${repo.name}): 更新仓库配置`,
-              date: "2026-09-01T10:20:00+08:00"
+            repoCommit(branchRepo, {
+              refs: [branchName]
             }),
-            repoCommit(repo, {
-              hash: `${repo.head.slice(0, 5)}b2`,
-              subject: `fix(${repo.name}): 补充状态检查`,
-              date: "2026-08-30T16:45:00+08:00"
+            repoCommit(branchRepo, {
+              hash: `${branchRepo.head.slice(0, 5)}a1`,
+              subject: `chore(${repo.name}): 更新 ${branchName} 配置`,
+              date: "2026-09-01T10:20:00+08:00",
+              refs: [branchName]
+            }),
+            repoCommit(branchRepo, {
+              hash: `${branchRepo.head.slice(0, 5)}b2`,
+              subject: `fix(${repo.name}): 补充 ${branchName} 状态检查`,
+              date: "2026-08-30T16:45:00+08:00",
+              refs: [branchName]
             })
           ];
       const subjects = [
-        `refactor(${repo.name}): 优化模块边界`,
-        `docs(${repo.name}): 更新开发说明`,
-        `feat(${repo.name}): 完善工作流`,
-        `test(${repo.name}): 补充回归用例`,
-        `chore(${repo.name}): 同步依赖版本`
+        `refactor(${repo.name}): 优化 ${branchName} 模块边界`,
+        `docs(${repo.name}): 更新 ${branchName} 开发说明`,
+        `feat(${repo.name}): 完善 ${branchName} 工作流`,
+        `test(${repo.name}): 补充 ${branchName} 回归用例`,
+        `chore(${repo.name}): 同步 ${branchName} 依赖版本`
       ];
       const authors = [
         repo.lastAuthor,
@@ -7306,17 +8132,56 @@
           { length: Math.max(0, 50 - seededCommits.length) },
           (_, offset) => {
             const index = seededCommits.length + offset;
-            const date = new Date(repo.lastDate);
+            const date = new Date(branchRepo.lastDate);
             date.setDate(date.getDate() - index);
-            return repoCommit(repo, {
-              hash: `${repo.head.slice(0, 4)}${String(index + 1).padStart(3, "0")}`,
+            return repoCommit(branchRepo, {
+              hash: `${branchRepo.head.slice(0, 4)}${String(index + 1).padStart(3, "0")}`,
               author: authors[offset % authors.length],
               date: date.toISOString(),
-              subject: subjects[offset % subjects.length]
+              subject: subjects[offset % subjects.length],
+              refs: [branchName]
             });
           }
         )
       ];
+    }
+
+    function comparedHistoryCommits(scope) {
+      const repo = currentRepo();
+      const leftName = historyRefDisplayName(scope.leftRef);
+      const rightName = historyRefDisplayName(scope.rightRef);
+      const left = commitsForHistoryRef(scope.leftRef)
+        .slice(0, 4)
+        .map((commit) => ({
+          ...commit,
+          refs: [leftName],
+          color: "var(--purple)",
+          comparisonSide: "left"
+        }));
+      const right = commitsForHistoryRef(scope.rightRef)
+        .slice(0, 3)
+        .map((commit) => ({
+          ...commit,
+          refs: [rightName],
+          color: "var(--blue)",
+          comparisonSide: "right"
+        }));
+      const interleaved = [];
+      for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+        if (right[index]) interleaved.push(right[index]);
+        if (left[index]) interleaved.push(left[index]);
+      }
+      interleaved.push(
+        repoCommit(repo, {
+          hash: `${repo.head.slice(0, 4)}000`,
+          subject: `${leftName} 与 ${rightName} 的共同历史基点`,
+          date: "2026-08-25T09:30:00+08:00",
+          refs: ["共同基点"],
+          color: "var(--muted)",
+          comparisonSide: "base"
+        })
+      );
+      return interleaved;
     }
 
     function filteredHistoryCommits(commits = currentCommits()) {
@@ -7350,6 +8215,345 @@
         state.historyFilter = "";
       }
       renderHistory();
+    }
+
+    function historyScopeCaption(commits) {
+      const scope = state.historyScope;
+      if (!scope) {
+        return `只读快照 · 最近 ${commits.length} 条 ${currentRepo().branch} 提交`;
+      }
+      if (scope.kind === "ref") {
+        return `只读快照 · 最近 ${commits.length} 条 ${historyRefDisplayName(scope.ref)} 提交`;
+      }
+      return `只读对比 · ${historyRefDisplayName(scope.leftRef)} ↔ ${historyRefDisplayName(scope.rightRef)}`;
+    }
+
+    function renderHistoryRefPicker(
+      label,
+      selectedRef,
+      side,
+      disabledRef = ""
+    ) {
+      const branches = historyBranchOptions();
+      const selected = branches.find(
+        (branch) => branch.fullName === selectedRef
+      );
+      const local = branches.filter((branch) => !branch.remote);
+      const remote = branches.filter((branch) => branch.remote);
+      const pickerId = `history-ref-${side}`;
+      const renderOptions = (group, heading, items) => items.length
+        ? `
+          <div
+            class="history-ref-group"
+            data-history-ref-group="${group}"
+            ${group === "remote" ? "hidden" : ""}
+          >
+            <span class="menu-heading history-ref-group-heading" hidden>${escapeHtml(heading)}</span>
+            ${items.map((branch) => `
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked="${branch.fullName === selectedRef}"
+                class="menu-item history-ref-option${branch.fullName === selectedRef ? " is-selected" : ""}"
+                data-branch-group="${group}"
+                data-merged="${branch.merged === true}"
+                data-selected="${branch.fullName === selectedRef}"
+                data-search-text="${escapeHtml(`${branch.name} ${branch.fullName} ${branch.upstream}`.toLowerCase())}"
+                ${group === "remote" ? "hidden" : ""}
+                ${branch.fullName === disabledRef ? "disabled" : ""}
+                title="${branch.fullName === disabledRef ? "比较范围不能选择同一个分支" : escapeHtml(branch.fullName)}"
+                onclick="selectHistoryRef('${side}', decodeURIComponent('${encodeURIComponent(branch.fullName)}'))"
+              >
+                <span class="menu-item-icon">${icon("branch", 14)}</span>
+                <span class="history-ref-option-copy">
+                  <strong>${escapeHtml(branch.name)}</strong>
+                  ${!branch.remote && branch.upstream
+                    ? `<small>跟踪 ${escapeHtml(branch.upstream)}</small>`
+                    : ""}
+                </span>
+              </button>
+            `).join("")}
+          </div>
+        `
+        : "";
+
+      return `
+        <span class="history-ref-picker-label">${escapeHtml(label)}</span>
+        <details
+          class="history-ref-picker"
+          data-dropdown-id="${pickerId}"
+          ontoggle="onHistoryRefPickerToggle(event.currentTarget)"
+        >
+          <summary
+            class="history-ref-trigger"
+            aria-label="选择${escapeHtml(label)}分支"
+            title="${selected?.remote ? `${escapeHtml(selected.name)} · 本地远程引用快照` : escapeHtml(selected?.fullName || selectedRef)}"
+          >
+            ${icon("branch", 13)}
+            <span>${escapeHtml(selected?.name || historyRefDisplayName(selectedRef) || "选择分支")}</span>
+            ${icon("chevronDown", 12)}
+          </summary>
+          <div
+            class="history-ref-menu menu-surface"
+            data-active-group="local"
+            data-show-merged-remote="false"
+            role="menu"
+            aria-label="${escapeHtml(label)}分支"
+          >
+            <div class="history-ref-menu-header">
+              <input
+                class="history-ref-search"
+                type="search"
+                aria-label="搜索${escapeHtml(label)}分支"
+                autocomplete="off"
+                placeholder="搜索本地或远程分支"
+                oninput="filterHistoryRefOptions(this)"
+              />
+              <div class="history-ref-breadcrumb-row">
+                <div class="history-ref-breadcrumb" role="tablist" aria-label="分支类型">
+                  <button
+                    type="button"
+                    class="is-active"
+                    data-history-ref-group="local"
+                    role="tab"
+                    aria-selected="true"
+                    onclick="selectHistoryRefGroup(this, 'local')"
+                  >
+                    <span>本地分支</span>
+                    <span class="history-ref-count">${local.length}</span>
+                  </button>
+                  <span aria-hidden="true">/</span>
+                  <button
+                    type="button"
+                    data-history-ref-group="remote"
+                    role="tab"
+                    aria-selected="false"
+                    onclick="selectHistoryRefGroup(this, 'remote')"
+                  >
+                    <span>远程分支</span>
+                    <span class="history-ref-count">${remote.length}</span>
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  class="history-ref-merged-toggle"
+                  aria-pressed="false"
+                  hidden
+                  onclick="toggleHistoryMergedRemote(this)"
+                ></button>
+              </div>
+            </div>
+            ${renderOptions("local", "本地分支", local)}
+            ${local.length && remote.length ? '<div class="menu-separator history-ref-group-separator" hidden aria-hidden="true"></div>' : ""}
+            ${renderOptions("remote", "远程分支", remote)}
+            <span class="history-ref-empty" hidden>没有匹配的分支</span>
+          </div>
+        </details>
+      `;
+    }
+
+    function renderHistoryScopeControls() {
+      const scope = state.historyScope;
+      if (scope?.kind === "compare") {
+        return `
+          <div class="history-scope-controls comparison" aria-label="比较分支提交历史">
+            ${renderHistoryRefPicker("基准", scope.leftRef, "left", scope.rightRef)}
+            ${renderHistoryRefPicker("目标", scope.rightRef, "right", scope.leftRef)}
+            ${renderButton({
+              label: "退出比较",
+              size: "small",
+              variant: "default",
+              className: "history-compare-exit",
+              attributes: 'onclick="exitHistoryComparison()"'
+            })}
+          </div>
+        `;
+      }
+
+      return `
+        <div class="history-scope-controls" aria-label="选择提交历史范围">
+          ${renderHistoryRefPicker("查看", currentHistorySingleRef(), "single")}
+          ${renderButton({
+            label: "比较",
+            title: "比较两个本地或远程跟踪分支的差异提交",
+            size: "small",
+            variant: "default",
+            icon: icon("diff", 13),
+            attributes: 'onclick="beginHistoryComparison()"'
+          })}
+        </div>
+      `;
+    }
+
+    function updateHistoryRefMenu(menu) {
+      if (!menu) return;
+      const input = menu.querySelector(".history-ref-search");
+      if (!input) return;
+      const query = input.value.trim().toLowerCase();
+      const activeGroup = menu.dataset.activeGroup || "local";
+      const showMergedRemote =
+        menu.dataset.showMergedRemote === "true";
+      const options = [...menu.querySelectorAll(".history-ref-option")];
+      let visible = 0;
+      const mergedRemoteCount = options.filter(
+        (option) =>
+          option.dataset.branchGroup === "remote" &&
+          option.dataset.merged === "true" &&
+          option.dataset.selected !== "true"
+      ).length;
+      const groupMatches = {
+        local: 0,
+        remote: 0
+      };
+      options.forEach((option) => {
+        const matches = query
+          ? option.dataset.searchText.includes(query)
+          : option.dataset.branchGroup === activeGroup &&
+            (
+              option.dataset.branchGroup !== "remote" ||
+              showMergedRemote ||
+              option.dataset.merged !== "true" ||
+              option.dataset.selected === "true"
+            );
+        option.hidden = !matches;
+        if (matches) {
+          visible += 1;
+          groupMatches[option.dataset.branchGroup] += 1;
+        }
+      });
+      menu.querySelectorAll(".history-ref-group").forEach((group) => {
+        const groupName = group.dataset.historyRefGroup;
+        group.hidden = groupMatches[groupName] === 0;
+        const heading = group.querySelector(".history-ref-group-heading");
+        if (heading) heading.hidden = !query;
+      });
+      menu.querySelectorAll(".history-ref-breadcrumb button").forEach((button) => {
+        const selected =
+          button.dataset.historyRefGroup === activeGroup;
+        button.classList.toggle("is-active", selected);
+        button.setAttribute("aria-selected", String(selected));
+      });
+      const separator = menu.querySelector(".history-ref-group-separator");
+      if (separator) {
+        separator.hidden = !query
+          || groupMatches.local === 0
+          || groupMatches.remote === 0;
+      }
+      const mergedToggle = menu.querySelector(
+        ".history-ref-merged-toggle"
+      );
+      if (mergedToggle) {
+        mergedToggle.hidden =
+          activeGroup !== "remote" ||
+          Boolean(query) ||
+          mergedRemoteCount === 0;
+        mergedToggle.setAttribute(
+          "aria-pressed",
+          String(showMergedRemote)
+        );
+        mergedToggle.textContent = showMergedRemote
+          ? "隐藏已合并"
+          : `显示已合并 ${mergedRemoteCount}`;
+      }
+      const empty = menu.querySelector(".history-ref-empty");
+      if (empty) empty.hidden = visible > 0;
+    }
+
+    function filterHistoryRefOptions(input) {
+      updateHistoryRefMenu(input.closest(".history-ref-menu"));
+    }
+
+    function selectHistoryRefGroup(button, group) {
+      const menu = button.closest(".history-ref-menu");
+      if (!menu) return;
+      menu.dataset.activeGroup = group;
+      const input = menu.querySelector(".history-ref-search");
+      if (input) input.value = "";
+      updateHistoryRefMenu(menu);
+    }
+
+    function toggleHistoryMergedRemote(button) {
+      const menu = button.closest(".history-ref-menu");
+      if (!menu) return;
+      menu.dataset.showMergedRemote = String(
+        menu.dataset.showMergedRemote !== "true"
+      );
+      updateHistoryRefMenu(menu);
+    }
+
+    function onHistoryRefPickerToggle(details) {
+      positionDetailsMenu(details, { side: "bottom", align: "end" });
+      if (!details.open) return;
+      const menu = details.querySelector(".history-ref-menu");
+      if (!menu) return;
+      menu.dataset.activeGroup = "local";
+      menu.dataset.showMergedRemote = "false";
+      const input = menu.querySelector(".history-ref-search");
+      if (input) input.value = "";
+      updateHistoryRefMenu(menu);
+      requestAnimationFrame(() => input?.focus());
+    }
+
+    function resetHistoryScopeView() {
+      state.historyFilter = "";
+      state.historyFilterOpen = false;
+      state.historyDetailOpen = false;
+      state.selectedCommit = currentCommits()[0]?.hash || "";
+      renderHistory();
+    }
+
+    function selectHistoryRef(side, ref) {
+      if (side === "single") {
+        state.historyLastSingleRef = ref;
+        state.historyScope = { kind: "ref", ref };
+        resetHistoryScopeView();
+        return;
+      }
+      const current = state.historyScope?.kind === "compare"
+        ? state.historyScope
+        : {
+            kind: "compare",
+            leftRef: historyUpstreamRef(currentHistorySingleRef()),
+            rightRef: currentHistorySingleRef()
+          };
+      if (!current.leftRef) return;
+      const next = {
+        ...current,
+        [side === "left" ? "leftRef" : "rightRef"]: ref
+      };
+      if (next.leftRef === next.rightRef) return;
+      state.historyScope = next;
+      resetHistoryScopeView();
+    }
+
+    function beginHistoryComparison() {
+      const targetRef = currentHistorySingleRef();
+      const upstreamRef = historyUpstreamRef(targetRef);
+      if (!upstreamRef) {
+        showToast(
+          "请选择比较基准",
+          "当前查看范围没有可用的上游跟踪分支。",
+          "branch"
+        );
+        return;
+      }
+      state.historyLastSingleRef = targetRef;
+      state.historyScope = {
+        kind: "compare",
+        leftRef: upstreamRef,
+        rightRef: targetRef
+      };
+      resetHistoryScopeView();
+    }
+
+    function exitHistoryComparison() {
+      state.historyScope = state.historyLastSingleRef
+        ? {
+            kind: "ref",
+            ref: state.historyLastSingleRef
+          }
+        : null;
+      resetHistoryScopeView();
     }
 
     function currentBranchRows() {
@@ -7616,6 +8820,7 @@
       view: "workspace",
       repoId: "workspace-root",
       tab: "overview",
+      repositoryTab: "overview",
       settingsSection: "general",
       selectedCommit: repositories[0].head,
       historyDetailOpen: false,
@@ -7624,8 +8829,16 @@
       diffSearchOpen: false,
       diffSearchQuery: "",
       diffSearchActiveMatch: 0,
+      diffHunkContexts: {},
+      diffLoading: false,
+      diffLoadingTimer: null,
+      diffSkeletonVisible: false,
+      diffSkeletonMinimumTimer: null,
+      diffSkeletonShownAt: 0,
       historyFilter: "",
       historyFilterOpen: false,
+      historyScope: null,
+      historyLastSingleRef: null,
       workspaceWorktreeFilter: "",
       workspaceWorktreeFilterOpen: false,
       workspaceWorktreeFacets: [],
@@ -8769,7 +9982,7 @@
       withCommitDraftGuard(() => {
         state.repoId = repoId;
         state.view = "repository";
-        state.tab = "overview";
+        state.tab = state.repositoryTab;
         renderSidebar();
         renderMain();
       });
@@ -10634,15 +11847,18 @@
         state.tab === "history"
           ? state.historyDetailOpen && state.selectedCommit === commit.hash
           : state.selectedCommit === commit.hash;
+      const comparisonClass = commit.comparisonSide
+        ? ` comparison-${commit.comparisonSide}`
+        : "";
       return `
-        <div role="button" tabindex="0" class="commit-row ${isSelected ? "selected" : ""}" aria-current="${isSelected}" onclick="selectCommit('${commit.hash}')" onkeydown="activateOnKey(event)">
-          <div class="commit-graph ${index === 2 ? "branch" : ""}" style="--lane-color:${commit.color}">
+        <div role="button" tabindex="0" class="commit-row${comparisonClass} ${isSelected ? "selected" : ""}" aria-current="${isSelected}" onclick="selectCommit('${commit.hash}')" onkeydown="activateOnKey(event)">
+          <div class="commit-graph ${commit.comparisonSide ? `comparison-${commit.comparisonSide}` : index === 2 ? "branch" : ""}" style="--lane-color:${commit.color}">
             <span class="commit-node"></span>
           </div>
           <div class="commit-message">
             <div class="commit-subject">${commit.subject}</div>
             <div class="commit-meta">
-              ${commit.refs.map((ref) => `<span class="ref-label ${ref.startsWith("origin") ? "remote" : ""}">${ref}</span>`).join("")}
+              ${commit.refs.map((ref) => `<span class="ref-label ${ref.startsWith("origin") ? "remote" : ""}${commit.comparisonSide ? ` comparison-${commit.comparisonSide}` : ""}">${ref}</span>`).join("")}
             </div>
           </div>
           <div class="commit-time" title="提交日期">${commit.time}</div>
@@ -11003,9 +12219,39 @@
       );
     }
 
-    function discardChangeSection(mode) {
-      const files = changeSectionFiles(mode);
-      if (!files.length) return;
+    function openDiscardChangeConfirmation(files, onConfirm, scope = "file") {
+      const untrackedCount = files.filter(
+        (file) => file.status === "untracked"
+      ).length;
+      const singleFile = scope === "file" ? files[0] : null;
+      const title = singleFile
+        ? untrackedCount > 0
+          ? "永久删除未跟踪文件？"
+          : `放弃对“${singleFile.path}”的更改？`
+        : `放弃 ${files.length} 个文件的更改？`;
+      const targetSummary = singleFile
+        ? singleFile.path
+        : `${files.length} 个文件${
+            untrackedCount > 0
+              ? `，其中 ${untrackedCount} 个未跟踪文件`
+              : ""
+          }`;
+      const risk = untrackedCount > 0
+        ? `其中 ${untrackedCount} 个未跟踪文件会从磁盘永久删除，不会移入回收站，且无法撤销。`
+        : "工作区中的修改将被还原，此操作无法撤销。";
+
+      openConfirmDialog({
+        title,
+        description: `${targetSummary}。${risk} 当前为原型预览，不执行 Git 命令。`,
+        actionLabel:
+          untrackedCount > 0
+            ? "永久删除并放弃"
+            : "确认放弃",
+        onConfirm
+      });
+    }
+
+    function applyDiscardedChanges(files) {
       const discarded = new Set(files.map((file) => file.path));
       const repoId = currentRepo().id;
       changedFilesByRepo[repoId] = currentChangedFiles().filter(
@@ -11017,28 +12263,32 @@
       renderChanges();
       showToast(
         "放弃更改",
-        `${discarded.size} 个文件（原型预览，不执行 Git 命令）`,
+        files.length === 1
+          ? `${files[0].path}（原型预览，不执行 Git 命令）`
+          : `${discarded.size} 个文件（原型预览，不执行 Git 命令）`,
         "undo"
       );
     }
 
+    function discardChangeSection(mode) {
+      const files = changeSectionFiles(mode);
+      if (!files.length) return;
+      openDiscardChangeConfirmation(
+        [...files],
+        () => applyDiscardedChanges(files),
+        "group"
+      );
+    }
+
     function discardChangeFile(path) {
-      const repoId = currentRepo().id;
       const target = currentChangedFiles().find(
         (file) => file.path === path
       );
       if (!target) return;
-      changedFilesByRepo[repoId] = currentChangedFiles().filter(
-        (file) => file.path !== path
-      );
-      if (state.selectedFile === path) {
-        state.selectedFile = "";
-      }
-      renderChanges();
-      showToast(
-        "放弃更改",
-        `${path}（原型预览，不执行 Git 命令）`,
-        "undo"
+      openDiscardChangeConfirmation(
+        [target],
+        () => applyDiscardedChanges([target]),
+        "file"
       );
     }
 
@@ -11143,7 +12393,6 @@
             <strong class="file-name" title="${escapeHtml(file.path)}">${escapeHtml(displayName)}</strong>
             <span class="file-meta">
               <span class="file-status-letter ${file.status}">${statusLetter[file.status] || "M"}</span>
-              <small class="file-dir">${changeFileStatusLabel(file)}</small>
               <span class="file-change-stats" aria-label="新增 ${stats.additions} 行，删除 ${stats.deletions} 行">
                 <strong>+${stats.additions}</strong>
                 <em>-${stats.deletions}</em>
@@ -11484,6 +12733,14 @@
     function renderHistory() {
       const commits = currentCommits();
       const visibleCommits = filteredHistoryCommits(commits);
+      const comparison = state.historyScope?.kind === "compare"
+        ? {
+            ...state.historyScope,
+            leftOnly: commits.filter((item) => item.comparisonSide === "left").length,
+            rightOnly: commits.filter((item) => item.comparisonSide === "right").length,
+            mergeBase: commits.find((item) => item.comparisonSide === "base")?.hash
+          }
+        : null;
       const selectedCommit = state.historyDetailOpen
         ? commits.find((item) => item.hash === state.selectedCommit)
         : null;
@@ -11494,34 +12751,55 @@
             <section class="history-list">
               <div class="panel-header sticky-panel-header">
                 <div class="panel-title">${icon("history")}提交历史</div>
-                <span class="panel-caption">只读快照 · 最近 ${commits.length} 条 HEAD 提交</span>
-                ${state.historyFilterOpen ? `
-                  <input
-                    id="historyFilter"
-                    class="history-filter-input"
-                    type="text"
-                    aria-label="筛选提交历史"
-                    autocomplete="off"
-                    spellcheck="false"
-                    placeholder="筛选提交、作者或 Hash"
-                    value="${escapeHtml(state.historyFilter)}"
-                    oninput="filterHistory(this.value, this.selectionStart ?? this.value.length)"
-                    onkeydown="if (event.key === 'Escape') { event.preventDefault(); toggleHistoryFilter(); }"
-                  />
-                ` : ""}
-                ${renderButton({
-                  label: "筛选",
-                  size: "small",
-                  variant: "default",
-                  className: "panel-header-action",
-                  icon: icon("filter", 13),
-                  attributes: `aria-expanded="${state.historyFilterOpen}" onclick="toggleHistoryFilter()"`
-                })}
+                <span class="panel-caption">${historyScopeCaption(commits)}</span>
+                <div class="history-header-actions">
+                  ${renderHistoryScopeControls()}
+                  <div class="history-filter-controls">
+                    ${state.historyFilterOpen ? `
+                      <input
+                        id="historyFilter"
+                        class="history-filter-input"
+                        type="text"
+                        aria-label="筛选提交历史"
+                        autocomplete="off"
+                        spellcheck="false"
+                        placeholder="筛选提交、作者或 Hash"
+                        value="${escapeHtml(state.historyFilter)}"
+                        oninput="filterHistory(this.value, this.selectionStart ?? this.value.length)"
+                        onkeydown="if (event.key === 'Escape') { event.preventDefault(); toggleHistoryFilter(); }"
+                      />
+                    ` : ""}
+                    ${renderButton({
+                      label: "筛选",
+                      size: "small",
+                      variant: "default",
+                      className: "panel-header-action",
+                      icon: icon("filter", 13),
+                      attributes: `aria-expanded="${state.historyFilterOpen}" onclick="toggleHistoryFilter()"`
+                    })}
+                  </div>
+                </div>
               </div>
+              ${comparison ? `
+                <div class="history-comparison-summary">
+                  <span class="history-comparison-side left">
+                    ${escapeHtml(historyRefDisplayName(comparison.leftRef))}
+                    <strong>${comparison.leftOnly}</strong> 条独有
+                  </span>
+                  <span class="history-comparison-side right">
+                    ${escapeHtml(historyRefDisplayName(comparison.rightRef))}
+                    <strong>${comparison.rightOnly}</strong> 条独有
+                  </span>
+                  <span class="history-comparison-base">
+                    共同基点 <code>${escapeHtml(comparison.mergeBase || "无")}</code>
+                  </span>
+                  <span class="history-comparison-note">仅显示差异提交与共同基点</span>
+                </div>
+              ` : ""}
               <div class="commit-list">
                 ${visibleCommits.length
                   ? visibleCommits.map(renderCommitRow).join("")
-                  : `<div class="history-filter-empty">${icon("search", 18)}<strong>没有匹配的提交</strong><span>可修改筛选关键词后重试。</span></div>`}
+                  : `<div class="history-filter-empty">${icon(state.historyFilter ? "search" : "history", 18)}<strong>${state.historyFilter ? "没有匹配的提交" : comparison ? "两个分支没有差异提交" : "该引用暂无提交历史"}</strong><span>${state.historyFilter ? "可修改筛选关键词后重试。" : comparison ? "双方当前指向相同历史，或没有可展示的独有提交。" : "可选择其他本地或远程引用查看。"}</span></div>`}
               </div>
             </section>
             ${selectedCommit
@@ -11816,14 +13094,6 @@
               </div>
               <div class="page-actions">
                 ${renderButton({
-                  label: "Prune 预览",
-                  size: "small",
-                  variant: "default",
-                  icon: icon("eye"),
-                  disabled: repo.prunable === 0,
-                  attributes: 'onclick="showToast(\'Prune 预览\', \'先列出可清理记录，不会直接删除目录。\', \'eye\')"'
-                })}
-                ${renderButton({
                   label: "新建 Worktree",
                   size: "small",
                   variant: "primary",
@@ -11956,8 +13226,42 @@
     }
 
     function selectFile(path) {
+      if (state.selectedFile === path) return;
+      state.diffHunkContexts = {};
+      state.diffLoading = true;
       state.selectedFile = path;
+      clearTimeout(state.diffLoadingTimer);
+      clearTimeout(state.diffSkeletonMinimumTimer);
+      state.diffSkeletonMinimumTimer = null;
+      if (!state.diffSkeletonVisible) {
+        state.diffSkeletonVisible = true;
+        state.diffSkeletonShownAt = performance.now();
+      }
       renderChanges();
+      state.diffLoadingTimer = setTimeout(() => {
+        state.diffLoadingTimer = null;
+        if (state.selectedFile !== path) return;
+        state.diffLoading = false;
+        const remaining = state.diffSkeletonVisible
+          ? Math.max(
+              0,
+              500 -
+                (performance.now() -
+                  state.diffSkeletonShownAt)
+            )
+          : 0;
+        state.diffSkeletonMinimumTimer = setTimeout(() => {
+          state.diffSkeletonMinimumTimer = null;
+          if (state.selectedFile !== path) return;
+          state.diffSkeletonVisible = false;
+          if (
+            state.view === "repository" &&
+            state.tab === "changes"
+          ) {
+            renderChanges();
+          }
+        }, remaining);
+      }, 520);
     }
 
     function selectBranch(name) {
@@ -12048,13 +13352,9 @@
       withCommitDraftGuard(() => {
         const repo = repositories.find((item) => item.id === id) || repositories[0];
         const changedFiles = changedFilesByRepo[repo.id] || [];
-        const hasChanges =
-          repo.changes > 0 ||
-          repo.conflicts > 0 ||
-          changedFiles.length > 0;
         state.view = "repository";
         state.repoId = repo.id;
-        state.tab = hasChanges ? "changes" : "overview";
+        state.tab = state.repositoryTab;
         state.selectedCommit = repo.head;
         state.historyDetailOpen = false;
         state.selectedFile = changedFiles[0]?.path || "";
@@ -12105,6 +13405,7 @@
       withCommitDraftGuard(() => {
         state.view = "repository";
         state.tab = tab;
+        state.repositoryTab = tab;
         if (tab === "history") {
           state.historyDetailOpen = false;
         }

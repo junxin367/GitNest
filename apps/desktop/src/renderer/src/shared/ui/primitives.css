@@ -2,8 +2,9 @@
   --gn-button-height: var(--control-compact);
   --gn-button-padding: 0 var(--space-4);
   --gn-button-icon-size: var(--icon-small);
+  --gn-button-background: var(--surface-2);
   --gn-button-primary-color: var(--blue);
-  --gn-button-primary-foreground: var(--on-accent);
+  --gn-button-primary-foreground: #fff;
   position: relative;
   display: inline-flex;
   flex: 0 0 auto;
@@ -17,7 +18,7 @@
   font: inherit;
   line-height: 1;
   white-space: nowrap;
-  background: var(--surface-2);
+  background: var(--gn-button-background);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-regular);
   cursor: pointer;
@@ -60,72 +61,58 @@
 }
 
 .gn-button[data-variant="toolbar"] {
+  --gn-button-background: transparent;
   min-width: 0;
-  background: transparent;
   border-color: transparent;
 }
 
 .gn-button[data-variant="quick"] {
+  --gn-button-background: var(--surface-2);
   min-width: 0;
 }
 
 .gn-button[data-variant="icon"] {
+  --gn-button-background: transparent;
   width: var(--gn-button-height);
   min-width: var(--gn-button-height);
   padding: 0;
   color: var(--muted);
-  background: transparent;
   border-color: transparent;
 }
 
 .gn-button[data-variant="primary"] {
+  --gn-button-background: var(--gn-button-primary-color);
   color: var(--gn-button-primary-foreground);
-  background: var(--gn-button-primary-color);
   border-color: var(--gn-button-primary-color);
   font-weight: var(--font-weight-semibold);
 }
 
 .gn-button[data-variant="danger"] {
+  --gn-button-background: var(--red-soft);
   color: var(--red);
-  background: var(--red-soft);
   border-color: color-mix(in srgb, var(--red) 28%, transparent);
 }
 
 .gn-button[data-variant="danger"][data-emphasis="strong"] {
+  --gn-button-background: var(--red);
   color: var(--color-on-danger);
-  background: var(--red);
   border-color: var(--red);
-}
-
-.gn-button:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--surface-hover);
-  border-color: var(--border);
 }
 
 .gn-button[data-variant="toolbar"][data-selected="true"],
 .gn-button[data-variant="toolbar"][data-emphasis="primary"],
 .gn-button[data-variant="icon"][data-selected="true"] {
+  --gn-button-background: var(--accent-soft);
   color: var(--text);
-  background: var(--accent-soft);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-.gn-button[data-variant="primary"]:hover:not(:disabled) {
+.gn-button:hover:not(:disabled) {
   background: color-mix(
     in srgb,
-    var(--gn-button-primary-color) 88%,
-    var(--text)
+    var(--gn-button-background) 88%,
+    white
   );
-  border-color: color-mix(
-    in srgb,
-    var(--gn-button-primary-color) 88%,
-    var(--text)
-  );
-}
-
-.gn-button[data-variant="danger"][data-emphasis="strong"]:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--red) 86%, black);
 }
 
 .gn-button:active:not(:disabled) {
@@ -195,6 +182,170 @@
 @keyframes gn-button-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+.gn-skeleton-surface {
+  user-select: none;
+}
+
+.gn-skeleton {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 1px;
+  pointer-events: none;
+  background: color-mix(
+    in srgb,
+    var(--surface-3) 82%,
+    var(--surface)
+  );
+  border-radius: var(--radius-small);
+}
+
+.gn-skeleton[data-variant="text"] {
+  height: 0.72em;
+  border-radius: 999px;
+}
+
+.gn-skeleton[data-variant="circle"] {
+  aspect-ratio: 1;
+  border-radius: 50%;
+}
+
+.gn-page-skeleton {
+  display: grid;
+  align-content: start;
+  gap: var(--space-5);
+}
+
+.gn-skeleton-heading {
+  display: grid;
+  gap: var(--space-2);
+  width: min(680px, 100%);
+}
+
+.gn-skeleton-heading > .gn-skeleton:nth-child(1) {
+  width: 112px;
+  height: 10px;
+}
+
+.gn-skeleton-heading > .gn-skeleton:nth-child(2) {
+  width: min(320px, 72%);
+  height: 24px;
+}
+
+.gn-skeleton-heading > .gn-skeleton:nth-child(3) {
+  width: min(560px, 92%);
+  height: 10px;
+}
+
+.gn-skeleton-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.gn-skeleton-card {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  min-height: 104px;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-large);
+}
+
+.gn-skeleton-panel {
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-large);
+}
+
+.gn-skeleton-panel-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-large);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.gn-skeleton-panel-header > :last-child:not(:first-child) {
+  margin-left: auto;
+}
+
+.gn-skeleton-panel-body {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.gn-skeleton-list {
+  display: grid;
+}
+
+.gn-skeleton-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(64px, 18%);
+  align-items: center;
+  gap: var(--space-4);
+  min-height: 52px;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.gn-skeleton-row:last-child {
+  border-bottom: 0;
+}
+
+.gn-skeleton-row-copy {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.gn-skeleton-row-copy > .gn-skeleton:first-child {
+  width: min(320px, 72%);
+}
+
+.gn-skeleton-row-copy > .gn-skeleton:last-child {
+  width: min(220px, 52%);
+}
+
+.gn-skeleton::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--surface-hover) 82%, transparent),
+    transparent
+  );
+  transform: translateX(-100%);
+  animation: gn-skeleton-shimmer 1.35s ease-in-out infinite;
+}
+
+@keyframes gn-skeleton-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gn-skeleton::after {
+    animation: none;
+    opacity: 0.28;
+    transform: none;
+  }
+}
+
+@container (max-width: 900px) {
+  .gn-skeleton-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

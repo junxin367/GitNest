@@ -29,6 +29,10 @@ import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
 import {
+  Skeleton,
+  SkeletonBoundary
+} from "../../shared/ui/Skeleton";
+import {
   Menu,
   MenuHeading,
   MenuItem,
@@ -841,9 +845,11 @@ export function WorkspaceSidebar({
               {workspace?.name ?? "GitNest Workspace"}
             </span>
             <span className="workspace-caption">
-              {workspace
-                ? "1 个 Workspace · 本地持久化"
-                : "正在恢复本地 Workspace…"}
+              {workspace ? (
+                "1 个 Workspace · 本地持久化"
+              ) : (
+                <Skeleton variant="text" width="72%" />
+              )}
             </span>
           </span>
           <span
@@ -1638,31 +1644,45 @@ function SidebarEmpty({
   query: string;
   onClearQuery(): void;
 }) {
-  if (busy && !hasEntries) {
-    return (
-      <div className="sidebar-empty">
-        正在恢复或扫描 Workspace…
-      </div>
-    );
-  }
-
-  if (query) {
-    return (
-      <div className="sidebar-empty">
-        <span>当前筛选条件没有匹配的仓库。</span>
-        <Button size="small"
-          onClick={onClearQuery}
-          type="button"
-        >
-          清除筛选
-        </Button>
-      </div>
-    );
-  }
-
   return (
-    <div className="sidebar-empty">
-      尚未添加目录。可通过选择器、手动路径或拖拽开始。
+    <SkeletonBoundary
+      fallback={<SidebarSkeleton />}
+      hasContent={hasEntries}
+      label="正在读取 Workspace 仓库"
+      loading={busy}
+      surfaceClassName="sidebar-skeleton"
+    >
+      {query ? (
+        <div className="sidebar-empty">
+          <span>当前筛选条件没有匹配的仓库。</span>
+          <Button size="small"
+            onClick={onClearQuery}
+            type="button"
+          >
+            清除筛选
+          </Button>
+        </div>
+      ) : (
+        <div className="sidebar-empty">
+          尚未添加目录。可通过选择器、手动路径或拖拽开始。
+        </div>
+      )}
+    </SkeletonBoundary>
+  );
+}
+
+function SidebarSkeleton() {
+  return (
+    <div className="sidebar-skeleton-list">
+      {Array.from({ length: 5 }, (_, index) => (
+        <div className="sidebar-skeleton-row" key={index}>
+          <Skeleton height={20} variant="circle" width={20} />
+          <div className="gn-skeleton-row-copy">
+            <Skeleton height={10} />
+            <Skeleton height={8} variant="text" />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

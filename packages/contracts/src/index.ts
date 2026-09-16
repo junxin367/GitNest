@@ -33,6 +33,7 @@ export type {
 export type {
   CancelRepositoryOperationRequest,
   CancelRepositoryQueryRequest,
+  CommitHistoryComparisonSideDto,
   CommitFileStatDto,
   CreateRepositoryCommitRequest,
   RepositoryBranchesDto,
@@ -51,6 +52,10 @@ export type {
   RepositoryDiffRequest,
   RepositoryHistoryPageDto,
   RepositoryHistoryRequest,
+  RepositoryHistoryScopeDto,
+  RepositoryMediaKindDto,
+  RepositoryMediaPreviewDto,
+  RepositoryMediaUnavailableReasonDto,
   RepositoryPathsMutationDto,
   RepositoryPathsMutationRequest,
   RepositoryQueryRequest

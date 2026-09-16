@@ -660,7 +660,8 @@ export function registerIpcHandlers(
           input.queryId,
           input.target,
           input.path,
-          input.mode
+          input.mode,
+          input.contextLines
         );
       })
   );
@@ -674,7 +675,8 @@ export function registerIpcHandlers(
           input.queryId,
           input.target,
           input.limit,
-          input.offset
+          input.offset,
+          input.scope
         );
       })
   );
@@ -1526,7 +1528,7 @@ function validateRepositoryQueryRequest(
   };
 }
 
-function validateRepositoryDiffRequest(
+export function validateRepositoryDiffRequest(
   request: unknown
 ): RepositoryDiffRequest {
   const base = validateRepositoryQueryRequest(request);
@@ -1547,14 +1549,33 @@ function validateRepositoryDiffRequest(
     );
   }
 
+  const contextLines =
+    "contextLines" in request
+      ? request.contextLines
+      : undefined;
+  if (
+    contextLines !== undefined &&
+    (typeof contextLines !== "number" ||
+      !Number.isInteger(contextLines) ||
+      contextLines < 0)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Diff context lines must be a non-negative integer."
+    );
+  }
+
   return {
     ...base,
     path: request.path,
-    mode: request.mode as RepositoryDiffRequest["mode"]
+    mode: request.mode as RepositoryDiffRequest["mode"],
+    ...(contextLines === undefined
+      ? {}
+      : { contextLines })
   };
 }
 
-function validateRepositoryHistoryRequest(
+export function validateRepositoryHistoryRequest(
   request: unknown
 ): RepositoryHistoryRequest {
   const base = validateRepositoryQueryRequest(request);
@@ -1568,6 +1589,8 @@ function validateRepositoryHistoryRequest(
 
   const limit = "limit" in request ? request.limit : undefined;
   const offset = "offset" in request ? request.offset : undefined;
+  const rawScope =
+    "scope" in request ? request.scope : undefined;
 
   if (
     (limit !== undefined && typeof limit !== "number") ||
@@ -1579,11 +1602,104 @@ function validateRepositoryHistoryRequest(
     );
   }
 
+  const scope =
+    rawScope === undefined
+      ? undefined
+      : validateRepositoryHistoryScope(rawScope);
+
   return {
     ...base,
     ...(limit === undefined ? {} : { limit }),
-    ...(offset === undefined ? {} : { offset })
+    ...(offset === undefined ? {} : { offset }),
+    ...(scope === undefined ? {} : { scope })
   };
+}
+
+function validateRepositoryHistoryScope(
+  scope: unknown
+): RepositoryHistoryRequest["scope"] {
+  if (!scope || typeof scope !== "object" || !("kind" in scope)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "History scope must identify a ref or comparison."
+    );
+  }
+
+  if (scope.kind === "ref") {
+    if (!("ref" in scope)) {
+      throw new GitError(
+        "INVALID_REQUEST",
+        "Single-ref history requires a ref."
+      );
+    }
+    return {
+      kind: "ref",
+      ref: validateRepositoryHistoryRef(scope.ref)
+    };
+  }
+
+  if (scope.kind === "compare") {
+    if (!("leftRef" in scope) || !("rightRef" in scope)) {
+      throw new GitError(
+        "INVALID_REQUEST",
+        "Compared history requires two refs."
+      );
+    }
+    const leftRef = validateRepositoryHistoryRef(scope.leftRef);
+    const rightRef = validateRepositoryHistoryRef(scope.rightRef);
+    if (leftRef === rightRef) {
+      throw new GitError(
+        "INVALID_REQUEST",
+        "Compared history requires two different refs."
+      );
+    }
+    return {
+      kind: "compare",
+      leftRef,
+      rightRef
+    };
+  }
+
+  throw new GitError(
+    "INVALID_REQUEST",
+    "Unsupported history scope."
+  );
+}
+
+function validateRepositoryHistoryRef(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "History refs must be strings."
+    );
+  }
+  const ref = value.trim();
+  const allowedPrefix =
+    ref.startsWith("refs/heads/") ||
+    ref.startsWith("refs/remotes/");
+  const invalidSyntax =
+    !ref ||
+    ref.length > 1_024 ||
+    /[\x00-\x20\x7f~^:?*[\]\\]/.test(ref) ||
+    ref.includes("..") ||
+    ref.includes("@{") ||
+    ref.includes("//") ||
+    ref.endsWith("/") ||
+    ref.endsWith(".") ||
+    ref.split("/").some(
+      (segment) =>
+        segment === "." ||
+        segment === ".." ||
+        segment.endsWith(".lock")
+    );
+
+  if (!allowedPrefix || invalidSyntax) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "History refs must be exact local or remote-tracking refs."
+    );
+  }
+  return ref;
 }
 
 function validateRepositoryCommitRequest(

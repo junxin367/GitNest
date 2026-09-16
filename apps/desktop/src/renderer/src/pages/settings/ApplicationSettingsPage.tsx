@@ -17,6 +17,10 @@ import { Button } from "../../shared/ui/Button";
 import { Icon, type IconName } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
+import {
+  Skeleton,
+  SkeletonBoundary
+} from "../../shared/ui/Skeleton";
 import { Textarea } from "../../shared/ui/Textarea";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
@@ -208,8 +212,15 @@ export function ApplicationSettingsPage({
   );
 
   return (
-    <div className="page-scroll settings-page-scroll">
-      <div className="application-settings-page">
+    <SkeletonBoundary
+      fallback={<ApplicationSettingsSkeleton />}
+      hasContent={appSettings.loaded}
+      label="正在读取应用设置"
+      loading={appSettings.loading}
+      surfaceClassName="page-scroll settings-page-scroll gn-page-skeleton application-settings-skeleton"
+    >
+      <div className="page-scroll settings-page-scroll">
+        <div className="application-settings-page">
         <section className="page-heading">
           <div>
             <span className="eyebrow">应用偏好</span>
@@ -692,19 +703,72 @@ export function ApplicationSettingsPage({
         </div>
       </div>
 
-      {clearKeyConfirmOpen && (
-        <ClearAiKeyDialog
-          busy={appSettings.clearingKey}
-          onCancel={() => setClearKeyConfirmOpen(false)}
-          onConfirm={async () => {
-            const cleared = await appSettings.clearAiApiKey();
-            if (cleared) {
-              setAiKey("");
-              setClearKeyConfirmOpen(false);
-            }
-          }}
-        />
-      )}
+        {clearKeyConfirmOpen && (
+          <ClearAiKeyDialog
+            busy={appSettings.clearingKey}
+            onCancel={() => setClearKeyConfirmOpen(false)}
+            onConfirm={async () => {
+              const cleared = await appSettings.clearAiApiKey();
+              if (cleared) {
+                setAiKey("");
+                setClearKeyConfirmOpen(false);
+              }
+            }}
+          />
+        )}
+      </div>
+    </SkeletonBoundary>
+  );
+}
+
+function ApplicationSettingsSkeleton() {
+  return (
+    <div className="application-settings-page">
+      <div className="gn-skeleton-heading">
+        <Skeleton />
+        <Skeleton />
+        <Skeleton />
+      </div>
+      <div className="settings-layout">
+        <div className="panel settings-nav settings-nav-skeleton">
+          <Skeleton height={10} variant="text" width="36%" />
+          {Array.from({ length: 4 }, (_, index) => (
+            <div className="settings-nav-skeleton-row" key={index}>
+              <Skeleton height={18} variant="circle" width={18} />
+              <div className="gn-skeleton-row-copy">
+                <Skeleton height={10} />
+                <Skeleton height={8} variant="text" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="settings-content">
+          {Array.from({ length: 3 }, (_, index) => (
+            <div className="gn-skeleton-panel" key={index}>
+              <div className="gn-skeleton-panel-header">
+                <div className="gn-skeleton-row-copy">
+                  <Skeleton height={12} />
+                  <Skeleton height={9} variant="text" />
+                </div>
+              </div>
+              <div className="gn-skeleton-panel-body">
+                {Array.from({ length: 3 }, (_, rowIndex) => (
+                  <div
+                    className="settings-skeleton-control"
+                    key={rowIndex}
+                  >
+                    <div className="gn-skeleton-row-copy">
+                      <Skeleton height={10} />
+                      <Skeleton height={8} variant="text" />
+                    </div>
+                    <Skeleton height={28} width={96} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

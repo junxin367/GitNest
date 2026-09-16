@@ -33,7 +33,29 @@ export interface ProcessResult {
   outputTruncated?: boolean;
 }
 
-export async function runProcess({
+export interface ProcessBufferResult {
+  exitCode: number;
+  stdout: Buffer;
+  stderr: string;
+  durationMs: number;
+  outputTruncated?: boolean;
+}
+
+export function runProcess(
+  request: ProcessRequest
+): Promise<ProcessResult> {
+  return runProcessWithStdout(request, (stdout) =>
+    stdout.toString("utf8")
+  );
+}
+
+export function runProcessBuffer(
+  request: ProcessRequest
+): Promise<ProcessBufferResult> {
+  return runProcessWithStdout(request, (stdout) => stdout);
+}
+
+async function runProcessWithStdout<Stdout extends string | Buffer>({
   executable,
   args,
   cwd,
@@ -45,7 +67,13 @@ export async function runProcess({
   allowFailure = false,
   writeIntent = false,
   environment
-}: ProcessRequest): Promise<ProcessResult> {
+}: ProcessRequest, decodeStdout: (stdout: Buffer) => Stdout): Promise<{
+  exitCode: number;
+  stdout: Stdout;
+  stderr: string;
+  durationMs: number;
+  outputTruncated?: boolean;
+}> {
   if (signal?.aborted) {
     throw new GitError(
       "COMMAND_CANCELLED",
@@ -64,7 +92,7 @@ export async function runProcess({
     stdio: ["ignore", "pipe", "pipe"]
   };
 
-  return new Promise<ProcessResult>((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const child = spawn(executable, [...args], spawnOptions);
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
@@ -166,7 +194,7 @@ export async function runProcess({
       settled = true;
       cleanup();
 
-      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+      const stdout = decodeStdout(Buffer.concat(stdoutChunks));
       const stderr = Buffer.concat(stderrChunks).toString("utf8");
       const durationMs = Math.round(performance.now() - startedAt);
 

@@ -9,10 +9,14 @@ import {
   type Ref
 } from "react";
 
+import type { RepositoryMediaPreviewDto } from "@gitnest/contracts";
+
 import { copyTextToClipboard } from "../../shared/lib/copyTextToClipboard";
 import {
+  buildLocalizedDiffContent,
   collectDiffViewerSearchHits,
   parseDiffViewModel,
+  type DiffHunkContextRange,
   type DiffSearchHit,
   type DiffViewerLayout,
   type SplitDiffCell
@@ -20,12 +24,51 @@ import {
 import { Button } from "../../shared/ui/Button";
 import { DiffSearchPopover } from "../../shared/ui/DiffSearchPopover";
 import { Icon, type IconName } from "../../shared/ui/Icon";
+import { Skeleton } from "../../shared/ui/Skeleton";
 import type { DiffDocumentFeatureConfig } from "./diffWorkspaceConfiguration";
 
 export type DiffPathCopyStatus =
   | "idle"
   | "copied"
   | "failed";
+
+export const DEFAULT_DIFF_CONTEXT_LINES = 3;
+export const DIFF_CONTEXT_STEP = 10;
+export const FULL_DIFF_CONTEXT_LINES = 100_000;
+const DIFF_CONTENT_SKELETON_ROWS = [
+  "short",
+  "medium",
+  "long",
+  "medium",
+  "short",
+  "long",
+  "medium",
+  "long",
+  "short",
+  "medium"
+] as const;
+
+export type DiffContextDirection =
+  | "up"
+  | "down"
+  | "around"
+  | "all"
+  | "reset";
+
+export interface DiffContextRequest {
+  direction: DiffContextDirection;
+  hunkIndex: number;
+  contextLines: number;
+}
+
+interface DiffHunkContextState extends DiffHunkContextRange {
+  full: boolean;
+}
+
+interface DiffContextState {
+  scopeKey: string;
+  hunks: Record<number, DiffHunkContextState>;
+}
 
 export interface DiffPanelState {
   icon: Extract<
@@ -46,12 +89,14 @@ export interface DiffPanelState {
 export interface DiffPanelProps {
   config: DiffDocumentFeatureConfig;
   scopeKey: string;
+  searchScopeKey?: string | undefined;
   path?: string | undefined;
   content?: string | undefined;
   additions?: number | undefined;
   deletions?: number | undefined;
   statsAvailable?: boolean | undefined;
   binary?: boolean | undefined;
+  media?: RepositoryMediaPreviewDto | undefined;
   truncated?: boolean | undefined;
   maxLines?: number | undefined;
   emptyPathLabel?: string | undefined;
@@ -68,17 +113,24 @@ export interface DiffPanelProps {
     layout: DiffViewerLayout
   ): void;
   onWrapPreferenceChange?(wrap: boolean): void;
+  contextLines?: number | undefined;
+  contextLoading?: boolean | undefined;
+  onContextRequest?(
+    request: DiffContextRequest
+  ): void;
 }
 
 export function DiffPanel({
   config,
   scopeKey,
+  searchScopeKey,
   path,
   content,
   additions = 0,
   deletions = 0,
   statsAvailable,
   binary = false,
+  media,
   truncated = false,
   maxLines,
   emptyPathLabel = "没有匹配的文件",
@@ -90,7 +142,10 @@ export function DiffPanel({
   preferredLayout,
   preferredWrap,
   onLayoutPreferenceChange,
-  onWrapPreferenceChange
+  onWrapPreferenceChange,
+  contextLines = DEFAULT_DIFF_CONTEXT_LINES,
+  contextLoading = false,
+  onContextRequest
 }: DiffPanelProps) {
   const availableLayouts = config.layouts.length
     ? config.layouts
@@ -114,29 +169,97 @@ export function DiffPanel({
   const [pathCopyStatus, setPathCopyStatus] =
     useState<DiffPathCopyStatus>("idle");
   const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
+  const resolvedSearchScopeKey = searchScopeKey ?? scopeKey;
+  const [searchQueries, setSearchQueries] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
+  const searchQuery =
+    searchQueries.get(resolvedSearchScopeKey) ?? "";
+  const setSearchQuery = useCallback(
+    (value: string) => {
+      setSearchQueries((current) => {
+        if (
+          (current.get(resolvedSearchScopeKey) ?? "") === value
+        ) {
+          return current;
+        }
+        const next = new Map(current);
+        if (value) {
+          next.set(resolvedSearchScopeKey, value);
+        } else {
+          next.delete(resolvedSearchScopeKey);
+        }
+        return next;
+      });
+    },
+    [resolvedSearchScopeKey]
+  );
   const [activeSearchHit, setActiveSearchHit] = useState(0);
   const [activeHunk, setActiveHunk] = useState(0);
+  const [diffContextState, setDiffContextState] =
+    useState<DiffContextState>({
+      scopeKey,
+      hunks: {}
+    });
   const searchInputRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const compactContentRef = useRef({
+    scopeKey,
+    content: content ?? ""
+  });
+  const contextAnchorRef = useRef<{
+    hunkIndex: number;
+    offsetTop: number;
+    scrollTop: number;
+  } | null>(null);
+  const hasMediaPreview = media !== undefined;
+  if (compactContentRef.current.scopeKey !== scopeKey) {
+    compactContentRef.current = {
+      scopeKey,
+      content: content ?? ""
+    };
+  }
+  const hunkContextStates =
+    diffContextState.scopeKey === scopeKey
+      ? diffContextState.hunks
+      : {};
+  const localizedContent = useMemo(
+    () =>
+      hasMediaPreview
+        ? ""
+        : buildLocalizedDiffContent(
+            compactContentRef.current.content || content || "",
+            content || "",
+            hunkContextStates
+          ),
+    [
+      content,
+      hasMediaPreview,
+      hunkContextStates,
+      scopeKey
+    ]
+  );
 
   const limitedContent = useMemo(() => {
-    if (!content || !maxLines || maxLines <= 0) {
+    if (!localizedContent || !maxLines || maxLines <= 0) {
       return {
-        content: content ?? "",
+        content: localizedContent,
         rendererTruncated: false
       };
     }
 
-    const lines = content.split(/\r?\n/);
+    const lines = localizedContent.split(/\r?\n/);
     if (lines.length <= maxLines) {
-      return { content, rendererTruncated: false };
+      return {
+        content: localizedContent,
+        rendererTruncated: false
+      };
     }
     return {
       content: lines.slice(0, maxLines).join("\n"),
       rendererTruncated: true
     };
-  }, [content, maxLines]);
+  }, [localizedContent, maxLines]);
   const model = useMemo(
     () => parseDiffViewModel(limitedContent.content),
     [limitedContent.content]
@@ -159,14 +282,22 @@ export function DiffPanel({
       ? -1
       : Math.min(activeHunk, model.hunkCount - 1);
   const canSearch =
-    Boolean(limitedContent.content) && !binary && !state;
+    Boolean(limitedContent.content) &&
+    !binary &&
+    !hasMediaPreview &&
+    !state;
   const showToolbar =
+    !hasMediaPreview &&
     config.showToolbar &&
     (availableLayouts.length > 1 ||
       config.allowWrap ||
       config.showHunkNavigation);
   const hasHeaderActions = Boolean(headerActions);
   const showStats = statsAvailable ?? Boolean(path);
+  const showEmptyStatsLabel = Boolean(
+    emptyStatsLabel.trim()
+  );
+  const showStatsContent = showStats || showEmptyStatsLabel;
 
   const reportPathCopyStatus = useCallback(
     (status: DiffPathCopyStatus) => {
@@ -175,6 +306,117 @@ export function DiffPanel({
     },
     [onPathCopyStatusChange]
   );
+  const requestDiffContext = useCallback(
+    (request: DiffContextRequest) => {
+      const viewport = contentRef.current;
+      const hunk = viewport?.querySelector<HTMLElement>(
+        `[data-diff-viewer-hunk="${request.hunkIndex}"]`
+      );
+      if (viewport && hunk) {
+        contextAnchorRef.current = {
+          hunkIndex: request.hunkIndex,
+          offsetTop:
+            hunk.getBoundingClientRect().top -
+            viewport.getBoundingClientRect().top,
+          scrollTop: viewport.scrollTop
+        };
+      }
+
+      if (
+        contextLines <= DEFAULT_DIFF_CONTEXT_LINES &&
+        content
+      ) {
+        compactContentRef.current = {
+          scopeKey,
+          content
+        };
+      }
+
+      const currentHunks =
+        diffContextState.scopeKey === scopeKey
+          ? diffContextState.hunks
+          : {};
+      const current = currentHunks[request.hunkIndex] ?? {
+        beforeLines: DEFAULT_DIFF_CONTEXT_LINES,
+        afterLines: DEFAULT_DIFF_CONTEXT_LINES,
+        full: false
+      };
+      const next =
+        request.direction === "reset"
+          ? undefined
+          : request.direction === "all"
+            ? {
+                beforeLines: FULL_DIFF_CONTEXT_LINES,
+                afterLines: FULL_DIFF_CONTEXT_LINES,
+                full: true
+              }
+            : request.direction === "around"
+              ? {
+                  beforeLines: DIFF_CONTEXT_STEP,
+                  afterLines: DIFF_CONTEXT_STEP,
+                  full: false
+                }
+              : request.direction === "up"
+              ? {
+                  ...current,
+                  beforeLines:
+                    current.beforeLines + DIFF_CONTEXT_STEP,
+                  full: false
+                }
+              : {
+                  ...current,
+                  afterLines:
+                    current.afterLines + DIFF_CONTEXT_STEP,
+                  full: false
+                };
+      const nextHunks = { ...currentHunks };
+      if (next) {
+        nextHunks[request.hunkIndex] = next;
+      } else {
+        delete nextHunks[request.hunkIndex];
+      }
+      setDiffContextState({
+        scopeKey,
+        hunks: nextHunks
+      });
+
+      if (!next) {
+        return;
+      }
+      const requiredContextLines = Math.max(
+        next.beforeLines,
+        next.afterLines
+      );
+      if (requiredContextLines > contextLines) {
+        onContextRequest?.({
+          ...request,
+          contextLines: requiredContextLines
+        });
+      }
+    },
+    [
+      content,
+      contextLines,
+      diffContextState,
+      onContextRequest,
+      scopeKey
+    ]
+  );
+  const contextControls =
+    config.allowContextExpansion &&
+    onContextRequest &&
+    limitedContent.content &&
+    !binary &&
+    !hasMediaPreview &&
+    !truncated &&
+    !limitedContent.rendererTruncated &&
+    !state
+      ? {
+          hunkContextStates,
+          contextLoading,
+          onContextRequest: requestDiffContext
+        }
+      : undefined;
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
     setSearchQuery("");
@@ -182,7 +424,7 @@ export function DiffPanel({
     window.requestAnimationFrame(() => {
       contentRef.current?.focus({ preventScroll: true });
     });
-  }, []);
+  }, [setSearchQuery]);
   const moveSearchHit = useCallback(
     (direction: -1 | 1) => {
       if (searchHits.length === 0) {
@@ -248,13 +490,36 @@ export function DiffPanel({
   ]);
 
   useEffect(() => {
+    contextAnchorRef.current = null;
     setSearchOpen(false);
-    setSearchQuery("");
     setActiveSearchHit(0);
     setActiveHunk(0);
     reportPathCopyStatus("idle");
     contentRef.current?.scrollTo({ top: 0, left: 0 });
-  }, [reportPathCopyStatus, scopeKey]);
+  }, [
+    reportPathCopyStatus,
+    resolvedSearchScopeKey,
+    scopeKey
+  ]);
+
+  useEffect(() => {
+    setDiffContextState({
+      scopeKey,
+      hunks: {}
+    });
+  }, [scopeKey]);
+
+  useEffect(() => {
+    if (
+      contextLines <= DEFAULT_DIFF_CONTEXT_LINES &&
+      Object.keys(hunkContextStates).length === 0
+    ) {
+      compactContentRef.current = {
+        scopeKey,
+        content: content ?? ""
+      };
+    }
+  }, [content, contextLines, hunkContextStates, scopeKey]);
 
   useEffect(() => {
     if (pathCopyStatus === "idle") {
@@ -270,6 +535,31 @@ export function DiffPanel({
   useEffect(() => {
     setActiveSearchHit(0);
   }, [layout, searchQuery]);
+
+  useLayoutEffect(() => {
+    const anchor = contextAnchorRef.current;
+    const viewport = contentRef.current;
+    if (!anchor || !viewport) {
+      return;
+    }
+
+    const hunks = viewport.querySelectorAll<HTMLElement>(
+      "[data-diff-viewer-hunk]"
+    );
+    const hunk =
+      viewport.querySelector<HTMLElement>(
+        `[data-diff-viewer-hunk="${anchor.hunkIndex}"]`
+      ) ?? hunks.item(hunks.length - 1);
+    if (hunk) {
+      const nextOffsetTop =
+        hunk.getBoundingClientRect().top -
+        viewport.getBoundingClientRect().top;
+      viewport.scrollTop += nextOffsetTop - anchor.offsetTop;
+    } else {
+      viewport.scrollTop = anchor.scrollTop;
+    }
+    contextAnchorRef.current = null;
+  }, [layout, limitedContent.content]);
 
   useEffect(() => {
     if (!searchOpen) {
@@ -501,17 +791,19 @@ export function DiffPanel({
                 <strong>+{additions}</strong>
                 <em>-{deletions}</em>
               </span>
-            ) : (
+            ) : showEmptyStatsLabel ? (
               <span className="diff-viewer-stats muted">
                 {emptyStatsLabel}
               </span>
-            )}
+            ) : null}
             {hasHeaderActions ? (
               <>
-                <span
-                  aria-hidden="true"
-                  className="diff-viewer-file-header-separator"
-                />
+                {showStatsContent ? (
+                  <span
+                    aria-hidden="true"
+                    className="diff-viewer-file-header-separator"
+                  />
+                ) : null}
                 <div className="diff-viewer-header-action-slot">
                   {headerActions}
                 </div>
@@ -537,12 +829,14 @@ export function DiffPanel({
         />
 
         <div
-          aria-label="文件 Diff"
+          aria-label={hasMediaPreview ? "文件预览" : "文件 Diff"}
           aria-busy={state?.busy}
           className={`diff-viewer-code${
-            wrap ? " wrap" : ""
+            hasMediaPreview ? " media-preview" : ""
           }${
-            layout === "split" && !wrap
+            wrap && !hasMediaPreview ? " wrap" : ""
+          }${
+            layout === "split" && !wrap && !hasMediaPreview
               ? " split-nowrap"
               : ""
           }`}
@@ -550,8 +844,16 @@ export function DiffPanel({
           role="region"
           tabIndex={0}
         >
-          {state ? (
+          {state?.busy ? (
+            <DiffContentSkeleton />
+          ) : state ? (
             <DiffViewerState {...state} />
+          ) : media ? (
+            <DiffMediaPreview
+              media={media}
+              path={path}
+              scopeKey={scopeKey}
+            />
           ) : binary ? (
             <DiffViewerState
               icon="files"
@@ -568,6 +870,7 @@ export function DiffPanel({
             <SplitDiff
               activeHunk={normalizedActiveHunk}
               activeSearchHit={normalizedActiveSearchHit}
+              contextControls={contextControls}
               hits={searchHitsBySegment}
               rows={model.splitRows}
               wrap={wrap}
@@ -576,11 +879,13 @@ export function DiffPanel({
             <UnifiedDiff
               activeHunk={normalizedActiveHunk}
               activeSearchHit={normalizedActiveSearchHit}
+              contextControls={contextControls}
               hits={searchHitsBySegment}
               lines={model.unifiedLines}
             />
           )}
           {!state &&
+          !media &&
           !binary &&
           (truncated || limitedContent.rendererTruncated) ? (
             <div className="diff-viewer-truncated">
@@ -591,6 +896,167 @@ export function DiffPanel({
       </main>
     </section>
   );
+}
+
+function DiffMediaPreview({
+  media,
+  path,
+  scopeKey
+}: {
+  media: RepositoryMediaPreviewDto;
+  path?: string | undefined;
+  scopeKey: string;
+}) {
+  const objectUrl = useMediaObjectUrl(media);
+  const [decodeFailed, setDecodeFailed] = useState(false);
+
+  useEffect(() => {
+    setDecodeFailed(false);
+  }, [media, scopeKey]);
+
+  if (media.status === "unavailable") {
+    if (media.reason === "too-large") {
+      return (
+        <DiffViewerState
+          icon="files"
+          message="媒体文件超过 50 MB 预览上限，请通过文件右键菜单在外部应用中打开。"
+          title="文件过大"
+        />
+      );
+    }
+    if (media.reason === "missing") {
+      return (
+        <DiffViewerState
+          icon="eye"
+          message="所选变更的当前版本不存在，可能已被删除。"
+          title="当前版本不可预览"
+        />
+      );
+    }
+    return (
+      <DiffViewerState
+        icon="warning"
+        message="当前路径不是可安全预览的普通文件，请在外部应用中查看。"
+        title="无法预览文件"
+      />
+    );
+  }
+
+  if (objectUrl.failed || decodeFailed) {
+    return (
+      <DiffViewerState
+        icon="warning"
+        message="Electron 无法解码该媒体格式或编码，请在外部应用中打开。"
+        title="媒体预览失败"
+      />
+    );
+  }
+  if (!objectUrl.url) {
+    return (
+      <DiffViewerState
+        icon="refresh"
+        message="正在创建安全的本地媒体预览。"
+        title="准备媒体预览…"
+      />
+    );
+  }
+
+  const label = path ?? "所选文件";
+  return (
+    <div
+      className={`diff-viewer-media ${media.kind}`}
+      data-media-kind={media.kind}
+    >
+      {media.kind === "image" ? (
+        <img
+          alt={`${label} 图片预览`}
+          onError={() => setDecodeFailed(true)}
+          src={objectUrl.url}
+        />
+      ) : media.kind === "video" ? (
+        <video
+          aria-label={`${label} 视频预览`}
+          controls
+          onError={() => setDecodeFailed(true)}
+          preload="metadata"
+          src={objectUrl.url}
+        />
+      ) : (
+        <audio
+          aria-label={`${label} 音频预览`}
+          controls
+          onError={() => setDecodeFailed(true)}
+          preload="metadata"
+          src={objectUrl.url}
+        />
+      )}
+    </div>
+  );
+}
+
+function useMediaObjectUrl(
+  media: RepositoryMediaPreviewDto
+): {
+  url: string | undefined;
+  failed: boolean;
+} {
+  const [state, setState] = useState<{
+    source: RepositoryMediaPreviewDto | undefined;
+    url: string | undefined;
+    failed: boolean;
+  }>({
+    source: undefined,
+    url: undefined,
+    failed: false
+  });
+
+  useEffect(() => {
+    if (media.status !== "available") {
+      setState({
+        source: media,
+        url: undefined,
+        failed: false
+      });
+      return;
+    }
+
+    let nextUrl: string | undefined;
+    try {
+      const bytes = Uint8Array.from(media.content);
+      nextUrl = URL.createObjectURL(
+        new Blob([bytes.buffer], {
+          type: media.mimeType
+        })
+      );
+      setState({
+        source: media,
+        url: nextUrl,
+        failed: false
+      });
+    } catch {
+      setState({
+        source: media,
+        url: undefined,
+        failed: true
+      });
+    }
+
+    return () => {
+      if (nextUrl) {
+        URL.revokeObjectURL(nextUrl);
+      }
+    };
+  }, [media]);
+
+  return state.source === media
+    ? {
+        url: state.url,
+        failed: state.failed
+      }
+    : {
+        url: undefined,
+        failed: false
+      };
 }
 
 export function DiffViewerState({
@@ -609,17 +1075,40 @@ export function DiffViewerState({
   );
 }
 
+export function DiffContentSkeleton() {
+  return (
+    <div aria-hidden="true" className="diff-content-skeleton">
+      <div className="diff-workspace-skeleton-hunk">
+        <Skeleton className="diff-workspace-skeleton-hunk-title" />
+      </div>
+      <div className="diff-workspace-skeleton-code">
+        {DIFF_CONTENT_SKELETON_ROWS.map((width, index) => (
+          <div
+            className={`diff-workspace-skeleton-code-row is-${width}`}
+            key={`code-${index + 1}`}
+          >
+            <Skeleton className="diff-workspace-skeleton-line-number" />
+            <Skeleton className="diff-workspace-skeleton-code-line" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SplitDiff({
   rows,
   hits,
   activeSearchHit,
   activeHunk,
+  contextControls,
   wrap
 }: {
   rows: ReturnType<typeof parseDiffViewModel>["splitRows"];
   hits: ReadonlyMap<string, DiffSearchHit[]>;
   activeSearchHit: number;
   activeHunk: number;
+  contextControls?: DiffHunkContextControlsProps | undefined;
   wrap: boolean;
 }) {
   const oldPaneRef = useRef<HTMLDivElement>(null);
@@ -721,6 +1210,7 @@ function SplitDiff({
                 <SplitWideRow
                   activeHunk={activeHunk}
                   activeSearchHit={activeSearchHit}
+                  contextControls={contextControls}
                   hits={hits}
                   key={row.key}
                   row={row}
@@ -733,20 +1223,24 @@ function SplitDiff({
               activeHunk={activeHunk}
               activeSearchHit={activeSearchHit}
               contentRef={oldContentRef}
+              contextControls={contextControls}
               hits={hits}
               onHorizontalScroll={syncHorizontalScroll}
               paneRef={oldPaneRef}
               rows={rows}
+              showContextControls
               side="old"
             />
             <SplitPane
               activeHunk={activeHunk}
               activeSearchHit={activeSearchHit}
               contentRef={newContentRef}
+              contextControls={contextControls}
               hits={hits}
               onHorizontalScroll={syncHorizontalScroll}
               paneRef={newPaneRef}
               rows={rows}
+              showContextControls
               side="new"
             />
           </div>
@@ -795,6 +1289,7 @@ function SplitDiff({
           <SplitWideRow
             activeHunk={activeHunk}
             activeSearchHit={activeSearchHit}
+            contextControls={contextControls}
             hits={hits}
             key={row.key}
             row={row}
@@ -813,6 +1308,8 @@ function SplitPane({
   side,
   paneRef,
   contentRef,
+  contextControls,
+  showContextControls,
   onHorizontalScroll
 }: {
   rows: ReturnType<typeof parseDiffViewModel>["splitRows"];
@@ -822,6 +1319,8 @@ function SplitPane({
   side: "old" | "new";
   paneRef: Ref<HTMLDivElement>;
   contentRef: Ref<HTMLDivElement>;
+  contextControls?: DiffHunkContextControlsProps | undefined;
+  showContextControls: boolean;
   onHorizontalScroll(
     source: HTMLDivElement,
     scrollLeft: number
@@ -861,6 +1360,11 @@ function SplitPane({
             <SplitWideRow
               activeHunk={activeHunk}
               activeSearchHit={activeSearchHit}
+              contextControls={
+                showContextControls
+                  ? contextControls
+                  : undefined
+              }
               hits={hits}
               key={row.key}
               row={row}
@@ -876,7 +1380,8 @@ function SplitWideRow({
   row,
   hits,
   activeSearchHit,
-  activeHunk
+  activeHunk,
+  contextControls
 }: {
   row: Exclude<
     ReturnType<typeof parseDiffViewModel>["splitRows"][number],
@@ -885,6 +1390,7 @@ function SplitWideRow({
   hits: ReadonlyMap<string, DiffSearchHit[]>;
   activeSearchHit: number;
   activeHunk: number;
+  contextControls?: DiffHunkContextControlsProps | undefined;
 }) {
   return (
     <div
@@ -896,13 +1402,28 @@ function SplitWideRow({
       data-diff-viewer-hunk={row.hunkIndex}
     >
       {row.kind === "hunk" ? <Icon name="diff" size={14} /> : null}
-      <code>
-        {highlightSearchHits(
-          row.text ?? " ",
-          hits.get(`${row.key}:full`) ?? [],
-          activeSearchHit
-        )}
-      </code>
+      {row.kind === "hunk" &&
+      row.hunkIndex !== undefined &&
+      contextControls ? (
+        <DiffHunkContextTrigger
+          {...contextControls}
+          hunkIndex={row.hunkIndex}
+        >
+          {highlightSearchHits(
+            row.text ?? " ",
+            hits.get(`${row.key}:full`) ?? [],
+            activeSearchHit
+          )}
+        </DiffHunkContextTrigger>
+      ) : (
+        <code>
+          {highlightSearchHits(
+            row.text ?? " ",
+            hits.get(`${row.key}:full`) ?? [],
+            activeSearchHit
+          )}
+        </code>
+      )}
     </div>
   );
 }
@@ -947,12 +1468,14 @@ function UnifiedDiff({
   lines,
   hits,
   activeSearchHit,
-  activeHunk
+  activeHunk,
+  contextControls
 }: {
   lines: ReturnType<typeof parseDiffViewModel>["unifiedLines"];
   hits: ReadonlyMap<string, DiffSearchHit[]>;
   activeSearchHit: number;
   activeHunk: number;
+  contextControls?: DiffHunkContextControlsProps | undefined;
 }) {
   return (
     <div className="diff-viewer-unified">
@@ -976,13 +1499,28 @@ function UnifiedDiff({
               {line.kind === "hunk" ? (
                 <Icon name="diff" size={14} />
               ) : null}
-              <code>
-                {highlightSearchHits(
-                  line.text || " ",
-                  hits.get(line.key) ?? [],
-                  activeSearchHit
-                )}
-              </code>
+              {line.kind === "hunk" &&
+              line.hunkIndex !== undefined &&
+              contextControls ? (
+                <DiffHunkContextTrigger
+                  {...contextControls}
+                  hunkIndex={line.hunkIndex}
+                >
+                  {highlightSearchHits(
+                    line.text || " ",
+                    hits.get(line.key) ?? [],
+                    activeSearchHit
+                  )}
+                </DiffHunkContextTrigger>
+              ) : (
+                <code>
+                  {highlightSearchHits(
+                    line.text || " ",
+                    hits.get(line.key) ?? [],
+                    activeSearchHit
+                  )}
+                </code>
+              )}
             </div>
           );
         }
@@ -1020,6 +1558,65 @@ function UnifiedDiff({
         );
       })}
     </div>
+  );
+}
+
+interface DiffHunkContextControlsProps {
+  hunkContextStates: Readonly<
+    Record<number, DiffHunkContextState>
+  >;
+  contextLoading: boolean;
+  onContextRequest(request: DiffContextRequest): void;
+}
+
+function DiffHunkContextTrigger({
+  hunkContextStates,
+  contextLoading,
+  hunkIndex,
+  onContextRequest,
+  children
+}: DiffHunkContextControlsProps & {
+  hunkIndex: number;
+  children: ReactNode;
+}) {
+  const context = hunkContextStates[hunkIndex] ?? {
+    beforeLines: DEFAULT_DIFF_CONTEXT_LINES,
+    afterLines: DEFAULT_DIFF_CONTEXT_LINES,
+    full: false
+  };
+  const expanded =
+    context.full ||
+    context.beforeLines > DEFAULT_DIFF_CONTEXT_LINES ||
+    context.afterLines > DEFAULT_DIFF_CONTEXT_LINES;
+  const direction = expanded ? "reset" : "around";
+  return (
+    <button
+      aria-label={
+        expanded
+          ? `收起第 ${hunkIndex + 1} 个变更块上下文`
+          : `展开第 ${hunkIndex + 1} 个变更块上下各 ${DIFF_CONTEXT_STEP} 行`
+      }
+      aria-expanded={expanded}
+      className="diff-viewer-hunk-trigger"
+      disabled={contextLoading}
+      onClick={() =>
+        onContextRequest({
+          direction,
+          hunkIndex,
+          contextLines: expanded
+            ? DEFAULT_DIFF_CONTEXT_LINES
+            : DIFF_CONTEXT_STEP
+        })
+      }
+      title={
+        expanded
+          ? "点击收起当前变更块，恢复默认 3 行上下文"
+          : `点击查看当前变更块上方和下方各 ${DIFF_CONTEXT_STEP} 行代码`
+      }
+      type="button"
+    >
+      <code>{children}</code>
+    </button>
   );
 }
 

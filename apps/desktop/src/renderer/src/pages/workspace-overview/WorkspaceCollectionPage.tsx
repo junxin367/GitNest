@@ -21,6 +21,10 @@ import {
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import {
+  Skeleton,
+  SkeletonBoundary
+} from "../../shared/ui/Skeleton";
+import {
   MenuItem,
   MenuPopover
 } from "../../shared/ui/Menu";
@@ -40,6 +44,7 @@ type CollectionTab = Exclude<WorkspaceTab, "overview">;
 
 interface WorkspaceCollectionPageProps {
   busy: boolean;
+  loading: boolean;
   snapshots: RepositoryStatusSnapshotDto[];
   tab: CollectionTab;
   workspace: WorkspaceDetailsDto | null;
@@ -56,6 +61,7 @@ interface WorkspaceRepositoryRow {
 
 export function WorkspaceCollectionPage({
   busy,
+  loading,
   snapshots,
   tab,
   workspace,
@@ -64,21 +70,41 @@ export function WorkspaceCollectionPage({
 }: WorkspaceCollectionPageProps) {
   if (!workspace) {
     return (
-      <div className="page-scroll">
-        <section className="page-heading">
-          <div>
-            <span className="eyebrow">多仓库工作区</span>
-            <h1>Workspace</h1>
-            <p>正在恢复 Workspace 数据。</p>
+      <SkeletonBoundary
+        fallback={<WorkspaceCollectionSkeleton />}
+        hasContent={false}
+        label="正在读取 Workspace"
+        loading={loading}
+        surfaceClassName="page-scroll gn-page-skeleton workspace-collection-skeleton"
+      >
+        <div className="page-scroll">
+          <section className="page-heading">
+            <div>
+              <span className="eyebrow">多仓库工作区</span>
+              <h1>Workspace</h1>
+              <p>当前没有可展示的 Workspace 数据。</p>
+            </div>
+          </section>
+          <div className="empty-state workspace-empty-state">
+            <span className="empty-state-icon">
+              <Icon name="folder" size={20} />
+            </span>
+            <div>
+              <strong>尚未添加本地目录</strong>
+              <p>添加目录后即可查看仓库和 Worktree。</p>
+              <Button
+                onClick={onAddDirectory}
+                size="small"
+                type="button"
+                variant="primary"
+              >
+                <Icon name="plus" />
+                添加目录
+              </Button>
+            </div>
           </div>
-        </section>
-        <div className="repository-loading" role="status">
-          <span className="empty-state-icon spinning">
-            <Icon name="refresh" size={18} />
-          </span>
-          <span>正在读取 Workspace…</span>
         </div>
-      </div>
+      </SkeletonBoundary>
     );
   }
 
@@ -166,6 +192,35 @@ export function WorkspaceCollectionPage({
   );
 }
 
+function WorkspaceCollectionSkeleton() {
+  return (
+    <>
+      <div className="gn-skeleton-heading">
+        <Skeleton />
+        <Skeleton />
+        <Skeleton />
+      </div>
+      <div className="gn-skeleton-panel">
+        <div className="gn-skeleton-panel-header">
+          <Skeleton height={14} width="32%" />
+          <Skeleton height={28} width={132} />
+        </div>
+        <div className="gn-skeleton-list">
+          {Array.from({ length: 6 }, (_, index) => (
+            <div className="gn-skeleton-row" key={index}>
+              <div className="gn-skeleton-row-copy">
+                <Skeleton height={11} />
+                <Skeleton height={9} variant="text" />
+              </div>
+              <Skeleton height={18} width="100%" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
 function WorkspaceWorktreesPanel({
   busy,
   onAddDirectory,
@@ -238,6 +293,15 @@ function WorkspaceWorktreesPanel({
     }
 
     const close = () => setRepoMenuOpen(false);
+    const handleScroll = (event: Event) => {
+      if (
+        event.target instanceof Node &&
+        repoMenuRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      close();
+    };
     const handlePointerDown = (event: PointerEvent) => {
       if (
         event.target instanceof Node &&
@@ -260,7 +324,7 @@ function WorkspaceWorktreesPanel({
     document.addEventListener("keydown", handleKeyDown);
     window.addEventListener("blur", close);
     window.addEventListener("resize", close);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", handleScroll, true);
     // 菜单首帧仍为 visibility:hidden，定位完成后才可聚焦；等一帧再聚焦当前选中项。
     const focusFrame = window.requestAnimationFrame(() => {
       const items =
@@ -279,7 +343,7 @@ function WorkspaceWorktreesPanel({
       document.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("blur", close);
       window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", handleScroll, true);
     };
   }, [repoMenuOpen]);
 

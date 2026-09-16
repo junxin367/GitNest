@@ -50,11 +50,38 @@ describe("ApplicationSettingsPage", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("uses the shared page skeleton before settings finish their first load", () => {
+    vi.stubGlobal("React", React);
+    try {
+      const html = renderToStaticMarkup(
+        <ApplicationSettingsPage
+          accounts={emptyAccounts()}
+          appSettings={settingsController({
+            loaded: false,
+            loading: true
+          })}
+          gitEnvironment={null}
+          terminalProfiles={[]}
+          workspace={null}
+        />
+      );
+
+      expect(html).toContain("gn-skeleton-surface");
+      expect(html).toContain('aria-label="正在读取应用设置"');
+      expect(html).not.toContain("settings-nav-item-title");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
-function settingsController(): AppSettingsController {
+function settingsController(
+  overrides: Partial<AppSettingsController> = {}
+): AppSettingsController {
   return {
     settings: createDefaultAppSettings(),
+    loaded: true,
     loading: false,
     saving: false,
     clearingKey: false,
@@ -63,7 +90,8 @@ function settingsController(): AppSettingsController {
     reload: vi.fn(async () => undefined),
     update: vi.fn(async () => true),
     clearAiApiKey: vi.fn(async () => true),
-    clearFeedback: vi.fn()
+    clearFeedback: vi.fn(),
+    ...overrides
   };
 }
 

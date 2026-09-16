@@ -1,13 +1,22 @@
 import { describe, expect, it } from "vitest";
 
-import { preferredRepositoryTab } from "./navigation";
+import {
+  repositoryTabForTargetSwitch,
+  type RepositoryTab
+} from "./navigation";
 
-describe("preferredRepositoryTab", () => {
-  it("opens the overview when there are no changes", () => {
-    expect(preferredRepositoryTab(0)).toBe("overview");
+describe("repositoryTabForTargetSwitch", () => {
+  it.each<RepositoryTab>([
+    "overview",
+    "changes",
+    "history",
+    "branches",
+    "worktrees"
+  ])("keeps the current %s tab", (tab) => {
+    expect(repositoryTabForTargetSwitch(tab)).toBe(tab);
   });
 
-  it("opens changes when the repository has local changes", () => {
-    expect(preferredRepositoryTab(1)).toBe("changes");
+  it("opens the overview when there is no previous repository tab", () => {
+    expect(repositoryTabForTargetSwitch()).toBe("overview");
   });
 });

@@ -20,6 +20,8 @@ import {
   validateRemoveAccountRequest,
   validateRepositoryCommandExecuteRequest,
   validateRepositoryCommandPreflightRequest,
+  validateRepositoryDiffRequest,
+  validateRepositoryHistoryRequest,
   validateSaveAccountRequest,
   validateTestAiConnectionRequest,
   validateTestAccountRequest,
@@ -339,6 +341,117 @@ describe("repository command IPC validation", () => {
       validateTestAccountRequest({
         accountId: "account_1",
         repositoryUrl: "https://git.example.test/repo\nnext"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+});
+
+describe("repository history IPC validation", () => {
+  const target = {
+    repositoryId: "repository",
+    worktreeId: "worktree"
+  };
+
+  it("accepts exact local and remote refs for single and comparison history", () => {
+    expect(
+      validateRepositoryHistoryRequest({
+        queryId: "history_ref",
+        target,
+        scope: {
+          kind: "ref",
+          ref: "refs/remotes/origin/main"
+        }
+      })
+    ).toMatchObject({
+      scope: {
+        kind: "ref",
+        ref: "refs/remotes/origin/main"
+      }
+    });
+
+    expect(
+      validateRepositoryHistoryRequest({
+        queryId: "history_compare",
+        target,
+        scope: {
+          kind: "compare",
+          leftRef: "refs/heads/main",
+          rightRef: "refs/heads/develop"
+        }
+      })
+    ).toMatchObject({
+      scope: {
+        kind: "compare",
+        leftRef: "refs/heads/main",
+        rightRef: "refs/heads/develop"
+      }
+    });
+  });
+
+  it("rejects arbitrary revisions and identical comparison refs", () => {
+    expect(() =>
+      validateRepositoryHistoryRequest({
+        queryId: "history_bad_ref",
+        target,
+        scope: {
+          kind: "ref",
+          ref: "--all"
+        }
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+
+    expect(() =>
+      validateRepositoryHistoryRequest({
+        queryId: "history_same_ref",
+        target,
+        scope: {
+          kind: "compare",
+          leftRef: "refs/heads/main",
+          rightRef: "refs/heads/main"
+        }
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+});
+
+describe("repository diff IPC validation", () => {
+  const target = {
+    repositoryId: "repository",
+    worktreeId: "worktree"
+  };
+
+  it("accepts non-negative context line requests", () => {
+    expect(
+      validateRepositoryDiffRequest({
+        queryId: "diff_1",
+        target,
+        path: "src/App.tsx",
+        mode: "unstaged",
+        contextLines: 13
+      })
+    ).toEqual({
+      queryId: "diff_1",
+      target,
+      path: "src/App.tsx",
+      mode: "unstaged",
+      contextLines: 13
+    });
+  });
+
+  it("rejects invalid context line requests", () => {
+    expect(() =>
+      validateRepositoryDiffRequest({
+        queryId: "diff_1",
+        target,
+        path: "src/App.tsx",
+        mode: "unstaged",
+        contextLines: -1
       })
     ).toThrowError(
       expect.objectContaining({ code: "INVALID_REQUEST" })

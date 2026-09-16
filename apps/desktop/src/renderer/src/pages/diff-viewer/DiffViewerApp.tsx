@@ -20,20 +20,27 @@ import {
   canUnstageChange,
   useRepositoryMutations
 } from "../../entities/repository/useRepositoryMutations";
+import { useExternalApplications } from "../../features/external-application/useExternalApplications";
 import { useAppSettings } from "../../features/settings/useAppSettings";
 import {
   buildDiffViewerFiles,
   type DiffViewerFile,
   type DiffViewerMode
 } from "../../shared/model/diffViewModel";
+import { useMinimumLoadingIndicator } from "../../shared/lib/useMinimumLoadingIndicator";
 import { Icon } from "../../shared/ui/Icon";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import {
+  DEFAULT_DIFF_CONTEXT_LINES,
   DiffViewerState,
+  type DiffContextRequest,
   type DiffPanelState,
   type DiffPathCopyStatus
 } from "../../widgets/diff-workspace/DiffPanel";
-import { DiffWorkspace } from "../../widgets/diff-workspace/DiffWorkspace";
+import {
+  DiffWorkspace,
+  DiffWorkspaceSkeleton
+} from "../../widgets/diff-workspace/DiffWorkspace";
 import { standaloneDiffWorkspaceConfiguration } from "../../widgets/diff-workspace/diffWorkspaceConfiguration";
 
 let querySequence = 0;
@@ -57,6 +64,10 @@ function DiffViewer({
   request: OpenDiffViewerRequest;
 }) {
   const appSettings = useAppSettings();
+  const externalApplications = useExternalApplications({
+    scope: "repository",
+    target: request.target
+  });
   const initialFile = useMemo<DiffViewerFile>(() => {
     const change: ChangedPathDto = {
       path: request.path,
@@ -91,7 +102,11 @@ function DiffViewer({
   const [diff, setDiff] =
     useState<RepositoryDiffDto["diff"] | null>(null);
   const [changesLoading, setChangesLoading] = useState(true);
+  const [changesLoaded, setChangesLoaded] = useState(false);
   const [diffLoading, setDiffLoading] = useState(true);
+  const [diffContextLines, setDiffContextLines] = useState(
+    DEFAULT_DIFF_CONTEXT_LINES
+  );
   const [changesError, setChangesError] =
     useState<GitReadErrorDto | null>(null);
   const [diffError, setDiffError] =
@@ -101,6 +116,7 @@ function DiffViewer({
     null
   );
   const diffRequestKeyRef = useRef<string | null>(null);
+  const selectedFileKeyRef = useRef(initialFile.key);
   const [pathCopyStatus, setPathCopyStatus] =
     useState<DiffPathCopyStatus>("idle");
   const mutationHooks = useMemo(
@@ -140,6 +156,9 @@ function DiffViewer({
       files
     ]
   );
+  const showChangesSkeleton = useMinimumLoadingIndicator(
+    changesLoading && !changesLoaded
+  );
 
   useEffect(() => {
     document.documentElement.dataset.theme =
@@ -151,6 +170,15 @@ function DiffViewer({
       ? `${fileName(selectedFile.path)} — GitNest Diff`
       : "GitNest Diff";
   }, [selectedFile]);
+
+  useEffect(() => {
+    const nextKey = selectedFile?.key ?? "";
+    if (selectedFileKeyRef.current === nextKey) {
+      return;
+    }
+    selectedFileKeyRef.current = nextKey;
+    setDiffContextLines(DEFAULT_DIFF_CONTEXT_LINES);
+  }, [selectedFile?.key]);
 
   useEffect(() => {
     const queryId = nextQueryId("diff-viewer-changes");
@@ -194,6 +222,7 @@ function DiffViewer({
       })
       .finally(() => {
         if (current) {
+          setChangesLoaded(true);
           setChangesLoading(false);
         }
       });
@@ -278,7 +307,8 @@ function DiffViewer({
         queryId,
         target: request.target,
         path: selectedFile.path,
-        mode: selectedFile.mode
+        mode: selectedFile.mode,
+        contextLines: diffContextLines
       })
       .then((result) => {
         if (!current) {
@@ -309,6 +339,7 @@ function DiffViewer({
     request.target.repositoryId,
     request.target.worktreeId,
     refreshVersion,
+    diffContextLines,
     selectedFile?.key,
     selectedFile?.mode,
     selectedFile?.path
@@ -330,7 +361,7 @@ function DiffViewer({
       ? {
           busy: true,
           icon: "refresh",
-          message: "正在生成所选文件的文本差异。",
+          message: "正在读取所选文件内容。",
           title: "读取 Diff…"
         }
       : diffError
@@ -348,6 +379,13 @@ function DiffViewer({
           title: "变更列表读取失败"
         }
       : undefined;
+  const requestDiffContext = ({
+    contextLines
+  }: DiffContextRequest) => {
+    setDiffContextLines((current) =>
+      Math.max(current, contextLines)
+    );
+  };
 
   return (
     <div className="diff-viewer-app">
@@ -411,7 +449,13 @@ function DiffViewer({
         </div>
       </header>
 
-      <DiffWorkspace
+      {showChangesSkeleton ? (
+        <DiffWorkspaceSkeleton
+          className="diff-viewer-workspace"
+          label="正在读取工作区变更"
+        />
+      ) : (
+        <DiffWorkspace
         {...(changesMessage
           ? { changesError: changesMessage }
           : {})}
@@ -423,6 +467,7 @@ function DiffViewer({
         changesLoading={changesLoading}
         className="diff-viewer-workspace"
         configuration={standaloneDiffWorkspaceConfiguration}
+        externalApplications={externalApplications}
         fileView={appSettings.settings.diff.fileView}
         files={workspaceFiles}
         mutationBusy={mutations.active !== null}
@@ -435,9 +480,10 @@ function DiffViewer({
             { silent: true }
           )
         }
-        onSelectedFileChange={(file) =>
-          setSelectedKey(file.key)
-        }
+        onSelectedFileChange={(file) => {
+          setDiffContextLines(DEFAULT_DIFF_CONTEXT_LINES);
+          setSelectedKey(file.key);
+        }}
         onStageFile={(file) =>
           mutations.stageChange(file.change)
         }
@@ -466,7 +512,11 @@ function DiffViewer({
           additions: diff?.additions,
           binary: diff?.binary,
           content: diff?.content,
+          contextLines: diffContextLines,
+          contextLoading: diffLoading,
           deletions: diff?.deletions,
+          media: diff?.media,
+          onContextRequest: requestDiffContext,
           onPathCopyStatusChange: setPathCopyStatus,
           onLayoutPreferenceChange: (layout) =>
             void appSettings.update(
@@ -516,7 +566,8 @@ function DiffViewer({
             </span>
           </>
         }
-      />
+        />
+      )}
 
       <ToastViewport>
         {pathCopyStatus === "copied" && selectedFile ? (
@@ -556,6 +607,14 @@ function DiffViewer({
             message={mutations.error.message}
             onClose={mutations.clearFeedback}
             title="Git 操作失败"
+            tone="error"
+          />
+        ) : null}
+        {externalApplications.error ? (
+          <Toast
+            message={externalApplications.error.message}
+            onClose={externalApplications.clearError}
+            title="无法打开本地应用"
             tone="error"
           />
         ) : null}

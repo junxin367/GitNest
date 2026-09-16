@@ -42,6 +42,7 @@ export interface Branch {
   upstream?: string;
   current: boolean;
   remote: boolean;
+  merged?: boolean;
   worktreePath?: string;
   updatedAt?: string;
 }

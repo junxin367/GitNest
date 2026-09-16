@@ -230,19 +230,19 @@
   justify-content: flex-end;
   gap: 2px;
   padding-left: var(--space-5);
-  opacity: 0;
+  visibility: hidden;
   pointer-events: none;
   background: linear-gradient(
     90deg,
     transparent,
     var(--diff-workspace-file-backdrop) var(--space-5)
   );
-  transition: opacity var(--motion-micro) var(--ease-enter);
+  transition: none;
 }
 
 .diff-workspace-file:hover .diff-workspace-file-actions,
 .diff-workspace-file:focus-within .diff-workspace-file-actions {
-  opacity: 1;
+  visibility: visible;
   pointer-events: auto;
 }
 
@@ -267,6 +267,11 @@
   background: transparent;
   border: 0;
   cursor: pointer;
+}
+
+.diff-workspace-file-select:not(:disabled):active {
+  opacity: 1;
+  transform: none;
 }
 
 .diff-workspace-file-select strong,
@@ -355,6 +360,7 @@
   background: transparent;
   border: 0;
   box-shadow: none;
+  transition: none;
 }
 
 .diff-workspace-file-actions
@@ -458,6 +464,252 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+.diff-workspace-skeleton {
+  pointer-events: none;
+}
+
+.diff-workspace-skeleton-sidebar-header {
+  justify-content: initial;
+}
+
+.diff-workspace-skeleton-sidebar-title {
+  flex: 0 0 58px;
+  width: 58px;
+  height: 11px;
+}
+
+.diff-workspace-skeleton-filter {
+  flex: 1 1 auto;
+  min-width: 72px;
+  height: var(--control-compact);
+  margin-left: auto;
+}
+
+.diff-workspace-skeleton-square {
+  flex: 0 0 var(--control-compact);
+  width: var(--control-compact);
+  height: var(--control-compact);
+}
+
+.diff-workspace-skeleton-file-list {
+  overflow: hidden;
+}
+
+.diff-workspace-skeleton-group {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: var(--space-2);
+  height: 28px;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.diff-workspace-skeleton-chevron {
+  width: 8px;
+  height: 8px;
+}
+
+.diff-workspace-skeleton-group-title {
+  width: 42%;
+  height: 9px;
+}
+
+.diff-workspace-skeleton-count {
+  width: 20px;
+  height: 16px;
+  border-radius: 999px;
+}
+
+.diff-workspace-skeleton-file-row {
+  display: grid;
+  align-content: center;
+  gap: var(--space-1);
+  min-height: 44px;
+  padding: var(--space-1) var(--space-2) var(--space-1)
+    var(--space-3);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.diff-workspace-skeleton-file-name {
+  width: 82%;
+  height: 10px;
+}
+
+.diff-workspace-skeleton-file-meta {
+  width: 56%;
+  height: 8px;
+}
+
+.diff-workspace-skeleton-file-row.is-medium
+  .diff-workspace-skeleton-file-name {
+  width: 68%;
+}
+
+.diff-workspace-skeleton-file-row.is-medium
+  .diff-workspace-skeleton-file-meta {
+  width: 44%;
+}
+
+.diff-workspace-skeleton-file-row.is-short
+  .diff-workspace-skeleton-file-name {
+  width: 52%;
+}
+
+.diff-workspace-skeleton-file-row.is-short
+  .diff-workspace-skeleton-file-meta {
+  width: 34%;
+}
+
+.diff-workspace-skeleton-commit {
+  display: grid;
+  grid-template-rows: 8px var(--control-compact) minmax(0, 1fr);
+  height: 180px;
+  min-height: 180px;
+  overflow: hidden;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.diff-workspace-skeleton-resizer {
+  align-self: center;
+  justify-self: center;
+  width: 32px;
+  height: 2px;
+  border-radius: 999px;
+}
+
+.diff-workspace-skeleton-commit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.diff-workspace-skeleton-commit-option {
+  width: 76px;
+  height: 10px;
+}
+
+.diff-workspace-skeleton-commit-pill {
+  width: 58px;
+  height: 18px;
+  border-radius: 999px;
+}
+
+.diff-workspace-skeleton-commit-body {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.diff-workspace-skeleton-textarea {
+  flex: 1 1 auto;
+  min-height: 56px;
+}
+
+.diff-workspace-skeleton-commit-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.diff-workspace-skeleton-submit {
+  flex: 1 1 auto;
+  height: var(--control-compact);
+}
+
+.diff-workspace-skeleton-content {
+  display: grid;
+  grid-template-rows: 48px minmax(0, 1fr);
+  background: var(--canvas);
+}
+
+.diff-content-skeleton {
+  display: grid;
+  grid-template-rows: 32px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--canvas);
+  pointer-events: none;
+}
+
+.diff-workspace-skeleton-document-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-workspace-skeleton-document-title {
+  flex: 0 1 58%;
+  width: 58%;
+  height: 11px;
+}
+
+.diff-workspace-skeleton-document-stat {
+  width: 48px;
+  height: 10px;
+  margin-left: auto;
+}
+
+.diff-workspace-skeleton-hunk {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.diff-workspace-skeleton-hunk-title {
+  width: min(220px, 42%);
+  height: 9px;
+}
+
+.diff-workspace-skeleton-code {
+  min-height: 0;
+  overflow: hidden;
+  padding-top: var(--space-2);
+}
+
+.diff-workspace-skeleton-code-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 24px;
+  padding: 0 var(--space-4) 0 var(--space-2);
+}
+
+.diff-workspace-skeleton-line-number {
+  justify-self: end;
+  width: 26px;
+  height: 8px;
+}
+
+.diff-workspace-skeleton-code-line {
+  width: 72%;
+  height: 9px;
+}
+
+.diff-workspace-skeleton-code-row.is-long
+  .diff-workspace-skeleton-code-line {
+  width: 88%;
+}
+
+.diff-workspace-skeleton-code-row.is-short
+  .diff-workspace-skeleton-code-line {
+  width: 44%;
 }
 
 .diff-workspace-open-standalone.gn-button {
@@ -619,6 +871,31 @@
 
 .diff-workspace-status-spacer {
   flex: 1 1 auto;
+}
+
+.diff-discard-dialog {
+  width: min(560px, calc(100vw - 48px));
+}
+
+.diff-discard-target {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.diff-discard-target > span {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+}
+
+.diff-discard-target code {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 900px) {

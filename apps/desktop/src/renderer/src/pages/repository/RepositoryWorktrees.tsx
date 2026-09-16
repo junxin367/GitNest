@@ -169,20 +169,6 @@ export function RepositoryWorktrees({
           </p>
         </div>
         <div className="page-actions">
-          <Button size="small"
-            aria-busy={commands.active === "prune"}
-            disabled={commands.busy || prunableCount === 0}
-            onClick={() =>
-              void commands.request({
-                type: "prune",
-                repositoryId
-              })
-            }
-            type="button"
-          >
-            <Icon name="eye" />
-            Prune 预览
-          </Button>
           <Button size="small" variant="primary"
             aria-controls="worktree-create-panel"
             aria-expanded={createOpen}

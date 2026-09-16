@@ -17,8 +17,8 @@ export type RepositoryTab =
   | "branches"
   | "worktrees";
 
-export function preferredRepositoryTab(
-  changeCount: number
+export function repositoryTabForTargetSwitch(
+  currentTab?: RepositoryTab
 ): RepositoryTab {
-  return changeCount > 0 ? "changes" : "overview";
+  return currentTab ?? "overview";
 }

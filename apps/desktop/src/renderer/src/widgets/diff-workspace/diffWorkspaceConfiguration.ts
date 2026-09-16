@@ -6,6 +6,7 @@ export interface DiffDocumentFeatureConfig {
   showToolbar: boolean;
   allowWrap: boolean;
   showHunkNavigation: boolean;
+  allowContextExpansion: boolean;
 }
 
 export interface DiffNavigationFeatureConfig {
@@ -32,7 +33,8 @@ export const standaloneDiffWorkspaceConfiguration = {
     defaultLayout: "unified",
     showToolbar: true,
     allowWrap: true,
-    showHunkNavigation: true
+    showHunkNavigation: true,
+    allowContextExpansion: true
   },
   navigation: {
     allowTreeView: true,
@@ -52,7 +54,8 @@ export const repositoryDiffWorkspaceConfiguration = {
     defaultLayout: "unified",
     showToolbar: false,
     allowWrap: false,
-    showHunkNavigation: false
+    showHunkNavigation: false,
+    allowContextExpansion: true
   },
   navigation: {
     allowTreeView: true,

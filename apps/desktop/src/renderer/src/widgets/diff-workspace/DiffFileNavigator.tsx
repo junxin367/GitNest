@@ -38,7 +38,30 @@ interface DiffFileSection {
   files: DiffViewerFile[];
 }
 
+type DiffFileSectionCollapseState = Record<
+  DiffViewerMode,
+  boolean
+>;
+
+interface DiffFileNavigatorState {
+  filter: string;
+  collapsedSections: DiffFileSectionCollapseState;
+}
+
 const MAX_GROUP_MUTATION_PATHS = 200;
+const DEFAULT_COLLAPSED_SECTIONS: DiffFileSectionCollapseState = {
+  staged: false,
+  unstaged: false,
+  untracked: false
+};
+const DEFAULT_NAVIGATOR_STATE: DiffFileNavigatorState = {
+  filter: "",
+  collapsedSections: DEFAULT_COLLAPSED_SECTIONS
+};
+const navigatorStateByScope = new Map<
+  string,
+  DiffFileNavigatorState
+>();
 
 export interface DiffWorkspaceMessage {
   icon: Parameters<typeof DiffViewerState>[0]["icon"];
@@ -138,18 +161,21 @@ export function DiffFileNavigator({
   onRefresh,
   onFileContextMenu
 }: DiffFileNavigatorProps) {
-  const [filter, setFilter] = useState("");
   const [internalViewMode, setInternalViewMode] =
     useState<DiffFileViewDto>("list");
   const viewMode = fileView ?? internalViewMode;
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
-  const [collapsedSections, setCollapsedSections] = useState<
-    Record<DiffViewerMode, boolean>
-  >({
-    staged: false,
-    unstaged: false,
-    untracked: false
-  });
+  const navigatorScopeKey = treePreference?.scopeKey ?? "";
+  const [navigatorStates, setNavigatorStates] = useState<
+    ReadonlyMap<string, DiffFileNavigatorState>
+  >(() => new Map(navigatorStateByScope));
+  const navigatorStatesRef = useRef(navigatorStates);
+  navigatorStatesRef.current = navigatorStates;
+  const navigatorState =
+    navigatorStates.get(navigatorScopeKey) ??
+    navigatorStateByScope.get(navigatorScopeKey) ??
+    DEFAULT_NAVIGATOR_STATE;
+  const { filter, collapsedSections } = navigatorState;
   const [collapsedDirectories, setCollapsedDirectories] =
     useState<Set<string>>(() => new Set());
   const viewMenuTriggerRef = useRef<HTMLButtonElement>(null);
@@ -333,6 +359,51 @@ export function DiffFileNavigator({
     setViewMenuOpen(false);
   };
 
+  const updateNavigatorState = (
+    update: (
+      current: DiffFileNavigatorState
+    ) => DiffFileNavigatorState
+  ) => {
+    const currentStates = navigatorStatesRef.current;
+    const currentState =
+      currentStates.get(navigatorScopeKey) ??
+      navigatorStateByScope.get(navigatorScopeKey) ??
+      DEFAULT_NAVIGATOR_STATE;
+    const nextState = update(currentState);
+    if (nextState === currentState) {
+      return;
+    }
+
+    const nextStates = new Map(currentStates);
+    nextStates.set(navigatorScopeKey, nextState);
+    navigatorStatesRef.current = nextStates;
+    if (navigatorScopeKey) {
+      navigatorStateByScope.set(navigatorScopeKey, nextState);
+    }
+    setNavigatorStates(nextStates);
+  };
+
+  const setFilter = (value: string) => {
+    updateNavigatorState((current) =>
+      current.filter === value
+        ? current
+        : {
+            ...current,
+            filter: value
+          }
+    );
+  };
+
+  const toggleSection = (mode: DiffViewerMode) => {
+    updateNavigatorState((current) => ({
+      ...current,
+      collapsedSections: {
+        ...current.collapsedSections,
+        [mode]: !current.collapsedSections[mode]
+      }
+    }));
+  };
+
   const renderFileRow = (
     file: DiffViewerFile,
     depth = 0
@@ -385,11 +456,11 @@ export function DiffFileNavigator({
             >
               {file.status}
             </span>
-            <small>
-              {file.change.originalPath
-                ? `原路径：${file.change.originalPath}`
-                : modeLabel(file.mode)}
-            </small>
+            {file.change.originalPath ? (
+              <small>
+                原路径：{file.change.originalPath}
+              </small>
+            ) : null}
             {showStats ? (
               <span
                 aria-label={`新增 ${file.additions} 行，删除 ${file.deletions} 行`}
@@ -728,12 +799,7 @@ export function DiffFileNavigator({
                     aria-controls={bodyId}
                     aria-expanded={!collapsed}
                     className="diff-workspace-file-section-title"
-                    onClick={() =>
-                      setCollapsedSections((current) => ({
-                        ...current,
-                        [section.mode]: !current[section.mode]
-                      }))
-                    }
+                    onClick={() => toggleSection(section.mode)}
                     type="button"
                   >
                     <Icon

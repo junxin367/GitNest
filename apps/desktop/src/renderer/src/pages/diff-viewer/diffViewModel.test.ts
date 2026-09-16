@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildLocalizedDiffContent,
   buildDiffViewerFiles,
   collectDiffViewerSearchHits,
   matchesDiffViewerFileFilter,
@@ -165,6 +166,84 @@ describe("Diff viewer model", () => {
     expect(
       collectDiffViewerSearchHits(model, "split", "missing")
     ).toEqual([]);
+  });
+
+  it("expands context for only the requested hunk", () => {
+    const compactContent = [
+      "@@ -4,7 +4,7 @@",
+      " line 4",
+      " line 5",
+      " line 6",
+      "-old line 7",
+      "+new line 7",
+      " line 8",
+      " line 9",
+      " line 10",
+      "@@ -20,7 +20,7 @@",
+      " line 20",
+      " line 21",
+      " line 22",
+      "-old line 23",
+      "+new line 23",
+      " line 24",
+      " line 25",
+      " line 26"
+    ].join("\n");
+    const expandedSource = [
+      "@@ -1,29 +1,29 @@",
+      " line 1",
+      " line 2",
+      " line 3",
+      " line 4",
+      " line 5",
+      " line 6",
+      "-old line 7",
+      "+new line 7",
+      " line 8",
+      " line 9",
+      " line 10",
+      " line 11",
+      " line 12",
+      " line 13",
+      " line 14",
+      " line 15",
+      " line 16",
+      " line 17",
+      " line 18",
+      " line 19",
+      " line 20",
+      " line 21",
+      " line 22",
+      "-old line 23",
+      "+new line 23",
+      " line 24",
+      " line 25",
+      " line 26",
+      " line 27",
+      " line 28",
+      " line 29"
+    ].join("\n");
+
+    const localized = buildLocalizedDiffContent(
+      compactContent,
+      expandedSource,
+      {
+        1: {
+          beforeLines: 13,
+          afterLines: 3
+        }
+      }
+    );
+    const [firstHunk, secondHunk] = localized.split(
+      /(?=^@@ )/m
+    );
+
+    expect(firstHunk).toBe(
+      compactContent.split(/(?=^@@ )/m)[0]
+    );
+    expect(secondHunk).toContain(" line 15");
+    expect(secondHunk).toContain("-old line 23");
+    expect(localized.match(/^ line 20$/gm)).toHaveLength(1);
   });
 
   it("filters files by path, status, and localized group label", () => {

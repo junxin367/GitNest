@@ -417,11 +417,44 @@ html[data-theme="light"] .gn-diff-panel {
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
-.gn-diff-panel__wide-row > code {
+.gn-diff-panel__wide-row > code,
+.gn-diff-panel__wide-row > .gn-diff-panel__hunk-trigger {
+  flex: 1 1 auto;
   min-width: max-content;
+}
+
+.gn-diff-panel__wide-row > code {
   color: inherit;
   font: inherit;
   white-space: pre;
+}
+
+.gn-diff-panel__hunk-trigger {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 2px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 2px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.gn-diff-panel__hunk-trigger > code {
+  color: inherit;
+  font: inherit;
+  white-space: pre;
+}
+
+.gn-diff-panel__hunk-trigger:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.gn-diff-panel__hunk-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .gn-diff-panel[data-wrap="true"] .gn-diff-panel__table {
@@ -441,7 +474,8 @@ html[data-theme="light"] .gn-diff-panel {
 }
 
 .gn-diff-panel[data-wrap="true"] .gn-diff-panel__code-cell > code,
-.gn-diff-panel[data-wrap="true"] .gn-diff-panel__wide-row > code {
+.gn-diff-panel[data-wrap="true"] .gn-diff-panel__wide-row > code,
+.gn-diff-panel[data-wrap="true"] .gn-diff-panel__hunk-trigger > code {
   min-width: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;

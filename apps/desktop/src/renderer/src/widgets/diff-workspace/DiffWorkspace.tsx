@@ -1,6 +1,9 @@
-import type {
-  MouseEvent,
-  ReactNode
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type MouseEvent,
+  type ReactNode
 } from "react";
 
 import type { DiffFileViewDto } from "@gitnest/contracts";
@@ -9,15 +12,27 @@ import type { DiffViewerFile } from "../../shared/model/diffViewModel";
 import { Button } from "../../shared/ui/Button";
 import { Icon } from "../../shared/ui/Icon";
 import {
+  Skeleton,
+  SkeletonSurface
+} from "../../shared/ui/Skeleton";
+import {
   DiffCommitComposer,
   type DiffWorkspaceCommit
 } from "./DiffCommitComposer";
+import { DiffDiscardConfirmationDialog } from "./DiffDiscardConfirmationDialog";
 import {
   DiffFileNavigator,
   type DiffWorkspaceMessage,
   type DiffWorkspaceTreePreference
 } from "./DiffFileNavigator";
 import {
+  createDiffFileContextMenuState,
+  DiffFileContextMenu,
+  type DiffFileContextMenuState,
+  type DiffWorkspaceExternalApplications
+} from "./DiffFileContextMenu";
+import {
+  DiffContentSkeleton,
   DiffPanel,
   type DiffPanelProps
 } from "./DiffPanel";
@@ -30,8 +45,21 @@ export interface DiffWorkspaceOpenStandaloneAction {
   onOpen(): void | Promise<void>;
 }
 
+export interface DiffWorkspaceSkeletonProps {
+  className?: string | undefined;
+  commitPanelHeight?: number | undefined;
+  label?: string | undefined;
+  showCommit?: boolean | undefined;
+}
+
+interface DiffDiscardRequest {
+  kind: "file" | "group";
+  files: readonly DiffViewerFile[];
+}
+
 export interface DiffWorkspaceProps {
   configuration: DiffWorkspaceConfiguration;
+  externalApplications: DiffWorkspaceExternalApplications;
   files: readonly DiffViewerFile[];
   selectedFileKey?: string | undefined;
   onSelectedFileChange(file: DiffViewerFile): void;
@@ -55,15 +83,13 @@ export interface DiffWorkspaceProps {
   changesLoading?: boolean | undefined;
   changesError?: DiffWorkspaceMessage | undefined;
   onRefresh?: (() => void) | undefined;
-  onFileContextMenu?:
-    | ((
-        event: MouseEvent<HTMLDivElement>,
-        file: DiffViewerFile
-      ) => void)
-    | undefined;
   panelProps: Omit<
     DiffPanelProps,
-    "config" | "headerActions" | "path" | "scopeKey"
+    | "config"
+    | "headerActions"
+    | "path"
+    | "scopeKey"
+    | "searchScopeKey"
   >;
   openStandalone?: DiffWorkspaceOpenStandaloneAction | undefined;
   commit?: DiffWorkspaceCommit | undefined;
@@ -101,6 +127,7 @@ export interface DiffWorkspaceProps {
 
 export function DiffWorkspace({
   configuration,
+  externalApplications,
   files,
   selectedFileKey,
   onSelectedFileChange,
@@ -117,7 +144,6 @@ export function DiffWorkspace({
   changesLoading,
   changesError,
   onRefresh,
-  onFileContextMenu,
   panelProps,
   openStandalone,
   commit,
@@ -127,6 +153,10 @@ export function DiffWorkspace({
   onFileViewChange,
   className
 }: DiffWorkspaceProps) {
+  const [fileContextMenu, setFileContextMenu] =
+    useState<DiffFileContextMenuState | null>(null);
+  const [discardRequest, setDiscardRequest] =
+    useState<DiffDiscardRequest | null>(null);
   const selectedFile =
     files.find((file) => file.key === selectedFileKey) ??
     files[0];
@@ -137,6 +167,76 @@ export function DiffWorkspace({
     configuration.extensions.commitRegion && Boolean(commit);
   const showStatusbar =
     configuration.extensions.statusbar && Boolean(statusbar);
+  const closeFileContextMenu = useCallback(() => {
+    setFileContextMenu(null);
+  }, []);
+  const closeDiscardConfirmation = useCallback(() => {
+    setDiscardRequest(null);
+  }, []);
+  const openFileContextMenu = useCallback(
+    (
+      event: MouseEvent<HTMLDivElement>,
+      file: DiffViewerFile
+    ) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setFileContextMenu(
+        createDiffFileContextMenuState(
+          file,
+          event.clientX,
+          event.clientY
+        )
+      );
+      onSelectedFileChange(file);
+    },
+    [onSelectedFileChange]
+  );
+  const requestDiscardFile = useCallback(
+    (file: DiffViewerFile) => {
+      closeFileContextMenu();
+      setDiscardRequest({
+        kind: "file",
+        files: [file]
+      });
+    },
+    [closeFileContextMenu]
+  );
+  const requestDiscardFiles = useCallback(
+    (requestedFiles: readonly DiffViewerFile[]) => {
+      closeFileContextMenu();
+      setDiscardRequest({
+        kind: "group",
+        files: [...requestedFiles]
+      });
+    },
+    [closeFileContextMenu]
+  );
+  const confirmDiscard = useCallback(async () => {
+    if (!discardRequest) {
+      return false;
+    }
+    if (discardRequest.kind === "file") {
+      const file = discardRequest.files[0];
+      if (!file || !onDiscardFile) {
+        return false;
+      }
+      return await onDiscardFile(file);
+    }
+    if (!onDiscardFiles) {
+      return false;
+    }
+    return await onDiscardFiles(discardRequest.files);
+  }, [discardRequest, onDiscardFile, onDiscardFiles]);
+
+  useEffect(() => {
+    closeFileContextMenu();
+    closeDiscardConfirmation();
+  }, [
+    closeDiscardConfirmation,
+    closeFileContextMenu,
+    treePreference?.scopeKey
+  ]);
+
   const headerActions = showOpenStandalone ? (
     <Button
       aria-label="在独立窗口中打开 Diff"
@@ -185,16 +285,20 @@ export function DiffWorkspace({
           configuration={configuration.navigation}
           files={files}
           mutationBusy={mutationBusy}
-          onFileContextMenu={onFileContextMenu}
+          onFileContextMenu={openFileContextMenu}
           onRefresh={onRefresh}
           onSelectedFileChange={onSelectedFileChange}
           onStageFile={onStageFile}
           onUnstageFile={onUnstageFile}
-          onDiscardFile={onDiscardFile}
+          onDiscardFile={
+            onDiscardFile ? requestDiscardFile : undefined
+          }
           canDiscardFile={canDiscardFile}
           onStageFiles={onStageFiles}
           onUnstageFiles={onUnstageFiles}
-          onDiscardFiles={onDiscardFiles}
+          onDiscardFiles={
+            onDiscardFiles ? requestDiscardFiles : undefined
+          }
           selectedFileKey={selectedFileKey}
           treePreference={treePreference}
           fileView={fileView}
@@ -219,6 +323,9 @@ export function DiffWorkspace({
           }
           headerActions={headerActions}
           path={selectedFile?.path}
+          searchScopeKey={
+            treePreference?.scopeKey ?? selectedFile?.key ?? ""
+          }
           scopeKey={selectedFile?.key ?? ""}
           statsAvailable={
             panelProps.statsAvailable ??
@@ -234,11 +341,138 @@ export function DiffWorkspace({
           {statusbar}
         </footer>
       ) : null}
+      <DiffFileContextMenu
+        applications={externalApplications}
+        contextMenu={fileContextMenu}
+        onClose={closeFileContextMenu}
+      />
+      {discardRequest ? (
+        <DiffDiscardConfirmationDialog
+          files={discardRequest.files}
+          mutationBusy={mutationBusy}
+          scope={discardRequest.kind}
+          onCancel={closeDiscardConfirmation}
+          onConfirm={confirmDiscard}
+        />
+      ) : null}
     </section>
   );
 }
 
+const DIFF_WORKSPACE_SKELETON_FILE_ROWS = [
+  "long",
+  "medium",
+  "short",
+  "long",
+  "medium"
+] as const;
+
+export function DiffWorkspaceSkeleton({
+  className,
+  commitPanelHeight,
+  label = "正在读取工作区变更…",
+  showCommit = false
+}: DiffWorkspaceSkeletonProps) {
+  return (
+    <SkeletonSurface
+      as="section"
+      className={[
+        "diff-workspace",
+        "diff-workspace-skeleton",
+        className
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      label={label}
+    >
+      <aside
+        aria-hidden="true"
+        className={[
+          "diff-workspace-sidebar",
+          showCommit ? "with-commit" : ""
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        <div className="diff-workspace-sidebar-header diff-workspace-skeleton-sidebar-header">
+          <Skeleton className="diff-workspace-skeleton-sidebar-title" />
+          <Skeleton className="diff-workspace-skeleton-filter" />
+          <Skeleton className="diff-workspace-skeleton-square" />
+        </div>
+        <div className="diff-workspace-file-list diff-workspace-skeleton-file-list">
+          <DiffWorkspaceSkeletonFileSection
+            rows={DIFF_WORKSPACE_SKELETON_FILE_ROWS.slice(0, 3)}
+          />
+          <DiffWorkspaceSkeletonFileSection
+            rows={DIFF_WORKSPACE_SKELETON_FILE_ROWS.slice(3)}
+          />
+        </div>
+        {showCommit && (
+          <div
+            className="diff-workspace-skeleton-commit"
+            style={
+              commitPanelHeight === undefined
+                ? undefined
+                : { height: commitPanelHeight }
+            }
+          >
+            <Skeleton className="diff-workspace-skeleton-resizer" />
+            <div className="diff-workspace-skeleton-commit-header">
+              <Skeleton className="diff-workspace-skeleton-commit-option" />
+              <Skeleton className="diff-workspace-skeleton-commit-pill" />
+            </div>
+            <div className="diff-workspace-skeleton-commit-body">
+              <Skeleton className="diff-workspace-skeleton-textarea" />
+              <div className="diff-workspace-skeleton-commit-actions">
+                <Skeleton className="diff-workspace-skeleton-square" />
+                <Skeleton className="diff-workspace-skeleton-submit" />
+              </div>
+            </div>
+          </div>
+        )}
+      </aside>
+      <div
+        aria-hidden="true"
+        className="diff-workspace-content diff-workspace-skeleton-content"
+      >
+        <div className="diff-workspace-skeleton-document-header">
+          <Skeleton className="diff-workspace-skeleton-document-title" />
+          <Skeleton className="diff-workspace-skeleton-document-stat" />
+          <Skeleton className="diff-workspace-skeleton-square" />
+        </div>
+        <DiffContentSkeleton />
+      </div>
+    </SkeletonSurface>
+  );
+}
+
+function DiffWorkspaceSkeletonFileSection({
+  rows
+}: {
+  rows: readonly (typeof DIFF_WORKSPACE_SKELETON_FILE_ROWS)[number][];
+}) {
+  return (
+    <div className="diff-workspace-skeleton-file-section">
+      <div className="diff-workspace-skeleton-group">
+        <Skeleton className="diff-workspace-skeleton-chevron" />
+        <Skeleton className="diff-workspace-skeleton-group-title" />
+        <Skeleton className="diff-workspace-skeleton-count" />
+      </div>
+      {rows.map((width, index) => (
+        <div
+          className={`diff-workspace-skeleton-file-row is-${width}`}
+          key={`${width}-${index + 1}`}
+        >
+          <Skeleton className="diff-workspace-skeleton-file-name" />
+          <Skeleton className="diff-workspace-skeleton-file-meta" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export type {
+  DiffWorkspaceExternalApplications,
   DiffWorkspaceCommit,
   DiffWorkspaceMessage,
   DiffWorkspaceTreePreference

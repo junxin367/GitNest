@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   createReadOnlyProcessEnvironment,
   createWritableProcessEnvironment,
-  runProcess
+  runProcess,
+  runProcessBuffer
 } from "./git-process-runner";
 
 describe("createReadOnlyProcessEnvironment", () => {
@@ -113,5 +114,19 @@ describe("createReadOnlyProcessEnvironment", () => {
     expect(result.exitCode).toBe(0);
     expect(Buffer.byteLength(result.stdout)).toBe(128);
     expect(result.outputTruncated).toBe(true);
+  });
+
+  it("returns stdout bytes without UTF-8 decoding", async () => {
+    const result = await runProcessBuffer({
+      executable: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write(Buffer.from([0, 255, 1, 128]))"
+      ]
+    });
+
+    expect(result.stdout).toEqual(
+      Buffer.from([0, 255, 1, 128])
+    );
   });
 });

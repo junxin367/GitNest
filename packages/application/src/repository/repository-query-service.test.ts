@@ -53,7 +53,8 @@ describe("RepositoryQueryService", () => {
       "diff_1",
       TARGET,
       "src/app.ts",
-      "unstaged"
+      "unstaged",
+      13
     );
 
     expect(result.target).toEqual(TARGET);
@@ -63,6 +64,8 @@ describe("RepositoryQueryService", () => {
         repositoryPath: WORKTREE_PATH,
         relativePath: "src/app.ts",
         mode: "unstaged",
+        contextLines: 13,
+        includeMedia: true,
         signal: expect.any(AbortSignal)
       }
     ]);
@@ -128,6 +131,37 @@ describe("RepositoryQueryService", () => {
     });
     expect(gitClient.branchCalls).toBe(0);
   });
+
+  it("forwards a read-only branch comparison scope to Git", async () => {
+    const gitClient = new FakeGitClient();
+    const service = createService(gitClient);
+
+    await service.getHistory(
+      "history_compare",
+      TARGET,
+      50,
+      0,
+      {
+        kind: "compare",
+        leftRef: "refs/heads/main",
+        rightRef: "refs/heads/develop"
+      }
+    );
+
+    expect(gitClient.historyCalls).toEqual([
+      {
+        repositoryPath: WORKTREE_PATH,
+        limit: 50,
+        offset: 0,
+        scope: {
+          kind: "compare",
+          leftRef: "refs/heads/main",
+          rightRef: "refs/heads/develop"
+        },
+        signal: expect.any(AbortSignal)
+      }
+    ]);
+  });
 });
 
 class FakeGitClient implements GitClient {
@@ -140,6 +174,15 @@ class FakeGitClient implements GitClient {
     repositoryPath: string;
     relativePath: string;
     mode: ReadRepositoryDiffOptions["mode"];
+    contextLines: number | undefined;
+    includeMedia: boolean | undefined;
+    signal: AbortSignal;
+  }> = [];
+  readonly historyCalls: Array<{
+    repositoryPath: string;
+    limit: number | undefined;
+    offset: number | undefined;
+    scope: ReadCommitHistoryOptions["scope"];
     signal: AbortSignal;
   }> = [];
   branchCalls = 0;
@@ -206,6 +249,8 @@ class FakeGitClient implements GitClient {
       repositoryPath,
       relativePath: options.path,
       mode: options.mode,
+      contextLines: options.contextLines,
+      includeMedia: options.includeMedia,
       signal
     });
     return Promise.resolve({
@@ -219,11 +264,21 @@ class FakeGitClient implements GitClient {
     });
   }
 
-  async readCommitHistory(
-    _path: string,
-    _options?: ReadCommitHistoryOptions
+  readCommitHistory(
+    repositoryPath: string,
+    options: ReadCommitHistoryOptions = {}
   ): Promise<CommitHistoryPage> {
-    throw new Error("Not used.");
+    this.historyCalls.push({
+      repositoryPath,
+      limit: options.limit,
+      offset: options.offset,
+      scope: options.scope,
+      signal:
+        options.signal ?? new AbortController().signal
+    });
+    return Promise.resolve({
+      commits: []
+    });
   }
 
   async readCommitDetails(

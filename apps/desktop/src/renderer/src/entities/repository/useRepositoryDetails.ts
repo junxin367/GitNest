@@ -14,6 +14,7 @@ import type {
   RepositoryCommitDto,
   RepositoryDiffDto,
   RepositoryHistoryPageDto,
+  RepositoryHistoryScopeDto,
   RepositoryTargetDto
 } from "@gitnest/contracts";
 
@@ -28,6 +29,7 @@ type LoadingKey =
 
 interface SelectChangeOptions {
   preserveDiff?: boolean;
+  contextLines?: number;
 }
 
 interface SelectCommitOptions {
@@ -39,11 +41,13 @@ export interface RepositoryDetailsController {
   diff: RepositoryDiffDto | null;
   diffNotice: "change-removed" | "metadata-only" | null;
   history: RepositoryHistoryPageDto | null;
+  historyScope: RepositoryHistoryScopeDto | null;
   commit: RepositoryCommitDto | null;
   branches: RepositoryBranchesDto | null;
   selectedChange: {
     path: string;
     mode: "unstaged" | "staged" | "untracked";
+    contextLines: number;
   } | null;
   selectedCommitHash: string | null;
   historyDetailOpen: boolean;
@@ -51,11 +55,15 @@ export interface RepositoryDetailsController {
   error: GitReadErrorDto | null;
   selectChange(
     change: ChangedPathDto,
-    mode?: "unstaged" | "staged" | "untracked"
+    mode?: "unstaged" | "staged" | "untracked",
+    options?: SelectChangeOptions
   ): Promise<void>;
   selectCommit(
     commitHash: string,
     options?: SelectCommitOptions
+  ): Promise<void>;
+  selectHistoryScope(
+    scope: RepositoryHistoryScopeDto | null
   ): Promise<void>;
   loadMoreHistory(): Promise<void>;
   reload(
@@ -73,6 +81,7 @@ const EMPTY_LOADING: Record<LoadingKey, boolean> = {
   commit: false,
   branches: false
 };
+const DEFAULT_DIFF_CONTEXT_LINES = 3;
 
 export function useRepositoryDetails(
   target: RepositoryTargetDto | undefined,
@@ -101,6 +110,8 @@ export function useRepositoryDetails(
   >(null);
   const [history, setHistory] =
     useState<RepositoryHistoryPageDto | null>(null);
+  const [historyScope, setHistoryScope] =
+    useState<RepositoryHistoryScopeDto | null>(null);
   const [commit, setCommit] =
     useState<RepositoryCommitDto | null>(null);
   const [branches, setBranches] =
@@ -120,6 +131,8 @@ export function useRepositoryDetails(
   >(null);
   const selectedCommitHashRef = useRef<string | null>(null);
   const historyDetailOpenRef = useRef(false);
+  const historyScopeRef =
+    useRef<RepositoryHistoryScopeDto | null>(null);
   const previousTabRef = useRef<RepositoryTab | null>(null);
   const diffRef = useRef<RepositoryDiffDto | null>(null);
   const reloadChangesRef = useRef<
@@ -204,9 +217,22 @@ export function useRepositoryDetails(
       }
 
       const mode = requestedMode ?? preferredDiffMode(change);
+      const previousSelection = selectedChangeRef.current;
+      const sameSelection =
+        previousSelection?.path === change.path &&
+        previousSelection.mode === mode;
+      const contextLines =
+        options.contextLines ??
+        (sameSelection
+          ? previousSelection.contextLines
+          : DEFAULT_DIFF_CONTEXT_LINES);
       const queryId = createQuery("diff");
       const requestGeneration = generation.current;
-      const nextSelection = { path: change.path, mode };
+      const nextSelection = {
+        path: change.path,
+        mode,
+        contextLines
+      };
       const refreshKey = emptyDiffRefreshKey(
         targetKey,
         nextSelection
@@ -222,6 +248,8 @@ export function useRepositoryDetails(
           matchingDiffLoaded);
       const background =
         preserveExistingDiff && matchingDiffLoaded;
+      const reportLoading =
+        !background || options.contextLines !== undefined;
       selectedChangeRef.current = nextSelection;
       setSelectedChange(nextSelection);
       if (!preserveExistingDiff) {
@@ -229,7 +257,7 @@ export function useRepositoryDetails(
         setDiff(null);
         setDiffNotice(null);
       }
-      if (!background) {
+      if (reportLoading) {
         setLoadingKey("diff", true);
       }
       setError(null);
@@ -239,7 +267,8 @@ export function useRepositoryDetails(
           queryId,
           target: stableTarget,
           path: change.path,
-          mode
+          mode,
+          contextLines
         });
 
         if (
@@ -284,7 +313,7 @@ export function useRepositoryDetails(
         if (
           finishQuery("diff", queryId) &&
           requestGeneration === generation.current &&
-          !background
+          reportLoading
         ) {
           setLoadingKey("diff", false);
         }
@@ -361,7 +390,13 @@ export function useRepositoryDetails(
               )
             ) {
               void selectChange(nextChange, nextMode, {
-                preserveDiff: preserveExistingDiff
+                preserveDiff: preserveExistingDiff,
+                ...(previousSelection
+                  ? {
+                      contextLines:
+                        previousSelection.contextLines
+                    }
+                  : {})
               });
             }
           } else {
@@ -519,7 +554,10 @@ export function useRepositoryDetails(
   }, [selectCommit]);
 
   const loadHistory = useCallback(
-    async (offset = 0) => {
+    async (
+      offset = 0,
+      scope = historyScopeRef.current
+    ) => {
       if (!stableTarget) {
         return;
       }
@@ -534,7 +572,8 @@ export function useRepositoryDetails(
           queryId,
           target: stableTarget,
           limit: 50,
-          offset
+          offset,
+          ...(scope ? { scope } : {})
         });
 
         if (
@@ -607,6 +646,28 @@ export function useRepositoryDetails(
     ]
   );
 
+  const selectHistoryScope = useCallback(
+    async (scope: RepositoryHistoryScopeDto | null) => {
+      if (sameHistoryScope(historyScopeRef.current, scope)) {
+        return;
+      }
+
+      cancelQuery("commit");
+      setLoadingKey("commit", false);
+      selectedCommitHashRef.current = null;
+      historyDetailOpenRef.current = false;
+      setSelectedCommitHash(null);
+      setHistoryDetailOpen(false);
+      setCommit(null);
+      setHistory(null);
+      setError(null);
+      historyScopeRef.current = scope;
+      setHistoryScope(scope);
+      await loadHistory(0, scope);
+    },
+    [cancelQuery, loadHistory, setLoadingKey]
+  );
+
   const loadBranches = useCallback(async () => {
     if (!stableTarget) {
       return;
@@ -668,7 +729,7 @@ export function useRepositoryDetails(
     async () => {
       const offset = history?.page.nextOffset;
       if (offset !== undefined) {
-        await loadHistory(offset);
+        await loadHistory(offset, historyScopeRef.current);
       }
     },
     [history?.page.nextOffset, loadHistory]
@@ -705,7 +766,10 @@ export function useRepositoryDetails(
           setHistoryDetailOpen(false);
           setCommit(null);
         }
-        await loadHistory(0);
+        await Promise.all([
+          loadHistory(0, historyScopeRef.current),
+          loadBranches()
+        ]);
       } else if (requestedTab === "branches") {
         await loadBranches();
       }
@@ -741,6 +805,8 @@ export function useRepositoryDetails(
     setDiff(null);
     setDiffNotice(null);
     setHistory(null);
+    historyScopeRef.current = null;
+    setHistoryScope(null);
     setCommit(null);
     setBranches(null);
     setSelectedChange(null);
@@ -812,6 +878,7 @@ export function useRepositoryDetails(
     diff,
     diffNotice,
     history,
+    historyScope,
     commit,
     branches,
     selectedChange,
@@ -821,11 +888,33 @@ export function useRepositoryDetails(
     error,
     selectChange,
     selectCommit,
+    selectHistoryScope,
     loadMoreHistory,
     reload,
     invalidate,
     clearError
   };
+}
+
+function sameHistoryScope(
+  left: RepositoryHistoryScopeDto | null,
+  right: RepositoryHistoryScopeDto | null
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  if (left.kind === "ref" && right.kind === "ref") {
+    return left.ref === right.ref;
+  }
+  return (
+    left.kind === "compare" &&
+    right.kind === "compare" &&
+    left.leftRef === right.leftRef &&
+    left.rightRef === right.rightRef
+  );
 }
 
 function preferredDiffMode(

@@ -16,16 +16,12 @@ import type {
 } from "@gitnest/contracts";
 
 import {
-  preferredRepositoryTab,
+  repositoryTabForTargetSwitch,
   type AppView,
   type RepositoryTab,
   type WorkspaceTab
 } from "./navigation";
-import {
-  findTargetSnapshot,
-  getSnapshotChangeCount,
-  listWorkspaceTargets
-} from "../entities/workspace/model";
+import { listWorkspaceTargets } from "../entities/workspace/model";
 import { useWorkspace } from "../entities/workspace/useWorkspace";
 import { useAccounts } from "../features/account-manage/useAccounts";
 import { useExternalApplications } from "../features/external-application/useExternalApplications";
@@ -323,14 +319,8 @@ export function App() {
   }, [repositoryCommands.preflight]);
 
   const openRepositoryTarget = (target: RepositoryTargetDto) => {
-    const snapshot = findTargetSnapshot(
-      workspace.snapshots,
-      target
-    );
     void workspace.selectTarget(target);
-    const nextTab = preferredRepositoryTab(
-      getSnapshotChangeCount(snapshot)
-    );
+    const nextTab = repositoryTabForTargetSwitch(repositoryTab);
     setRepositoryTab(nextTab);
     setView("repository");
     void appSettings.update(
@@ -345,7 +335,6 @@ export function App() {
   };
   const navigate = (nextView: AppView) => {
     if (nextView === "workspace") {
-      setRepositoryTab("overview");
       setWorkspaceTab("overview");
       void appSettings.update(
         {
@@ -619,6 +608,7 @@ export function App() {
               ) : view === "workspace" ? (
                 <WorkspaceCollectionPage
                   busy={workspace.busy}
+                  loading={workspace.operation === "loading"}
                   onAddDirectory={() =>
                     void workspace.chooseDirectory()
                   }
@@ -648,6 +638,7 @@ export function App() {
               ) : view === "operations" ? (
                 <OperationCenterPage
                   commands={repositoryCommands}
+                  loading={workspace.operation === "loading"}
                   onOpenTarget={openRepositoryTarget}
                   operations={workspace.operations}
                   snapshots={workspace.snapshots}

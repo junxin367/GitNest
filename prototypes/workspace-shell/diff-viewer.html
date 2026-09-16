@@ -1065,6 +1065,44 @@
       border-bottom: 1px solid rgba(97, 168, 255, 0.14);
     }
 
+    .hunk-label,
+    .hunk-trigger {
+      flex: 1 1 auto;
+      min-width: max-content;
+    }
+
+    .hunk-label {
+      white-space: pre;
+    }
+
+    .hunk-trigger {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 2px;
+      color: inherit;
+      background: transparent;
+      border: 0;
+      border-radius: 2px;
+      cursor: pointer;
+      font: inherit;
+      text-align: left;
+    }
+
+    .hunk-trigger > span {
+      color: inherit;
+      font: inherit;
+      white-space: pre;
+    }
+
+    .hunk-trigger:hover {
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+    }
+
+    .hunk-trigger:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
     .hunk-row.current .hunk-content {
       box-shadow: inset 3px 0 0 var(--accent);
     }
@@ -1093,6 +1131,137 @@
       color: #17120a;
       background: var(--yellow);
       box-shadow: 0 0 0 1px rgba(255, 230, 145, 0.72);
+    }
+
+    .discard-confirm-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 300;
+      display: grid;
+      place-items: center;
+      padding: var(--space-5);
+      background: rgba(3, 7, 12, 0.72);
+      backdrop-filter: blur(7px);
+    }
+
+    .discard-confirm-dialog {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      width: min(560px, calc(100vw - 48px));
+      max-height: min(640px, calc(100vh - 64px));
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid color-mix(in srgb, var(--red) 44%, var(--border));
+      border-radius: var(--radius-large);
+      box-shadow: var(--shadow);
+    }
+
+    .discard-confirm-header {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-3);
+      padding: var(--space-4);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .discard-confirm-header > div {
+      min-width: 0;
+    }
+
+    .discard-confirm-icon {
+      display: grid;
+      flex: 0 0 auto;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      color: var(--red);
+      background: var(--red-soft);
+      border-radius: var(--radius-large);
+    }
+
+    .discard-confirm-eyebrow {
+      color: var(--red);
+      font-size: 10px;
+      font-weight: var(--font-weight-semibold);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .discard-confirm-dialog h2,
+    .discard-confirm-dialog p {
+      margin: 0;
+    }
+
+    .discard-confirm-dialog h2 {
+      margin-top: var(--space-1);
+      font-size: var(--font-size-emphasis);
+    }
+
+    .discard-confirm-header p {
+      margin-top: var(--space-1);
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .discard-confirm-body {
+      display: grid;
+      gap: var(--space-4);
+      padding: var(--space-4);
+      overflow: auto;
+    }
+
+    .discard-confirm-warning {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-2);
+      padding: var(--space-2) var(--space-3);
+      color: var(--red);
+      background: var(--red-soft);
+      border: 1px solid color-mix(in srgb, var(--red) 32%, transparent);
+      border-radius: var(--radius-regular);
+      font-size: var(--font-size-caption);
+    }
+
+    .discard-confirm-target {
+      display: grid;
+      gap: var(--space-1);
+      min-width: 0;
+    }
+
+    .discard-confirm-target > span {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .discard-confirm-target code {
+      overflow: hidden;
+      color: var(--text-soft);
+      font-family: var(--font-mono);
+      font-size: var(--font-size-caption);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .discard-confirm-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+      padding: var(--space-3) var(--space-4);
+      background: var(--surface-2);
+      border-top: 1px solid var(--border-soft);
+    }
+
+    .discard-confirm-footer > p {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .discard-confirm-footer > div {
+      display: flex;
+      flex: 0 0 auto;
+      gap: var(--space-2);
     }
 
     .notice {
@@ -1279,6 +1448,7 @@
       more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
       plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
       search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+      warning: '<path d="M12 4 3 20h18L12 4Z"/><path d="M12 9v5"/><path d="M12 17h.01"/>',
       wrap: '<path d="M4 6h11"/><path d="M4 10h13a3 3 0 0 1 0 6h-3"/><path d="m16 13-3 3 3 3"/><path d="M4 16h5"/>',
       x: '<path d="m6 6 12 12"/><path d="m18 6-12 12"/>',
       undo: '<path d="M9 7 4 12l5 5"/><path d="M4 12h9a7 7 0 0 1 7 7"/>'
@@ -1599,6 +1769,8 @@
     const repository = repositories[requestedRepoId] || repositories.core;
     const requestedFilePath = params.get("file") || "";
     const requestedFile = repository.files.find((file) => file.path === requestedFilePath);
+    const defaultDiffContextLines = 3;
+    const diffContextStep = 10;
 
     const state = {
       selectedPath: requestedFile?.path || repository.files[0]?.path || "",
@@ -1609,6 +1781,7 @@
       searchMatches: [],
       activeMatch: 0,
       activeHunk: 0,
+      hunkContexts: {},
       fileFilter: "",
       fileViewMode: "list",
       collapsedFileGroups: new Set(),
@@ -1707,6 +1880,139 @@
       return file.staged ? "已暂存" : "未暂存";
     }
 
+    function expandedRows(file) {
+      if (!file || file.status === "untracked") return file?.rows || [];
+      if (file.fullRows) return file.fullRows;
+
+      const contextBefore = [
+        `public final class ${fileName(file.path).replace(/\.[^.]+$/, "")} {`,
+        "    private final RepositoryClient repositoryClient;",
+        "    private final Clock clock;",
+        "",
+        "    // 当前变更所在类的字段与构造函数",
+        "    public WorkspaceSnapshot load(Path root) {",
+        "        requireReadableDirectory(root);",
+        "        GitStatus status = repositoryClient.status(root);",
+        "",
+        "        // 进入当前变更位置",
+        "        List<ChangedFile> files = status.changedFiles();",
+        ""
+      ];
+      const contextAfter = [
+        "",
+        "        return WorkspaceSnapshot.builder()",
+        "            .root(root)",
+        "            .changedFiles(files)",
+        "            .build();",
+        "    }",
+        "",
+        "    private void requireReadableDirectory(Path root) {",
+        "        if (!Files.isReadable(root)) {",
+        "            throw new IllegalArgumentException(\"Workspace is not readable\");",
+        "        }",
+        "    }"
+      ];
+      const groups = [];
+      let current = null;
+      file.rows.forEach((row) => {
+        if (row.kind === "hunk") {
+          current = { header: row, body: [] };
+          groups.push(current);
+        } else if (current) {
+          current.body.push(row);
+        }
+      });
+      file.fullRows = groups.flatMap((group) => {
+        const firstNumber = group.body
+          .map((row) => Number(row.oldNo ?? row.newNo))
+          .find((value) => Number.isFinite(value)) || 1;
+        const lastNumber = [...group.body]
+          .reverse()
+          .map((row) => Number(row.oldNo ?? row.newNo))
+          .find((value) => Number.isFinite(value)) || firstNumber;
+        const prefix = contextBefore.map((text, index) => {
+          const lineNumber = Math.max(
+            1,
+            firstNumber - contextBefore.length + index
+          );
+          return {
+            kind: "context",
+            oldNo: lineNumber,
+            newNo: lineNumber,
+            text
+          };
+        });
+        const suffix = contextAfter.map((text, index) => ({
+          kind: "context",
+          oldNo: lastNumber + index + 1,
+          newNo: lastNumber + index + 1,
+          text
+        }));
+        return [
+          group.header,
+          ...prefix,
+          ...group.body,
+          ...suffix
+        ];
+      });
+      return file.fullRows;
+    }
+
+    function rowsForContext(file) {
+      const rows = expandedRows(file);
+      if (!file || file.status === "untracked") {
+        return rows;
+      }
+
+      const hunks = [];
+      let current = null;
+      rows.forEach((row) => {
+        if (row.kind === "hunk") {
+          current = { header: row, body: [] };
+          hunks.push(current);
+        } else if (current) {
+          current.body.push(row);
+        }
+      });
+      return hunks.flatMap((hunk, hunkIndex) => {
+        const context = state.hunkContexts[hunkIndex] || {
+          beforeLines: defaultDiffContextLines,
+          afterLines: defaultDiffContextLines,
+          full: false
+        };
+        const changedIndexes = hunk.body
+          .map((row, index) => row.kind === "context" ? -1 : index)
+          .filter((index) => index >= 0);
+        if (!changedIndexes.length || context.full) {
+          return [hunk.header, ...hunk.body];
+        }
+        const start = Math.max(
+          0,
+          changedIndexes[0] - context.beforeLines
+        );
+        const end = Math.min(
+          hunk.body.length,
+          changedIndexes[changedIndexes.length - 1] +
+            context.afterLines +
+            1
+        );
+        return [
+          hunk.header,
+          ...hunk.body.slice(start, end)
+        ];
+      });
+    }
+
+    function canExpandContext(file) {
+      return Boolean(
+        file &&
+        file.status !== "untracked" &&
+        !file.binary &&
+        !file.truncated &&
+        expandedRows(file).length > file.rows.length
+      );
+    }
+
     function fileStats(file) {
       return file.rows.reduce((stats, row) => {
         if (row.kind === "pair") {
@@ -1725,7 +2031,7 @@
 
     function searchableEntries(file) {
       const entries = [];
-      file.rows.forEach((row, rowIndex) => {
+      rowsForContext(file).forEach((row, rowIndex) => {
         if (row.kind === "hunk") {
           entries.push({ key: `${rowIndex}:hunk`, text: row.text });
         } else if (row.kind === "pair") {
@@ -1886,11 +2192,11 @@
       return `<div class="split-pane-row">${cellMarkup}</div>`;
     }
 
-    function renderSplitPanes(file) {
+    function renderSplitPanes(rows) {
       const renderPane = (side, label) => `
         <div class="split-pane ${side}" aria-label="${label}">
           <div class="split-pane-content">
-            ${file.rows
+            ${rows
               .map((row, rowIndex) => renderSplitPaneRow(row, rowIndex, side))
               .join("")}
           </div>
@@ -1997,14 +2303,38 @@
     }
 
     function renderHunk(row, rowIndex) {
-      const hunkIndex = currentFile().rows
+      const file = currentFile();
+      const hunkIndex = rowsForContext(file)
         .slice(0, rowIndex + 1)
         .filter((item) => item.kind === "hunk").length - 1;
+      const context = state.hunkContexts[hunkIndex] || {
+        beforeLines: defaultDiffContextLines,
+        afterLines: defaultDiffContextLines,
+        full: false
+      };
+      const expanded =
+        context.full ||
+        context.beforeLines > defaultDiffContextLines ||
+        context.afterLines > defaultDiffContextLines;
+      const hunkLabel = canExpandContext(file)
+        ? `
+            <button
+              class="hunk-trigger"
+              type="button"
+              onclick="expandDiffContext('${expanded ? "reset" : "around"}', ${hunkIndex})"
+              aria-label="${expanded ? `收起第 ${hunkIndex + 1} 个变更块上下文` : `展开第 ${hunkIndex + 1} 个变更块上下各 ${diffContextStep} 行`}"
+              aria-expanded="${expanded}"
+              title="${expanded ? "点击收起当前变更块，恢复默认 3 行上下文" : `点击查看当前变更块上方和下方各 ${diffContextStep} 行代码`}"
+            >
+              <span>${textMarkup(row.text, `${rowIndex}:hunk`)}</span>
+            </button>
+          `
+        : `<span class="hunk-label">${textMarkup(row.text, `${rowIndex}:hunk`)}</span>`;
       return `
         <div class="hunk-row${hunkIndex === state.activeHunk ? " current" : ""}" data-hunk-index="${hunkIndex}">
           <div class="hunk-content">
             ${icon("diff", 14)}
-            <span>${textMarkup(row.text, `${rowIndex}:hunk`)}</span>
+            ${hunkLabel}
           </div>
         </div>
       `;
@@ -2030,6 +2360,7 @@
         updateHunkControls();
         return;
       }
+      const rows = rowsForContext(file);
 
       state.searchMatches = collectSearchMatches(file);
       if (!state.searchMatches.length) {
@@ -2041,9 +2372,9 @@
       }
 
       if (state.view === "split" && !state.wrap) {
-        elements.diffMount.innerHTML = renderSplitPanes(file);
+        elements.diffMount.innerHTML = renderSplitPanes(rows);
       } else {
-        const rowMarkup = file.rows
+        const rowMarkup = rows
           .map((row, rowIndex) =>
             state.view === "split"
               ? renderSplitRow(row, rowIndex)
@@ -2106,7 +2437,6 @@
             <span class="file-name" title="${escapeHtml(file.path)}">${escapeHtml(displayName)}</span>
             <span class="file-meta">
               <span class="file-status${untracked ? " untracked" : ""}">${untracked ? "?" : "M"}</span>
-              <span class="file-dir">${fileStatusLabel(file)}</span>
               <span class="file-change-stats" aria-label="新增 ${stats.additions} 行，删除 ${stats.deletions} 行">
                 <span class="additions">+${stats.additions}</span>
                 <span class="deletions">-${stats.deletions}</span>
@@ -2349,6 +2679,20 @@
       });
       elements.fileList.querySelectorAll(".stage-toggle").forEach((button) => {
         button.addEventListener("click", () => {
+          if (button.dataset.stageAction === "放弃更改") {
+            const file = repository.files.find(
+              (candidate) =>
+                candidate.path === button.dataset.filePath
+            );
+            if (file) {
+              openDiscardConfirmation(
+                [file],
+                () => discardFiles([file]),
+                "file"
+              );
+            }
+            return;
+          }
           showNotice(
             `${button.dataset.stageAction}：${button.dataset.filePath}（原型预览，不执行 Git 命令）`
           );
@@ -2364,19 +2708,11 @@
             );
             if (!group || group.files.length === 0) return;
             if (button.dataset.groupAction === "discard") {
-              const discarded = new Set(
-                group.files.map((file) => file.path)
-              );
-              repository.files = repository.files.filter(
-                (file) => !discarded.has(file.path)
-              );
-              if (discarded.has(state.selectedPath)) {
-                state.selectedPath = repository.files[0]?.path || "";
-              }
-              renderFileList();
-              updatePanel();
-              showNotice(
-                `放弃更改：${discarded.size} 个文件（原型预览，不执行 Git 命令）`
+              const files = [...group.files];
+              openDiscardConfirmation(
+                files,
+                () => discardFiles(files),
+                "group"
               );
               return;
             }
@@ -2483,6 +2819,9 @@
 
     function selectFile(path) {
       if (!repository.files.some((file) => file.path === path)) return;
+      if (state.selectedPath !== path) {
+        state.hunkContexts = {};
+      }
       state.selectedPath = path;
       state.searchQuery = "";
       state.searchMatches = [];
@@ -2510,6 +2849,7 @@
       const files = filteredFiles();
       if (!files.some((file) => file.path === state.selectedPath)) {
         state.selectedPath = files[0]?.path || "";
+        state.hunkContexts = {};
         state.searchQuery = "";
         state.searchMatches = [];
         state.activeMatch = 0;
@@ -2600,6 +2940,54 @@
       });
     }
 
+    function expandDiffContext(direction, hunkIndex) {
+      const file = currentFile();
+      if (!canExpandContext(file)) return;
+
+      const current = state.hunkContexts[hunkIndex] || {
+        beforeLines: defaultDiffContextLines,
+        afterLines: defaultDiffContextLines,
+        full: false
+      };
+      if (direction === "reset") {
+        delete state.hunkContexts[hunkIndex];
+      } else if (direction === "around") {
+        state.hunkContexts[hunkIndex] = {
+          beforeLines: diffContextStep,
+          afterLines: diffContextStep,
+          full: false
+        };
+      } else if (direction === "all") {
+        state.hunkContexts[hunkIndex] = {
+          beforeLines: Number.MAX_SAFE_INTEGER,
+          afterLines: Number.MAX_SAFE_INTEGER,
+          full: true
+        };
+      } else if (direction === "up") {
+        state.hunkContexts[hunkIndex] = {
+          ...current,
+          beforeLines: current.beforeLines + diffContextStep,
+          full: false
+        };
+      } else if (direction === "down") {
+        state.hunkContexts[hunkIndex] = {
+          ...current,
+          afterLines: current.afterLines + diffContextStep,
+          full: false
+        };
+      }
+      state.activeHunk = hunkIndex;
+      renderDiff();
+      requestAnimationFrame(() => {
+        document
+          .querySelector(`.hunk-row[data-hunk-index="${hunkIndex}"]`)
+          ?.scrollIntoView({
+            block: "center",
+            inline: "nearest"
+          });
+      });
+    }
+
     async function copyText(value) {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(value);
@@ -2644,6 +3032,160 @@
       elements.notice.textContent = message;
       elements.notice.classList.add("show");
       window.setTimeout(() => elements.notice.classList.remove("show"), 3200);
+    }
+
+    function openDiscardConfirmation(files, onConfirm, scope = "file") {
+      const previousFocus =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      const untrackedCount = files.filter(
+        (file) => file.status === "untracked"
+      ).length;
+      const singleFile = scope === "file" ? files[0] : null;
+      const title = singleFile
+        ? untrackedCount > 0
+          ? "永久删除未跟踪文件？"
+          : `放弃对“${singleFile.path}”的更改？`
+        : `放弃 ${files.length} 个文件的更改？`;
+      const targetSummary = singleFile
+        ? singleFile.path
+        : `${files.length} 个文件${
+            untrackedCount > 0
+              ? ` · ${untrackedCount} 个未跟踪文件`
+              : ""
+          }`;
+      const warning = untrackedCount > 0
+        ? `正式应用中，其中 ${untrackedCount} 个未跟踪文件将从磁盘永久删除，不会移入回收站，且无法撤销。`
+        : "正式应用中，工作区中的修改将被还原，此操作无法撤销。";
+      const overlay = document.createElement("div");
+      overlay.className = "discard-confirm-overlay";
+      overlay.innerHTML = `
+        <section
+          class="discard-confirm-dialog"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="discardConfirmTitle"
+          aria-describedby="discardConfirmDescription"
+        >
+          <header class="discard-confirm-header">
+            <span class="discard-confirm-icon">${icon("warning", 20)}</span>
+            <div>
+              <span class="discard-confirm-eyebrow">危险操作</span>
+              <h2 id="discardConfirmTitle">${escapeHtml(title)}</h2>
+              <p id="discardConfirmDescription">确认后将立即处理当前工作区内容。</p>
+            </div>
+          </header>
+          <div class="discard-confirm-body">
+            <div class="discard-confirm-warning">
+              ${icon("warning", 15)}
+              <span>${escapeHtml(warning)}</span>
+            </div>
+            <div class="discard-confirm-target">
+              <span>${singleFile ? "目标文件" : "影响范围"}</span>
+              <code title="${escapeHtml(targetSummary)}">${escapeHtml(targetSummary)}</code>
+            </div>
+          </div>
+          <footer class="discard-confirm-footer">
+            <p>当前为原型预览，不执行 Git 命令。</p>
+            <div>
+              ${renderButton({
+                label: "取消",
+                size: "small",
+                attributes: 'data-discard-confirm-action="cancel"'
+              })}
+              ${renderButton({
+                label:
+                  untrackedCount > 0
+                    ? "永久删除并放弃"
+                    : "确认放弃",
+                size: "small",
+                variant: "danger",
+                emphasis: "strong",
+                icon: icon("warning", 14),
+                attributes: 'data-discard-confirm-action="confirm"'
+              })}
+            </div>
+          </footer>
+        </section>
+      `;
+
+      const close = ({ restoreFocus = true } = {}) => {
+        document.removeEventListener("keydown", handleKeyDown, true);
+        overlay.remove();
+        if (restoreFocus && previousFocus?.isConnected) {
+          previousFocus.focus();
+        }
+      };
+      const handleKeyDown = (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          close();
+          return;
+        }
+        if (event.key !== "Tab") return;
+        const focusable = [
+          ...overlay.querySelectorAll("button:not([disabled])")
+        ];
+        const first = focusable[0];
+        const last = focusable.at(-1);
+        if (!first || !last) return;
+        if (
+          event.shiftKey &&
+          (document.activeElement === first ||
+            !overlay.contains(document.activeElement))
+        ) {
+          event.preventDefault();
+          last.focus();
+        } else if (
+          !event.shiftKey &&
+          (document.activeElement === last ||
+            !overlay.contains(document.activeElement))
+        ) {
+          event.preventDefault();
+          first.focus();
+        }
+      };
+
+      overlay.addEventListener("pointerup", (event) => {
+        if (event.target === overlay) {
+          close();
+        }
+      });
+      overlay
+        .querySelector('[data-discard-confirm-action="cancel"]')
+        ?.addEventListener("click", () => close());
+      overlay
+        .querySelector('[data-discard-confirm-action="confirm"]')
+        ?.addEventListener("click", () => {
+          close({ restoreFocus: false });
+          onConfirm();
+        });
+      document.addEventListener("keydown", handleKeyDown, true);
+      document.body.append(overlay);
+      overlay
+        .querySelector('[data-discard-confirm-action="cancel"]')
+        ?.focus();
+    }
+
+    function discardFiles(files) {
+      const discarded = new Set(
+        files.map((file) => file.path)
+      );
+      repository.files = repository.files.filter(
+        (file) => !discarded.has(file.path)
+      );
+      if (discarded.has(state.selectedPath)) {
+        state.selectedPath = repository.files[0]?.path || "";
+      }
+      renderFileList();
+      updatePanel();
+      showNotice(
+        files.length === 1
+          ? `放弃更改：${files[0].path}（原型预览，不执行 Git 命令）`
+          : `放弃更改：${discarded.size} 个文件（原型预览，不执行 Git 命令）`
+      );
     }
 
     function bindEvents() {

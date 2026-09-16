@@ -97,6 +97,7 @@ export interface BranchDto {
   upstream?: string;
   current: boolean;
   remote: boolean;
+  merged?: boolean;
   worktreePath?: string;
   updatedAt?: string;
 }

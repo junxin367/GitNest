@@ -15,6 +15,7 @@ import {
 } from "vitest";
 
 import type {
+  BranchDto,
   CommitSummaryDto,
   GitNestBridge,
   RepositoryChangesDto,
@@ -331,6 +332,75 @@ describe("useRepositoryDetails", () => {
     expect(controller?.diff?.diff.content).toBe("updated diff");
   });
 
+  it("keeps the loaded diff visible while expanding its context", async () => {
+    let resolveExpandedDiff!: (
+      result: Awaited<
+        ReturnType<GitNestBridge["repository"]["getDiff"]>
+      >
+    ) => void;
+    const getChanges = vi.fn(async () => ({
+      ok: true as const,
+      value: createChanges([CHANGE])
+    }));
+    const getDiff = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: createDiff("compact diff")
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveExpandedDiff = resolve;
+          })
+      );
+    installBridge({ getChanges, getDiff });
+
+    await act(async () => {
+      root.render(
+        <Harness
+          onController={(value) => {
+            controller = value;
+          }}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(getDiff).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        contextLines: 3
+      })
+    );
+
+    act(() => {
+      void controller?.selectChange(CHANGE, "unstaged", {
+        contextLines: 13,
+        preserveDiff: true
+      });
+    });
+
+    expect(getDiff).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        contextLines: 13
+      })
+    );
+    expect(controller?.selectedChange?.contextLines).toBe(13);
+    expect(controller?.diff?.diff.content).toBe("compact diff");
+    expect(controller?.loading.diff).toBe(true);
+
+    await act(async () => {
+      resolveExpandedDiff({
+        ok: true,
+        value: createDiff("expanded diff")
+      });
+      await flushAsyncWork();
+    });
+
+    expect(controller?.diff?.diff.content).toBe("expanded diff");
+    expect(controller?.loading.diff).toBe(false);
+  });
+
   it("keeps history details collapsed while loading the inspector commit", async () => {
     const summary = createCommitSummary();
     const getHistory = vi.fn(
@@ -400,6 +470,189 @@ describe("useRepositoryDetails", () => {
     expect(controller?.historyDetailOpen).toBe(false);
     expect(controller?.commit?.commit.hash).toBe(summary.hash);
   });
+
+  it("loads branches and keeps the selected history scope across pagination", async () => {
+    const mainCommit = createCommitSummary();
+    const developCommit = {
+      ...mainCommit,
+      hash: "develop1234567890",
+      shortHash: "develop",
+      subject: "Develop commit",
+      refs: ["develop"]
+    };
+    const getHistory = vi.fn(
+      async (request: {
+        offset?: number;
+        scope?: {
+          kind: string;
+        };
+      }): Promise<{
+        ok: true;
+        value: RepositoryHistoryPageDto;
+      }> => ({
+        ok: true,
+        value: {
+          target: TARGET,
+          page: {
+            commits:
+              request.scope?.kind === "ref"
+                ? [developCommit]
+                : [mainCommit],
+            ...(request.offset === 0
+              ? { nextOffset: 50 }
+              : {})
+          }
+        }
+      })
+    );
+    const getBranches = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        target: TARGET,
+        branches: createBranches()
+      }
+    }));
+    installBridge({ getHistory, getBranches });
+
+    await act(async () => {
+      root.render(
+        <Harness
+          onController={(value) => {
+            controller = value;
+          }}
+          tab="history"
+        />
+      );
+      await flushAsyncWork();
+    });
+    await act(flushAsyncWork);
+
+    expect(getBranches).toHaveBeenCalledTimes(1);
+    expect(controller?.historyScope).toBeNull();
+
+    await act(async () => {
+      await controller?.selectHistoryScope({
+        kind: "ref",
+        ref: "refs/heads/develop"
+      });
+      await flushAsyncWork();
+    });
+
+    expect(getHistory).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        offset: 0,
+        scope: {
+          kind: "ref",
+          ref: "refs/heads/develop"
+        }
+      })
+    );
+    expect(controller?.history?.page.commits[0]?.subject).toBe(
+      "Develop commit"
+    );
+
+    await act(async () => {
+      await controller?.loadMoreHistory();
+      await flushAsyncWork();
+    });
+
+    expect(getHistory).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        offset: 50,
+        scope: {
+          kind: "ref",
+          ref: "refs/heads/develop"
+        }
+      })
+    );
+  });
+
+  it("keeps branch comparison metadata on the loaded history page", async () => {
+    const summary = createCommitSummary();
+    const comparison = {
+      leftRef: "refs/remotes/origin/pre-production",
+      rightRef: "refs/heads/pre-production",
+      leftOnly: 4,
+      rightOnly: 3,
+      mergeBase: "e3d9000123456789"
+    };
+    const getHistory = vi.fn(
+      async (request: {
+        scope?: {
+          kind: string;
+        };
+      }): Promise<{
+        ok: true;
+        value: RepositoryHistoryPageDto;
+      }> => ({
+        ok: true,
+        value: {
+          target: TARGET,
+          page: {
+            commits: [
+              {
+                ...summary,
+                ...(request.scope?.kind === "compare"
+                  ? { comparisonSide: "left" as const }
+                  : {})
+              }
+            ],
+            ...(request.scope?.kind === "compare"
+              ? { comparison }
+              : {})
+          }
+        }
+      })
+    );
+    installBridge({
+      getHistory,
+      getBranches: vi.fn(async () => ({
+        ok: true as const,
+        value: {
+          target: TARGET,
+          branches: createBranches()
+        }
+      }))
+    });
+
+    await act(async () => {
+      root.render(
+        <Harness
+          onController={(value) => {
+            controller = value;
+          }}
+          tab="history"
+        />
+      );
+      await flushAsyncWork();
+    });
+    await act(flushAsyncWork);
+
+    await act(async () => {
+      await controller?.selectHistoryScope({
+        kind: "compare",
+        leftRef: comparison.leftRef,
+        rightRef: comparison.rightRef
+      });
+      await flushAsyncWork();
+    });
+
+    expect(getHistory).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        scope: {
+          kind: "compare",
+          leftRef: comparison.leftRef,
+          rightRef: comparison.rightRef
+        }
+      })
+    );
+    expect(controller?.history?.page.comparison).toEqual(
+      comparison
+    );
+    expect(
+      controller?.history?.page.commits[0]?.comparisonSide
+    ).toBe("left");
+  });
 });
 
 function Harness({
@@ -465,6 +718,33 @@ function createCommitSummary(): CommitSummaryDto {
     parentHashes: [],
     refs: ["HEAD -> main", "origin/main"]
   };
+}
+
+function createBranches(): BranchDto[] {
+  return [
+    {
+      fullName: "refs/heads/main",
+      name: "main",
+      head: "abcdef1234567890",
+      upstream: "origin/main",
+      current: true,
+      remote: false
+    },
+    {
+      fullName: "refs/heads/develop",
+      name: "develop",
+      head: "develop1234567890",
+      current: false,
+      remote: false
+    },
+    {
+      fullName: "refs/remotes/origin/main",
+      name: "origin/main",
+      head: "abcdef1234567890",
+      current: false,
+      remote: true
+    }
+  ];
 }
 
 function createEmptyDiff(): RepositoryDiffDto {

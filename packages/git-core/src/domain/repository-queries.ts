@@ -9,6 +9,32 @@ export type RepositoryDiffMode =
   | "staged"
   | "untracked";
 
+export type RepositoryMediaKind =
+  | "image"
+  | "video"
+  | "audio";
+
+export type RepositoryMediaUnavailableReason =
+  | "too-large"
+  | "missing"
+  | "not-file";
+
+export type RepositoryMediaPreview =
+  | {
+      status: "available";
+      kind: RepositoryMediaKind;
+      mimeType: string;
+      size: number;
+      content: Uint8Array;
+    }
+  | {
+      status: "unavailable";
+      kind: RepositoryMediaKind;
+      mimeType: string;
+      reason: RepositoryMediaUnavailableReason;
+      size?: number;
+    };
+
 export interface RepositoryDiff {
   path: string;
   mode: RepositoryDiffMode;
@@ -17,11 +43,41 @@ export interface RepositoryDiff {
   truncated: boolean;
   additions: number;
   deletions: number;
+  media?: RepositoryMediaPreview;
+}
+
+export type CommitHistoryComparisonSide =
+  | "left"
+  | "right"
+  | "base";
+
+export interface CommitHistoryEntry extends CommitSummary {
+  comparisonSide?: CommitHistoryComparisonSide;
+}
+
+export type CommitHistoryScope =
+  | {
+      kind: "ref";
+      ref: string;
+    }
+  | {
+      kind: "compare";
+      leftRef: string;
+      rightRef: string;
+    };
+
+export interface CommitHistoryComparison {
+  leftRef: string;
+  rightRef: string;
+  leftOnly: number;
+  rightOnly: number;
+  mergeBase?: string;
 }
 
 export interface CommitHistoryPage {
-  commits: CommitSummary[];
+  commits: CommitHistoryEntry[];
   nextOffset?: number;
+  comparison?: CommitHistoryComparison;
 }
 
 export interface CommitFileStat {

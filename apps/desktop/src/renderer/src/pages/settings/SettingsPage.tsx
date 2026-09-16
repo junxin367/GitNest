@@ -20,6 +20,10 @@ import type { AccountController } from "../../features/account-manage/useAccount
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
+import {
+  Skeleton,
+  SkeletonBoundary
+} from "../../shared/ui/Skeleton";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
 
@@ -345,90 +349,90 @@ export function SettingsPage({
             {accounts.overview?.accounts.length ?? 0} 个账号
           </span>
         </header>
-        {accounts.active === "loading" &&
-        !accounts.overview ? (
-          <div className="repository-loading" role="status">
-            <span className="empty-state-icon spinning">
-              <Icon name="refresh" size={18} />
-            </span>
-            <span>正在读取账号元数据…</span>
-          </div>
-        ) : accounts.error && !accounts.overview ? (
-          <div
-            className="empty-state repository-empty-state"
-            role="alert"
-          >
-            <span className="empty-state-icon warning-icon">
-              <Icon name="warning" size={20} />
-            </span>
-            <div>
-              <strong>账号数据暂时不可用</strong>
-              <p>{accounts.error.message}</p>
-              <Button size="small"
-                disabled={accounts.active !== null}
-                onClick={() => void accounts.reload()}
-                type="button"
-              >
-                重新读取
-              </Button>
+        <SkeletonBoundary
+          fallback={<AccountListSkeleton />}
+          hasContent={Boolean(accounts.overview)}
+          label="正在读取账号元数据"
+          loading={accounts.active === "loading"}
+          surfaceClassName="account-list-skeleton"
+        >
+          {accounts.error && !accounts.overview ? (
+            <div
+              className="empty-state repository-empty-state"
+              role="alert"
+            >
+              <span className="empty-state-icon warning-icon">
+                <Icon name="warning" size={20} />
+              </span>
+              <div>
+                <strong>账号数据暂时不可用</strong>
+                <p>{accounts.error.message}</p>
+                <Button size="small"
+                  disabled={accounts.active !== null}
+                  onClick={() => void accounts.reload()}
+                  type="button"
+                >
+                  重新读取
+                </Button>
+              </div>
             </div>
-          </div>
-        ) : accounts.overview?.accounts.length ? (
-          <div className="account-card-list">
-            {accounts.overview.accounts.map((account) => (
-              <AccountCard
-                account={account}
-                active={accounts.active !== null}
-                bindings={
-                  accounts.overview?.bindings ?? []
-                }
-                key={account.id}
-                repositoryNames={repositoryNames}
-                selectedRepositoryId={selectedRepositoryId}
-                testUrl={testUrls[account.id] ?? ""}
-                onBind={(repositoryId) =>
-                  void accounts.bind({
-                    accountId: account.id,
-                    ...(repositoryId ? { repositoryId } : {})
-                  })
-                }
-                onDelete={() =>
-                  void accounts.requestRemoval(account.id)
-                }
-                onTest={() =>
-                  void accounts.test(
-                    account.id,
-                    testUrls[account.id] ?? ""
-                  )
-                }
-                onTestUrlChange={(value) =>
-                  setTestUrls((current) => ({
-                    ...current,
-                    [account.id]: value
-                  }))
-                }
-                onUnbind={(repositoryId) =>
-                  void accounts.unbind({
-                    host: account.host,
-                    ...(repositoryId ? { repositoryId } : {})
-                  })
-                }
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="empty-state account-empty-state">
-            <span className="empty-state-icon">
-              <Icon name="repository" size={20} />
-            </span>
-            <div>
-              <strong>尚未添加 GitNest 账号</strong>
-              <p>
-                当前所有仓库继续使用系统 Credential Helper 或 SSH。
-              </p>
+          ) : accounts.overview?.accounts.length ? (
+            <div className="account-card-list">
+              {accounts.overview.accounts.map((account) => (
+                <AccountCard
+                  account={account}
+                  active={accounts.active !== null}
+                  bindings={
+                    accounts.overview?.bindings ?? []
+                  }
+                  key={account.id}
+                  repositoryNames={repositoryNames}
+                  selectedRepositoryId={selectedRepositoryId}
+                  testUrl={testUrls[account.id] ?? ""}
+                  onBind={(repositoryId) =>
+                    void accounts.bind({
+                      accountId: account.id,
+                      ...(repositoryId ? { repositoryId } : {})
+                    })
+                  }
+                  onDelete={() =>
+                    void accounts.requestRemoval(account.id)
+                  }
+                  onTest={() =>
+                    void accounts.test(
+                      account.id,
+                      testUrls[account.id] ?? ""
+                    )
+                  }
+                  onTestUrlChange={(value) =>
+                    setTestUrls((current) => ({
+                      ...current,
+                      [account.id]: value
+                    }))
+                  }
+                  onUnbind={(repositoryId) =>
+                    void accounts.unbind({
+                      host: account.host,
+                      ...(repositoryId ? { repositoryId } : {})
+                    })
+                  }
+                />
+              ))}
             </div>
-          </div>
-        )}
+          ) : (
+            <div className="empty-state account-empty-state">
+              <span className="empty-state-icon">
+                <Icon name="repository" size={20} />
+              </span>
+              <div>
+                <strong>尚未添加 GitNest 账号</strong>
+                <p>
+                  当前所有仓库继续使用系统 Credential Helper 或 SSH。
+                </p>
+              </div>
+            </div>
+          )}
+        </SkeletonBoundary>
       </article>
 
       {!embedded && <article className="panel terminal-settings-panel">
@@ -467,6 +471,22 @@ export function SettingsPage({
           repositoryNames={repositoryNames}
         />
       )}
+    </div>
+  );
+}
+
+function AccountListSkeleton() {
+  return (
+    <div className="gn-skeleton-list">
+      {Array.from({ length: 3 }, (_, index) => (
+        <div className="gn-skeleton-row" key={index}>
+          <div className="gn-skeleton-row-copy">
+            <Skeleton height={11} />
+            <Skeleton height={9} variant="text" />
+          </div>
+          <Skeleton height={24} width="100%" />
+        </div>
+      ))}
     </div>
   );
 }

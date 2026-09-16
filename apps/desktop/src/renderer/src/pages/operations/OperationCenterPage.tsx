@@ -18,6 +18,10 @@ import {
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
 import { Icon } from "../../shared/ui/Icon";
+import {
+  Skeleton,
+  SkeletonBoundary
+} from "../../shared/ui/Skeleton";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 
 type OperationFilter =
@@ -27,6 +31,7 @@ type OperationFilter =
   | "completed";
 
 interface OperationCenterPageProps {
+  loading: boolean;
   workspace: WorkspaceDetailsDto | null;
   snapshots: RepositoryStatusSnapshotDto[];
   operations: WorkspaceOperationDto[];
@@ -35,6 +40,7 @@ interface OperationCenterPageProps {
 }
 
 export function OperationCenterPage({
+  loading,
   workspace,
   snapshots,
   operations,
@@ -57,23 +63,32 @@ export function OperationCenterPage({
 
   if (!workspace) {
     return (
-      <div className="page-scroll operation-center-page">
-        <section className="page-heading">
-          <div>
-            <span className="eyebrow">可观察后台任务</span>
-            <h1>操作中心</h1>
-            <p>
-              正在恢复 Workspace 与历史操作，完成前不会把未知状态显示为空记录。
-            </p>
+      <SkeletonBoundary
+        fallback={<OperationCenterSkeleton />}
+        hasContent={false}
+        label="正在读取操作中心"
+        loading={loading}
+        surfaceClassName="page-scroll operation-center-page gn-page-skeleton"
+      >
+        <div className="page-scroll operation-center-page">
+          <section className="page-heading">
+            <div>
+              <span className="eyebrow">可观察后台任务</span>
+              <h1>操作中心</h1>
+              <p>当前没有可展示的 Workspace 操作记录。</p>
+            </div>
+          </section>
+          <div className="empty-state">
+            <span className="empty-state-icon">
+              <Icon name="operations" size={20} />
+            </span>
+            <div>
+              <strong>暂无操作记录</strong>
+              <p>添加 Workspace 后，后台任务会显示在这里。</p>
+            </div>
           </div>
-        </section>
-        <div className="repository-loading" role="status">
-          <span className="empty-state-icon spinning">
-            <Icon name="refresh" size={18} />
-          </span>
-          <span>正在读取操作记录…</span>
         </div>
-      </div>
+      </SkeletonBoundary>
     );
   }
   const pullTargets = targets.filter((target) => {
@@ -299,6 +314,49 @@ export function OperationCenterPage({
         )}
       </article>
     </div>
+  );
+}
+
+function OperationCenterSkeleton() {
+  return (
+    <>
+      <div className="gn-skeleton-heading">
+        <Skeleton />
+        <Skeleton />
+        <Skeleton />
+      </div>
+      <div className="gn-skeleton-metric-grid">
+        {Array.from({ length: 4 }, (_, index) => (
+          <div className="gn-skeleton-card" key={index}>
+            <Skeleton height={10} variant="text" width="44%" />
+            <Skeleton height={28} width="24%" />
+            <Skeleton height={9} variant="text" width="72%" />
+          </div>
+        ))}
+      </div>
+      {Array.from({ length: 2 }, (_, panelIndex) => (
+        <div className="gn-skeleton-panel" key={panelIndex}>
+          <div className="gn-skeleton-panel-header">
+            <Skeleton height={14} width="28%" />
+            <Skeleton height={10} variant="text" width="22%" />
+          </div>
+          <div className="gn-skeleton-list">
+            {Array.from(
+              { length: panelIndex === 0 ? 2 : 5 },
+              (_, rowIndex) => (
+                <div className="gn-skeleton-row" key={rowIndex}>
+                  <div className="gn-skeleton-row-copy">
+                    <Skeleton height={11} />
+                    <Skeleton height={9} variant="text" />
+                  </div>
+                  <Skeleton height={18} width="100%" />
+                </div>
+              )
+            )}
+          </div>
+        </div>
+      ))}
+    </>
   );
 }
 

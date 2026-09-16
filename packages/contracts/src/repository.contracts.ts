@@ -15,13 +15,31 @@ export interface RepositoryDiffRequest
   extends RepositoryQueryRequest {
   path: string;
   mode: "unstaged" | "staged" | "untracked";
+  contextLines?: number;
 }
 
 export interface RepositoryHistoryRequest
   extends RepositoryQueryRequest {
   limit?: number;
   offset?: number;
+  scope?: RepositoryHistoryScopeDto;
 }
+
+export type RepositoryHistoryScopeDto =
+  | {
+      kind: "ref";
+      ref: string;
+    }
+  | {
+      kind: "compare";
+      leftRef: string;
+      rightRef: string;
+    };
+
+export type CommitHistoryComparisonSideDto =
+  | "left"
+  | "right"
+  | "base";
 
 export interface RepositoryCommitRequest
   extends RepositoryQueryRequest {
@@ -48,6 +66,32 @@ export interface RepositoryChangesDto {
   snapshot: RepositorySnapshotDto;
 }
 
+export type RepositoryMediaKindDto =
+  | "image"
+  | "video"
+  | "audio";
+
+export type RepositoryMediaUnavailableReasonDto =
+  | "too-large"
+  | "missing"
+  | "not-file";
+
+export type RepositoryMediaPreviewDto =
+  | {
+      status: "available";
+      kind: RepositoryMediaKindDto;
+      mimeType: string;
+      size: number;
+      content: Uint8Array;
+    }
+  | {
+      status: "unavailable";
+      kind: RepositoryMediaKindDto;
+      mimeType: string;
+      reason: RepositoryMediaUnavailableReasonDto;
+      size?: number;
+    };
+
 export interface RepositoryDiffDto {
   target: RepositoryTargetDto;
   diff: {
@@ -58,14 +102,26 @@ export interface RepositoryDiffDto {
     truncated: boolean;
     additions: number;
     deletions: number;
+    media?: RepositoryMediaPreviewDto;
   };
 }
 
 export interface RepositoryHistoryPageDto {
   target: RepositoryTargetDto;
   page: {
-    commits: CommitSummaryDto[];
+    commits: Array<
+      CommitSummaryDto & {
+        comparisonSide?: CommitHistoryComparisonSideDto;
+      }
+    >;
     nextOffset?: number;
+    comparison?: {
+      leftRef: string;
+      rightRef: string;
+      leftOnly: number;
+      rightOnly: number;
+      mergeBase?: string;
+    };
   };
 }
 

@@ -13,6 +13,7 @@ import {
 
 import type { WorkspaceDetailsDto } from "@gitnest/contracts";
 
+import { WorkspaceCollectionPage } from "./WorkspaceCollectionPage";
 import { WorkspaceOverviewPage } from "./WorkspaceOverviewPage";
 import {
   filterSnapshotsToTargets,
@@ -71,12 +72,20 @@ describe("Workspace overview state", () => {
   });
 });
 
-describe("Workspace overview collapsible panels", () => {
+describe("Workspace overview interactions", () => {
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
     vi.stubGlobal("React", React);
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      (callback: FrameRequestCallback) => {
+        callback(0);
+        return 1;
+      }
+    );
+    vi.stubGlobal("cancelAnimationFrame", () => undefined);
     (
       globalThis as typeof globalThis & {
         IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -90,6 +99,10 @@ describe("Workspace overview collapsible panels", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    document
+      .querySelectorAll(".menu-surface")
+      .forEach((element) => element.remove());
+    vi.unstubAllGlobals();
   });
 
   it("collapses repository status and recent commit lists from their headers", () => {
@@ -140,6 +153,84 @@ describe("Workspace overview collapsible panels", () => {
     expect(repositoryBody?.hasAttribute("hidden")).toBe(true);
     expect(recentBody?.hasAttribute("hidden")).toBe(true);
   });
+
+  it("uses shared layout skeletons while Workspace data is initially loading", () => {
+    act(() => {
+      root.render(
+        <WorkspaceOverviewPage
+          busy
+          error={null}
+          notice={null}
+          onAddDirectory={() => undefined}
+          onAddManualPath={async () => false}
+          onClearFeedback={() => undefined}
+          onSelectTarget={() => undefined}
+          operation="loading"
+          snapshots={[]}
+          workspace={null}
+        />
+      );
+    });
+
+    expect(
+      container.querySelector(
+        '.gn-skeleton-surface[aria-label="正在读取 Workspace 概览"]'
+      )
+    ).not.toBeNull();
+    expect(
+      container.querySelectorAll(".gn-skeleton").length
+    ).toBeGreaterThan(4);
+    expect(container.textContent).not.toContain("正在恢复 Workspace");
+  });
+
+  it("keeps the repository menu open for internal scrolling and closes it for page scrolling", () => {
+    act(() => {
+      root.render(
+        <WorkspaceCollectionPage
+          busy={false}
+          loading={false}
+          onAddDirectory={() => undefined}
+          onSelectTarget={() => undefined}
+          snapshots={[]}
+          tab="worktrees"
+          workspace={createWorktreeWorkspace()}
+        />
+      );
+    });
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[aria-label="按仓库筛选 Worktree"]'
+    );
+    expect(trigger).not.toBeNull();
+
+    act(() => {
+      trigger?.click();
+    });
+
+    const menu = document.querySelector<HTMLDivElement>(
+      ".worktree-repo-menu-surface"
+    );
+    expect(menu).not.toBeNull();
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+
+    act(() => {
+      menu?.dispatchEvent(new Event("scroll"));
+    });
+
+    expect(
+      document.querySelector(".worktree-repo-menu-surface")
+    ).toBe(menu);
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+
+    act(() => {
+      window.dispatchEvent(new Event("scroll"));
+    });
+
+    expect(
+      document.querySelector(".worktree-repo-menu-surface")
+    ).toBeNull();
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+  });
 });
 
 function createWorkspace(): WorkspaceDetailsDto {
@@ -185,6 +276,60 @@ function createWorkspace(): WorkspaceDetailsDto {
     worktrees: [],
     selectedEntryId: "entry-a",
     updatedAt: "2026-09-11T00:00:00.000Z"
+  };
+}
+
+function createWorktreeWorkspace(): WorkspaceDetailsDto {
+  return {
+    ...createWorkspace(),
+    repositories: [
+      {
+        id: "repository-a",
+        name: "Repository A",
+        commonDir: "C:\\repository-a\\.git",
+        canonicalCommonDir: "c:\\repository-a\\.git",
+        primaryWorktreeId: "worktree-a",
+        worktreeIds: ["worktree-a"]
+      },
+      {
+        id: "repository-b",
+        name: "Repository B",
+        commonDir: "C:\\repository-b\\.git",
+        canonicalCommonDir: "c:\\repository-b\\.git",
+        primaryWorktreeId: "worktree-b",
+        worktreeIds: ["worktree-b"]
+      }
+    ],
+    worktrees: [
+      {
+        id: "worktree-a",
+        repositoryId: "repository-a",
+        name: "Repository A",
+        path: "C:\\repository-a",
+        canonicalPath: "c:\\repository-a",
+        head: "aaaaaaaaaaaaaaaa",
+        branch: "main",
+        isPrimary: true,
+        isBare: false,
+        isDetached: false,
+        isLocked: false,
+        isPrunable: false
+      },
+      {
+        id: "worktree-b",
+        repositoryId: "repository-b",
+        name: "Repository B",
+        path: "C:\\repository-b",
+        canonicalPath: "c:\\repository-b",
+        head: "bbbbbbbbbbbbbbbb",
+        branch: "main",
+        isPrimary: true,
+        isBare: false,
+        isDetached: false,
+        isLocked: false,
+        isPrunable: false
+      }
+    ]
   };
 }
 

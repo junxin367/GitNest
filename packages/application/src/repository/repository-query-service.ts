@@ -2,6 +2,7 @@ import type {
   Branch,
   CommitDetails,
   CommitHistoryPage,
+  CommitHistoryScope,
   GitClient,
   RepositoryDiff,
   RepositoryDiffMode,
@@ -75,7 +76,8 @@ export class RepositoryQueryService {
     queryId: string,
     target: RepositoryTarget,
     path: string,
-    mode: RepositoryDiffMode
+    mode: RepositoryDiffMode,
+    contextLines?: number
   ): Promise<RepositoryDiffResult> {
     return this.#runQuery(queryId, async (signal) => {
       const worktreePath = await this.#resolveTargetPath(target);
@@ -86,6 +88,10 @@ export class RepositoryQueryService {
           {
             path,
             mode,
+            ...(contextLines === undefined
+              ? {}
+              : { contextLines }),
+            includeMedia: true,
             signal
           }
         )
@@ -97,7 +103,8 @@ export class RepositoryQueryService {
     queryId: string,
     target: RepositoryTarget,
     limit?: number,
-    offset?: number
+    offset?: number,
+    scope?: CommitHistoryScope
   ): Promise<RepositoryHistoryResult> {
     return this.#runQuery(queryId, async (signal) => {
       const path = await this.#resolveTargetPath(target);
@@ -106,6 +113,7 @@ export class RepositoryQueryService {
         page: await this.#gitClient.readCommitHistory(path, {
           ...(limit === undefined ? {} : { limit }),
           ...(offset === undefined ? {} : { offset }),
+          ...(scope === undefined ? {} : { scope }),
           signal
         })
       };

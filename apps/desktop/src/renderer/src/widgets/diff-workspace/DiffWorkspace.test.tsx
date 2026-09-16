@@ -12,8 +12,15 @@ import {
 } from "vitest";
 
 import type { DiffViewerFile } from "../../shared/model/diffViewModel";
+import { useMinimumLoadingIndicator } from "../../shared/lib/useMinimumLoadingIndicator";
+import {
+  Skeleton,
+  SkeletonBoundary
+} from "../../shared/ui/Skeleton";
 import {
   DiffWorkspace,
+  DiffWorkspaceSkeleton,
+  type DiffWorkspaceExternalApplications,
   parseCommitMessage
 } from "./DiffWorkspace";
 import {
@@ -64,6 +71,78 @@ const files: DiffViewerFile[] = [
   }
 ];
 
+const untrackedFiles: DiffViewerFile[] = [
+  {
+    key: "untracked\u0001src/new-file.ts",
+    path: "src/new-file.ts",
+    mode: "untracked",
+    status: "?",
+    kind: "untracked",
+    additions: 3,
+    deletions: 0,
+    change: {
+      path: "src/new-file.ts",
+      indexStatus: "?",
+      worktreeStatus: "?",
+      kind: "untracked"
+    }
+  },
+  {
+    key: "untracked\u0001src/another-file.ts",
+    path: "src/another-file.ts",
+    mode: "untracked",
+    status: "?",
+    kind: "untracked",
+    additions: 1,
+    deletions: 0,
+    change: {
+      path: "src/another-file.ts",
+      indexStatus: "?",
+      worktreeStatus: "?",
+      kind: "untracked"
+    }
+  }
+];
+
+const externalApplications: DiffWorkspaceExternalApplications = {
+  active: null,
+  loading: false,
+  openFile: vi.fn().mockResolvedValue(true),
+  profiles: []
+};
+
+function DelayedLoadingHarness({
+  loading
+}: {
+  loading: boolean;
+}) {
+  const visible = useMinimumLoadingIndicator(loading);
+  return (
+    <span data-testid="delayed-loading">
+      {visible ? "visible" : "hidden"}
+    </span>
+  );
+}
+
+function SkeletonBoundaryHarness({
+  hasContent = false,
+  loading
+}: {
+  hasContent?: boolean;
+  loading: boolean;
+}) {
+  return (
+    <SkeletonBoundary
+      fallback={<Skeleton height={40} />}
+      hasContent={hasContent}
+      label="正在读取测试内容"
+      loading={loading}
+    >
+      <span data-testid="loaded-content">content</span>
+    </SkeletonBoundary>
+  );
+}
+
 describe("DiffWorkspace", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -104,6 +183,153 @@ describe("DiffWorkspace", () => {
     vi.unstubAllGlobals();
   });
 
+  it("shows the skeleton as soon as loading starts", () => {
+    act(() => {
+      root.render(<DelayedLoadingHarness loading />);
+    });
+
+    expect(container.textContent).toBe("visible");
+  });
+
+  it("keeps a displayed skeleton visible for at least 500ms", () => {
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        root.render(<DelayedLoadingHarness loading />);
+      });
+      expect(container.textContent).toBe("visible");
+
+      act(() => {
+        vi.advanceTimersByTime(50);
+      });
+      act(() => {
+        root.render(<DelayedLoadingHarness loading={false} />);
+      });
+      act(() => {
+        vi.advanceTimersByTime(449);
+      });
+      expect(container.textContent).toBe("visible");
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(container.textContent).toBe("hidden");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the skeleton visible when loading restarts", () => {
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        root.render(<DelayedLoadingHarness loading />);
+      });
+      act(() => {
+        root.render(<DelayedLoadingHarness loading={false} />);
+      });
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      act(() => {
+        root.render(<DelayedLoadingHarness loading />);
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(container.textContent).toBe("visible");
+
+      act(() => {
+        root.render(<DelayedLoadingHarness loading={false} />);
+      });
+      expect(container.textContent).toBe("hidden");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps existing content visible during background refreshes", () => {
+    act(() => {
+      root.render(
+        <SkeletonBoundaryHarness hasContent loading />
+      );
+    });
+
+    expect(
+      container.querySelector('[role="status"]')
+    ).toBeNull();
+    expect(container.textContent).toBe("content");
+  });
+
+  it("uses the shared minimum duration for empty loading boundaries", () => {
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        root.render(<SkeletonBoundaryHarness loading />);
+      });
+      expect(
+        container.querySelector('[role="status"]')?.getAttribute(
+          "aria-label"
+        )
+      ).toBe("正在读取测试内容");
+
+      act(() => {
+        root.render(
+          <SkeletonBoundaryHarness loading={false} />
+        );
+        vi.advanceTimersByTime(499);
+      });
+      expect(
+        container.querySelector('[role="status"]')
+      ).not.toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(container.textContent).toBe("content");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders a layout-matched loading skeleton for repository changes", () => {
+    act(() => {
+      root.render(
+        <DiffWorkspaceSkeleton
+          className="changes-layout"
+          commitPanelHeight={240}
+          label="正在读取工作区变更…"
+          showCommit
+        />
+      );
+    });
+
+    const status = container.querySelector<HTMLElement>(
+      '[role="status"]'
+    );
+    expect(status?.getAttribute("aria-busy")).toBe("true");
+    expect(status?.getAttribute("aria-label")).toBe(
+      "正在读取工作区变更…"
+    );
+    expect(status?.classList.contains("changes-layout")).toBe(true);
+    expect(
+      container.querySelector(".diff-workspace-sidebar")
+    ).not.toBeNull();
+    expect(
+      container.querySelector(".diff-workspace-skeleton-content")
+    ).not.toBeNull();
+    expect(
+      container.querySelectorAll(
+        ".diff-workspace-skeleton-file-row"
+      )
+    ).toHaveLength(5);
+    expect(
+      container.querySelector<HTMLElement>(
+        ".diff-workspace-skeleton-commit"
+      )?.style.height
+    ).toBe("240px");
+  });
+
   it("renders repository navigation and extensions from the shared contract", () => {
     const onSelectedFileChange = vi.fn();
     const onStageFile = vi.fn();
@@ -137,6 +363,7 @@ describe("DiffWorkspace", () => {
             onSubmit
           }}
           configuration={repositoryDiffWorkspaceConfiguration}
+          externalApplications={externalApplications}
           files={files}
           onSelectedFileChange={onSelectedFileChange}
           onStageFile={onStageFile}
@@ -158,6 +385,11 @@ describe("DiffWorkspace", () => {
     expect(
       container.querySelectorAll(".diff-workspace-file")
     ).toHaveLength(2);
+    expect(
+      container.querySelectorAll(
+        ".diff-workspace-file-meta small"
+      )
+    ).toHaveLength(0);
     expect(container.textContent).toContain("+2");
     expect(container.textContent).toContain("-1");
     expect(
@@ -302,6 +534,7 @@ describe("DiffWorkspace", () => {
       root.render(
         <DiffWorkspace
           configuration={standaloneDiffWorkspaceConfiguration}
+          externalApplications={externalApplications}
           files={files}
           onRefresh={onRefresh}
           onSelectedFileChange={vi.fn()}
@@ -376,6 +609,316 @@ describe("DiffWorkspace", () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 
+  it("restores each repository file navigator state after unmounting", () => {
+    const onSelectedFileChange = vi.fn();
+    const renderRepository = (scopeKey?: string) => {
+      act(() => {
+        root.render(
+          scopeKey ? (
+            <DiffWorkspace
+              configuration={repositoryDiffWorkspaceConfiguration}
+              externalApplications={externalApplications}
+              files={files}
+              onSelectedFileChange={onSelectedFileChange}
+              panelProps={{ content }}
+              selectedFileKey={files[0]?.key}
+              treePreference={{
+                initiallyCollapsed: false,
+                scopeKey
+              }}
+            />
+          ) : (
+            <div data-testid="repository-loading" />
+          )
+        );
+      });
+    };
+
+    const repositoryAScope =
+      "workspace\u0001repository-a:worktree-a";
+    const repositoryBScope =
+      "workspace\u0001repository-b:worktree-b";
+
+    renderRepository(repositoryAScope);
+    expect(
+      findButton(container, "已暂存").getAttribute(
+        "aria-expanded"
+      )
+    ).toBe("true");
+    act(() => {
+      findButton(container, "已暂存").click();
+    });
+    const repositoryAFilter =
+      container.querySelector<HTMLInputElement>(
+        '[aria-label="筛选变更文件"]'
+      );
+    act(() => {
+      if (!repositoryAFilter) {
+        throw new Error("File filter was not rendered.");
+      }
+      setInputValue(repositoryAFilter, "App");
+    });
+    expect(
+      findButton(container, "已暂存").getAttribute(
+        "aria-expanded"
+      )
+    ).toBe("false");
+
+    renderRepository();
+    renderRepository(repositoryBScope);
+    const repositoryBFilter =
+      container.querySelector<HTMLInputElement>(
+        '[aria-label="筛选变更文件"]'
+      );
+    expect(repositoryBFilter?.value).toBe("");
+    expect(
+      findButton(container, "已暂存").getAttribute(
+        "aria-expanded"
+      )
+    ).toBe("true");
+    act(() => {
+      findButton(container, "未暂存").click();
+      if (!repositoryBFilter) {
+        throw new Error("File filter was not rendered.");
+      }
+      setInputValue(repositoryBFilter, "Button");
+    });
+    expect(
+      findButton(container, "未暂存").getAttribute(
+        "aria-expanded"
+      )
+    ).toBe("false");
+
+    renderRepository();
+    renderRepository(repositoryAScope);
+    expect(
+      container.querySelector<HTMLInputElement>(
+        '[aria-label="筛选变更文件"]'
+      )?.value
+    ).toBe("App");
+    expect(
+      findButton(container, "已暂存").getAttribute(
+        "aria-expanded"
+      )
+    ).toBe("false");
+
+    renderRepository();
+    renderRepository(repositoryBScope);
+    expect(
+      container.querySelector<HTMLInputElement>(
+        '[aria-label="筛选变更文件"]'
+      )?.value
+    ).toBe("Button");
+    expect(
+      findButton(container, "未暂存").getAttribute(
+        "aria-expanded"
+      )
+    ).toBe("false");
+  });
+
+  it("provides the same file context menu to every workspace consumer", () => {
+    const onSelectedFileChange = vi.fn();
+    const openFile = vi.fn().mockResolvedValue(true);
+
+    act(() => {
+      root.render(
+        <DiffWorkspace
+          configuration={standaloneDiffWorkspaceConfiguration}
+          externalApplications={{
+            active: null,
+            loading: false,
+            openFile,
+            profiles: [{ kind: "vscode", label: "VS Code" }]
+          }}
+          files={files}
+          onSelectedFileChange={onSelectedFileChange}
+          panelProps={{ content }}
+          selectedFileKey={files[0]?.key}
+        />
+      );
+    });
+
+    const fileRow = Array.from(
+      container.querySelectorAll<HTMLDivElement>(
+        ".diff-workspace-file"
+      )
+    ).find((candidate) =>
+      candidate.textContent?.includes("Button.tsx")
+    );
+    if (!fileRow) {
+      throw new Error("Unstaged file row was not rendered.");
+    }
+
+    const contextMenuEvent = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 120,
+      clientY: 80
+    });
+    act(() => {
+      fileRow.dispatchEvent(contextMenuEvent);
+    });
+
+    expect(contextMenuEvent.defaultPrevented).toBe(true);
+    expect(onSelectedFileChange).toHaveBeenCalledWith(files[1]);
+
+    act(() => {
+      findButton(document.body, "VS Code").click();
+    });
+
+    expect(openFile).toHaveBeenCalledWith(
+      "vscode",
+      "src/components/Button.tsx"
+    );
+  });
+
+  it("asks for confirmation before discarding one tracked file", async () => {
+    const onDiscardFile = vi.fn().mockResolvedValue(true);
+
+    act(() => {
+      root.render(
+        <DiffWorkspace
+          canDiscardFile={() => true}
+          configuration={repositoryDiffWorkspaceConfiguration}
+          externalApplications={externalApplications}
+          files={[files[1]!]}
+          onDiscardFile={onDiscardFile}
+          onSelectedFileChange={vi.fn()}
+          panelProps={{ content }}
+          selectedFileKey={files[1]?.key}
+        />
+      );
+    });
+
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="放弃更改 src/components/Button.tsx"]'
+        )
+        ?.click();
+    });
+
+    expect(onDiscardFile).not.toHaveBeenCalled();
+    expect(
+      document.body.querySelector('[role="alertdialog"]')
+        ?.textContent
+    ).toContain("放弃对“src/components/Button.tsx”的更改？");
+    expect(document.activeElement?.textContent?.trim()).toBe(
+      "取消"
+    );
+
+    act(() => {
+      findButton(document.body, "取消").click();
+    });
+    expect(
+      document.body.querySelector('[role="alertdialog"]')
+    ).toBeNull();
+    expect(onDiscardFile).not.toHaveBeenCalled();
+
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="放弃更改 src/components/Button.tsx"]'
+        )
+        ?.click();
+    });
+    await act(async () => {
+      findButton(document.body, "确认放弃").click();
+      await Promise.resolve();
+    });
+
+    expect(onDiscardFile).toHaveBeenCalledTimes(1);
+    expect(onDiscardFile).toHaveBeenCalledWith(files[1]);
+    expect(
+      document.body.querySelector('[role="alertdialog"]')
+    ).toBeNull();
+  });
+
+  it("warns that untracked files are permanently deleted before group discard", async () => {
+    const onDiscardFiles = vi.fn().mockResolvedValue(true);
+    const groupFiles = [untrackedFiles[0]!];
+
+    act(() => {
+      root.render(
+        <DiffWorkspace
+          canDiscardFile={() => true}
+          configuration={standaloneDiffWorkspaceConfiguration}
+          externalApplications={externalApplications}
+          files={groupFiles}
+          onDiscardFiles={onDiscardFiles}
+          onSelectedFileChange={vi.fn()}
+          panelProps={{ content }}
+          selectedFileKey={groupFiles[0]?.key}
+        />
+      );
+    });
+
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="放弃未跟踪分组的更改"]'
+        )
+        ?.click();
+    });
+
+    const dialog =
+      document.body.querySelector('[role="alertdialog"]');
+    expect(onDiscardFiles).not.toHaveBeenCalled();
+    expect(dialog?.textContent).toContain(
+      "放弃 1 个文件的更改？"
+    );
+    expect(dialog?.textContent).toContain("1 个未跟踪文件");
+    expect(dialog?.textContent).toContain("永久删除");
+    expect(dialog?.textContent).toContain("不会移入回收站");
+
+    await act(async () => {
+      findButton(document.body, "永久删除并放弃").click();
+      await Promise.resolve();
+    });
+
+    expect(onDiscardFiles).toHaveBeenCalledTimes(1);
+    expect(onDiscardFiles).toHaveBeenCalledWith(groupFiles);
+  });
+
+  it("keeps the confirmation open when discard reports failure", async () => {
+    const onDiscardFile = vi.fn().mockResolvedValue(false);
+
+    act(() => {
+      root.render(
+        <DiffWorkspace
+          canDiscardFile={() => true}
+          configuration={repositoryDiffWorkspaceConfiguration}
+          externalApplications={externalApplications}
+          files={[files[1]!]}
+          onDiscardFile={onDiscardFile}
+          onSelectedFileChange={vi.fn()}
+          panelProps={{ content }}
+          selectedFileKey={files[1]?.key}
+        />
+      );
+    });
+
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="放弃更改 src/components/Button.tsx"]'
+        )
+        ?.click();
+    });
+    await act(async () => {
+      findButton(document.body, "确认放弃").click();
+      await Promise.resolve();
+    });
+
+    expect(onDiscardFile).toHaveBeenCalledTimes(1);
+    expect(
+      document.body.querySelector('[role="alertdialog"]')
+    ).not.toBeNull();
+    expect(
+      findButton(document.body, "确认放弃").disabled
+    ).toBe(false);
+  });
+
   it("maps the single commit message to Git subject and body", () => {
     expect(
       parseCommitMessage(
@@ -410,6 +953,7 @@ describe("DiffWorkspace", () => {
             onSubmit: vi.fn()
           }}
           configuration={repositoryDiffWorkspaceConfiguration}
+          externalApplications={externalApplications}
           files={files}
           onSelectedFileChange={vi.fn()}
           onStageFile={vi.fn()}
@@ -453,6 +997,7 @@ describe("DiffWorkspace", () => {
             unstaged: 0
           }}
           configuration={repositoryDiffWorkspaceConfiguration}
+          externalApplications={externalApplications}
           files={[files[0]!]}
           onSelectedFileChange={vi.fn()}
           onStageFile={vi.fn()}
@@ -512,6 +1057,7 @@ describe("DiffWorkspace", () => {
             onSubmit
           }}
           configuration={repositoryDiffWorkspaceConfiguration}
+          externalApplications={externalApplications}
           files={[files[1]!]}
           onSelectedFileChange={vi.fn()}
           panelProps={{

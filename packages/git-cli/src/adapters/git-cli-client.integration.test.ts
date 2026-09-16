@@ -1,5 +1,9 @@
 import { spawn } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import {
+  rm,
+  truncate,
+  writeFile
+} from "node:fs/promises";
 import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -340,6 +344,205 @@ describe("GitCliClient integration", () => {
     });
   });
 
+  it("previews the selected media version from the index or worktree", async () => {
+    const mediaFixture =
+      await createTemporaryDirectoryFixture("media-preview");
+    const mediaPath = join(mediaFixture.path, "preview.webp");
+    const svgPath = join(mediaFixture.path, "diagram.svg");
+    const stagedBytes = Buffer.from([0, 1, 2, 3]);
+    const worktreeBytes = Buffer.from([0, 4, 5, 6]);
+
+    try {
+      await runGit(mediaFixture.path, [
+        "init",
+        "--initial-branch=main",
+        "."
+      ]);
+      await writeFile(mediaPath, stagedBytes);
+      await runGit(mediaFixture.path, ["add", "preview.webp"]);
+      await writeFile(mediaPath, worktreeBytes);
+      await writeFile(
+        svgPath,
+        '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+        "utf8"
+      );
+
+      const [staged, unstaged, untracked] =
+        await Promise.all([
+          client.readRepositoryDiff(mediaFixture.path, {
+            path: "preview.webp",
+            mode: "staged",
+            includeMedia: true
+          }),
+          client.readRepositoryDiff(mediaFixture.path, {
+            path: "preview.webp",
+            mode: "unstaged",
+            includeMedia: true
+          }),
+          client.readRepositoryDiff(mediaFixture.path, {
+            path: "diagram.svg",
+            mode: "untracked",
+            includeMedia: true
+          })
+        ]);
+
+      expect(staged.media).toMatchObject({
+        status: "available",
+        kind: "image",
+        mimeType: "image/webp",
+        size: stagedBytes.byteLength
+      });
+      expect(unstaged.media).toMatchObject({
+        status: "available",
+        kind: "image",
+        mimeType: "image/webp",
+        size: worktreeBytes.byteLength
+      });
+      expect(untracked).toMatchObject({
+        binary: false,
+        media: {
+          status: "available",
+          kind: "image",
+          mimeType: "image/svg+xml"
+        }
+      });
+      if (
+        staged.media?.status !== "available" ||
+        unstaged.media?.status !== "available"
+      ) {
+        throw new Error("Expected available media previews.");
+      }
+      expect(Buffer.from(staged.media.content)).toEqual(
+        stagedBytes
+      );
+      expect(Buffer.from(unstaged.media.content)).toEqual(
+        worktreeBytes
+      );
+
+      await rm(mediaPath);
+      await expect(
+        client.readRepositoryDiff(mediaFixture.path, {
+          path: "preview.webp",
+          mode: "unstaged",
+          includeMedia: true
+        })
+      ).resolves.toMatchObject({
+        media: {
+          status: "unavailable",
+          reason: "missing"
+        }
+      });
+    } finally {
+      await mediaFixture.dispose();
+    }
+  });
+
+  it("refuses to load media previews larger than 50 MB", async () => {
+    const mediaFixture =
+      await createTemporaryDirectoryFixture(
+        "large-media-preview"
+      );
+    const mediaPath = join(mediaFixture.path, "oversized.mp4");
+    const size = 50 * 1024 * 1024 + 1;
+
+    try {
+      await runGit(mediaFixture.path, [
+        "init",
+        "--initial-branch=main",
+        "."
+      ]);
+      await writeFile(mediaPath, "");
+      await truncate(mediaPath, size);
+
+      await expect(
+        client.readRepositoryDiff(mediaFixture.path, {
+          path: "oversized.mp4",
+          mode: "untracked",
+          includeMedia: true
+        })
+      ).resolves.toMatchObject({
+        media: {
+          status: "unavailable",
+          kind: "video",
+          mimeType: "video/mp4",
+          reason: "too-large",
+          size
+        }
+      });
+    } finally {
+      await mediaFixture.dispose();
+    }
+  });
+
+  it("supports requesting enough context to show the whole changed file", async () => {
+    const contextFixture =
+      await createTemporaryDirectoryFixture("diff-context");
+    const originalLines = Array.from(
+      { length: 60 },
+      (_, index) => `line ${index + 1}`
+    );
+
+    try {
+      await runGit(contextFixture.path, [
+        "init",
+        "--initial-branch=main",
+        "."
+      ]);
+      await runGit(contextFixture.path, [
+        "config",
+        "user.name",
+        "GitNest Tests"
+      ]);
+      await runGit(contextFixture.path, [
+        "config",
+        "user.email",
+        "gitnest@example.invalid"
+      ]);
+      const filePath = join(contextFixture.path, "context.txt");
+      await writeFile(
+        filePath,
+        `${originalLines.join("\n")}\n`,
+        "utf8"
+      );
+      await runGit(contextFixture.path, ["add", "context.txt"]);
+      await runGit(contextFixture.path, [
+        "commit",
+        "-m",
+        "Initial context fixture"
+      ]);
+      const changedLines = [...originalLines];
+      changedLines[30] = "line 31 changed";
+      await writeFile(
+        filePath,
+        `${changedLines.join("\n")}\n`,
+        "utf8"
+      );
+
+      const compact = await client.readRepositoryDiff(
+        contextFixture.path,
+        {
+          path: "context.txt",
+          mode: "unstaged",
+          contextLines: 3
+        }
+      );
+      const expanded = await client.readRepositoryDiff(
+        contextFixture.path,
+        {
+          path: "context.txt",
+          mode: "unstaged",
+          contextLines: 100_000
+        }
+      );
+
+      expect(compact.content).not.toContain("\n line 1\n");
+      expect(expanded.content).toContain("\n line 1\n");
+      expect(expanded.content).toContain("\n line 60\n");
+    } finally {
+      await contextFixture.dispose();
+    }
+  });
+
   it("reads paged history, commit details, and branches", async () => {
     const history = await client.readCommitHistory(
       fixture.repositoryPath,
@@ -378,6 +581,172 @@ describe("GitCliClient integration", () => {
         })
       ])
     );
+  });
+
+  it("marks remote branches merged into the current HEAD", async () => {
+    const mergedFixture = await createGitRepositoryFixture();
+
+    try {
+      const mainHead = await client.resolveRevision(
+        mergedFixture.repositoryPath,
+        "HEAD"
+      );
+      await runGit(mergedFixture.repositoryPath, [
+        "update-ref",
+        "refs/remotes/origin/merged-feature",
+        mainHead
+      ]);
+      await runGit(mergedFixture.repositoryPath, [
+        "switch",
+        "-c",
+        "active-remote-source"
+      ]);
+      await writeFile(
+        join(
+          mergedFixture.repositoryPath,
+          "active-remote.txt"
+        ),
+        "active\n",
+        "utf8"
+      );
+      await runGit(mergedFixture.repositoryPath, [
+        "add",
+        "active-remote.txt"
+      ]);
+      await runGit(mergedFixture.repositoryPath, [
+        "commit",
+        "-m",
+        "Active remote branch"
+      ]);
+      const activeHead = await client.resolveRevision(
+        mergedFixture.repositoryPath,
+        "HEAD"
+      );
+      await runGit(mergedFixture.repositoryPath, [
+        "update-ref",
+        "refs/remotes/origin/active-feature",
+        activeHead
+      ]);
+      await runGit(mergedFixture.repositoryPath, [
+        "switch",
+        "main"
+      ]);
+
+      const branches = await client.readBranches(
+        mergedFixture.repositoryPath
+      );
+
+      expect(
+        branches.find(
+          (branch) =>
+            branch.fullName ===
+            "refs/remotes/origin/merged-feature"
+        )
+      ).toMatchObject({ merged: true });
+      expect(
+        branches.find(
+          (branch) =>
+            branch.fullName ===
+            "refs/remotes/origin/active-feature"
+        )
+      ).toMatchObject({ merged: false });
+    } finally {
+      await mergedFixture.dispose();
+    }
+  });
+
+  it("reads one selected ref and compares divergent branch histories", async () => {
+    const comparisonFixture =
+      await createGitRepositoryFixture();
+
+    try {
+      await writeFile(
+        join(
+          comparisonFixture.repositoryPath,
+          "main-only.txt"
+        ),
+        "main\n",
+        "utf8"
+      );
+      await runGit(comparisonFixture.repositoryPath, [
+        "add",
+        "main-only.txt"
+      ]);
+      await runGit(comparisonFixture.repositoryPath, [
+        "commit",
+        "-m",
+        "Main-only commit"
+      ]);
+      await writeFile(
+        join(
+          comparisonFixture.linkedWorktreePath,
+          "feature-only.txt"
+        ),
+        "feature\n",
+        "utf8"
+      );
+      await runGit(comparisonFixture.linkedWorktreePath, [
+        "add",
+        "feature-only.txt"
+      ]);
+      await runGit(comparisonFixture.linkedWorktreePath, [
+        "commit",
+        "-m",
+        "Feature-only commit"
+      ]);
+
+      const selected = await client.readCommitHistory(
+        comparisonFixture.repositoryPath,
+        {
+          scope: {
+            kind: "ref",
+            ref: "refs/heads/feature/test"
+          }
+        }
+      );
+      expect(selected.commits[0]?.subject).toBe(
+        "Feature-only commit"
+      );
+
+      const comparison = await client.readCommitHistory(
+        comparisonFixture.repositoryPath,
+        {
+          scope: {
+            kind: "compare",
+            leftRef: "refs/heads/main",
+            rightRef: "refs/heads/feature/test"
+          }
+        }
+      );
+
+      expect(comparison.comparison).toMatchObject({
+        leftRef: "refs/heads/main",
+        rightRef: "refs/heads/feature/test",
+        leftOnly: 1,
+        rightOnly: 1
+      });
+      expect(comparison.comparison?.mergeBase).toMatch(
+        /^[0-9a-f]{40,64}$/i
+      );
+      expect(comparison.commits).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            subject: "Main-only commit",
+            comparisonSide: "left"
+          }),
+          expect.objectContaining({
+            subject: "Feature-only commit",
+            comparisonSide: "right"
+          }),
+          expect.objectContaining({
+            subject: "Initial fixture commit",
+            comparisonSide: "base"
+          })
+        ])
+      );
+    } finally {
+      await comparisonFixture.dispose();
+    }
   });
 
   it("returns empty read models for a repository with an unborn HEAD", async () => {

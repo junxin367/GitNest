@@ -5,6 +5,7 @@ import type {
   RepositorySnapshot
 } from "../domain/repository";
 import type {
+  CommitHistoryScope,
   CommitDetails,
   CommitHistoryPage,
   RepositoryDiff,
@@ -29,11 +30,13 @@ export interface ReadRepositoryDiffOptions extends GitReadOptions {
   path: string;
   mode: RepositoryDiffMode;
   contextLines?: number;
+  includeMedia?: boolean;
 }
 
 export interface ReadCommitHistoryOptions extends GitReadOptions {
   limit?: number;
   offset?: number;
+  scope?: CommitHistoryScope;
 }
 
 export interface GitClient {

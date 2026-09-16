@@ -14,6 +14,7 @@ import {
 
 export interface AppSettingsController {
   settings: AppSettingsDto;
+  loaded: boolean;
   loading: boolean;
   saving: boolean;
   clearingKey: boolean;
@@ -35,6 +36,7 @@ export function useAppSettings(): AppSettingsController {
   const [settings, setSettings] = useState<AppSettingsDto>(
     createDefaultAppSettings
   );
+  const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingCount, setSavingCount] = useState(0);
   const [clearingKey, setClearingKey] = useState(false);
@@ -133,6 +135,7 @@ export function useAppSettings(): AppSettingsController {
     } finally {
       if (requestGeneration === generation.current) {
         setLoading(false);
+        setLoaded(true);
       }
     }
   }, []);
@@ -183,6 +186,7 @@ export function useAppSettings(): AppSettingsController {
 
   return {
     settings,
+    loaded,
     loading,
     saving: savingCount > 0,
     clearingKey,
