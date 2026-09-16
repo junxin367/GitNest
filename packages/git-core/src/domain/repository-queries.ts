@@ -98,6 +98,55 @@ export interface CommitDetails extends CommitSummary {
   deletions: number;
 }
 
+export interface CommitDiff {
+  path: string;
+  content: string;
+  binary: boolean;
+  truncated: boolean;
+  additions: number;
+  deletions: number;
+}
+
+export interface StashFileStat {
+  path: string;
+  additions?: number;
+  deletions?: number;
+  binary: boolean;
+}
+
+export interface StashSummary {
+  ref: string;
+  hash: string;
+  subject: string;
+  authorName: string;
+  authorEmail: string;
+  authoredAt: string;
+  parentHashes: string[];
+  baseHash?: string;
+  files?: number;
+  additions?: number;
+  deletions?: number;
+}
+
+export interface StashFiles {
+  ref: string;
+  hash: string;
+  files: StashFileStat[];
+  additions: number;
+  deletions: number;
+}
+
+export interface StashDiff {
+  ref: string;
+  hash: string;
+  path: string;
+  content: string;
+  binary: boolean;
+  truncated: boolean;
+  additions: number;
+  deletions: number;
+}
+
 export interface RepositoryChanges {
   snapshot: RepositorySnapshot;
 }

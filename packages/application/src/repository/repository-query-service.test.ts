@@ -1,20 +1,29 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  type CommitDiff,
   GitError,
   type Branch,
   type CommitDetails,
   type CommitHistoryPage,
   type GitClient,
+  type GitCommitDiffClient,
   type GitEnvironment,
   type GitReadOptions,
+  type GitStashClient,
   type InspectRepositoryOptions,
   type ReadCommitHistoryOptions,
+  type ReadCommitDiffOptions,
   type ReadRepositoryDiffOptions,
   type ReadRepositorySnapshotOptions,
+  type ReadStashDiffOptions,
+  type ReadStashesOptions,
   type RepositoryDiff,
   type RepositoryInspection,
-  type RepositorySnapshot
+  type RepositorySnapshot,
+  type StashDiff,
+  type StashFiles,
+  type StashSummary
 } from "@gitnest/git-core";
 import type {
   RepositoryTarget,
@@ -162,9 +171,85 @@ describe("RepositoryQueryService", () => {
       }
     ]);
   });
+
+  it("resolves stash list, files, and diff queries through the registered target", async () => {
+    const gitClient = new FakeGitClient();
+    const service = createService(gitClient);
+
+    await service.getStashes("stashes_1", TARGET, 20);
+    await service.getStashFiles(
+      "stash_files_1",
+      TARGET,
+      "stash@{0}"
+    );
+    await service.getStashDiff(
+      "stash_diff_1",
+      TARGET,
+      "stash@{0}",
+      "src/app.ts",
+      13
+    );
+
+    expect(gitClient.stashListCalls).toEqual([
+      {
+        repositoryPath: WORKTREE_PATH,
+        limit: 20,
+        signal: expect.any(AbortSignal)
+      }
+    ]);
+    expect(gitClient.stashFileCalls).toEqual([
+      {
+        repositoryPath: WORKTREE_PATH,
+        stashRef: "stash@{0}",
+        signal: expect.any(AbortSignal)
+      }
+    ]);
+    expect(gitClient.stashDiffCalls).toEqual([
+      {
+        repositoryPath: WORKTREE_PATH,
+        stashRef: "stash@{0}",
+        path: "src/app.ts",
+        contextLines: 13,
+        signal: expect.any(AbortSignal)
+      }
+    ]);
+  });
+
+  it("resolves commit file diffs through the dedicated read port", async () => {
+    const gitClient = new FakeGitClient();
+    const service = createService(gitClient);
+    const result = await service.getCommitDiff(
+      "commit_diff_1",
+      TARGET,
+      "abcdef",
+      "src/app.ts",
+      13
+    );
+
+    expect(result).toMatchObject({
+      target: TARGET,
+      commit: {
+        hash: "abcdef"
+      },
+      diff: {
+        path: "src/app.ts"
+      }
+    });
+    expect(gitClient.commitDiffCalls).toEqual([
+      {
+        repositoryPath: WORKTREE_PATH,
+        commitHash: "abcdef",
+        path: "src/app.ts",
+        contextLines: 13,
+        signal: expect.any(AbortSignal)
+      }
+    ]);
+  });
 });
 
-class FakeGitClient implements GitClient {
+class FakeGitClient
+  implements GitClient, GitCommitDiffClient, GitStashClient
+{
   readonly snapshotCalls: Array<{
     repositoryPath: string;
     includeChangeStats: boolean | undefined;
@@ -185,7 +270,31 @@ class FakeGitClient implements GitClient {
     scope: ReadCommitHistoryOptions["scope"];
     signal: AbortSignal;
   }> = [];
+  readonly commitDiffCalls: Array<{
+    repositoryPath: string;
+    commitHash: string;
+    path: string;
+    contextLines: number | undefined;
+    signal: AbortSignal;
+  }> = [];
   branchCalls = 0;
+  readonly stashListCalls: Array<{
+    repositoryPath: string;
+    limit: number | undefined;
+    signal: AbortSignal;
+  }> = [];
+  readonly stashFileCalls: Array<{
+    repositoryPath: string;
+    stashRef: string;
+    signal: AbortSignal;
+  }> = [];
+  readonly stashDiffCalls: Array<{
+    repositoryPath: string;
+    stashRef: string;
+    path: string;
+    contextLines: number | undefined;
+    signal: AbortSignal;
+  }> = [];
   readonly snapshotStarted: Promise<void>;
   readonly #blockSnapshots: boolean;
   #markSnapshotStarted!: () => void;
@@ -289,12 +398,89 @@ class FakeGitClient implements GitClient {
     throw new Error("Not used.");
   }
 
+  readCommitDiff(
+    repositoryPath: string,
+    options: ReadCommitDiffOptions
+  ): Promise<CommitDiff> {
+    this.commitDiffCalls.push({
+      repositoryPath,
+      commitHash: options.commitHash,
+      path: options.path,
+      contextLines: options.contextLines,
+      signal:
+        options.signal ?? new AbortController().signal
+    });
+    return Promise.resolve({
+      path: options.path,
+      content: "",
+      binary: false,
+      truncated: false,
+      additions: 0,
+      deletions: 0
+    });
+  }
+
   async readBranches(
     _path: string,
     _options?: GitReadOptions
   ): Promise<Branch[]> {
     this.branchCalls += 1;
     return [];
+  }
+
+  async readStashes(
+    repositoryPath: string,
+    options: ReadStashesOptions = {}
+  ): Promise<StashSummary[]> {
+    this.stashListCalls.push({
+      repositoryPath,
+      limit: options.limit,
+      signal: options.signal ?? new AbortController().signal
+    });
+    return [];
+  }
+
+  async readStashFiles(
+    repositoryPath: string,
+    stashRef: string,
+    options: GitReadOptions = {}
+  ): Promise<StashFiles> {
+    this.stashFileCalls.push({
+      repositoryPath,
+      stashRef,
+      signal: options.signal ?? new AbortController().signal
+    });
+    return {
+      ref: stashRef,
+      hash: "0123456789abcdef0123456789abcdef01234567",
+      files: [],
+      additions: 0,
+      deletions: 0
+    };
+  }
+
+  async readStashDiff(
+    repositoryPath: string,
+    options: ReadStashDiffOptions
+  ): Promise<StashDiff> {
+    this.stashDiffCalls.push({
+      repositoryPath,
+      stashRef: options.stashRef,
+      path: options.path,
+      contextLines: options.contextLines,
+      signal:
+        options.signal ?? new AbortController().signal
+    });
+    return {
+      ref: options.stashRef,
+      hash: "0123456789abcdef0123456789abcdef01234567",
+      path: options.path,
+      content: "",
+      binary: false,
+      truncated: false,
+      additions: 0,
+      deletions: 0
+    };
   }
 
   async inspectRepository(
@@ -306,13 +492,14 @@ class FakeGitClient implements GitClient {
 }
 
 function createService(
-  gitClient: GitClient
+  gitClient: GitClient & GitCommitDiffClient & GitStashClient
 ): RepositoryQueryService {
   const workspace = createWorkspace();
   return new RepositoryQueryService(
     {
       getCurrent: async () => structuredClone(workspace)
     },
+    gitClient,
     gitClient
   );
 }

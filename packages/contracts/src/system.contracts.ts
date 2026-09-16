@@ -26,6 +26,8 @@ import type {
   RepositoryCommandExecutionDto,
   RepositoryCommandPreflightDto,
   RepositoryCommandPreflightRequest,
+  RepositoryCommitDiffDto,
+  RepositoryCommitDiffRequest,
   RepositoryCommitDto,
   RepositoryCommitMutationDto,
   RepositoryCommitRequest,
@@ -33,6 +35,14 @@ import type {
   RepositoryDiffRequest,
   RepositoryHistoryPageDto,
   RepositoryHistoryRequest,
+  RepositoryStashDiffDto,
+  RepositoryStashDiffRequest,
+  RepositoryStashFilesDto,
+  RepositoryStashRequest,
+  RepositoryStashMutationDto,
+  RepositoryStashMutationRequest,
+  RepositoryStashesDto,
+  RepositoryStashesRequest,
   RepositoryPathsMutationDto,
   RepositoryPathsMutationRequest,
   RepositoryQueryRequest
@@ -279,6 +289,18 @@ export interface GitNestBridge {
     getCommit(
       request: RepositoryCommitRequest
     ): Promise<GitReadResult<RepositoryCommitDto>>;
+    getCommitDiff(
+      request: RepositoryCommitDiffRequest
+    ): Promise<GitReadResult<RepositoryCommitDiffDto>>;
+    getStashes(
+      request: RepositoryStashesRequest
+    ): Promise<GitReadResult<RepositoryStashesDto>>;
+    getStashFiles(
+      request: RepositoryStashRequest
+    ): Promise<GitReadResult<RepositoryStashFilesDto>>;
+    getStashDiff(
+      request: RepositoryStashDiffRequest
+    ): Promise<GitReadResult<RepositoryStashDiffDto>>;
     getBranches(
       request: RepositoryQueryRequest
     ): Promise<GitReadResult<RepositoryBranchesDto>>;
@@ -294,6 +316,9 @@ export interface GitNestBridge {
     discard(
       request: RepositoryPathsMutationRequest
     ): Promise<GitReadResult<RepositoryPathsMutationDto>>;
+    mutateStash(
+      request: RepositoryStashMutationRequest
+    ): Promise<GitReadResult<RepositoryStashMutationDto>>;
     createCommit(
       request: CreateRepositoryCommitRequest
     ): Promise<GitReadResult<RepositoryCommitMutationDto>>;

@@ -181,7 +181,7 @@ export function AppTitlebar({
         type="button"
       >
         <Icon name="search" size={15} />
-        <span>搜索仓库、分支或命令</span>
+        <span>搜索仓库、变更文件、分支或命令</span>
         <kbd>Ctrl K</kbd>
       </Button>
 

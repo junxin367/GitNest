@@ -16,6 +16,8 @@ playwright-report/
 # Local runtime and tool state
 temp/
 tmp/
+.playwright-cli/
+output/
 *.tmp
 *.log
 *.pid

@@ -1,12 +1,18 @@
 import type {
   Branch,
+  CommitDiff,
   CommitDetails,
   CommitHistoryPage,
   CommitHistoryScope,
   GitClient,
+  GitCommitDiffClient,
+  GitStashClient,
   RepositoryDiff,
   RepositoryDiffMode,
-  RepositorySnapshot
+  RepositorySnapshot,
+  StashDiff,
+  StashFiles,
+  StashSummary
 } from "@gitnest/git-core";
 import {
   WorkspaceError,
@@ -40,19 +46,49 @@ export interface RepositoryCommitResult {
   commit: CommitDetails;
 }
 
+export interface RepositoryCommitDiffResult {
+  target: RepositoryTarget;
+  commit: {
+    hash: string;
+  };
+  diff: CommitDiff;
+}
+
 export interface RepositoryBranchesResult {
   target: RepositoryTarget;
   branches: Branch[];
 }
 
+export interface RepositoryStashesResult {
+  target: RepositoryTarget;
+  stashes: StashSummary[];
+}
+
+export interface RepositoryStashFilesResult {
+  target: RepositoryTarget;
+  stash: StashFiles;
+}
+
+export interface RepositoryStashDiffResult {
+  target: RepositoryTarget;
+  stash: Pick<StashDiff, "ref" | "hash">;
+  diff: Omit<StashDiff, "ref" | "hash">;
+}
+
 export class RepositoryQueryService {
   readonly #workspace: WorkspaceReader;
-  readonly #gitClient: GitClient;
+  readonly #gitClient: GitClient & GitStashClient;
+  readonly #gitCommitDiffClient: GitCommitDiffClient;
   readonly #queries = new Map<string, AbortController>();
 
-  constructor(workspace: WorkspaceReader, gitClient: GitClient) {
+  constructor(
+    workspace: WorkspaceReader,
+    gitClient: GitClient & GitStashClient,
+    gitCommitDiffClient: GitCommitDiffClient
+  ) {
     this.#workspace = workspace;
     this.#gitClient = gitClient;
+    this.#gitCommitDiffClient = gitCommitDiffClient;
   }
 
   getChanges(
@@ -134,6 +170,99 @@ export class RepositoryQueryService {
           commitHash,
           { signal }
         )
+      };
+    });
+  }
+
+  getCommitDiff(
+    queryId: string,
+    target: RepositoryTarget,
+    commitHash: string,
+    path: string,
+    contextLines?: number
+  ): Promise<RepositoryCommitDiffResult> {
+    return this.#runQuery(queryId, async (signal) => {
+      const worktreePath = await this.#resolveTargetPath(target);
+      return {
+        target,
+        commit: {
+          hash: commitHash
+        },
+        diff: await this.#gitCommitDiffClient.readCommitDiff(
+          worktreePath,
+          {
+            commitHash,
+            path,
+            ...(contextLines === undefined
+              ? {}
+              : { contextLines }),
+            signal
+          }
+        )
+      };
+    });
+  }
+
+  getStashes(
+    queryId: string,
+    target: RepositoryTarget,
+    limit?: number
+  ): Promise<RepositoryStashesResult> {
+    return this.#runQuery(queryId, async (signal) => {
+      const path = await this.#resolveTargetPath(target);
+      return {
+        target,
+        stashes: await this.#gitClient.readStashes(path, {
+          ...(limit === undefined ? {} : { limit }),
+          signal
+        })
+      };
+    });
+  }
+
+  getStashFiles(
+    queryId: string,
+    target: RepositoryTarget,
+    stashRef: string
+  ): Promise<RepositoryStashFilesResult> {
+    return this.#runQuery(queryId, async (signal) => {
+      const path = await this.#resolveTargetPath(target);
+      return {
+        target,
+        stash: await this.#gitClient.readStashFiles(
+          path,
+          stashRef,
+          { signal }
+        )
+      };
+    });
+  }
+
+  getStashDiff(
+    queryId: string,
+    target: RepositoryTarget,
+    stashRef: string,
+    path: string,
+    contextLines?: number
+  ): Promise<RepositoryStashDiffResult> {
+    return this.#runQuery(queryId, async (signal) => {
+      const worktreePath = await this.#resolveTargetPath(target);
+      const stashDiff = await this.#gitClient.readStashDiff(
+        worktreePath,
+        {
+          stashRef,
+          path,
+          ...(contextLines === undefined
+            ? {}
+            : { contextLines }),
+          signal
+        }
+      );
+      const { ref, hash, ...diff } = stashDiff;
+      return {
+        target,
+        stash: { ref, hash },
+        diff
       };
     });
   }

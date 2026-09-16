@@ -3,7 +3,8 @@ import {
   type CreatedCommit,
   type GitClient,
   type GitMutationClient,
-  type RepositorySnapshot
+  type RepositorySnapshot,
+  type StashMutationAction
 } from "@gitnest/git-core";
 import type {
   RepositoryTarget
@@ -35,6 +36,13 @@ export interface RepositoryPathsMutationResult {
 export interface RepositoryCommitMutationResult
   extends RepositoryPathsMutationResult {
   commit: CreatedCommit;
+}
+
+export interface RepositoryStashMutationResult
+  extends RepositoryPathsMutationResult {
+  action: StashMutationAction;
+  stashRef: string;
+  stashHash: string;
 }
 
 export class RepositoryMutationService {
@@ -190,6 +198,36 @@ export class RepositoryMutationService {
     };
   }
 
+  async mutateStash(
+    target: RepositoryTarget,
+    action: StashMutationAction,
+    stashRef: string,
+    stashHash: string
+  ): Promise<RepositoryStashMutationResult> {
+    const input = validateStashMutation(
+      action,
+      stashRef,
+      stashHash
+    );
+    const completed = await this.#runtime.runWorktreeMutation(
+      target,
+      `stash-${input.action}`,
+      (worktreePath) =>
+        this.#gitWriter.mutateStash(
+          worktreePath,
+          input.action,
+          input.stashRef,
+          input.stashHash
+        )
+    );
+
+    return {
+      target,
+      operationId: completed.operationId,
+      ...input
+    };
+  }
+
   async commit(
     target: RepositoryTarget,
     subject: string,
@@ -240,6 +278,47 @@ export class RepositoryMutationService {
       commit: completed.result
     };
   }
+}
+
+function validateStashMutation(
+  action: StashMutationAction,
+  stashRefValue: string,
+  stashHashValue: string
+): {
+  action: StashMutationAction;
+  stashRef: string;
+  stashHash: string;
+} {
+  if (
+    action !== "apply" &&
+    action !== "drop" &&
+    action !== "pop"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash mutations require apply, drop, or pop."
+    );
+  }
+
+  const stashRef = stashRefValue.trim();
+  if (!/^stash@\{(?:0|[1-9]\d{0,8})\}$/.test(stashRef)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash references must use the exact stash@{n} form."
+    );
+  }
+
+  const stashHash = stashHashValue
+    .trim()
+    .toLocaleLowerCase("en-US");
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(stashHash)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash hashes must be complete 40- or 64-character hexadecimal object ids."
+    );
+  }
+
+  return { action, stashRef, stashHash };
 }
 
 function validateMutationPaths(

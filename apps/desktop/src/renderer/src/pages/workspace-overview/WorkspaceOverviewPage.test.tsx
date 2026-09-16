@@ -183,6 +183,82 @@ describe("Workspace overview interactions", () => {
     expect(container.textContent).not.toContain("正在恢复 Workspace");
   });
 
+  it("limits collection pages and counts to the selected Workspace entry", () => {
+    const workspace = createWorktreeWorkspace();
+    const snapshots = [
+      createSnapshot("repository-a", "worktree-a"),
+      createSnapshot("repository-b", "worktree-b")
+    ];
+    const onSelectTarget = vi.fn();
+    const renderCollection = (
+      tab: "repositories" | "activity" | "worktrees"
+    ) => {
+      act(() => {
+        root.render(
+          <WorkspaceCollectionPage
+            busy={false}
+            loading={false}
+            onAddDirectory={() => undefined}
+            onSelectTarget={onSelectTarget}
+            snapshots={snapshots}
+            tab={tab}
+            workspace={workspace}
+          />
+        );
+      });
+    };
+
+    renderCollection("repositories");
+
+    expect(
+      container.querySelectorAll(
+        '[aria-label="Workspace 全部仓库"] [role="listitem"]'
+      )
+    ).toHaveLength(1);
+    expect(
+      container.querySelector(".panel-caption")?.textContent
+    ).toContain("1 个仓库 · 1 个 Worktree");
+    expect(container.textContent).toContain("Repository A");
+    expect(container.textContent).not.toContain("Repository B");
+
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          ".repository-status-item button"
+        )
+        ?.click();
+    });
+    expect(onSelectTarget).toHaveBeenLastCalledWith({
+      repositoryId: "repository-a",
+      worktreeId: "worktree-a"
+    });
+
+    renderCollection("activity");
+
+    expect(
+      container.querySelectorAll(".workspace-activity-row")
+    ).toHaveLength(1);
+    expect(
+      container.querySelector(".panel-caption")?.textContent
+    ).toContain("1 条");
+    expect(container.textContent).toContain("Repository A");
+    expect(container.textContent).not.toContain("Repository B");
+
+    renderCollection("worktrees");
+
+    expect(
+      container.querySelectorAll(".worktree-summary-card")
+    ).toHaveLength(1);
+    expect(
+      container.querySelector(".page-heading p")?.textContent
+    ).toContain("实际登记 1 个 Worktree");
+    expect(
+      container.querySelector(".worktree-toolbar-count")?.textContent
+    ).toContain("共 1 个");
+    expect(container.textContent).toContain("Repository A");
+    expect(container.textContent).not.toContain("Repository B");
+  });
+
   it("keeps the repository menu open for internal scrolling and closes it for page scrolling", () => {
     act(() => {
       root.render(
@@ -193,7 +269,7 @@ describe("Workspace overview interactions", () => {
           onSelectTarget={() => undefined}
           snapshots={[]}
           tab="worktrees"
-          workspace={createWorktreeWorkspace()}
+          workspace={createMultiRepositoryEntryWorkspace()}
         />
       );
     });
@@ -330,6 +406,43 @@ function createWorktreeWorkspace(): WorkspaceDetailsDto {
         isPrunable: false
       }
     ]
+  };
+}
+
+function createMultiRepositoryEntryWorkspace(): WorkspaceDetailsDto {
+  return {
+    ...createWorktreeWorkspace(),
+    entries: [
+      {
+        id: "entry-all",
+        displayName: "Workspace All",
+        path: "C:\\workspace-all",
+        canonicalPath: "c:\\workspace-all",
+        excludes: [],
+        order: 0,
+        groups: [
+          {
+            id: "group-all",
+            name: "All",
+            collapsed: false,
+            targets: [
+              {
+                repositoryId: "repository-a",
+                worktreeId: "worktree-a"
+              },
+              {
+                repositoryId: "repository-b",
+                worktreeId: "worktree-b"
+              }
+            ]
+          }
+        ],
+        scanIssues: [],
+        lastScannedAt: "2026-09-11T00:00:00.000Z",
+        kind: "workspace-directory"
+      }
+    ],
+    selectedEntryId: "entry-all"
   };
 }
 

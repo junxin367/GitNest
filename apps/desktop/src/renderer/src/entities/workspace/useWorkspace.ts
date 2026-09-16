@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState
 } from "react";
 
@@ -46,7 +47,7 @@ export interface WorkspaceController {
     target?: RepositoryTargetDto
   ): Promise<boolean>;
   selectEntry(entryId: string): Promise<void>;
-  selectTarget(target: RepositoryTargetDto): Promise<void>;
+  selectTarget(target: RepositoryTargetDto): Promise<boolean>;
   setGroupCollapsed(
     entryId: string,
     groupId: string,
@@ -64,6 +65,8 @@ export function useWorkspace(): WorkspaceController {
   const [notice, setNotice] = useState<string | null>(null);
   const [operation, setOperation] =
     useState<WorkspaceOperation>("loading");
+  const targetSelectionSequenceRef = useRef(0);
+  const pendingTargetSelectionsRef = useRef(new Set<number>());
   const workspace = runtimeState?.workspace ?? null;
   const setWorkspace = useCallback(
     (nextWorkspace: WorkspaceDetailsDto) => {
@@ -365,25 +368,41 @@ export function useWorkspace(): WorkspaceController {
 
   const selectTarget = useCallback(
     async (target: RepositoryTargetDto) => {
+      const requestId = ++targetSelectionSequenceRef.current;
+      const selectionAlreadyPending =
+        pendingTargetSelectionsRef.current.size > 0;
+      pendingTargetSelectionsRef.current.add(requestId);
       if (
+        !selectionAlreadyPending &&
         workspace?.selectedTarget?.repositoryId ===
           target.repositoryId &&
         workspace.selectedTarget.worktreeId === target.worktreeId
       ) {
-        return;
+        pendingTargetSelectionsRef.current.delete(requestId);
+        return true;
       }
 
       try {
         const result = await window.gitnest.workspace.selectTarget({
           target
         });
+        if (targetSelectionSequenceRef.current !== requestId) {
+          return false;
+        }
         if (result.ok) {
           setWorkspace(result.value);
+          return true;
         } else {
           setError(result.error);
+          return false;
         }
       } catch (reason) {
-        setUnexpectedError(reason);
+        if (targetSelectionSequenceRef.current === requestId) {
+          setUnexpectedError(reason);
+        }
+        return false;
+      } finally {
+        pendingTargetSelectionsRef.current.delete(requestId);
       }
     },
     [setUnexpectedError, setWorkspace, workspace?.selectedTarget]

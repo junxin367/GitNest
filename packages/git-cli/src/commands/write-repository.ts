@@ -59,6 +59,18 @@ export function removeUntrackedArguments(
   ];
 }
 
+export function stashMutationArguments(
+  action: "apply" | "drop" | "pop",
+  stashRef: string,
+  stashHash: string
+): string[] {
+  return [
+    "stash",
+    action,
+    action === "apply" ? stashHash : stashRef
+  ];
+}
+
 export function createCommitArguments(
   subject: string,
   body?: string

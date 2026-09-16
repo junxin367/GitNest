@@ -15,8 +15,10 @@ import {
 
 import type { WorkspaceTab } from "../../app/navigation";
 import {
+  filterSnapshotsToTargets,
   findTargetSnapshot,
-  getSnapshotChangeCount
+  getSnapshotChangeCount,
+  listActiveWorkspaceTargets
 } from "../../entities/workspace/model";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
@@ -108,9 +110,32 @@ export function WorkspaceCollectionPage({
     );
   }
 
-  const repositoryRows = workspace.repositories
+  const activeTargets = listActiveWorkspaceTargets(workspace);
+  const activeTargetKeys = new Set(
+    activeTargets.map(
+      (target) => `${target.repositoryId}:${target.worktreeId}`
+    )
+  );
+  const activeRepositoryIds = new Set(
+    activeTargets.map((target) => target.repositoryId)
+  );
+  const activeRepositories = workspace.repositories.filter(
+    (repository) => activeRepositoryIds.has(repository.id)
+  );
+  const activeWorktrees = workspace.worktrees.filter((worktree) =>
+    activeTargetKeys.has(`${worktree.repositoryId}:${worktree.id}`)
+  );
+  const activeSnapshots = filterSnapshotsToTargets(
+    snapshots,
+    activeTargets
+  );
+  const repositoryRows = activeRepositories
     .map((repository) =>
-      createRepositoryRow(repository, workspace, snapshots)
+      createRepositoryRow(
+        repository,
+        activeWorktrees,
+        activeSnapshots
+      )
     )
     .sort(compareRepositoryRows);
 
@@ -128,8 +153,8 @@ export function WorkspaceCollectionPage({
               全部仓库
             </div>
             <span className="panel-caption">
-              {workspace.repositories.length} 个仓库 ·{" "}
-              {workspace.entries.length} 个配置项
+              {activeRepositories.length} 个仓库 ·{" "}
+              {activeWorktrees.length} 个 Worktree
             </span>
             <Button variant="unstyled"
               className="panel-action"
@@ -178,15 +203,15 @@ export function WorkspaceCollectionPage({
     <div className="page-scroll workspace-collection-page">
       <WorkspacePageHeading
         title="跨仓 Worktrees"
-        description={`聚合仓库实际登记 ${workspace.worktrees.length} 个 Worktree；其中 ${workspace.worktrees.filter((worktree) => worktree.isPrunable).length} 个记录指向不存在的目录。`}
+        description={`聚合仓库实际登记 ${activeWorktrees.length} 个 Worktree；其中 ${activeWorktrees.filter((worktree) => worktree.isPrunable).length} 个记录指向不存在的目录。`}
       />
       <WorkspaceWorktreesPanel
         busy={busy}
         onAddDirectory={onAddDirectory}
         onSelectTarget={onSelectTarget}
-        repositories={workspace.repositories}
-        snapshots={snapshots}
-        worktrees={workspace.worktrees}
+        repositories={activeRepositories}
+        snapshots={activeSnapshots}
+        worktrees={activeWorktrees}
       />
     </div>
   );
@@ -949,20 +974,20 @@ function WorkspaceEmptyState({
 
 function createRepositoryRow(
   repository: WorkspaceRepositoryDto,
-  workspace: WorkspaceDetailsDto,
+  worktrees: WorkspaceWorktreeDto[],
   snapshots: RepositoryStatusSnapshotDto[]
 ): WorkspaceRepositoryRow {
   const worktree =
     repository.worktreeIds
       .map((worktreeId) =>
-        workspace.worktrees.find(
+        worktrees.find(
           (candidate) => candidate.id === worktreeId
         )
       )
       .find((candidate) => candidate?.isPrimary) ??
     repository.worktreeIds
       .map((worktreeId) =>
-        workspace.worktrees.find(
+        worktrees.find(
           (candidate) => candidate.id === worktreeId
         )
       )

@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -48,6 +49,11 @@ interface DiffFileNavigatorState {
   collapsedSections: DiffFileSectionCollapseState;
 }
 
+interface PendingSelectionReveal {
+  fileKey: string;
+  requestKey: string;
+}
+
 const MAX_GROUP_MUTATION_PATHS = 200;
 const DEFAULT_COLLAPSED_SECTIONS: DiffFileSectionCollapseState = {
   staged: false,
@@ -81,6 +87,7 @@ export interface DiffFileNavigatorProps {
   configuration: DiffNavigationFeatureConfig;
   files: readonly DiffViewerFile[];
   selectedFileKey?: string | undefined;
+  selectionRevealKey?: string | undefined;
   mutationBusy?: boolean | undefined;
   changesLoading?: boolean | undefined;
   changesError?: DiffWorkspaceMessage | undefined;
@@ -142,6 +149,7 @@ export function DiffFileNavigator({
   configuration,
   files,
   selectedFileKey,
+  selectionRevealKey,
   mutationBusy = false,
   changesLoading = false,
   changesError,
@@ -178,11 +186,15 @@ export function DiffFileNavigator({
   const { filter, collapsedSections } = navigatorState;
   const [collapsedDirectories, setCollapsedDirectories] =
     useState<Set<string>>(() => new Set());
+  const [pendingSelectionReveal, setPendingSelectionReveal] =
+    useState<PendingSelectionReveal | null>(null);
   const viewMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const viewMenuRef = useRef<HTMLDivElement>(null);
+  const fileListRef = useRef<HTMLDivElement>(null);
   const treeScopeRef = useRef("");
   const knownDirectoryKeysRef = useRef<Set<string>>(new Set());
   const requestedSelectionRef = useRef("");
+  const revealedSelectionRef = useRef("");
 
   const filteredFiles = useMemo(
     () =>
@@ -404,6 +416,89 @@ export function DiffFileNavigator({
     }));
   };
 
+  useEffect(() => {
+    if (
+      !selectionRevealKey ||
+      revealedSelectionRef.current ===
+        selectionRevealKey ||
+      !selectedFileKey
+    ) {
+      return;
+    }
+
+    const file = files.find(
+      (candidate) => candidate.key === selectedFileKey
+    );
+    if (!file) {
+      return;
+    }
+
+    updateNavigatorState((current) => {
+      if (
+        !current.filter &&
+        !current.collapsedSections[file.mode]
+      ) {
+        return current;
+      }
+      return {
+        filter: "",
+        collapsedSections: {
+          ...current.collapsedSections,
+          [file.mode]: false
+        }
+      };
+    });
+    if (viewMode === "tree") {
+      setCollapsedDirectories((current) => {
+        const next = new Set(current);
+        changeTreeDirectoryPaths(file.path).forEach((path) =>
+          next.delete(`${file.mode}:${path}`)
+        );
+        return next;
+      });
+    }
+    setPendingSelectionReveal({
+      fileKey: file.key,
+      requestKey: selectionRevealKey
+    });
+  }, [
+    files,
+    navigatorScopeKey,
+    selectedFileKey,
+    selectionRevealKey,
+    viewMode
+  ]);
+
+  useLayoutEffect(() => {
+    if (!pendingSelectionReveal) {
+      return;
+    }
+    const row = Array.from(
+      fileListRef.current?.querySelectorAll<HTMLElement>(
+        "[data-diff-file-key]"
+      ) ?? []
+    ).find(
+      (element) =>
+        element.dataset.diffFileKey ===
+        pendingSelectionReveal.fileKey
+    );
+    if (!row) {
+      return;
+    }
+
+    row.scrollIntoView({
+      block: "nearest"
+    });
+    row
+      .querySelector<HTMLButtonElement>(
+        ".diff-workspace-file-select"
+      )
+      ?.focus({ preventScroll: true });
+    revealedSelectionRef.current =
+      pendingSelectionReveal.requestKey;
+    setPendingSelectionReveal(null);
+  }, [pendingSelectionReveal]);
+
   const renderFileRow = (
     file: DiffViewerFile,
     depth = 0
@@ -430,6 +525,7 @@ export function DiffFileNavigator({
         className={`diff-workspace-file${
           selected ? " selected" : ""
         }`}
+        data-diff-file-key={file.key}
         key={file.key}
         onContextMenu={(event) =>
           onFileContextMenu?.(event, file)
@@ -763,7 +859,10 @@ export function DiffFileNavigator({
           ) : null}
         </div>
       </header>
-      <div className="diff-workspace-file-list">
+      <div
+        className="diff-workspace-file-list"
+        ref={fileListRef}
+      >
         {changesError ? (
           <DiffViewerState {...changesError} />
         ) : files.length === 0 && !changesLoading ? (

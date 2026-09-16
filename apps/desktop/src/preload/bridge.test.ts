@@ -190,6 +190,41 @@ describe("createGitNestBridge", () => {
       },
       commitHash: "abcdef"
     });
+    await bridge.repository.getCommitDiff({
+      queryId: "commit-diff",
+      target: {
+        repositoryId: "repository",
+        worktreeId: "worktree"
+      },
+      commitHash: "abcdef",
+      path: "README.md",
+      contextLines: 13
+    });
+    await bridge.repository.getStashes({
+      queryId: "stashes",
+      target: {
+        repositoryId: "repository",
+        worktreeId: "worktree"
+      },
+      limit: 50
+    });
+    await bridge.repository.getStashFiles({
+      queryId: "stash-files",
+      target: {
+        repositoryId: "repository",
+        worktreeId: "worktree"
+      },
+      stashRef: "stash@{0}"
+    });
+    await bridge.repository.getStashDiff({
+      queryId: "stash-diff",
+      target: {
+        repositoryId: "repository",
+        worktreeId: "worktree"
+      },
+      stashRef: "stash@{0}",
+      path: "README.md"
+    });
     await bridge.repository.getBranches({
       queryId: "branches",
       target: {
@@ -213,6 +248,15 @@ describe("createGitNestBridge", () => {
         worktreeId: "worktree"
       },
       paths: ["README.md"]
+    });
+    await bridge.repository.mutateStash({
+      target: {
+        repositoryId: "repository",
+        worktreeId: "worktree"
+      },
+      action: "pop",
+      stashRef: "stash@{0}",
+      stashHash: "a".repeat(40)
     });
     await bridge.repository.createCommit({
       target: {
@@ -551,6 +595,61 @@ describe("createGitNestBridge", () => {
         ]
       },
       {
+        channel: IPC_CHANNELS.repositoryGetCommitDiff,
+        args: [
+          {
+            queryId: "commit-diff",
+            target: {
+              repositoryId: "repository",
+              worktreeId: "worktree"
+            },
+            commitHash: "abcdef",
+            path: "README.md",
+            contextLines: 13
+          }
+        ]
+      },
+      {
+        channel: IPC_CHANNELS.repositoryGetStashes,
+        args: [
+          {
+            queryId: "stashes",
+            target: {
+              repositoryId: "repository",
+              worktreeId: "worktree"
+            },
+            limit: 50
+          }
+        ]
+      },
+      {
+        channel: IPC_CHANNELS.repositoryGetStashFiles,
+        args: [
+          {
+            queryId: "stash-files",
+            target: {
+              repositoryId: "repository",
+              worktreeId: "worktree"
+            },
+            stashRef: "stash@{0}"
+          }
+        ]
+      },
+      {
+        channel: IPC_CHANNELS.repositoryGetStashDiff,
+        args: [
+          {
+            queryId: "stash-diff",
+            target: {
+              repositoryId: "repository",
+              worktreeId: "worktree"
+            },
+            stashRef: "stash@{0}",
+            path: "README.md"
+          }
+        ]
+      },
+      {
         channel: IPC_CHANNELS.repositoryGetBranches,
         args: [
           {
@@ -587,6 +686,20 @@ describe("createGitNestBridge", () => {
               worktreeId: "worktree"
             },
             paths: ["README.md"]
+          }
+        ]
+      },
+      {
+        channel: IPC_CHANNELS.repositoryMutateStash,
+        args: [
+          {
+            target: {
+              repositoryId: "repository",
+              worktreeId: "worktree"
+            },
+            action: "pop",
+            stashRef: "stash@{0}",
+            stashHash: "a".repeat(40)
           }
         ]
       },

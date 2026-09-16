@@ -15,7 +15,8 @@ import type {
   ReadRepositoryDiffOptions,
   RepositoryDiff,
   RepositoryInspection,
-  RepositorySnapshot
+  RepositorySnapshot,
+  StashMutationAction
 } from "@gitnest/git-core";
 import type {
   RepositoryTarget
@@ -314,6 +315,66 @@ describe("RepositoryMutationService", () => {
     });
     expect(git.commitCalls).toHaveLength(0);
   });
+
+  it("serializes validated stash mutations through the worktree runtime", async () => {
+    const git = new FakeGitMutationClient();
+    const service = new RepositoryMutationService(
+      new ImmediateMutationRuntime(),
+      git,
+      git
+    );
+    const hash = "A".repeat(40);
+
+    await expect(
+      service.mutateStash(
+        TARGET,
+        "pop",
+        " stash@{2} ",
+        hash
+      )
+    ).resolves.toEqual({
+      target: TARGET,
+      operationId: "operation-stash-pop",
+      action: "pop",
+      stashRef: "stash@{2}",
+      stashHash: hash.toLowerCase()
+    });
+    expect(git.stashMutationCalls).toEqual([
+      {
+        path: WORKTREE_PATH,
+        action: "pop",
+        stashRef: "stash@{2}",
+        stashHash: hash.toLowerCase()
+      }
+    ]);
+  });
+
+  it("rejects malformed stash mutations before running Git", async () => {
+    const git = new FakeGitMutationClient();
+    const service = new RepositoryMutationService(
+      new ImmediateMutationRuntime(),
+      git,
+      git
+    );
+
+    await expect(
+      service.mutateStash(
+        TARGET,
+        "drop",
+        "stash@{0}^1",
+        "a".repeat(40)
+      )
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    await expect(
+      service.mutateStash(
+        TARGET,
+        "apply",
+        "stash@{0}",
+        "abcd"
+      )
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(git.stashMutationCalls).toHaveLength(0);
+  });
 });
 
 class ImmediateMutationRuntime
@@ -321,7 +382,14 @@ class ImmediateMutationRuntime
 {
   async runWorktreeMutation<Result>(
     _target: RepositoryTarget,
-    kind: "stage" | "unstage" | "discard" | "commit",
+    kind:
+      | "stage"
+      | "unstage"
+      | "discard"
+      | "commit"
+      | "stash-apply"
+      | "stash-drop"
+      | "stash-pop",
     action: (worktreePath: string) => Promise<Result>
   ) {
     return {
@@ -356,6 +424,12 @@ class FakeGitMutationClient
     path: string;
     subject: string;
     body?: string;
+  }> = [];
+  readonly stashMutationCalls: Array<{
+    path: string;
+    action: StashMutationAction;
+    stashRef: string;
+    stashHash: string;
   }> = [];
 
   constructor(
@@ -412,6 +486,20 @@ class FakeGitMutationClient
     this.removeUntrackedCalls.push({
       path,
       paths: [...paths]
+    });
+  }
+
+  async mutateStash(
+    path: string,
+    action: StashMutationAction,
+    stashRef: string,
+    stashHash: string
+  ): Promise<void> {
+    this.stashMutationCalls.push({
+      path,
+      action,
+      stashRef,
+      stashHash
     });
   }
 

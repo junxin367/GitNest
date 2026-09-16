@@ -22,13 +22,16 @@ import {
   parseComparedCommitHistory,
   parseCommitHistory,
   parseRepositoryDiff,
+  parseStashList,
   parseStatusPorcelainV2,
   parseWorktrees,
   reconcileStatOnlyUnstagedChanges,
   type GitClient,
+  type GitCommitDiffClient,
   type GitEnvironment,
   type GitMutationClient,
   type GitRepositoryCommandClient,
+  type GitStashClient,
   type GitWorktreeCommandClient,
   type GitReadOptions,
   type GitWriteOptions,
@@ -40,8 +43,11 @@ import {
   type CreateWorktreeOptions,
   type LockWorktreeOptions,
   type ReadCommitHistoryOptions,
+  type ReadCommitDiffOptions,
   type ReadRepositoryDiffOptions,
   type ReadRepositorySnapshotOptions,
+  type ReadStashDiffOptions,
+  type ReadStashesOptions,
   type Branch,
   type ChangedPath,
   type ChangedPathStats,
@@ -49,6 +55,7 @@ import {
   type GitAncestry,
   type RemoteBranchRef,
   type CommitDetails,
+  type CommitDiff,
   type CommitHistoryPage,
   type RepositoryDiff,
   type RepositoryIdentity,
@@ -56,11 +63,17 @@ import {
   type RepositoryMediaKind,
   type RepositoryMediaPreview,
   type RepositorySnapshot,
+  type StashDiff,
+  type StashFiles,
+  type StashMutationAction,
+  type StashSummary,
   type Worktree
 } from "@gitnest/git-core";
 
 import {
   BRANCH_ARGUMENTS,
+  commitDiffArguments,
+  commitParentsArguments,
   commitMetadataArguments,
   commitNumstatArguments,
   compareHistoryCountArguments,
@@ -70,6 +83,11 @@ import {
   historyArguments,
   historyPageArguments,
   MERGED_REMOTE_BRANCH_ARGUMENTS,
+  resolveStashArguments,
+  stashDiffArguments,
+  stashFilesArguments,
+  stashListArguments,
+  stashUntrackedDiffArguments,
   stagedFileContentArguments,
   stagedFileSizeArguments,
   STAGED_DIFF_STAT_ARGUMENTS,
@@ -98,6 +116,7 @@ import {
   restoreWorktreeArguments,
   stageAllArguments,
   stageArguments,
+  stashMutationArguments,
   unstageArguments
 } from "../commands/write-repository";
 import {
@@ -213,6 +232,8 @@ export interface GitRemoteConnectionTestInput {
 export class GitCliClient
   implements
     GitClient,
+    GitCommitDiffClient,
+    GitStashClient,
     GitMutationClient,
     GitRepositoryCommandClient,
     GitWorktreeCommandClient
@@ -542,6 +563,204 @@ export class GitCliClient
       return {
         ...parseCommitMetadata(metadataResult.stdout),
         ...parseCommitNumstat(numstatResult.stdout)
+      };
+    } catch (error) {
+      throw mapRepositoryError(error, worktreePath);
+    }
+  }
+
+  async readCommitDiff(
+    path: string,
+    options: ReadCommitDiffOptions
+  ): Promise<CommitDiff> {
+    const worktreePath = await validateDirectoryPath(path);
+    const normalizedHash = validateCommitHash(
+      options.commitHash
+    );
+    const relativePath = validateRelativePathspec(options.path);
+    const contextLines = clampContextLines(options.contextLines);
+    const executablePath = await this.#getExecutablePath(
+      options.signal
+    );
+    const commandOptions = {
+      executable: executablePath,
+      cwd: worktreePath,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs
+    };
+
+    try {
+      const parentResult = await runProcess({
+        ...commandOptions,
+        args: commitParentsArguments(normalizedHash),
+        outputLimitBytes: 4_096
+      });
+      const { hash, firstParentHash } = parseCommitParents(
+        parentResult.stdout
+      );
+      const result = await runProcess({
+        ...commandOptions,
+        args: commitDiffArguments(
+          hash,
+          firstParentHash,
+          relativePath,
+          contextLines
+        ),
+        outputLimitBytes: DIFF_OUTPUT_LIMIT_BYTES,
+        truncateOutput: true
+      });
+      const diff = parseRepositoryDiff(
+        relativePath,
+        "unstaged",
+        result.stdout,
+        Boolean(result.outputTruncated)
+      );
+      return {
+        path: diff.path,
+        content: diff.content,
+        binary: diff.binary,
+        truncated: diff.truncated,
+        additions: diff.additions,
+        deletions: diff.deletions
+      };
+    } catch (error) {
+      throw mapRepositoryError(error, worktreePath);
+    }
+  }
+
+  async readStashes(
+    path: string,
+    options: ReadStashesOptions = {}
+  ): Promise<StashSummary[]> {
+    const worktreePath = await validateDirectoryPath(path);
+    const executablePath = await this.#getExecutablePath(options.signal);
+    const limit = clampStashLimit(options.limit);
+    const commandOptions = {
+      executable: executablePath,
+      cwd: worktreePath,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs,
+      outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
+    };
+
+    try {
+      const listResult = await runProcess({
+        ...commandOptions,
+        args: stashListArguments(limit)
+      });
+      return parseStashList(listResult.stdout);
+    } catch (error) {
+      throw mapRepositoryError(error, worktreePath);
+    }
+  }
+
+  async readStashFiles(
+    path: string,
+    stashRef: string,
+    options: GitReadOptions = {}
+  ): Promise<StashFiles> {
+    const worktreePath = await validateDirectoryPath(path);
+    const normalizedRef = validateStashRef(stashRef);
+    const executablePath = await this.#getExecutablePath(options.signal);
+    const commandOptions = {
+      executable: executablePath,
+      cwd: worktreePath,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs,
+      outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
+    };
+
+    try {
+      const hashResult = await runProcess({
+        ...commandOptions,
+        args: resolveStashArguments(normalizedRef)
+      });
+      const hash = validateCommitHash(
+        trimSingleLine(hashResult.stdout)
+      );
+      const statResult = await runProcess({
+        ...commandOptions,
+        args: stashFilesArguments(hash)
+      });
+      const stats = parseCommitNumstat(statResult.stdout);
+      return {
+        ref: normalizedRef,
+        hash,
+        ...stats
+      };
+    } catch (error) {
+      throw mapRepositoryError(error, worktreePath);
+    }
+  }
+
+  async readStashDiff(
+    path: string,
+    options: ReadStashDiffOptions
+  ): Promise<StashDiff> {
+    const worktreePath = await validateDirectoryPath(path);
+    const normalizedRef = validateStashRef(options.stashRef);
+    const relativePath = validateRelativePathspec(options.path);
+    const contextLines = clampContextLines(options.contextLines);
+    const executablePath = await this.#getExecutablePath(options.signal);
+    const commandOptions = {
+      executable: executablePath,
+      cwd: worktreePath,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs
+    };
+
+    try {
+      const hashResult = await runProcess({
+        ...commandOptions,
+        args: resolveStashArguments(normalizedRef),
+        outputLimitBytes: 4_096
+      });
+      const hash = validateCommitHash(
+        trimSingleLine(hashResult.stdout)
+      );
+      const trackedDiffResult = await runProcess({
+        ...commandOptions,
+        args: stashDiffArguments(
+          hash,
+          relativePath,
+          contextLines
+        ),
+        outputLimitBytes: DIFF_OUTPUT_LIMIT_BYTES,
+        truncateOutput: true
+      });
+      let diffResult = trackedDiffResult;
+      if (!trackedDiffResult.stdout) {
+        const untrackedDiffResult = await runProcess({
+          ...commandOptions,
+          args: stashUntrackedDiffArguments(
+            hash,
+            relativePath,
+            contextLines
+          ),
+          allowFailure: true,
+          outputLimitBytes: DIFF_OUTPUT_LIMIT_BYTES,
+          truncateOutput: true
+        });
+        if (untrackedDiffResult.exitCode === 0) {
+          diffResult = untrackedDiffResult;
+        }
+      }
+      const diff = parseRepositoryDiff(
+        relativePath,
+        "unstaged",
+        diffResult.stdout,
+        Boolean(diffResult.outputTruncated)
+      );
+
+      return {
+        ref: normalizedRef,
+        hash,
+        path: diff.path,
+        content: diff.content,
+        binary: diff.binary,
+        truncated: diff.truncated,
+        additions: diff.additions,
+        deletions: diff.deletions
       };
     } catch (error) {
       throw mapRepositoryError(error, worktreePath);
@@ -1585,6 +1804,69 @@ export class GitCliClient
         signal: options.signal,
         timeoutMs:
           options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
+        outputLimitBytes: WRITE_OUTPUT_LIMIT_BYTES,
+        discardOutputAfterLimit: true,
+        writeIntent: true
+      });
+    } catch (error) {
+      throw mapRepositoryError(error, worktreePath);
+    }
+  }
+
+  async mutateStash(
+    path: string,
+    action: StashMutationAction,
+    stashRef: string,
+    stashHash: string,
+    options: GitWriteOptions = {}
+  ): Promise<void> {
+    const worktreePath = await validateDirectoryPath(path);
+    const normalizedRef = validateStashRef(stashRef);
+    const expectedHash = validateFullObjectId(stashHash);
+    const executablePath = await this.#getExecutablePath(
+      options.signal
+    );
+    const timeoutMs =
+      options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS;
+
+    try {
+      const resolved = await runProcess({
+        executable: executablePath,
+        cwd: worktreePath,
+        args: resolveStashArguments(normalizedRef),
+        signal: options.signal,
+        timeoutMs,
+        outputLimitBytes: 4_096
+      });
+      const currentHash = validateFullObjectId(
+        trimSingleLine(resolved.stdout)
+      );
+
+      if (
+        currentHash.toLocaleLowerCase("en-US") !==
+        expectedHash.toLocaleLowerCase("en-US")
+      ) {
+        throw new GitError(
+          "INVALID_REQUEST",
+          "The selected stash changed before the operation could run. Refresh the stash list and try again.",
+          {
+            stashRef: normalizedRef,
+            expectedHash,
+            currentHash
+          }
+        );
+      }
+
+      await runProcess({
+        executable: executablePath,
+        cwd: worktreePath,
+        args: stashMutationArguments(
+          action,
+          normalizedRef,
+          currentHash
+        ),
+        signal: options.signal,
+        timeoutMs,
         outputLimitBytes: WRITE_OUTPUT_LIMIT_BYTES,
         discardOutputAfterLimit: true,
         writeIntent: true
@@ -2694,6 +2976,34 @@ function clampContextLines(value: number | undefined): number {
   return Math.min(value, MAX_DIFF_CONTEXT_LINES);
 }
 
+function clampStashLimit(value: number | undefined): number {
+  if (value === undefined) {
+    return 50;
+  }
+
+  if (!Number.isInteger(value) || value < 1) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash limits must be positive integers."
+    );
+  }
+
+  return Math.min(value, 100);
+}
+
+function validateStashRef(stashRef: string): string {
+  const normalized = stashRef.trim();
+
+  if (!/^stash@\{(?:0|[1-9]\d{0,8})\}$/.test(normalized)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash references must use the exact stash@{n} form."
+    );
+  }
+
+  return normalized;
+}
+
 function validateRelativePathspec(path: string): string {
   if (
     !path ||
@@ -2792,6 +3102,33 @@ function parseCreatedCommit(output: string): CreatedCommit {
   return { hash, shortHash, subject };
 }
 
+function parseCommitParents(output: string): {
+  hash: string;
+  firstParentHash?: string;
+} {
+  const [hash = "", firstParentHash] = output
+    .trim()
+    .split(/\s+/);
+
+  if (
+    !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(hash) ||
+    (firstParentHash !== undefined &&
+      !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(
+        firstParentHash
+      ))
+  ) {
+    throw new GitError(
+      "INVALID_GIT_OUTPUT",
+      "Commit parent metadata is invalid."
+    );
+  }
+
+  return {
+    hash,
+    ...(firstParentHash ? { firstParentHash } : {})
+  };
+}
+
 function validateCommitHash(commitHash: string): string {
   const normalized = commitHash.trim();
 
@@ -2799,6 +3136,21 @@ function validateCommitHash(commitHash: string): string {
     throw new GitError(
       "INVALID_REQUEST",
       "Commit hashes must be hexadecimal object ids."
+    );
+  }
+
+  return normalized;
+}
+
+function validateFullObjectId(objectId: string): string {
+  const normalized = objectId
+    .trim()
+    .toLocaleLowerCase("en-US");
+
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(normalized)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash hashes must be complete 40- or 64-character hexadecimal object ids."
     );
   }
 

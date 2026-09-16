@@ -24,12 +24,19 @@ export {
 } from "./commands/repository-operations";
 export {
   BRANCH_ARGUMENTS,
+  commitDiffArguments,
+  commitParentsArguments,
   compareHistoryCountArguments,
   compareHistoryMergeBaseArguments,
   compareHistoryPageArguments,
   diffArguments,
   historyArguments,
   historyPageArguments,
+  resolveStashArguments,
+  stashDiffArguments,
+  stashFilesArguments,
+  stashListArguments,
+  stashUntrackedDiffArguments,
   stagedFileContentArguments,
   stagedFileSizeArguments,
   STATUS_ARGUMENTS,
@@ -41,6 +48,7 @@ export {
   restoreWorktreeArguments,
   stageAllArguments,
   stageArguments,
+  stashMutationArguments,
   unstageArguments
 } from "./commands/write-repository";
 export {

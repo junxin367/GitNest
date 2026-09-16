@@ -46,6 +46,28 @@ export interface RepositoryCommitRequest
   commitHash: string;
 }
 
+export interface RepositoryCommitDiffRequest
+  extends RepositoryCommitRequest {
+  path: string;
+  contextLines?: number;
+}
+
+export interface RepositoryStashesRequest
+  extends RepositoryQueryRequest {
+  limit?: number;
+}
+
+export interface RepositoryStashRequest
+  extends RepositoryQueryRequest {
+  stashRef: string;
+}
+
+export interface RepositoryStashDiffRequest
+  extends RepositoryStashRequest {
+  path: string;
+  contextLines?: number;
+}
+
 export interface CancelRepositoryQueryRequest {
   queryId: string;
 }
@@ -53,6 +75,18 @@ export interface CancelRepositoryQueryRequest {
 export interface RepositoryPathsMutationRequest {
   target: RepositoryTargetDto;
   paths: string[];
+}
+
+export type RepositoryStashMutationAction =
+  | "apply"
+  | "drop"
+  | "pop";
+
+export interface RepositoryStashMutationRequest {
+  target: RepositoryTargetDto;
+  stashRef: string;
+  stashHash: string;
+  action: RepositoryStashMutationAction;
 }
 
 export interface CreateRepositoryCommitRequest {
@@ -146,6 +180,74 @@ export interface RepositoryCommitDto {
   };
 }
 
+export interface RepositoryCommitDiffDto {
+  target: RepositoryTargetDto;
+  commit: {
+    hash: string;
+  };
+  diff: {
+    path: string;
+    content: string;
+    binary: boolean;
+    truncated: boolean;
+    additions: number;
+    deletions: number;
+  };
+}
+
+export interface StashFileStatDto {
+  path: string;
+  additions?: number;
+  deletions?: number;
+  binary: boolean;
+}
+
+export interface StashSummaryDto {
+  ref: string;
+  hash: string;
+  subject: string;
+  authorName: string;
+  authorEmail: string;
+  authoredAt: string;
+  parentHashes: string[];
+  baseHash?: string;
+  files?: number;
+  additions?: number;
+  deletions?: number;
+}
+
+export interface RepositoryStashesDto {
+  target: RepositoryTargetDto;
+  stashes: StashSummaryDto[];
+}
+
+export interface RepositoryStashFilesDto {
+  target: RepositoryTargetDto;
+  stash: {
+    ref: string;
+    hash: string;
+    files: StashFileStatDto[];
+    additions: number;
+    deletions: number;
+  };
+}
+
+export interface RepositoryStashDiffDto {
+  target: RepositoryTargetDto;
+  stash: {
+    ref: string;
+    hash: string;
+  };
+  diff: {
+    path: string;
+    content: string;
+    binary: boolean;
+    truncated: boolean;
+    additions: number;
+    deletions: number;
+  };
+}
+
 export interface RepositoryBranchesDto {
   target: RepositoryTargetDto;
   branches: BranchDto[];
@@ -154,6 +256,13 @@ export interface RepositoryBranchesDto {
 export interface RepositoryPathsMutationDto {
   target: RepositoryTargetDto;
   operationId: string;
+}
+
+export interface RepositoryStashMutationDto
+  extends RepositoryPathsMutationDto {
+  action: RepositoryStashMutationAction;
+  stashRef: string;
+  stashHash: string;
 }
 
 export interface RepositoryCommitMutationDto

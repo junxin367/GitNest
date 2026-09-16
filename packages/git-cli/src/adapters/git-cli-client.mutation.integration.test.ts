@@ -138,6 +138,153 @@ describe("GitCliClient mutation integration", () => {
     }
   });
 
+  it("applies a validated stash by immutable hash without removing it", async () => {
+    const fixture = await createMutationRepository();
+
+    try {
+      const stash = await createTrackedStash(
+        client,
+        fixture.repositoryPath
+      );
+
+      await client.mutateStash(
+        fixture.repositoryPath,
+        "apply",
+        stash.ref,
+        stash.hash
+      );
+
+      expect(
+        await client.readRepositorySnapshot(
+          fixture.repositoryPath
+        )
+      ).toMatchObject({ unstaged: 1 });
+      expect(
+        await client.readStashes(fixture.repositoryPath)
+      ).toHaveLength(1);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("drops a validated stash and pops a validated stash only after applying it", async () => {
+    const dropFixture = await createMutationRepository();
+    const popFixture = await createMutationRepository();
+
+    try {
+      const dropped = await createTrackedStash(
+        client,
+        dropFixture.repositoryPath
+      );
+      await client.mutateStash(
+        dropFixture.repositoryPath,
+        "drop",
+        dropped.ref,
+        dropped.hash
+      );
+      expect(
+        await client.readStashes(dropFixture.repositoryPath)
+      ).toHaveLength(0);
+      expect(
+        await client.readRepositorySnapshot(
+          dropFixture.repositoryPath
+        )
+      ).toMatchObject({ staged: 0, unstaged: 0 });
+
+      const popped = await createTrackedStash(
+        client,
+        popFixture.repositoryPath
+      );
+      await client.mutateStash(
+        popFixture.repositoryPath,
+        "pop",
+        popped.ref,
+        popped.hash
+      );
+      expect(
+        await client.readStashes(popFixture.repositoryPath)
+      ).toHaveLength(0);
+      expect(
+        await client.readRepositorySnapshot(
+          popFixture.repositoryPath
+        )
+      ).toMatchObject({ unstaged: 1 });
+    } finally {
+      await dropFixture.dispose();
+      await popFixture.dispose();
+    }
+  });
+
+  it("rejects a stale stash hash without mutating the stash or worktree", async () => {
+    const fixture = await createMutationRepository();
+
+    try {
+      const stash = await createTrackedStash(
+        client,
+        fixture.repositoryPath
+      );
+
+      await expect(
+        client.mutateStash(
+          fixture.repositoryPath,
+          "drop",
+          stash.ref,
+          "f".repeat(40)
+        )
+      ).rejects.toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining(
+          "selected stash changed"
+        )
+      });
+      expect(
+        await client.readStashes(fixture.repositoryPath)
+      ).toHaveLength(1);
+      expect(
+        await client.readRepositorySnapshot(
+          fixture.repositoryPath
+        )
+      ).toMatchObject({ staged: 0, unstaged: 0 });
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("retains the stash when pop cannot apply over local changes", async () => {
+    const fixture = await createMutationRepository();
+
+    try {
+      const stash = await createTrackedStash(
+        client,
+        fixture.repositoryPath
+      );
+      await appendFile(
+        join(fixture.repositoryPath, "tracked.txt"),
+        "competing local change\n",
+        "utf8"
+      );
+
+      await expect(
+        client.mutateStash(
+          fixture.repositoryPath,
+          "pop",
+          stash.ref,
+          stash.hash
+        )
+      ).rejects.toMatchObject({ code: "COMMAND_FAILED" });
+      expect(
+        await client.readStashes(fixture.repositoryPath)
+      ).toHaveLength(1);
+      expect(
+        await client.readRepositorySnapshot(
+          fixture.repositoryPath
+        )
+      ).toMatchObject({ unstaged: 1 });
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("unstages a newly added path from an unborn repository without deleting the working file", async () => {
     const fixture = await createMutationRepository(false);
 
@@ -370,6 +517,28 @@ describe("GitCliClient mutation integration", () => {
 interface MutationRepositoryFixture {
   repositoryPath: string;
   dispose(): Promise<void>;
+}
+
+async function createTrackedStash(
+  client: GitCliClient,
+  repositoryPath: string
+): Promise<{ ref: string; hash: string }> {
+  await appendFile(
+    join(repositoryPath, "tracked.txt"),
+    "stashed change\n",
+    "utf8"
+  );
+  await runGit(repositoryPath, [
+    "stash",
+    "push",
+    "-m",
+    "Mutation integration stash"
+  ]);
+  const [stash] = await client.readStashes(repositoryPath);
+  if (!stash) {
+    throw new Error("Expected the fixture stash to exist.");
+  }
+  return { ref: stash.ref, hash: stash.hash };
 }
 
 async function createMutationRepository(

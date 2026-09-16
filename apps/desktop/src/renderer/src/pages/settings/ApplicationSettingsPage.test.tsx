@@ -74,6 +74,54 @@ describe("ApplicationSettingsPage", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("groups the current preferences by their purpose", () => {
+    vi.stubGlobal("React", React);
+    try {
+      const html = renderToStaticMarkup(
+        <ApplicationSettingsPage
+          accounts={emptyAccounts()}
+          appSettings={settingsController()}
+          gitEnvironment={null}
+          terminalProfiles={[]}
+          workspace={null}
+        />
+      );
+      const document = new DOMParser().parseFromString(
+        html,
+        "text/html"
+      );
+      const groups = Array.from(
+        document.querySelectorAll(".settings-preference-group")
+      );
+      const preferenceLabelsByGroup = Object.fromEntries(
+        groups.map((group) => [
+          group
+            .querySelector(".settings-preference-group-title")
+            ?.textContent?.trim(),
+          Array.from(group.querySelectorAll("dt")).map((item) =>
+            item.textContent?.trim()
+          )
+        ])
+      );
+
+      expect(preferenceLabelsByGroup).toEqual({
+        界面外观: ["界面主题"],
+        文件浏览: ["文件变更视图", "树形目录"],
+        差异查看: ["Diff 布局", "自动换行"],
+        提交体验: ["提交区域高度"]
+      });
+      expect(
+        groups.every(
+          (group) =>
+            group.getAttribute("aria-labelledby") ===
+            group.querySelector("h3")?.id
+        )
+      ).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 function settingsController(

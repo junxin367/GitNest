@@ -56,8 +56,13 @@ import {
   type RepositoryCommandDto,
   type RepositoryCommandExecuteRequest,
   type RepositoryCommandPreflightRequest,
+  type RepositoryCommitDiffRequest,
   type RepositoryDiffRequest,
   type RepositoryHistoryRequest,
+  type RepositoryStashDiffRequest,
+  type RepositoryStashMutationRequest,
+  type RepositoryStashRequest,
+  type RepositoryStashesRequest,
   type RepositoryPathsMutationRequest,
   type RepositoryQueryRequest,
   type RepositoryTabDto,
@@ -695,6 +700,64 @@ export function registerIpcHandlers(
   );
 
   registerHandler(
+    IPC_CHANNELS.repositoryGetCommitDiff,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input =
+          validateRepositoryCommitDiffRequest(request);
+        return services.repositoryQueries.getCommitDiff(
+          input.queryId,
+          input.target,
+          input.commitHash,
+          input.path,
+          input.contextLines
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryGetStashes,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input = validateRepositoryStashesRequest(request);
+        return services.repositoryQueries.getStashes(
+          input.queryId,
+          input.target,
+          input.limit
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryGetStashFiles,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input = validateRepositoryStashRequest(request);
+        return services.repositoryQueries.getStashFiles(
+          input.queryId,
+          input.target,
+          input.stashRef
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryGetStashDiff,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input =
+          validateRepositoryStashDiffRequest(request);
+        return services.repositoryQueries.getStashDiff(
+          input.queryId,
+          input.target,
+          input.stashRef,
+          input.path,
+          input.contextLines
+        );
+      })
+  );
+
+  registerHandler(
     IPC_CHANNELS.repositoryGetBranches,
     (_event, request) =>
       captureGitRead(() => {
@@ -751,6 +814,21 @@ export function registerIpcHandlers(
         return services.repositoryMutations.discard(
           input.target,
           input.paths
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.repositoryMutateStash,
+    (_event, request) =>
+      captureGitRead(() => {
+        const input =
+          validateRepositoryStashMutationRequest(request);
+        return services.repositoryMutations.mutateStash(
+          input.target,
+          input.action,
+          input.stashRef,
+          input.stashHash
         );
       })
   );
@@ -1721,7 +1799,226 @@ function validateRepositoryCommitRequest(
 
   return {
     ...base,
-    commitHash: request.commitHash
+    commitHash: validateRepositoryCommitHash(request.commitHash)
+  };
+}
+
+export function validateRepositoryCommitDiffRequest(
+  request: unknown
+): RepositoryCommitDiffRequest {
+  const base = validateRepositoryCommitRequest(request);
+
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("path" in request)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Commit Diff queries require a file path."
+    );
+  }
+
+  const contextLines =
+    "contextLines" in request
+      ? request.contextLines
+      : undefined;
+  if (
+    contextLines !== undefined &&
+    (typeof contextLines !== "number" ||
+      !Number.isInteger(contextLines) ||
+      contextLines < 0)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Diff context lines must be a non-negative integer."
+    );
+  }
+
+  return {
+    ...base,
+    path: validateRelativeWorktreeFilePath(request.path),
+    ...(contextLines === undefined
+      ? {}
+      : { contextLines })
+  };
+}
+
+function validateRepositoryCommitHash(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Commit queries require an object id."
+    );
+  }
+
+  const commitHash = value.trim();
+  if (!/^[0-9a-f]{4,64}$/i.test(commitHash)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Commit hashes must be hexadecimal object ids."
+    );
+  }
+
+  return commitHash;
+}
+
+export function validateRepositoryStashesRequest(
+  request: unknown
+): RepositoryStashesRequest {
+  const base = validateRepositoryQueryRequest(request);
+  const limit =
+    request && typeof request === "object" && "limit" in request
+      ? request.limit
+      : undefined;
+
+  if (
+    limit !== undefined &&
+    (typeof limit !== "number" ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 100)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash limits must be integers between 1 and 100."
+    );
+  }
+
+  return {
+    ...base,
+    ...(limit === undefined ? {} : { limit })
+  };
+}
+
+export function validateRepositoryStashRequest(
+  request: unknown
+): RepositoryStashRequest {
+  const base = validateRepositoryQueryRequest(request);
+
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("stashRef" in request) ||
+    typeof request.stashRef !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash queries require a stash reference."
+    );
+  }
+
+  const stashRef = request.stashRef.trim();
+  if (!/^stash@\{(?:0|[1-9]\d{0,8})\}$/.test(stashRef)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash references must use the exact stash@{n} form."
+    );
+  }
+
+  return {
+    ...base,
+    stashRef
+  };
+}
+
+export function validateRepositoryStashDiffRequest(
+  request: unknown
+): RepositoryStashDiffRequest {
+  const base = validateRepositoryStashRequest(request);
+
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("path" in request) ||
+    typeof request.path !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash Diff queries require a file path."
+    );
+  }
+
+  const contextLines =
+    "contextLines" in request
+      ? request.contextLines
+      : undefined;
+  if (
+    contextLines !== undefined &&
+    (typeof contextLines !== "number" ||
+      !Number.isInteger(contextLines) ||
+      contextLines < 0)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Diff context lines must be a non-negative integer."
+    );
+  }
+
+  return {
+    ...base,
+    path: request.path,
+    ...(contextLines === undefined
+      ? {}
+      : { contextLines })
+  };
+}
+
+export function validateRepositoryStashMutationRequest(
+  request: unknown
+): RepositoryStashMutationRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("target" in request) ||
+    !("action" in request) ||
+    !("stashRef" in request) ||
+    !("stashHash" in request) ||
+    typeof request.action !== "string" ||
+    typeof request.stashRef !== "string" ||
+    typeof request.stashHash !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash mutations require a target, action, reference, and full object id."
+    );
+  }
+
+  const action = request.action;
+  if (
+    action !== "apply" &&
+    action !== "drop" &&
+    action !== "pop"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash mutations require apply, drop, or pop."
+    );
+  }
+
+  const stashRef = request.stashRef.trim();
+  if (!/^stash@\{(?:0|[1-9]\d{0,8})\}$/.test(stashRef)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash references must use the exact stash@{n} form."
+    );
+  }
+
+  const stashHash = request.stashHash
+    .trim()
+    .toLocaleLowerCase("en-US");
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(stashHash)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Stash hashes must be complete 40- or 64-character hexadecimal object ids."
+    );
+  }
+
+  return {
+    target: validateRepositoryTarget(request.target),
+    action,
+    stashRef,
+    stashHash
   };
 }
 

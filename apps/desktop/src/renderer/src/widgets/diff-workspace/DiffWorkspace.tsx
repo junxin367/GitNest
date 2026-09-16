@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useState,
   type MouseEvent,
   type ReactNode
@@ -52,6 +53,15 @@ export interface DiffWorkspaceSkeletonProps {
   showCommit?: boolean | undefined;
 }
 
+export interface DiffWorkspaceAuxiliaryView {
+  active: boolean;
+  busy?: boolean | undefined;
+  content: ReactNode;
+  count?: number | undefined;
+  label: string;
+  onToggle(): void;
+}
+
 interface DiffDiscardRequest {
   kind: "file" | "group";
   files: readonly DiffViewerFile[];
@@ -62,6 +72,7 @@ export interface DiffWorkspaceProps {
   externalApplications: DiffWorkspaceExternalApplications;
   files: readonly DiffViewerFile[];
   selectedFileKey?: string | undefined;
+  selectionRevealKey?: string | undefined;
   onSelectedFileChange(file: DiffViewerFile): void;
   onStageFile?:
     | ((
@@ -93,6 +104,7 @@ export interface DiffWorkspaceProps {
   >;
   openStandalone?: DiffWorkspaceOpenStandaloneAction | undefined;
   commit?: DiffWorkspaceCommit | undefined;
+  auxiliaryView?: DiffWorkspaceAuxiliaryView | undefined;
   statusbar?: ReactNode | undefined;
   treePreference?: DiffWorkspaceTreePreference | undefined;
   fileView?: DiffFileViewDto | undefined;
@@ -130,6 +142,7 @@ export function DiffWorkspace({
   externalApplications,
   files,
   selectedFileKey,
+  selectionRevealKey,
   onSelectedFileChange,
   onStageFile,
   onUnstageFile,
@@ -147,12 +160,14 @@ export function DiffWorkspace({
   panelProps,
   openStandalone,
   commit,
+  auxiliaryView,
   statusbar,
   treePreference,
   fileView,
   onFileViewChange,
   className
 }: DiffWorkspaceProps) {
+  const auxiliaryViewId = useId();
   const [fileContextMenu, setFileContextMenu] =
     useState<DiffFileContextMenuState | null>(null);
   const [discardRequest, setDiscardRequest] =
@@ -173,6 +188,19 @@ export function DiffWorkspace({
   const closeDiscardConfirmation = useCallback(() => {
     setDiscardRequest(null);
   }, []);
+  const selectFile = useCallback(
+    (file: DiffViewerFile) => {
+      if (auxiliaryView?.active) {
+        auxiliaryView.onToggle();
+      }
+      onSelectedFileChange(file);
+    },
+    [
+      auxiliaryView?.active,
+      auxiliaryView?.onToggle,
+      onSelectedFileChange
+    ]
+  );
   const openFileContextMenu = useCallback(
     (
       event: MouseEvent<HTMLDivElement>,
@@ -187,9 +215,9 @@ export function DiffWorkspace({
           event.clientY
         )
       );
-      onSelectedFileChange(file);
+      selectFile(file);
     },
-    [onSelectedFileChange]
+    [selectFile]
   );
   const requestDiscardFile = useCallback(
     (file: DiffViewerFile) => {
@@ -257,6 +285,28 @@ export function DiffWorkspace({
       variant="icon"
     />
   ) : undefined;
+  const diffPanel = (
+    <DiffPanel
+      {...panelProps}
+      additions={panelProps.additions ?? selectedFile?.additions}
+      config={configuration.document}
+      deletions={panelProps.deletions ?? selectedFile?.deletions}
+      headerActions={headerActions}
+      keyboardShortcutsEnabled={!auxiliaryView?.active}
+      path={selectedFile?.path}
+      searchScopeKey={
+        treePreference?.scopeKey ?? selectedFile?.key ?? ""
+      }
+      scopeKey={selectedFile?.key ?? ""}
+      statsAvailable={
+        panelProps.statsAvailable ??
+        ((Number.isFinite(panelProps.additions) &&
+          Number.isFinite(panelProps.deletions)) ||
+          (Number.isFinite(selectedFile?.additions) &&
+            Number.isFinite(selectedFile?.deletions)))
+      }
+    />
+  );
 
   return (
     <section
@@ -272,7 +322,8 @@ export function DiffWorkspace({
         aria-label="文件变更"
         className={[
           "diff-workspace-sidebar",
-          showCommit ? "with-commit" : ""
+          showCommit ? "with-commit" : "",
+          auxiliaryView ? "with-auxiliary-view" : ""
         ]
           .filter(Boolean)
           .join(" ")}
@@ -287,7 +338,7 @@ export function DiffWorkspace({
           mutationBusy={mutationBusy}
           onFileContextMenu={openFileContextMenu}
           onRefresh={onRefresh}
-          onSelectedFileChange={onSelectedFileChange}
+          onSelectedFileChange={selectFile}
           onStageFile={onStageFile}
           onUnstageFile={onUnstageFile}
           onDiscardFile={
@@ -300,10 +351,48 @@ export function DiffWorkspace({
             onDiscardFiles ? requestDiscardFiles : undefined
           }
           selectedFileKey={selectedFileKey}
+          selectionRevealKey={selectionRevealKey}
           treePreference={treePreference}
           fileView={fileView}
           onFileViewChange={onFileViewChange}
         />
+        {auxiliaryView ? (
+          <div className="diff-workspace-auxiliary-entry">
+            <Button
+              aria-busy={auxiliaryView.busy}
+              aria-controls={auxiliaryViewId}
+              aria-label={auxiliaryView.label}
+              aria-pressed={auxiliaryView.active}
+              className="diff-workspace-auxiliary-toggle"
+              onClick={auxiliaryView.onToggle}
+              type="button"
+              variant="unstyled"
+            >
+              <span className="diff-workspace-auxiliary-label">
+                <Icon
+                  className={
+                    auxiliaryView.busy
+                      ? "diff-workspace-auxiliary-busy"
+                      : undefined
+                  }
+                  name={auxiliaryView.busy ? "refresh" : "layers"}
+                  size={14}
+                />
+                <span>{auxiliaryView.label}</span>
+                {auxiliaryView.count !== undefined ? (
+                  <span className="diff-workspace-auxiliary-count">
+                    {auxiliaryView.count}
+                  </span>
+                ) : null}
+              </span>
+              <Icon
+                className="diff-workspace-auxiliary-chevron"
+                name="collapse"
+                size={13}
+              />
+            </Button>
+          </div>
+        ) : null}
         {showCommit && commit ? (
           <DiffCommitComposer
             {...commit}
@@ -311,30 +400,28 @@ export function DiffWorkspace({
           />
         ) : null}
       </aside>
-      <div className="diff-workspace-content">
-        <DiffPanel
-          {...panelProps}
-          additions={
-            panelProps.additions ?? selectedFile?.additions
-          }
-          config={configuration.document}
-          deletions={
-            panelProps.deletions ?? selectedFile?.deletions
-          }
-          headerActions={headerActions}
-          path={selectedFile?.path}
-          searchScopeKey={
-            treePreference?.scopeKey ?? selectedFile?.key ?? ""
-          }
-          scopeKey={selectedFile?.key ?? ""}
-          statsAvailable={
-            panelProps.statsAvailable ??
-            ((Number.isFinite(panelProps.additions) &&
-              Number.isFinite(panelProps.deletions)) ||
-              (Number.isFinite(selectedFile?.additions) &&
-                Number.isFinite(selectedFile?.deletions)))
-          }
-        />
+      <div
+        className="diff-workspace-content"
+        id={auxiliaryView ? auxiliaryViewId : undefined}
+      >
+        {auxiliaryView ? (
+          <>
+            <div
+              className="diff-workspace-primary-content"
+              hidden={auxiliaryView.active}
+            >
+              {diffPanel}
+            </div>
+            <div
+              className="diff-workspace-auxiliary-content"
+              hidden={!auxiliaryView.active}
+            >
+              {auxiliaryView.content}
+            </div>
+          </>
+        ) : (
+          diffPanel
+        )}
       </div>
       {showStatusbar ? (
         <footer className="diff-workspace-statusbar">

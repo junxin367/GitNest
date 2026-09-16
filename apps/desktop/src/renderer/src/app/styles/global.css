@@ -1339,7 +1339,6 @@ p {
   min-width: 90px;
   max-width: 190px;
   height: var(--control-compact);
-  margin-left: var(--space-2);
   padding: 0 var(--space-2);
   color: var(--accent);
   background: var(--accent-soft);
@@ -3993,7 +3992,7 @@ button.repository-status-row:disabled {
 }
 
 .history-header-actions {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   flex-wrap: nowrap;
   justify-content: flex-end;
   margin-left: auto;
@@ -4011,7 +4010,7 @@ button.repository-status-row:disabled {
 .history-filter-controls {
   flex: 0 1 auto;
   flex-wrap: nowrap;
-  margin-left: auto;
+  margin-left: 0;
 }
 
 .history-ref-picker {
@@ -4568,16 +4567,19 @@ button.repository-status-row:disabled {
 }
 
 .history-commit-detail .commit-detail-body {
+  display: grid;
+  grid-template-rows: auto minmax(220px, 1fr);
   min-height: 0;
-  overflow-y: auto;
-  padding: var(--space-3) var(--space-4);
+  overflow: hidden;
+  padding: 0;
 }
 
 .history-commit-detail {
   display: flex;
   flex-direction: column;
   align-self: start;
-  max-height: 350px;
+  height: min(520px, 50vh);
+  max-height: min(520px, 50vh);
   overflow: hidden;
 }
 
@@ -4590,6 +4592,14 @@ button.repository-status-row:disabled {
 .history-commit-detail .commit-detail-body h2 {
   font-size: var(--font-size-body);
   line-height: 1.35;
+}
+
+.history-commit-overview {
+  min-height: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .history-commit-detail .commit-detail-meta {
@@ -4665,44 +4675,180 @@ button.repository-status-row:disabled {
 }
 
 .history-commit-files {
-  margin-top: var(--space-3);
-  border-top: 1px solid var(--border-soft);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
 }
 
-.history-commit-files summary {
+.history-commit-files-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  min-height: 32px;
+  min-height: 38px;
+  padding: 0 var(--space-3);
   color: var(--text-soft);
-  cursor: pointer;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-soft);
   font-size: var(--font-size-caption);
-  list-style: none;
 }
 
-.history-commit-files summary::-webkit-details-marker {
-  display: none;
+.history-commit-files-header > div,
+.history-commit-file-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
-.history-commit-files summary::before {
-  content: "›";
+.history-commit-files-header > div > span {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 var(--space-1);
   color: var(--muted);
-  font-size: var(--font-size-emphasis);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: calc(var(--font-size-caption) - 1px);
   line-height: 1;
-  transform: rotate(0deg);
-  transition: transform var(--motion-micro) var(--ease-enter);
 }
 
-.history-commit-files[open] summary::before {
-  transform: rotate(90deg);
+.history-commit-file-browser {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
 }
 
-.history-commit-files summary span:last-child {
-  margin-left: auto;
+.history-commit-detail .commit-file-list {
+  min-width: 0;
+  min-height: 0;
+  margin-top: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-right: 1px solid var(--border-soft);
+  background: var(--surface);
+}
+
+.history-commit-file {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-soft);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  cursor: pointer;
+  font: inherit;
+}
+
+.history-commit-file:hover,
+.history-commit-file:focus-visible {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.history-commit-file:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.history-commit-file[aria-current="true"] {
+  color: var(--text);
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.history-commit-file > .icon {
   color: var(--muted);
-  font-family: var(--font-mono);
+}
+
+.history-commit-file-path {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.history-commit-file-path strong,
+.history-commit-file-path small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-commit-file-path strong {
+  color: inherit;
   font-size: var(--font-size-caption);
+}
+
+.history-commit-file-path small {
+  color: var(--muted);
+  font-size: calc(var(--font-size-caption) - 1px);
+}
+
+.history-commit-file-stats {
+  font-family: var(--font-mono);
+  font-size: calc(var(--font-size-caption) - 1px);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.history-commit-file-stats .additions {
+  color: var(--green);
+}
+
+.history-commit-file-stats .deletions {
+  color: var(--red);
+}
+
+.history-commit-file-binary {
+  color: var(--muted);
+  font-size: calc(var(--font-size-caption) - 1px);
+}
+
+.history-commit-file-preview {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-code-bg);
+}
+
+.history-commit-file-preview > .diff-viewer-state {
+  min-height: 100%;
+}
+
+.history-commit-diff-panel {
+  flex: 1 1 auto;
+  border: 0;
+}
+
+.history-commit-file-error {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 38px;
+  padding: var(--space-1) var(--space-3);
+  color: var(--red);
+  background: var(--red-soft);
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--red) 24%, transparent);
+  font-size: var(--font-size-caption);
+}
+
+.history-commit-file-error > span {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .commit-detail-body {
@@ -6216,6 +6362,56 @@ html[data-theme="light"] .settings-switch.active .settings-switch-thumb {
   padding: 0;
 }
 
+.settings-preference-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.settings-preference-group {
+  min-width: 0;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-regular);
+}
+
+.settings-preference-group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  color: var(--text);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.settings-preference-group-header .icon {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.settings-preference-group-title {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-body);
+}
+
+.settings-preference-group .settings-preference-list {
+  display: grid;
+  padding: var(--space-2) var(--space-3);
+}
+
+.settings-preference-group .detail-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 32px;
+}
+
+.settings-preference-group .detail-row + .detail-row {
+  border-top: 1px solid var(--border-soft);
+}
+
 .settings-ai-field-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -7022,6 +7218,17 @@ html[data-theme="light"] .settings-switch.active .settings-switch-thumb {
   color: var(--muted);
   font-size: var(--font-size-caption);
   text-align: center;
+}
+
+.global-search-index-status {
+  padding: var(--space-2) var(--space-3);
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  text-align: center;
+}
+
+.global-search-index-status.warning {
+  color: var(--yellow);
 }
 
 .command-dialog-backdrop {
@@ -7880,7 +8087,8 @@ html[data-theme="light"] .settings-switch.active .settings-switch-thumb {
   }
 
   .settings-ai-field-grid,
-  .settings-option-grid {
+  .settings-option-grid,
+  .settings-preference-groups {
     grid-template-columns: minmax(0, 1fr);
   }
 

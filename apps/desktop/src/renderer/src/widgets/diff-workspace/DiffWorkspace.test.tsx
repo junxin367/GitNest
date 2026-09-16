@@ -527,6 +527,146 @@ describe("DiffWorkspace", () => {
     );
   });
 
+  it("keeps navigation and commit state mounted while an auxiliary view replaces the document", () => {
+    const onToggle = vi.fn();
+    const onSelectedFileChange = vi.fn();
+    const renderWorkspace = (active: boolean) => (
+      <DiffWorkspace
+        auxiliaryView={{
+          active,
+          content: (
+            <div data-testid="stash-browser">
+              Stash browser
+            </div>
+          ),
+          count: 2,
+          label: "储藏的变更",
+          onToggle
+        }}
+        commit={{
+          busy: false,
+          conflicted: 0,
+          message: "Keep this message",
+          push: false,
+          staged: 1,
+          submitting: false,
+          unstaged: 1,
+          untracked: 0,
+          onMessageChange: vi.fn(),
+          onPushChange: vi.fn(),
+          onSubmit: vi.fn()
+        }}
+        configuration={repositoryDiffWorkspaceConfiguration}
+        externalApplications={externalApplications}
+        files={files}
+        onSelectedFileChange={onSelectedFileChange}
+        panelProps={{
+          additions: 2,
+          content,
+          deletions: 1
+        }}
+        selectedFileKey={files[0]?.key}
+      />
+    );
+
+    act(() => {
+      root.render(renderWorkspace(false));
+    });
+
+    const toggle =
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="储藏的变更"]'
+      );
+    const message =
+      container.querySelector<HTMLTextAreaElement>(
+        '[aria-label="提交信息"]'
+      );
+    expect(toggle?.getAttribute("aria-pressed")).toBe("false");
+    expect(toggle?.textContent).toContain("2");
+    expect(
+      container.querySelector(".diff-viewer-panel")
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-testid="stash-browser"]')
+    ).not.toBeNull();
+    expect(
+      container
+        .querySelector(".diff-workspace-auxiliary-content")
+        ?.hasAttribute("hidden")
+    ).toBe(true);
+    expect(
+      container.querySelector(".diff-workspace-auxiliary-entry")
+        ?.nextElementSibling
+    ).toBe(container.querySelector(".diff-workspace-commit"));
+
+    act(() => {
+      toggle?.click();
+    });
+    expect(onToggle).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      root.render(renderWorkspace(true));
+    });
+
+    expect(
+      container
+        .querySelector('[aria-label="储藏的变更"]')
+        ?.getAttribute("aria-pressed")
+    ).toBe("true");
+    expect(
+      container.querySelector('[data-testid="stash-browser"]')
+    ).not.toBeNull();
+    expect(
+      container.querySelector(".diff-viewer-panel")
+    ).not.toBeNull();
+    expect(
+      container
+        .querySelector(".diff-workspace-primary-content")
+        ?.hasAttribute("hidden")
+    ).toBe(true);
+    expect(
+      container.querySelector('[aria-label="提交信息"]')
+    ).toBe(message);
+
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="src/components/Button.tsx"]'
+        )
+        ?.click();
+    });
+    expect(onToggle).toHaveBeenCalledTimes(2);
+    expect(onSelectedFileChange).toHaveBeenCalledWith(files[1]);
+  });
+
+  it("keeps the auxiliary entry available when the working tree is clean", () => {
+    act(() => {
+      root.render(
+        <DiffWorkspace
+          auxiliaryView={{
+            active: false,
+            content: <div>Stash browser</div>,
+            count: 0,
+            label: "储藏的变更",
+            onToggle: vi.fn()
+          }}
+          configuration={repositoryDiffWorkspaceConfiguration}
+          externalApplications={externalApplications}
+          files={[]}
+          onSelectedFileChange={vi.fn()}
+          panelProps={{
+            emptyPathLabel: "选择一个文件"
+          }}
+        />
+      );
+    });
+
+    expect(
+      container.querySelector('[aria-label="储藏的变更"]')
+    ).not.toBeNull();
+    expect(container.textContent).toContain("工作区干净");
+  });
+
   it("renders standalone toolbar, refresh, filtering, and tree view", () => {
     const onRefresh = vi.fn();
 

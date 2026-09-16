@@ -26,6 +26,7 @@ import type {
 } from "@gitnest/contracts";
 
 import type { RepositoryTab } from "../../app/navigation";
+import type { RepositoryChangeSelectionRequest } from "./changeSelection";
 import {
   useRepositoryDetails,
   type RepositoryDetailsController
@@ -95,6 +96,292 @@ describe("useRepositoryDetails", () => {
     expect(getDiff).toHaveBeenCalledTimes(2);
     expect(controller?.diff?.diff.content).toBe("");
     expect(controller?.diffNotice).toBe("metadata-only");
+  });
+
+  it("opens the requested changed file before loading the default diff", async () => {
+    const getChanges = vi.fn(async () => ({
+      ok: true as const,
+      value: createChanges([CHANGE, SECOND_CHANGE])
+    }));
+    const getDiff = vi.fn(
+      async (
+        request: Parameters<
+          GitNestBridge["repository"]["getDiff"]
+        >[0]
+      ) => ({
+      ok: true as const,
+      value: createDiff(
+        `diff for ${request.path}`,
+        request.path,
+        request.mode
+      )
+      })
+    );
+    const onRequestHandled = vi.fn();
+    installBridge({ getChanges, getDiff });
+
+    await act(async () => {
+      root.render(
+        <Harness
+          request={{
+            id: 7,
+            target: TARGET,
+            path: SECOND_CHANGE.path,
+            mode: "unstaged"
+          }}
+          onRequestHandled={onRequestHandled}
+          onController={(value) => {
+            controller = value;
+          }}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(getDiff).toHaveBeenCalledOnce();
+    expect(getDiff.mock.calls[0]?.[0]).toMatchObject({
+      path: SECOND_CHANGE.path,
+      mode: "unstaged"
+    });
+    expect(controller?.selectedChange).toMatchObject({
+      path: SECOND_CHANGE.path,
+      mode: "unstaged"
+    });
+    expect(controller?.changeSelectionRequestId).toBe(7);
+    expect(onRequestHandled).toHaveBeenCalledOnce();
+    expect(onRequestHandled).toHaveBeenCalledWith(7);
+  });
+
+  it("keeps the requested mode for a file with staged and unstaged changes", async () => {
+    const dualChange = {
+      ...CHANGE,
+      path: "DualState.ts",
+      indexStatus: "M"
+    } as const;
+    const getChanges = vi.fn(async () => ({
+      ok: true as const,
+      value: createChanges([dualChange])
+    }));
+    const getDiff = vi.fn(
+      async (
+        request: Parameters<
+          GitNestBridge["repository"]["getDiff"]
+        >[0]
+      ) => ({
+      ok: true as const,
+      value: createDiff(
+        "staged diff",
+        request.path,
+        request.mode
+      )
+      })
+    );
+    installBridge({ getChanges, getDiff });
+
+    await act(async () => {
+      root.render(
+        <Harness
+          request={{
+            id: 8,
+            target: TARGET,
+            path: dualChange.path,
+            mode: "staged"
+          }}
+          onController={(value) => {
+            controller = value;
+          }}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(controller?.selectedChange).toMatchObject({
+      path: dualChange.path,
+      mode: "staged"
+    });
+    expect(getDiff.mock.calls[0]?.[0]).toMatchObject({
+      path: dualChange.path,
+      mode: "staged"
+    });
+  });
+
+  it("refreshes loaded changes before consuming a later file request", async () => {
+    const getChanges = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: createChanges([CHANGE])
+      })
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: createChanges([CHANGE, SECOND_CHANGE])
+      });
+    const getDiff = vi.fn(
+      async (
+        request: Parameters<
+          GitNestBridge["repository"]["getDiff"]
+        >[0]
+      ) => ({
+        ok: true as const,
+        value: createDiff(
+          `diff for ${request.path}`,
+          request.path,
+          request.mode
+        )
+      })
+    );
+    const onRequestHandled = vi.fn();
+    installBridge({ getChanges, getDiff });
+
+    await act(async () => {
+      root.render(
+        <Harness
+          onRequestHandled={onRequestHandled}
+          onController={(value) => {
+            controller = value;
+          }}
+        />
+      );
+      await flushAsyncWork();
+    });
+    expect(controller?.selectedChange?.path).toBe(CHANGE.path);
+
+    await act(async () => {
+      root.render(
+        <Harness
+          request={{
+            id: 9,
+            target: TARGET,
+            path: SECOND_CHANGE.path,
+            mode: "unstaged"
+          }}
+          onRequestHandled={onRequestHandled}
+          onController={(value) => {
+            controller = value;
+          }}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(getChanges).toHaveBeenCalledTimes(2);
+    expect(controller?.selectedChange).toMatchObject({
+      path: SECOND_CHANGE.path,
+      mode: "unstaged"
+    });
+    expect(getDiff).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        path: SECOND_CHANGE.path,
+        mode: "unstaged"
+      })
+    );
+    expect(onRequestHandled).toHaveBeenCalledOnce();
+    expect(onRequestHandled).toHaveBeenCalledWith(9);
+  });
+
+  it("restarts an older in-flight changes read for a later file request", async () => {
+    let resolveOlderRefresh!: (
+      result: Awaited<
+        ReturnType<GitNestBridge["repository"]["getChanges"]>
+      >
+    ) => void;
+    const getChanges = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: createChanges([CHANGE])
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOlderRefresh = resolve;
+          })
+      )
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: createChanges([CHANGE, SECOND_CHANGE])
+      });
+    const getDiff = vi.fn(
+      async (
+        request: Parameters<
+          GitNestBridge["repository"]["getDiff"]
+        >[0]
+      ) => ({
+        ok: true as const,
+        value: createDiff(
+          `diff for ${request.path}`,
+          request.path,
+          request.mode
+        )
+      })
+    );
+    const onRequestHandled = vi.fn();
+    installBridge({ getChanges, getDiff });
+
+    await act(async () => {
+      root.render(
+        <Harness
+          revision="revision-1"
+          onRequestHandled={onRequestHandled}
+          onController={(value) => {
+            controller = value;
+          }}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    await act(async () => {
+      root.render(
+        <Harness
+          revision="revision-2"
+          onRequestHandled={onRequestHandled}
+          onController={(value) => {
+            controller = value;
+          }}
+        />
+      );
+      await flushAsyncWork();
+    });
+    expect(getChanges).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      root.render(
+        <Harness
+          revision="revision-2"
+          request={{
+            id: 10,
+            target: TARGET,
+            path: SECOND_CHANGE.path,
+            mode: "unstaged"
+          }}
+          onRequestHandled={onRequestHandled}
+          onController={(value) => {
+            controller = value;
+          }}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(getChanges).toHaveBeenCalledTimes(3);
+    expect(controller?.selectedChange?.path).toBe(
+      SECOND_CHANGE.path
+    );
+    expect(onRequestHandled).toHaveBeenCalledWith(10);
+
+    await act(async () => {
+      resolveOlderRefresh({
+        ok: true,
+        value: createChanges([CHANGE])
+      });
+      await flushAsyncWork();
+    });
+
+    expect(controller?.selectedChange?.path).toBe(
+      SECOND_CHANGE.path
+    );
+    expect(onRequestHandled).toHaveBeenCalledOnce();
   });
 
   it("reports when the empty-diff change disappears after refresh", async () => {
@@ -658,14 +945,24 @@ describe("useRepositoryDetails", () => {
 function Harness({
   revision = "",
   tab = "changes",
+  request = null,
+  onRequestHandled,
   onController
 }: {
   revision?: string;
   tab?: RepositoryTab;
+  request?: RepositoryChangeSelectionRequest | null;
+  onRequestHandled?(requestId: number): void;
   onController(value: RepositoryDetailsController): void;
 }) {
   onController(
-    useRepositoryDetails(TARGET, tab, revision)
+    useRepositoryDetails(
+      TARGET,
+      tab,
+      revision,
+      request,
+      onRequestHandled
+    )
   );
   return null;
 }
@@ -753,13 +1050,14 @@ function createEmptyDiff(): RepositoryDiffDto {
 
 function createDiff(
   content: string,
-  path: string = CHANGE.path
+  path: string = CHANGE.path,
+  mode: RepositoryDiffDto["diff"]["mode"] = "unstaged"
 ): RepositoryDiffDto {
   return {
     target: TARGET,
     diff: {
       path,
-      mode: "unstaged",
+      mode,
       content,
       binary: false,
       truncated: false,

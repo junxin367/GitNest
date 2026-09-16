@@ -3,8 +3,8 @@
  *
  * 组件封装：
  * - 左侧文件变更筛选、分组、列表/树视图、选择与暂存切换；
- * - 仓库模式的视图菜单和提交信息区域；
- * - 右侧 DiffPanel；
+ * - 仓库模式的视图菜单、储藏入口和提交信息区域；
+ * - 右侧 DiffPanel 或储藏列表 + 储藏文件双栏；
  * - 底部语言、编码和快捷键状态栏。
  */
 (function attachGitNestDiffWorkspace(global) {
@@ -60,6 +60,31 @@
       binary: Boolean(file.binary),
       truncated: Boolean(file.truncated)
     }));
+  }
+
+  function normalizedStashes(value) {
+    const source = Array.isArray(value) ? { items: value } : value || {};
+    const status = ["loading", "error"].includes(source.status)
+      ? source.status
+      : "ready";
+    return {
+      status,
+      error: source.error || "",
+      items: (Array.isArray(source.items) ? source.items : []).map(
+        (stash, index) => ({
+          hash: stash.hash || `prototype-stash-${index + 1}`,
+          ref: stash.ref || `stash@{${index}}`,
+          title: stash.title || "未命名储藏",
+          branch: stash.branch || "",
+          author: stash.author || "原型用户",
+          relativeTime: stash.relativeTime || "",
+          files: normalizedFiles(stash.files).map((file) => ({
+            ...file,
+            staged: false
+          }))
+        })
+      )
+    };
   }
 
   function fileStats(file) {
@@ -151,6 +176,10 @@
           rawFeatures.pushRegion !== undefined
             ? Boolean(rawFeatures.pushRegion)
             : true,
+        stashBrowser:
+          rawFeatures.stashBrowser !== undefined
+            ? Boolean(rawFeatures.stashBrowser)
+            : rawOptions.stashes !== undefined,
         statusbar:
           rawFeatures.statusbar !== undefined
             ? Boolean(rawFeatures.statusbar)
@@ -161,6 +190,7 @@
       this.instanceId = `diff-workspace-${++workspaceSequence}`;
       this.options = {
         files: normalizedFiles(rawOptions.files),
+        stashes: normalizedStashes(rawOptions.stashes),
         features,
         commit: features.commitRegion
           ? {
@@ -192,16 +222,35 @@
         collapsedSections: new Set(),
         collapsedDirectories: new Set(),
         commitMessage: this.options.commit?.message || "",
-        commitPush: Boolean(this.options.commit?.push)
+        commitPush: Boolean(this.options.commit?.push),
+        auxiliaryView: "diff",
+        stashFilter: "",
+        selectedStashHash:
+          rawOptions.selectedStashHash ||
+          this.options.stashes.items[0]?.hash ||
+          ""
       };
       this.handleClick = this.handleClick.bind(this);
       this.handleDocumentClick = this.handleDocumentClick.bind(this);
       this.handleInput = this.handleInput.bind(this);
+      this.handleContextMenu = this.handleContextMenu.bind(this);
+      this.handleDocumentKeyDown = this.handleDocumentKeyDown.bind(this);
+      this.handleScroll = this.handleScroll.bind(this);
       this.element.addEventListener("click", this.handleClick);
       this.element.addEventListener("input", this.handleInput);
+      this.element.addEventListener("contextmenu", this.handleContextMenu);
       this.element.ownerDocument.addEventListener(
         "click",
         this.handleDocumentClick
+      );
+      this.element.ownerDocument.addEventListener(
+        "keydown",
+        this.handleDocumentKeyDown
+      );
+      this.element.ownerDocument.defaultView?.addEventListener(
+        "scroll",
+        this.handleScroll,
+        true
       );
       this.renderShell();
       this.renderSidebar();
@@ -263,7 +312,15 @@
             <div class="gn-diff-workspace__file-list" data-diff-workspace-files></div>
             <div class="gn-diff-workspace__commit-mount" data-diff-workspace-commit></div>
           </aside>
-          <div class="gn-diff-workspace__content" data-diff-workspace-panel></div>
+          <div class="gn-diff-workspace__content" data-diff-workspace-panel>
+            <div class="gn-diff-workspace__diff-view" data-diff-workspace-diff></div>
+            <div
+              class="gn-diff-workspace__stash-view"
+              id="${this.instanceId}-stash-browser"
+              data-diff-workspace-stashes
+              hidden
+            ></div>
+          </div>
         </div>
         ${this.options.features.statusbar
           ? '<footer class="gn-diff-workspace__statusbar" data-diff-workspace-status></footer>'
@@ -280,6 +337,12 @@
       );
       this.panelMount = this.element.querySelector(
         "[data-diff-workspace-panel]"
+      );
+      this.diffMount = this.element.querySelector(
+        "[data-diff-workspace-diff]"
+      );
+      this.stashMount = this.element.querySelector(
+        "[data-diff-workspace-stashes]"
       );
       this.commitMount = this.element.querySelector(
         "[data-diff-workspace-commit]"
@@ -512,10 +575,28 @@
       );
     }
 
+    renderStashEntry() {
+      if (!this.options.features.stashBrowser) return "";
+      const active = this.state.auxiliaryView === "stash";
+      const count = this.options.stashes.items.length;
+      return `
+        <button
+          type="button"
+          class="gn-diff-workspace__stash-entry${active ? " is-active" : ""}"
+          data-diff-workspace-action="toggle-stashes"
+          aria-pressed="${active}"
+          aria-expanded="${active}"
+          aria-controls="${this.instanceId}-stash-browser"
+        >
+          <span>${iconMarkup("layers")}储藏的变更</span>
+          <span class="gn-diff-workspace__stash-count">${count}</span>
+        </button>
+      `;
+    }
+
     renderCommitComposer() {
       if (!this.options.commit) {
-        this.commitMount.replaceChildren();
-        return;
+        return "";
       }
 
       const staged = this.stagedCount();
@@ -527,7 +608,7 @@
         ? `${conflicts} 个冲突`
         : `${staged} 个已暂存`;
 
-      this.commitMount.innerHTML = `
+      return `
         <article class="gn-diff-workspace__commit-composer">
           <header class="gn-diff-workspace__commit-header">
             ${this.options.features.pushRegion ? `
@@ -589,6 +670,120 @@
       `;
     }
 
+    renderCommitRegion() {
+      const stashEntry = this.renderStashEntry();
+      const composer = this.renderCommitComposer();
+      this.commitMount.innerHTML =
+        stashEntry || composer
+          ? `${stashEntry}${composer}`
+          : "";
+    }
+
+    selectedStash() {
+      return (
+        this.options.stashes.items.find(
+          (stash) => stash.hash === this.state.selectedStashHash
+        ) ||
+        this.options.stashes.items[0] ||
+        null
+      );
+    }
+
+    renderStashBrowser() {
+      if (!this.options.features.stashBrowser) return;
+      const { status, error, items } = this.options.stashes;
+      const selected = this.selectedStash();
+      const normalizedFilter =
+        this.state.stashFilter.trim().toLocaleLowerCase();
+      const selectedFiles = selected?.files || [];
+      const visibleFiles = normalizedFilter
+        ? selectedFiles.filter((file) =>
+            file.path.toLocaleLowerCase().includes(normalizedFilter)
+          )
+        : selectedFiles;
+      const stateMarkup =
+        status === "loading"
+          ? `<div class="gn-diff-workspace__stash-state" role="status">${iconMarkup("refresh")}<strong>正在载入储藏…</strong><span>正在读取当前仓库的储藏列表。</span></div>`
+          : status === "error"
+            ? `<div class="gn-diff-workspace__stash-state" role="alert">${iconMarkup("alert")}<strong>无法载入储藏</strong><span>${escapeHtml(error || "请稍后重试。")}</span></div>`
+            : items.length === 0
+              ? `<div class="gn-diff-workspace__stash-state">${iconMarkup("layers")}<strong>还没有储藏</strong><span>当前仓库没有可浏览的储藏变更。</span></div>`
+              : items
+                  .map((stash) => {
+                    const isSelected = stash.hash === selected?.hash;
+                    return `
+                      <button
+                        type="button"
+                        class="gn-diff-workspace__stash-item${isSelected ? " is-selected" : ""}"
+                        aria-current="${isSelected}"
+                        data-diff-workspace-action="select-stash"
+                        data-stash-hash="${escapeHtml(stash.hash)}"
+                        aria-haspopup="menu"
+                      >
+                        <span class="gn-diff-workspace__stash-item-head"><strong>${escapeHtml(stash.ref)}</strong><span>${escapeHtml(stash.relativeTime)}</span></span>
+                        <span class="gn-diff-workspace__stash-title">${escapeHtml(stash.title)}</span>
+                        <span class="gn-diff-workspace__stash-branch">${escapeHtml(stash.branch || "当前分支")}</span>
+                      </button>
+                    `;
+                  })
+                  .join("");
+      const filesMarkup = visibleFiles.length
+        ? visibleFiles
+            .map((file) => {
+              const stats = fileStats(file);
+              return `
+                <div class="gn-diff-workspace__stash-file">
+                  <span>${iconMarkup("file")}<strong title="${escapeHtml(file.path)}">${escapeHtml(file.path)}</strong></span>
+                  ${file.binary
+                    ? '<span class="gn-diff-workspace__stash-binary">二进制</span>'
+                    : `<span class="gn-diff-workspace__stash-file-stats"><em>+${stats.additions}</em><i>-${stats.deletions}</i></span>`}
+                </div>
+              `;
+            })
+            .join("")
+        : `<div class="gn-diff-workspace__stash-state">${iconMarkup(normalizedFilter ? "search" : "file")}<strong>${normalizedFilter ? "没有匹配的文件" : selected ? "这个储藏没有文件" : "选择一个储藏"}</strong><span>${normalizedFilter ? "尝试输入文件名或目录。" : selected ? "没有可展示的文件记录。" : "从左侧列表选择后查看文件。"}</span></div>`;
+      this.stashMount.innerHTML = `
+        <section class="gn-diff-workspace__stash-pane" aria-label="储藏列表">
+          <header><strong>储藏列表</strong><span>${items.length}</span></header>
+          <div class="gn-diff-workspace__stash-list" role="list" aria-label="仓库储藏">${stateMarkup}</div>
+        </section>
+        <section class="gn-diff-workspace__stash-pane" aria-label="储藏文件">
+          <header class="gn-diff-workspace__stash-detail-header">
+            <div>
+              <span><strong>${escapeHtml(selected?.ref || "文件")}</strong>${selected ? `<code>${escapeHtml(selected.hash.slice(0, 8))}</code>` : ""}</span>
+              <b>${escapeHtml(selected?.title || "选择一个储藏")}</b>
+              ${selected ? `<small>${escapeHtml(selected.author)} · ${escapeHtml(selected.relativeTime || "时间未知")}</small>` : ""}
+            </div>
+            <span>${selectedFiles.length}</span>
+          </header>
+          <div class="gn-diff-workspace__stash-file-toolbar">
+            <strong>文件</strong>
+            <label>
+              ${iconMarkup("search")}
+              <input
+                type="text"
+                value="${escapeHtml(this.state.stashFilter)}"
+                placeholder="筛选文件"
+                aria-label="筛选储藏文件"
+                data-diff-workspace-control="stash-filter"
+              />
+            </label>
+          </div>
+          <div class="gn-diff-workspace__stash-files">${filesMarkup}</div>
+        </section>
+      `;
+    }
+
+    renderContentVisibility() {
+      const stashActive =
+        this.options.features.stashBrowser &&
+        this.state.auxiliaryView === "stash";
+      this.diffMount.hidden = stashActive;
+      this.stashMount.hidden = !stashActive;
+      if (stashActive) this.renderStashBrowser();
+      this.renderStatusbar();
+    }
+
     renderSidebar({ focusFilter = false } = {}) {
       const sections = this.fileSections();
       const filterField = global.GitNestInput.create({
@@ -622,7 +817,7 @@
               <span>清除筛选后恢复全部文件。</span>
             </div>
           `;
-      this.renderCommitComposer();
+      this.renderCommitRegion();
       if (focusFilter) {
         filterField.querySelector("input")?.focus({ preventScroll: true });
       }
@@ -650,7 +845,8 @@
           : "",
         config: this.options.config
       });
-      this.panelMount.replaceChildren(this.panel.element);
+      this.diffMount.replaceChildren(this.panel.element);
+      this.renderContentVisibility();
     }
 
     updatePanel() {
@@ -667,6 +863,16 @@
 
     renderStatusbar() {
       if (!this.statusbar) return;
+      if (this.state.auxiliaryView === "stash") {
+        const stash = this.selectedStash();
+        this.statusbar.innerHTML = `
+          <span>储藏浏览</span>
+          <span>${escapeHtml(stash?.ref || "—")}</span>
+          <span class="gn-diff-workspace__status-spacer"></span>
+          <span>${stash?.files.length || 0} 个文件</span>
+        `;
+        return;
+      }
       const selected = this.selectedFile();
       this.statusbar.innerHTML = `
         <span>${escapeHtml(selected?.language || "—")}</span>
@@ -703,10 +909,34 @@
         )
       ) {
         this.state.commitPush = event.target.checked;
+      } else if (
+        event.target.matches(
+          '[data-diff-workspace-control="stash-filter"]'
+        )
+      ) {
+        this.state.stashFilter = event.target.value;
+        const cursorPosition = event.target.selectionStart;
+        this.renderStashBrowser();
+        const input = this.stashMount.querySelector(
+          '[data-diff-workspace-control="stash-filter"]'
+        );
+        input?.focus({ preventScroll: true });
+        if (
+          typeof cursorPosition === "number" &&
+          typeof input?.setSelectionRange === "function"
+        ) {
+          input.setSelectionRange(cursorPosition, cursorPosition);
+        }
       }
     }
 
     handleDocumentClick(event) {
+      if (
+        this.stashContextMenuElement &&
+        !event.composedPath().includes(this.stashContextMenuElement)
+      ) {
+        this.closeStashContextMenu();
+      }
       if (
         this.state.viewMenuOpen &&
         !event.composedPath().includes(this.viewToggleMount)
@@ -714,6 +944,295 @@
         this.state.viewMenuOpen = false;
         this.renderViewMenu();
       }
+    }
+
+    handleContextMenu(event) {
+      const item = event.target.closest(
+        ".gn-diff-workspace__stash-item[data-stash-hash]"
+      );
+      if (!item || !this.element.contains(item)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const hash = item.dataset.stashHash;
+      if (!this.options.stashes.items.some((stash) => stash.hash === hash)) {
+        return;
+      }
+      this.state.selectedStashHash = hash;
+      this.state.stashFilter = "";
+      this.renderStashBrowser();
+      this.renderStatusbar();
+      this.openStashContextMenu(hash, event.clientX, event.clientY);
+    }
+
+    openStashContextMenu(hash, clientX, clientY) {
+      this.closeStashContextMenu({ restoreFocus: false });
+      const document = this.element.ownerDocument;
+      const stash = this.options.stashes.items.find(
+        (candidate) => candidate.hash === hash
+      );
+      if (!stash) return;
+      const menu = document.createElement("div");
+      menu.className = "gn-diff-workspace__stash-context-menu";
+      menu.setAttribute("role", "menu");
+      menu.setAttribute(
+        "aria-label",
+        `${stash.ref} 储藏操作`
+      );
+      menu.innerHTML = `
+        <button type="button" role="menuitem" data-stash-menu-action="restore">${iconMarkup("refresh")}<span>恢复</span></button>
+        <button type="button" role="menuitem" class="is-danger" data-stash-menu-action="delete">${iconMarkup("alert")}<span>删除</span></button>
+        <button type="button" role="menuitem" class="is-danger" data-stash-menu-action="pop">${iconMarkup("layers")}<span>恢复并删除</span></button>
+      `;
+      menu.style.left = "0";
+      menu.style.top = "0";
+      document.body.append(menu);
+      const rect = menu.getBoundingClientRect();
+      const view = document.defaultView;
+      const padding = 8;
+      const maximumX = Math.max(
+        padding,
+        (view?.innerWidth || 0) - rect.width - padding
+      );
+      const maximumY = Math.max(
+        padding,
+        (view?.innerHeight || 0) - rect.height - padding
+      );
+      menu.style.left = `${Math.max(padding, Math.min(clientX, maximumX))}px`;
+      menu.style.top = `${Math.max(padding, Math.min(clientY, maximumY))}px`;
+      menu.addEventListener("click", (menuEvent) => {
+        const action = menuEvent.target.closest("[data-stash-menu-action]");
+        if (!action) return;
+        this.confirmStashAction(action.dataset.stashMenuAction, hash);
+      });
+      this.stashContextMenuElement = menu;
+      this.stashContextMenuHash = hash;
+      view?.setTimeout(() => {
+        menu.querySelector('[role="menuitem"]')?.focus();
+      }, 0);
+    }
+
+    closeStashContextMenu({ restoreFocus = true } = {}) {
+      const hash = this.stashContextMenuHash;
+      this.stashContextMenuElement?.remove();
+      this.stashContextMenuElement = null;
+      this.stashContextMenuHash = "";
+      if (!restoreFocus || !hash) return;
+      [
+        ...this.stashMount.querySelectorAll(
+          ".gn-diff-workspace__stash-item[data-stash-hash]"
+        )
+      ]
+        .find((item) => item.dataset.stashHash === hash)
+        ?.focus();
+    }
+
+    handleDocumentKeyDown(event) {
+      const menu = this.stashContextMenuElement;
+      if (!menu) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        this.closeStashContextMenu();
+        return;
+      }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        return;
+      }
+      const items = [...menu.querySelectorAll('[role="menuitem"]')];
+      if (!items.length) return;
+      event.preventDefault();
+      const currentIndex = items.indexOf(this.element.ownerDocument.activeElement);
+      const nextIndex =
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? items.length - 1
+            : currentIndex < 0
+              ? event.key === "ArrowUp"
+                ? items.length - 1
+                : 0
+            : event.key === "ArrowUp"
+              ? (currentIndex - 1 + items.length) % items.length
+              : (currentIndex + 1) % items.length;
+      items[nextIndex].focus();
+    }
+
+    handleScroll() {
+      if (this.stashContextMenuElement) {
+        this.closeStashContextMenu({ restoreFocus: false });
+      }
+    }
+
+    confirmStashAction(action, hash) {
+      const stash = this.options.stashes.items.find(
+        (candidate) => candidate.hash === hash
+      );
+      if (!stash) return;
+      this.closeStashContextMenu({ restoreFocus: false });
+      const definitions = {
+        restore: {
+          title: `恢复 ${stash.ref}？`,
+          description:
+            "会把这个储藏的内容应用到当前工作区，并保留原储藏记录；如有冲突，需要在工作区中继续处理。",
+          label: "确认恢复",
+          warning: "原型不会执行 Git，只展示恢复后的交互结果。"
+        },
+        delete: {
+          title: `删除 ${stash.ref}？`,
+          description:
+            "这个储藏记录及其变更将被永久删除，删除后无法恢复。",
+          label: "确认删除",
+          warning: "正式操作不可撤销，请确认不再需要其中的变更。"
+        },
+        pop: {
+          title: `恢复并删除 ${stash.ref}？`,
+          description:
+            "会先把内容应用到当前工作区；只有恢复成功才移除储藏，发生冲突时会保留储藏记录。",
+          label: "恢复并删除",
+          warning: "原型按成功恢复演示刷新，不会执行真实 Git 命令。"
+        }
+      };
+      const definition = definitions[action];
+      if (!definition) return;
+      this.openStashConfirmation({
+        ...definition,
+        destructive: action !== "restore",
+        target: `${stash.ref} · ${stash.title}`,
+        onConfirm: () => {
+          if (action === "restore") {
+            global.showToast?.(
+              "恢复预览完成",
+              `${stash.ref} 的内容将应用到工作区，并保留该储藏；原型未执行 Git。`,
+              "refresh"
+            );
+            return;
+          }
+          this.removeStashPreview(hash);
+          global.showToast?.(
+            action === "delete"
+              ? "删除预览完成"
+              : "恢复并删除预览完成",
+            action === "delete"
+              ? `${stash.ref} 已从本地 mock 列表移除；原型未执行 Git，正式删除不可恢复。`
+              : `${stash.ref} 按恢复成功预览从 mock 列表移除；若真实操作发生冲突，储藏会保留。`,
+            action === "delete" ? "alert" : "layers"
+          );
+        }
+      });
+    }
+
+    openStashConfirmation({
+      title,
+      description,
+      label,
+      warning,
+      target,
+      destructive,
+      onConfirm
+    }) {
+      this.stashDialogCleanup?.({ restoreFocus: false });
+      const document = this.element.ownerDocument;
+      const previousFocus = document.activeElement;
+      const overlay = document.createElement("div");
+      overlay.className = "gn-diff-discard-overlay";
+      overlay.innerHTML = `
+        <section class="gn-diff-discard-dialog gn-diff-stash-dialog${destructive ? "" : " is-restore"}" role="alertdialog" aria-modal="true">
+          <header class="gn-diff-discard-dialog__header">
+            <span class="gn-diff-discard-dialog__icon">${iconMarkup(destructive ? "alert" : "refresh")}</span>
+            <div>
+              <span class="gn-diff-discard-dialog__eyebrow">储藏操作</span>
+              <h2>${escapeHtml(title)}</h2>
+              <p>${escapeHtml(description)}</p>
+            </div>
+          </header>
+          <div class="gn-diff-discard-dialog__body">
+            <div class="gn-diff-discard-dialog__warning">${iconMarkup(destructive ? "alert" : "refresh")}<span>${escapeHtml(warning)}</span></div>
+            <div class="gn-diff-discard-dialog__target"><span>目标储藏</span><code>${escapeHtml(target)}</code></div>
+          </div>
+          <footer class="gn-diff-discard-dialog__footer">
+            <p>当前为交互原型，不执行 Git 命令。</p>
+            <div>
+              ${buttonMarkup({ label: "取消", attributes: 'data-stash-dialog-action="cancel"' })}
+              ${buttonMarkup({
+                label,
+                icon: iconMarkup(destructive ? "alert" : "refresh"),
+                variant: destructive ? "danger" : "primary",
+                emphasis: "strong",
+                attributes: 'data-stash-dialog-action="confirm"'
+              })}
+            </div>
+          </footer>
+        </section>
+      `;
+      const close = ({ restoreFocus = true } = {}) => {
+        document.removeEventListener("keydown", handleKeyDown);
+        overlay.remove();
+        if (this.stashDialogCleanup === close) {
+          this.stashDialogCleanup = null;
+        }
+        if (restoreFocus && previousFocus?.isConnected) previousFocus.focus();
+      };
+      const handleKeyDown = (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          close();
+          return;
+        }
+        if (event.key !== "Tab") return;
+        const buttons = [...overlay.querySelectorAll("button:not([disabled])")];
+        const first = buttons[0];
+        const last = buttons.at(-1);
+        if (!first || !last) return;
+        if (
+          event.shiftKey &&
+          (document.activeElement === first ||
+            !overlay.contains(document.activeElement))
+        ) {
+          event.preventDefault();
+          last.focus();
+        } else if (
+          !event.shiftKey &&
+          (document.activeElement === last ||
+            !overlay.contains(document.activeElement))
+        ) {
+          event.preventDefault();
+          first.focus();
+        }
+      };
+      overlay.addEventListener("pointerup", (event) => {
+        if (event.target === overlay) close();
+      });
+      overlay
+        .querySelector('[data-stash-dialog-action="cancel"]')
+        ?.addEventListener("click", () => close());
+      overlay
+        .querySelector('[data-stash-dialog-action="confirm"]')
+        ?.addEventListener("click", () => {
+          close({ restoreFocus: false });
+          onConfirm();
+        });
+      document.addEventListener("keydown", handleKeyDown);
+      document.body.append(overlay);
+      this.stashDialogCleanup = close;
+      overlay
+        .querySelector('[data-stash-dialog-action="cancel"]')
+        ?.focus();
+    }
+
+    removeStashPreview(hash) {
+      const index = this.options.stashes.items.findIndex(
+        (stash) => stash.hash === hash
+      );
+      if (index < 0) return;
+      this.options.stashes.items.splice(index, 1);
+      const next =
+        this.options.stashes.items[index] ||
+        this.options.stashes.items[index - 1] ||
+        null;
+      this.state.selectedStashHash = next?.hash || "";
+      this.state.stashFilter = "";
+      this.renderCommitRegion();
+      this.renderStashBrowser();
+      this.renderStatusbar();
     }
 
     openDiscardConfirmation(files, onConfirm, scope = "file") {
@@ -882,8 +1401,23 @@
       const actionName = action.dataset.diffWorkspaceAction;
       if (actionName === "select-file") {
         this.state.selectedKey = action.dataset.fileKey;
+        this.state.auxiliaryView = "diff";
         this.renderSidebar();
         this.updatePanel();
+        this.renderContentVisibility();
+      } else if (actionName === "toggle-stashes") {
+        this.state.auxiliaryView =
+          this.state.auxiliaryView === "stash" ? "diff" : "stash";
+        const active = this.state.auxiliaryView === "stash";
+        action.classList.toggle("is-active", active);
+        action.setAttribute("aria-pressed", String(active));
+        action.setAttribute("aria-expanded", String(active));
+        this.renderContentVisibility();
+      } else if (actionName === "select-stash") {
+        this.state.selectedStashHash = action.dataset.stashHash;
+        this.state.stashFilter = "";
+        this.renderStashBrowser();
+        this.renderStatusbar();
       } else if (actionName === "toggle-stage") {
         const file = this.options.files.find(
           (candidate) => candidate.key === action.dataset.fileKey
@@ -1007,12 +1541,24 @@
 
     destroy() {
       this.discardDialogCleanup?.({ restoreFocus: false });
+      this.stashDialogCleanup?.({ restoreFocus: false });
+      this.closeStashContextMenu({ restoreFocus: false });
       this.panel?.destroy();
       this.element.removeEventListener("click", this.handleClick);
       this.element.removeEventListener("input", this.handleInput);
+      this.element.removeEventListener("contextmenu", this.handleContextMenu);
       this.element.ownerDocument.removeEventListener(
         "click",
         this.handleDocumentClick
+      );
+      this.element.ownerDocument.removeEventListener(
+        "keydown",
+        this.handleDocumentKeyDown
+      );
+      this.element.ownerDocument.defaultView?.removeEventListener(
+        "scroll",
+        this.handleScroll,
+        true
       );
     }
   }

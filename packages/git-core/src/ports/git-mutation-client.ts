@@ -10,6 +10,11 @@ export interface CreateCommitOptions extends GitWriteOptions {
   body?: string;
 }
 
+export type StashMutationAction =
+  | "apply"
+  | "drop"
+  | "pop";
+
 export interface GitMutationClient {
   stageAll(
     path: string,
@@ -33,6 +38,13 @@ export interface GitMutationClient {
   removeUntrackedPaths(
     path: string,
     paths: readonly string[],
+    options?: GitWriteOptions
+  ): Promise<void>;
+  mutateStash(
+    path: string,
+    action: StashMutationAction,
+    stashRef: string,
+    stashHash: string,
     options?: GitWriteOptions
   ): Promise<void>;
   createCommit(

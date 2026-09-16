@@ -4,6 +4,7 @@ export type {
   RemoteBranchRef
 } from "./domain/repository-commands";
 export type {
+  CommitDiff,
   CommitHistoryComparison,
   CommitHistoryComparisonSide,
   CommitHistoryEntry,
@@ -17,7 +18,11 @@ export type {
   RepositoryDiffMode,
   RepositoryMediaKind,
   RepositoryMediaPreview,
-  RepositoryMediaUnavailableReason
+  RepositoryMediaUnavailableReason,
+  StashDiff,
+  StashFiles,
+  StashFileStat,
+  StashSummary
 } from "./domain/repository-queries";
 export type {
   CreatedCommit
@@ -46,6 +51,7 @@ export {
   parseCommitHistory,
   parseComparedCommitHistory
 } from "./parsers/history";
+export { parseStashList } from "./parsers/stashes";
 export {
   parseStatusPorcelainV2,
   reconcileStatOnlyUnstagedChanges
@@ -70,9 +76,19 @@ export type {
   ReadRepositoryDiffOptions
 } from "./ports/git-client";
 export type {
+  GitCommitDiffClient,
+  ReadCommitDiffOptions
+} from "./ports/git-commit-diff-client";
+export type {
+  GitStashClient,
+  ReadStashDiffOptions,
+  ReadStashesOptions
+} from "./ports/git-stash-client";
+export type {
   CreateCommitOptions,
   GitMutationClient,
-  GitWriteOptions
+  GitWriteOptions,
+  StashMutationAction
 } from "./ports/git-mutation-client";
 export type {
   CreateWorktreeOptions,

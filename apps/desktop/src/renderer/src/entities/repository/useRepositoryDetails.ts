@@ -19,6 +19,12 @@ import type {
 } from "@gitnest/contracts";
 
 import type { RepositoryTab } from "../../app/navigation";
+import {
+  changeSupportsMode,
+  findRequestedRepositoryChange,
+  repositoryTargetsMatch,
+  type RepositoryChangeSelectionRequest
+} from "./changeSelection";
 
 type LoadingKey =
   | "changes"
@@ -49,6 +55,7 @@ export interface RepositoryDetailsController {
     mode: "unstaged" | "staged" | "untracked";
     contextLines: number;
   } | null;
+  changeSelectionRequestId: number | null;
   selectedCommitHash: string | null;
   historyDetailOpen: boolean;
   loading: Readonly<Record<LoadingKey, boolean>>;
@@ -86,7 +93,9 @@ const DEFAULT_DIFF_CONTEXT_LINES = 3;
 export function useRepositoryDetails(
   target: RepositoryTargetDto | undefined,
   tab: RepositoryTab,
-  statusRevision = ""
+  statusRevision = "",
+  requestedChange: RepositoryChangeSelectionRequest | null = null,
+  onRequestedChangeHandled?: (requestId: number) => void
 ): RepositoryDetailsController {
   const targetKey = target
     ? `${target.repositoryId}:${target.worktreeId}`
@@ -118,6 +127,10 @@ export function useRepositoryDetails(
     useState<RepositoryBranchesDto | null>(null);
   const [selectedChange, setSelectedChange] =
     useState<RepositoryDetailsController["selectedChange"]>(null);
+  const [
+    changeSelectionRequestId,
+    setChangeSelectionRequestId
+  ] = useState<number | null>(null);
   const [selectedCommitHash, setSelectedCommitHash] =
     useState<string | null>(null);
   const [historyDetailOpen, setHistoryDetailOpen] =
@@ -130,6 +143,18 @@ export function useRepositoryDetails(
     RepositoryDetailsController["selectedChange"]
   >(null);
   const selectedCommitHashRef = useRef<string | null>(null);
+  const requestedChangeRef =
+    useRef<RepositoryChangeSelectionRequest | null>(
+      requestedChange
+    );
+  requestedChangeRef.current = requestedChange;
+  const onRequestedChangeHandledRef = useRef(
+    onRequestedChangeHandled
+  );
+  onRequestedChangeHandledRef.current =
+    onRequestedChangeHandled;
+  const handledChangeRequestIdsRef = useRef(new Set<number>());
+  const activeChangesRequestIdRef = useRef<number | null>(null);
   const historyDetailOpenRef = useRef(false);
   const historyScopeRef =
     useRef<RepositoryHistoryScopeDto | null>(null);
@@ -152,6 +177,7 @@ export function useRepositoryDetails(
       void window.gitnest.repository.cancelQuery({ queryId });
     }
     activeQueries.current.clear();
+    activeChangesRequestIdRef.current = null;
   }, []);
 
   const cancelQuery = useCallback((key: LoadingKey) => {
@@ -160,6 +186,9 @@ export function useRepositoryDetails(
     if (queryId) {
       void window.gitnest.repository.cancelQuery({ queryId });
       activeQueries.current.delete(key);
+    }
+    if (key === "changes") {
+      activeChangesRequestIdRef.current = null;
     }
   }, []);
 
@@ -202,6 +231,18 @@ export function useRepositoryDetails(
         ...current,
         [key]: value
       }));
+    },
+    []
+  );
+  const markRequestedChangeHandled = useCallback(
+    (request: RepositoryChangeSelectionRequest) => {
+      if (
+        handledChangeRequestIdsRef.current.has(request.id)
+      ) {
+        return;
+      }
+      handledChangeRequestIdsRef.current.add(request.id);
+      onRequestedChangeHandledRef.current?.(request.id);
     },
     []
   );
@@ -335,7 +376,16 @@ export function useRepositoryDetails(
         return;
       }
 
+      const navigationRequest = requestedChangeRef.current;
       const queryId = createQuery("changes");
+      activeChangesRequestIdRef.current =
+        navigationRequest &&
+        repositoryTargetsMatch(
+          navigationRequest.target,
+          stableTarget
+        )
+          ? navigationRequest.id
+          : null;
       const requestGeneration = generation.current;
       setLoadingKey("changes", true);
       setError(null);
@@ -358,6 +408,25 @@ export function useRepositoryDetails(
 
         if (result.ok) {
           setChanges(result.value);
+          const currentRequest = requestedChangeRef.current;
+          const requestMatchesTarget = Boolean(
+            currentRequest &&
+              repositoryTargetsMatch(
+                currentRequest.target,
+                stableTarget
+              ) &&
+              repositoryTargetsMatch(
+                currentRequest.target,
+                result.value.target
+              )
+          );
+          const requestedSelection =
+            requestMatchesTarget && currentRequest
+              ? resolveRequestedChangeSelection(
+                  result.value,
+                  currentRequest
+                )
+              : null;
           const previousSelection = preserveSelection
             ? selectedChangeRef.current
             : null;
@@ -368,16 +437,24 @@ export function useRepositoryDetails(
               )
             : undefined;
           const nextChange =
-            preserved ?? result.value.snapshot.changes[0];
+            requestedSelection?.change ??
+            preserved ??
+            result.value.snapshot.changes[0];
 
           if (nextChange) {
-            const nextMode = preserved
-              ? preferredPreservedDiffMode(
-                  nextChange,
-                  previousSelection?.mode
-                )
-              : preferredDiffMode(nextChange);
+            if (requestedSelection && currentRequest) {
+              setChangeSelectionRequestId(currentRequest.id);
+            }
+            const nextMode =
+              requestedSelection?.mode ??
+              (preserved
+                ? preferredPreservedDiffMode(
+                    nextChange,
+                    previousSelection?.mode
+                  )
+                : preferredDiffMode(nextChange));
             const preserveExistingDiff =
+              !requestedSelection &&
               Boolean(preserved && previousSelection) &&
               nextMode === previousSelection?.mode;
             const diffAlreadyLoading =
@@ -419,6 +496,9 @@ export function useRepositoryDetails(
                 : null
             );
           }
+          if (requestMatchesTarget && currentRequest) {
+            markRequestedChangeHandled(currentRequest);
+          }
         } else if (result.error.code !== "COMMAND_CANCELLED") {
           setError(result.error);
         }
@@ -433,11 +513,11 @@ export function useRepositoryDetails(
           setError(unexpectedError(reason));
         }
       } finally {
-        if (
-          finishQuery("changes", queryId) &&
-          requestGeneration === generation.current
-        ) {
-          setLoadingKey("changes", false);
+        if (finishQuery("changes", queryId)) {
+          activeChangesRequestIdRef.current = null;
+          if (requestGeneration === generation.current) {
+            setLoadingKey("changes", false);
+          }
         }
       }
     },
@@ -445,6 +525,7 @@ export function useRepositoryDetails(
       createQuery,
       finishQuery,
       isCurrentQuery,
+      markRequestedChangeHandled,
       selectChange,
       setLoadingKey,
       stableTarget,
@@ -810,6 +891,7 @@ export function useRepositoryDetails(
     setCommit(null);
     setBranches(null);
     setSelectedChange(null);
+    setChangeSelectionRequestId(null);
     selectedCommitHashRef.current = null;
     historyDetailOpenRef.current = false;
     setSelectedCommitHash(null);
@@ -865,6 +947,39 @@ export function useRepositoryDetails(
     void reload("changes", { preserveSelection: true });
   }, [reload, statusRevision, tab, targetKey]);
 
+  useEffect(() => {
+    if (
+      !requestedChange ||
+      tab !== "changes" ||
+      !stableTarget ||
+      handledChangeRequestIdsRef.current.has(
+        requestedChange.id
+      ) ||
+      !repositoryTargetsMatch(
+        requestedChange.target,
+        stableTarget
+      )
+    ) {
+      return;
+    }
+
+    if (
+      activeQueries.current.has("changes") &&
+      activeChangesRequestIdRef.current === requestedChange.id
+    ) {
+      return;
+    }
+
+    void reload("changes", {
+      preserveSelection: true
+    });
+  }, [
+    reload,
+    requestedChange,
+    stableTarget,
+    tab
+  ]);
+
   useEffect(
     () => () => {
       generation.current += 1;
@@ -882,6 +997,7 @@ export function useRepositoryDetails(
     commit,
     branches,
     selectedChange,
+    changeSelectionRequestId,
     selectedCommitHash,
     historyDetailOpen,
     loading,
@@ -893,6 +1009,29 @@ export function useRepositoryDetails(
     reload,
     invalidate,
     clearError
+  };
+}
+
+export function resolveRequestedChangeSelection(
+  changes: RepositoryChangesDto,
+  request: RepositoryChangeSelectionRequest
+): {
+  change: ChangedPathDto;
+  mode: RepositoryChangeSelectionRequest["mode"];
+} | null {
+  const change = findRequestedRepositoryChange(
+    changes,
+    request
+  );
+  if (!change) {
+    return null;
+  }
+
+  return {
+    change,
+    mode: changeSupportsMode(change, request.mode)
+      ? request.mode
+      : preferredDiffMode(change)
   };
 }
 

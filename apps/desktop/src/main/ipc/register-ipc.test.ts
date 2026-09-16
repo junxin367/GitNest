@@ -20,8 +20,13 @@ import {
   validateRemoveAccountRequest,
   validateRepositoryCommandExecuteRequest,
   validateRepositoryCommandPreflightRequest,
+  validateRepositoryCommitDiffRequest,
   validateRepositoryDiffRequest,
   validateRepositoryHistoryRequest,
+  validateRepositoryStashDiffRequest,
+  validateRepositoryStashMutationRequest,
+  validateRepositoryStashRequest,
+  validateRepositoryStashesRequest,
   validateSaveAccountRequest,
   validateTestAiConnectionRequest,
   validateTestAccountRequest,
@@ -444,6 +449,24 @@ describe("repository diff IPC validation", () => {
     });
   });
 
+  it("accepts a safe commit file diff request", () => {
+    expect(
+      validateRepositoryCommitDiffRequest({
+        queryId: "commit_diff_1",
+        target,
+        commitHash: " ABCDEF ",
+        path: "src/App.tsx",
+        contextLines: 13
+      })
+    ).toEqual({
+      queryId: "commit_diff_1",
+      target,
+      commitHash: "ABCDEF",
+      path: "src/App.tsx",
+      contextLines: 13
+    });
+  });
+
   it("rejects invalid context line requests", () => {
     expect(() =>
       validateRepositoryDiffRequest({
@@ -456,6 +479,153 @@ describe("repository diff IPC validation", () => {
     ).toThrowError(
       expect.objectContaining({ code: "INVALID_REQUEST" })
     );
+
+    for (const request of [
+      {
+        queryId: "commit_diff_bad_hash",
+        target,
+        commitHash: "HEAD~1",
+        path: "src/App.tsx"
+      },
+      {
+        queryId: "commit_diff_bad_path",
+        target,
+        commitHash: "abcdef",
+        path: "../outside.ts"
+      },
+      {
+        queryId: "commit_diff_bad_context",
+        target,
+        commitHash: "abcdef",
+        path: "src/App.tsx",
+        contextLines: 1.5
+      }
+    ]) {
+      expect(() =>
+        validateRepositoryCommitDiffRequest(request)
+      ).toThrowError(
+        expect.objectContaining({ code: "INVALID_REQUEST" })
+      );
+    }
+  });
+});
+
+describe("repository stash IPC validation", () => {
+  const target = {
+    repositoryId: "repository",
+    worktreeId: "worktree"
+  };
+
+  it("accepts bounded list and exact stash file requests", () => {
+    expect(
+      validateRepositoryStashesRequest({
+        queryId: "stashes_1",
+        target,
+        limit: 50
+      })
+    ).toEqual({
+      queryId: "stashes_1",
+      target,
+      limit: 50
+    });
+    expect(
+      validateRepositoryStashDiffRequest({
+        queryId: "stash_diff_1",
+        target,
+        stashRef: " stash@{2} ",
+        path: "src/App.tsx",
+        contextLines: 13
+      })
+    ).toEqual({
+      queryId: "stash_diff_1",
+      target,
+      stashRef: "stash@{2}",
+      path: "src/App.tsx",
+      contextLines: 13
+    });
+  });
+
+  it("rejects arbitrary revisions and invalid limits", () => {
+    expect(() =>
+      validateRepositoryStashRequest({
+        queryId: "stash_bad_ref",
+        target,
+        stashRef: "--all"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+    expect(() =>
+      validateRepositoryStashRequest({
+        queryId: "stash_bad_ref",
+        target,
+        stashRef: "stash@{0}^1"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+    expect(() =>
+      validateRepositoryStashesRequest({
+        queryId: "stash_bad_limit",
+        target,
+        limit: 101
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+
+  it("accepts exact stash mutations and normalizes full object ids", () => {
+    expect(
+      validateRepositoryStashMutationRequest({
+        target,
+        action: "pop",
+        stashRef: " stash@{2} ",
+        stashHash: "A".repeat(40)
+      })
+    ).toEqual({
+      target,
+      action: "pop",
+      stashRef: "stash@{2}",
+      stashHash: "a".repeat(40)
+    });
+    expect(
+      validateRepositoryStashMutationRequest({
+        target,
+        action: "apply",
+        stashRef: "stash@{0}",
+        stashHash: "b".repeat(64)
+      }).stashHash
+    ).toBe("b".repeat(64));
+  });
+
+  it("rejects malformed stash mutation actions, refs, and abbreviated hashes", () => {
+    for (const request of [
+      {
+        target,
+        action: "clear",
+        stashRef: "stash@{0}",
+        stashHash: "a".repeat(40)
+      },
+      {
+        target,
+        action: "drop",
+        stashRef: "stash@{0}^1",
+        stashHash: "a".repeat(40)
+      },
+      {
+        target,
+        action: "drop",
+        stashRef: "stash@{0}",
+        stashHash: "abcdef"
+      }
+    ]) {
+      expect(() =>
+        validateRepositoryStashMutationRequest(request)
+      ).toThrowError(
+        expect.objectContaining({ code: "INVALID_REQUEST" })
+      );
+    }
   });
 });
 

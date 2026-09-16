@@ -15,6 +15,7 @@ import type {
 import {
   findTargetSnapshot,
   getSnapshotChangeCount,
+  listActiveWorkspaceTargets,
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
 import { useRepositoryBranchOptions } from "../../entities/repository/useRepositoryBranchOptions";
@@ -190,12 +191,17 @@ export function RepositoryHeader({
     branches: branchOptions.branches.length,
     worktrees: selected?.repository?.worktreeIds.length ?? 0
   };
+  const activeWorkspaceTargets =
+    listActiveWorkspaceTargets(workspace);
+  const activeWorkspaceRepositoryCount = new Set(
+    activeWorkspaceTargets.map((target) => target.repositoryId)
+  ).size;
   const workspaceTabCounts: Partial<
     Record<WorkspaceTab, number>
   > = {
-    repositories: workspace?.repositories.length ?? 0,
-    activity: workspace?.repositories.length ?? 0,
-    worktrees: workspace?.worktrees.length ?? 0
+    repositories: activeWorkspaceRepositoryCount,
+    activity: activeWorkspaceRepositoryCount,
+    worktrees: activeWorkspaceTargets.length
   };
 
   useEffect(() => {
@@ -232,13 +238,14 @@ export function RepositoryHeader({
           </div>
         </div>
 
-        {view === "workspace" && (
-          <div aria-hidden="true" className="toolbar-divider" />
-        )}
-
-        {view === "repository" && workspace?.selectedTarget && (
-          <>
+        <div className="repository-header-action-group">
+          {(view === "workspace" ||
+            (view === "repository" &&
+              Boolean(workspace?.selectedTarget))) && (
             <div aria-hidden="true" className="toolbar-divider" />
+          )}
+
+          {view === "repository" && workspace?.selectedTarget && (
             <Button variant="unstyled"
               aria-label="切换分支"
               aria-expanded={branchDialogOpen}
@@ -256,10 +263,8 @@ export function RepositoryHeader({
               <span>{currentBranch || "detached"}</span>
               <Icon name="chevron" size={12} />
             </Button>
-          </>
-        )}
+          )}
 
-        <div className="repository-header-action-group">
           {(view === "workspace" ||
             (view === "repository" &&
               Boolean(workspace?.selectedTarget))) && (

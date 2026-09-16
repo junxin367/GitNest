@@ -183,3 +183,114 @@ export function commitNumstatArguments(
     commitHash
   ];
 }
+
+export function commitDiffArguments(
+  commitHash: string,
+  firstParentHash: string | undefined,
+  path: string,
+  contextLines: number
+): string[] {
+  const options = [
+    "--literal-pathspecs",
+    firstParentHash ? "diff" : "diff-tree",
+    ...(firstParentHash
+      ? []
+      : ["--root", "--no-commit-id", "-p", "-r"]),
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    `--unified=${contextLines}`
+  ];
+
+  return [
+    ...options,
+    ...(firstParentHash
+      ? [firstParentHash, commitHash]
+      : [commitHash]),
+    "--",
+    path
+  ];
+}
+
+export function commitParentsArguments(
+  commitHash: string
+): string[] {
+  return [
+    "rev-list",
+    "--parents",
+    "--max-count=1",
+    "--end-of-options",
+    commitHash
+  ];
+}
+
+export function stashListArguments(limit: number): string[] {
+  return [
+    "stash",
+    "list",
+    `--max-count=${limit}`,
+    "--format=%gd%x00%H%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%x00"
+  ];
+}
+
+export function stashFilesArguments(stashRef: string): string[] {
+  return [
+    "--literal-pathspecs",
+    "stash",
+    "show",
+    "--include-untracked",
+    "--numstat",
+    "--format=",
+    "-z",
+    stashRef
+  ];
+}
+
+export function stashDiffArguments(
+  stashRef: string,
+  path: string,
+  contextLines: number
+): string[] {
+  return [
+    "--literal-pathspecs",
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    `--unified=${contextLines}`,
+    `${stashRef}^1`,
+    stashRef,
+    "--",
+    path
+  ];
+}
+
+export function stashUntrackedDiffArguments(
+  stashCommit: string,
+  path: string,
+  contextLines: number
+): string[] {
+  return [
+    "--literal-pathspecs",
+    "diff-tree",
+    "--root",
+    "--no-commit-id",
+    "-p",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    `--unified=${contextLines}`,
+    `${stashCommit}^3`,
+    "--",
+    path
+  ];
+}
+
+export function resolveStashArguments(stashRef: string): string[] {
+  return [
+    "rev-parse",
+    "--verify",
+    "--end-of-options",
+    `${stashRef}^{commit}`
+  ];
+}

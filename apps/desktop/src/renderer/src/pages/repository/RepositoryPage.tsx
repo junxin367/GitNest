@@ -22,7 +22,17 @@ import type {
 } from "@gitnest/contracts";
 
 import type { RepositoryTab } from "../../app/navigation";
+import type { RepositoryChangeSelectionRequest } from "../../entities/repository/changeSelection";
+import {
+  useRepositoryCommitDiff,
+  type RepositoryCommitDiffController
+} from "../../entities/repository/useRepositoryCommitDiff";
 import { useRepositoryDetails } from "../../entities/repository/useRepositoryDetails";
+import { useRepositoryCommitDraft } from "../../entities/repository/useRepositoryCommitDraft";
+import {
+  useRepositoryStashes,
+  useRepositoryStashView
+} from "../../entities/repository/useRepositoryStashes";
 import type { ExternalApplicationController } from "../../features/external-application/useExternalApplications";
 import type { RepositoryCommandController } from "../../features/repository-command/useRepositoryCommands";
 import type { AppSettingsController } from "../../features/settings/useAppSettings";
@@ -62,6 +72,7 @@ import {
 } from "../../shared/ui/Skeleton";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import { RepositoryWorktrees } from "./RepositoryWorktrees";
+import { RepositoryStashBrowser } from "./RepositoryStashBrowser";
 import {
   applyTapdKeywordToCommitMessage,
   readTapdKeywordPreference
@@ -69,6 +80,8 @@ import {
 import { getRendererPreferenceStorage } from "../../widgets/workspace-sidebar/sidebarPreferences";
 import {
   DEFAULT_DIFF_CONTEXT_LINES,
+  DiffPanel,
+  DiffViewerState,
   type DiffContextRequest,
   type DiffPanelState
 } from "../../widgets/diff-workspace/DiffPanel";
@@ -89,7 +102,9 @@ interface RepositoryPageProps {
   terminals: ExternalTerminalController;
   externalApplications: ExternalApplicationController;
   appSettings: AppSettingsController;
+  changeSelectionRequest?: RepositoryChangeSelectionRequest | null;
   onOpenTab(tab: RepositoryTab): void;
+  onChangeSelectionHandled?(requestId: number): void;
   onCommitSelectionChange?(
     commit: RepositoryCommitDto["commit"] | null
   ): void;
@@ -110,7 +125,9 @@ export function RepositoryPage({
   terminals,
   externalApplications,
   appSettings,
+  changeSelectionRequest,
   onOpenTab,
+  onChangeSelectionHandled,
   onCommitSelectionChange
 }: RepositoryPageProps) {
   const snapshot = findTargetSnapshot(snapshots, target);
@@ -130,7 +147,9 @@ export function RepositoryPage({
   const details = useRepositoryDetails(
     target,
     tab,
-    statusRevision
+    statusRevision,
+    changeSelectionRequest,
+    onChangeSelectionHandled
   );
 
   useEffect(() => {
@@ -159,9 +178,19 @@ export function RepositoryPage({
     target,
     mutationHooks
   );
-  const [commitMessage, setCommitMessage] = useState("");
-  const [pushAfterCommit, setPushAfterCommit] =
-    useState(false);
+  const targetKey = target
+    ? `${target.repositoryId}:${target.worktreeId}`
+    : "";
+  const commitDraftScopeKey = target
+    ? `${workspace?.id ?? ""}\u0001${targetKey}`
+    : "";
+  const {
+    message: commitMessage,
+    pushAfterCommit,
+    setMessage: setCommitMessage,
+    setMessageForScope: setCommitMessageForScope,
+    setPushAfterCommit
+  } = useRepositoryCommitDraft(commitDraftScopeKey);
   const [directoryOpening, setDirectoryOpening] =
     useState(false);
   const [directoryError, setDirectoryError] = useState<
@@ -178,9 +207,6 @@ export function RepositoryPage({
     message: string;
     tone: "success" | "error";
   } | null>(null);
-  const targetKey = target
-    ? `${target.repositoryId}:${target.worktreeId}`
-    : "";
   const targetKeyRef = useRef(targetKey);
   targetKeyRef.current = targetKey;
   const handledCommandCompletion = useRef(
@@ -188,8 +214,6 @@ export function RepositoryPage({
   );
 
   useEffect(() => {
-    setCommitMessage("");
-    setPushAfterCommit(false);
     mutations.clearFeedback();
     commands.clearFeedback();
     terminals.clearFeedback();
@@ -206,6 +230,8 @@ export function RepositoryPage({
       return;
     }
     const requestTargetKey = targetKey;
+    const requestCommitDraftScopeKey =
+      commitDraftScopeKey;
     setAiGenerating(true);
     setAiFeedback(null);
     try {
@@ -213,15 +239,14 @@ export function RepositoryPage({
         await window.gitnest.ai.generateCommitMessage({
           target
         });
-      if (targetKeyRef.current !== requestTargetKey) {
-        return;
-      }
       if (!result.ok) {
-        setAiFeedback({
-          title: "AI 提交信息未生成",
-          message: formatAiError(result.error),
-          tone: "error"
-        });
+        if (targetKeyRef.current === requestTargetKey) {
+          setAiFeedback({
+            title: "AI 提交信息未生成",
+            message: formatAiError(result.error),
+            tone: "error"
+          });
+        }
         return;
       }
       const tapdKeyword = readTapdKeywordPreference(
@@ -230,12 +255,16 @@ export function RepositoryPage({
         findWorkspaceEntryForTarget(workspace, target)?.id ??
           workspace?.selectedEntryId
       );
-      setCommitMessage(
+      setCommitMessageForScope(
+        requestCommitDraftScopeKey,
         applyTapdKeywordToCommitMessage(
           result.value.message,
           tapdKeyword
         )
       );
+      if (targetKeyRef.current !== requestTargetKey) {
+        return;
+      }
       setAiFeedback({
         title: "AI 提交信息已生成",
         message: result.value.truncated
@@ -259,7 +288,14 @@ export function RepositoryPage({
         setAiGenerating(false);
       }
     }
-  }, [aiGenerating, target, targetKey]);
+  }, [
+    aiGenerating,
+    commitDraftScopeKey,
+    setCommitMessageForScope,
+    target,
+    targetKey,
+    workspace
+  ]);
 
   const copyCommitId = useCallback(async (hash: string) => {
     try {
@@ -576,6 +612,11 @@ export function RepositoryPage({
           }}
           onPushAfterCommitChange={setPushAfterCommit}
           pushAfterCommit={pushAfterCommit}
+          selectionRevealKey={
+            details.changeSelectionRequestId === null
+              ? undefined
+              : String(details.changeSelectionRequestId)
+          }
           target={target}
           workspaceId={workspace?.id}
         />
@@ -586,6 +627,7 @@ export function RepositoryPage({
           controller={details}
           onCopyCommitId={copyCommitId}
           repositoryKey={`${target.repositoryId}:${target.worktreeId}`}
+          target={target}
         />
       )}
       {tab === "branches" && (
@@ -911,6 +953,20 @@ function RepositoryOverview({
   );
 }
 
+export function shouldShowRepositoryChangesSkeleton({
+  hasCurrentChanges,
+  hasError,
+  scopeChanged
+}: {
+  hasCurrentChanges: boolean;
+  hasError: boolean;
+  scopeChanged: boolean;
+}): boolean {
+  return (
+    scopeChanged || (!hasCurrentChanges && !hasError)
+  );
+}
+
 function RepositoryChanges({
   appSettings,
   aiGenerating,
@@ -920,6 +976,7 @@ function RepositoryChanges({
   externalApplications,
   commitMessage,
   pushAfterCommit,
+  selectionRevealKey,
   onCommitMessageChange,
   onGenerateAi,
   onPushAfterCommitChange,
@@ -935,6 +992,7 @@ function RepositoryChanges({
   externalApplications: ExternalApplicationController;
   commitMessage: string;
   pushAfterCommit: boolean;
+  selectionRevealKey?: string | undefined;
   onCommitMessageChange(value: string): void;
   onGenerateAi(): void | Promise<void>;
   onPushAfterCommitChange(value: boolean): void;
@@ -942,7 +1000,21 @@ function RepositoryChanges({
   workspaceId: string | undefined;
   target: RepositoryTargetDto;
 }) {
-  const changes = controller.changes?.snapshot.changes ?? [];
+  const changesScopeKey = `${workspaceId ?? ""}\u0001${target.repositoryId}:${target.worktreeId}`;
+  const controllerChangesScopeKey = controller.changes
+    ? `${workspaceId ?? ""}\u0001${controller.changes.target.repositoryId}:${controller.changes.target.worktreeId}`
+    : "";
+  const currentChanges =
+    controllerChangesScopeKey === changesScopeKey
+      ? controller.changes
+      : null;
+  const previousChangesScopeKey = useRef(changesScopeKey);
+  const scopeChanged =
+    previousChangesScopeKey.current !== changesScopeKey;
+  if (scopeChanged) {
+    previousChangesScopeKey.current = changesScopeKey;
+  }
+  const changes = currentChanges?.snapshot.changes ?? [];
   const files = useMemo(
     () => buildDiffViewerFiles(changes),
     [changes]
@@ -964,12 +1036,16 @@ function RepositoryChanges({
     controller.selectedChange.mode === selectedFile.mode
       ? diff
       : undefined;
-  const changesLoading =
-    controller.loading.changes && !controller.changes;
   const diffLoading =
     controller.loading.diff && !selectedDiff;
   const showChangesSkeleton =
-    useMinimumLoadingIndicator(changesLoading);
+    useMinimumLoadingIndicator(
+      shouldShowRepositoryChangesSkeleton({
+        hasCurrentChanges: Boolean(currentChanges),
+        hasError: Boolean(controller.error),
+        scopeChanged
+      })
+    );
   const showDiffSkeleton =
     useMinimumLoadingIndicator(diffLoading);
   const workspaceFiles = useMemo(
@@ -998,7 +1074,24 @@ function RepositoryChanges({
   const [diffViewerError, setDiffViewerError] = useState<
     string | null
   >(null);
-  const changesScopeKey = `${workspaceId ?? ""}\u0001${target.repositoryId}:${target.worktreeId}`;
+  const stashView = useRepositoryStashView(changesScopeKey);
+  const stashMutationHooks = useMemo(
+    () => ({
+      afterMutation: () => controller.reload("changes")
+    }),
+    [controller.reload]
+  );
+  const stashes = useRepositoryStashes(
+    target,
+    changesScopeKey,
+    stashMutationHooks
+  );
+
+  useEffect(() => {
+    if (stashView.active) {
+      void stashes.load();
+    }
+  }, [stashView.active, stashes.load]);
 
   const openSelectedDiffViewer = async () => {
     if (!selectedDiff || diffViewerOpening) {
@@ -1055,28 +1148,15 @@ function RepositoryChanges({
     );
   }
 
-  if (!controller.changes && controller.error) {
-    return (
-      <RepositoryReadFailure label="工作区变更暂时不可用" />
-    );
-  }
-
-  if (changes.length === 0) {
-    return (
-      <div className="empty-state repository-empty-state">
-        <span className="empty-state-icon">
-          <Icon name="check" size={20} />
-        </span>
-        <div>
-          <strong>工作区干净</strong>
-          <p>没有 staged、unstaged、untracked 或冲突文件。</p>
-        </div>
-      </div>
-    );
-  }
-
   const diffPanelState: DiffPanelState | undefined =
-    showDiffSkeleton
+    changes.length === 0 && currentChanges
+      ? {
+          icon: "check",
+          message:
+            "没有 staged、unstaged、untracked 或冲突文件。",
+          title: "工作区干净"
+        }
+      : showDiffSkeleton
       ? {
           busy: true,
           icon: "refresh",
@@ -1110,13 +1190,76 @@ function RepositoryChanges({
 
   return (
     <div className="changes-page">
+      <ToastViewport>
+        {(stashes.mutationError || stashes.notice) && (
+          <Toast
+            closeLabel="关闭储藏操作提示"
+            icon={stashes.mutationError ? "warning" : "check"}
+            key="repository-stash-mutation-feedback"
+            message={
+              stashes.mutationError?.message ??
+              stashes.notice ??
+              ""
+            }
+            onClose={stashes.clearMutationFeedback}
+            title={
+              stashes.mutationError
+                ? "储藏操作未完成"
+                : "储藏操作完成"
+            }
+            tone={stashes.mutationError ? "error" : "success"}
+          />
+        )}
+      </ToastViewport>
       <DiffWorkspace
+        auxiliaryView={{
+          active: stashView.active,
+          busy:
+            stashes.loading.stashes ||
+            stashes.loading.files ||
+            stashes.active !== null ||
+            mutations.active !== null ||
+            commands.busy,
+          content: (
+            <RepositoryStashBrowser
+              error={stashes.error}
+              loading={stashes.loading}
+              mutationBusy={
+                stashes.active !== null ||
+                mutations.active !== null ||
+                commands.busy
+              }
+              selectedStashRef={stashes.selectedStashRef}
+              stashFiles={stashes.stashFiles}
+              stashes={stashes.stashes}
+              onMutateStash={stashes.mutateStash}
+              onReload={() => void stashes.reload()}
+              onSelectStash={(stashRef) =>
+                void stashes.selectStash(stashRef)
+              }
+            />
+          ),
+          count: stashes.stashes?.stashes.length,
+          label: "储藏的变更",
+          onToggle: () => {
+            stashView.toggle();
+          }
+        }}
         className="changes-layout"
         canStageFile={(file) => canStageChange(file.change)}
         canUnstageFile={(file) =>
           canUnstageChange(file.change)
         }
         canDiscardFile={(file) => canDiscardChange(file.change)}
+        changesError={
+          !currentChanges && controller.error
+            ? {
+                icon: "warning",
+                message: controller.error.message,
+                title: "工作区变更暂时不可用"
+              }
+            : undefined
+        }
         changesLoading={controller.loading.changes}
         commit={{
           ai: {
@@ -1136,18 +1279,21 @@ function RepositoryChanges({
                 : "根据当前提交范围生成提交信息",
             onGenerate: onGenerateAi
           },
-          busy: mutations.active !== null || commands.busy,
+          busy:
+            mutations.active !== null ||
+            stashes.active !== null ||
+            commands.busy,
           commitPanelHeight:
             appSettings.settings.diff.commitPanelHeight,
           conflicted:
-            controller.changes?.snapshot.conflicted ?? 0,
+            currentChanges?.snapshot.conflicted ?? 0,
           message: commitMessage,
           push: pushAfterCommit,
-          staged: controller.changes?.snapshot.staged ?? 0,
+          staged: currentChanges?.snapshot.staged ?? 0,
           unstaged:
-            controller.changes?.snapshot.unstaged ?? 0,
+            currentChanges?.snapshot.unstaged ?? 0,
           untracked:
-            controller.changes?.snapshot.untracked ?? 0,
+            currentChanges?.snapshot.untracked ?? 0,
           submitting:
             mutations.active === "commit" ||
             (pushAfterCommit && commands.active === "push"),
@@ -1180,7 +1326,9 @@ function RepositoryChanges({
         externalApplications={externalApplications}
         fileView={appSettings.settings.diff.fileView}
         files={workspaceFiles}
-        mutationBusy={mutations.active !== null}
+        mutationBusy={
+          mutations.active !== null || stashes.active !== null
+        }
         onFileViewChange={(fileView) =>
           void appSettings.update(
             { diff: { fileView } },
@@ -1252,6 +1400,7 @@ function RepositoryChanges({
           onContextRequest: requestDiffContext
         }}
         selectedFileKey={selectedFileKey}
+        selectionRevealKey={selectionRevealKey}
         treePreference={{
           initiallyCollapsed:
             appSettings.settings.diff
@@ -1816,12 +1965,14 @@ function RepositoryHistory({
   branch,
   controller,
   onCopyCommitId,
-  repositoryKey
+  repositoryKey,
+  target
 }: {
   branch: string | undefined;
   controller: ReturnType<typeof useRepositoryDetails>;
   onCopyCommitId(hash: string): Promise<void>;
   repositoryKey: string;
+  target: RepositoryTargetDto;
 }) {
   const controllerHistoryKey = controller.history
     ? `${controller.history.target.repositoryId}:${controller.history.target.worktreeId}`
@@ -2179,34 +2330,11 @@ function RepositoryHistory({
               surfaceClassName="repository-commit-detail-skeleton"
             >
               {selected ? (
-                <div className="commit-detail-body">
-                  <h2>{selected.subject}</h2>
-                  <div className="commit-detail-meta">
-                    <span>{selected.authorName}</span>
-                    <code>{selected.hash}</code>
-                    <span>
-                      {formatCommitTimestamp(selected.authoredAt)}
-                    </span>
-                  </div>
-                  {selected.refs.length > 0 && (
-                    <details
-                      className="commit-refs commit-refs-collapsible"
-                      key={selected.hash}
-                    >
-                      <summary>
-                        分支（{selected.refs.length}）
-                      </summary>
-                      <div className="commit-ref-list">
-                        {selected.refs.map((ref) => (
-                          <span key={ref}>{ref}</span>
-                        ))}
-                      </div>
-                    </details>
-                  )}
-                  <p className="selected-commit-body">
-                    {selected.body}
-                  </p>
-                </div>
+                <RepositoryCommitDetail
+                  commit={selected}
+                  key={selected.hash}
+                  target={target}
+                />
               ) : (
                 <div className="diff-empty">
                   <Icon name="activity" size={20} />
@@ -2219,6 +2347,286 @@ function RepositoryHistory({
       </section>
     </SkeletonBoundary>
   );
+}
+
+export function RepositoryCommitDetail({
+  commit,
+  target
+}: {
+  commit: RepositoryCommitDto["commit"];
+  target: RepositoryTargetDto;
+}) {
+  const commitDiff = useRepositoryCommitDiff(
+    target,
+    commit.hash
+  );
+  const selectedFile = commit.files.find(
+    (file) => file.path === commitDiff.selected?.path
+  );
+
+  useEffect(() => {
+    const firstFile = commit.files[0];
+    if (!commitDiff.selected && firstFile) {
+      void commitDiff.selectFile(firstFile.path);
+    }
+  }, [
+    commit.files,
+    commitDiff.selected,
+    commitDiff.selectFile
+  ]);
+
+  return (
+    <div className="commit-detail-body">
+      <div className="history-commit-overview">
+        <h2>{commit.subject}</h2>
+        <div className="commit-detail-meta">
+          <span>{commit.authorName}</span>
+          <code>{commit.hash}</code>
+          <span>
+            {formatCommitTimestamp(commit.authoredAt)}
+          </span>
+        </div>
+        {commit.refs.length > 0 && (
+          <details
+            className="commit-refs commit-refs-collapsible"
+            key={commit.hash}
+          >
+            <summary>分支（{commit.refs.length}）</summary>
+            <div className="commit-ref-list">
+              {commit.refs.map((ref) => (
+                <span key={ref}>{ref}</span>
+              ))}
+            </div>
+          </details>
+        )}
+        <p className="selected-commit-body">{commit.body}</p>
+      </div>
+
+      <section
+        aria-label="提交变更文件"
+        className="history-commit-files"
+      >
+        <header className="history-commit-files-header">
+          <div>
+            <strong>变更文件</strong>
+            <span>{commit.files.length}</span>
+          </div>
+          <CommitFileStats
+            additions={commit.additions}
+            deletions={commit.deletions}
+          />
+        </header>
+        {commit.files.length > 0 ? (
+          <div className="history-commit-file-browser">
+            <div
+              aria-label="提交文件列表"
+              className="commit-file-list"
+              role="list"
+            >
+              {commit.files.map((file) => {
+                const filePath = splitCommitFilePath(
+                  file.path
+                );
+                return (
+                  <div key={file.path} role="listitem">
+                    <button
+                      aria-current={
+                        file.path === selectedFile?.path
+                          ? "true"
+                          : undefined
+                      }
+                      className="history-commit-file"
+                      onClick={() =>
+                        void commitDiff.selectFile(file.path)
+                      }
+                      title={file.path}
+                      type="button"
+                    >
+                      <Icon name="fileCode" size={14} />
+                      <span className="history-commit-file-path">
+                        <strong>{filePath.name}</strong>
+                        {filePath.directory ? (
+                          <small>{filePath.directory}</small>
+                        ) : null}
+                      </span>
+                      {file.binary ? (
+                        <span className="history-commit-file-binary">
+                          二进制
+                        </span>
+                      ) : (
+                        <CommitFileStats
+                          additions={file.additions}
+                          deletions={file.deletions}
+                        />
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <CommitFileDiffPreview
+              commitDiff={commitDiff}
+              commitHash={commit.hash}
+              file={selectedFile}
+            />
+          </div>
+        ) : (
+          <DiffViewerState
+            icon="files"
+            message="Git 没有为该提交返回变更文件。"
+            title="没有变更文件"
+          />
+        )}
+      </section>
+    </div>
+  );
+}
+
+function CommitFileDiffPreview({
+  commitDiff,
+  commitHash,
+  file
+}: {
+  commitDiff: RepositoryCommitDiffController;
+  commitHash: string;
+  file: RepositoryCommitDto["commit"]["files"][number] | undefined;
+}) {
+  if (!file) {
+    return (
+      <div className="history-commit-file-preview">
+        <DiffViewerState
+          icon="fileCode"
+          message="从左侧选择一个文件，查看它在本次提交中的变更。"
+          title="选择文件查看 Diff"
+        />
+      </div>
+    );
+  }
+
+  const diff =
+    commitDiff.diff?.commit.hash === commitHash &&
+    commitDiff.diff.diff.path === file.path
+      ? commitDiff.diff.diff
+      : null;
+  const state: DiffPanelState | undefined =
+    commitDiff.loading && !diff
+      ? {
+          busy: true,
+          icon: "refresh",
+          message: "正在读取该提交中的文件变更。",
+          title: "读取提交 Diff…"
+        }
+      : commitDiff.error && !diff
+        ? {
+            icon: "warning",
+            message: commitDiff.error.message,
+            title: "提交 Diff 读取失败"
+          }
+        : undefined;
+
+  return (
+    <div className="history-commit-file-preview">
+      {commitDiff.error && diff ? (
+        <div className="history-commit-file-error" role="alert">
+          <Icon name="warning" size={14} />
+          <span>{commitDiff.error.message}</span>
+          <Button
+            onClick={() =>
+              void commitDiff.selectFile(file.path, {
+                contextLines:
+                  commitDiff.selected?.contextLines ??
+                  DEFAULT_DIFF_CONTEXT_LINES,
+                preserveDiff: true
+              })
+            }
+            size="small"
+            variant="default"
+          >
+            重试
+          </Button>
+        </div>
+      ) : null}
+      <DiffPanel
+        additions={diff?.additions ?? file.additions}
+        binary={diff?.binary ?? file.binary}
+        className="history-commit-diff-panel"
+        config={repositoryDiffWorkspaceConfiguration.document}
+        content={diff?.content}
+        contextLines={
+          commitDiff.selected?.contextLines ??
+          DEFAULT_DIFF_CONTEXT_LINES
+        }
+        contextLoading={commitDiff.loading}
+        deletions={diff?.deletions ?? file.deletions}
+        headerActions={
+          commitDiff.error && !diff ? (
+            <Button
+              icon={<Icon name="refresh" size={13} />}
+              onClick={() =>
+                void commitDiff.selectFile(file.path)
+              }
+              size="small"
+              variant="default"
+            >
+              重试
+            </Button>
+          ) : undefined
+        }
+        maxLines={4_000}
+        onContextRequest={(request) =>
+          void commitDiff.selectFile(file.path, {
+            contextLines: request.contextLines,
+            preserveDiff: true
+          })
+        }
+        path={file.path}
+        scopeKey={`commit:${commitHash}:${file.path}`}
+        searchScopeKey={`commit:${commitHash}:${file.path}`}
+        state={state}
+        statsAvailable
+        truncated={diff?.truncated}
+      />
+    </div>
+  );
+}
+
+function CommitFileStats({
+  additions,
+  deletions
+}: {
+  additions: number | undefined;
+  deletions: number | undefined;
+}) {
+  if (
+    !Number.isFinite(additions) ||
+    !Number.isFinite(deletions)
+  ) {
+    return null;
+  }
+
+  return (
+    <span className="history-commit-file-stats">
+      <span className="additions">+{additions}</span>
+      <span className="deletions">-{deletions}</span>
+    </span>
+  );
+}
+
+function splitCommitFilePath(path: string): {
+  directory: string;
+  name: string;
+} {
+  const separator = path.lastIndexOf("/");
+  if (separator < 0) {
+    return {
+      directory: "",
+      name: path
+    };
+  }
+  return {
+    directory: path.slice(0, separator),
+    name: path.slice(separator + 1)
+  };
 }
 
 function historyScopeKey(

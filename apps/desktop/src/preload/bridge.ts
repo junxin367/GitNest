@@ -86,6 +86,20 @@ export function createGitNestBridge(
         invoke(IPC_CHANNELS.repositoryGetHistory, request),
       getCommit: (request) =>
         invoke(IPC_CHANNELS.repositoryGetCommit, request),
+      getCommitDiff: (request) =>
+        invoke(
+          IPC_CHANNELS.repositoryGetCommitDiff,
+          request
+        ),
+      getStashes: (request) =>
+        invoke(IPC_CHANNELS.repositoryGetStashes, request),
+      getStashFiles: (request) =>
+        invoke(
+          IPC_CHANNELS.repositoryGetStashFiles,
+          request
+        ),
+      getStashDiff: (request) =>
+        invoke(IPC_CHANNELS.repositoryGetStashDiff, request),
       getBranches: (request) =>
         invoke(IPC_CHANNELS.repositoryGetBranches, request),
       cancelQuery: (request) =>
@@ -96,6 +110,11 @@ export function createGitNestBridge(
         invoke(IPC_CHANNELS.repositoryUnstage, request),
       discard: (request) =>
         invoke(IPC_CHANNELS.repositoryDiscard, request),
+      mutateStash: (request) =>
+        invoke(
+          IPC_CHANNELS.repositoryMutateStash,
+          request
+        ),
       createCommit: (request) =>
         invoke(IPC_CHANNELS.repositoryCreateCommit, request),
       preflightCommand: (request) =>

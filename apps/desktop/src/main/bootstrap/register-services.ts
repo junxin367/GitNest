@@ -235,6 +235,7 @@ export function registerServices(): ApplicationServices {
     ),
     repositoryQueries: new RepositoryQueryService(
       workspace,
+      gitClient,
       gitClient
     ),
     settings,

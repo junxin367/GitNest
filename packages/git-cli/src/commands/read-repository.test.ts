@@ -1,14 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  commitDiffArguments,
   commitMetadataArguments,
   commitNumstatArguments,
+  commitParentsArguments,
   compareHistoryCountArguments,
   compareHistoryMergeBaseArguments,
   compareHistoryPageArguments,
   diffArguments,
   historyPageArguments,
   MERGED_REMOTE_BRANCH_ARGUMENTS,
+  resolveStashArguments,
+  stashDiffArguments,
+  stashFilesArguments,
+  stashListArguments,
+  stashUntrackedDiffArguments,
   stagedFileContentArguments,
   stagedFileSizeArguments,
   STAGED_DIFF_STAT_ARGUMENTS,
@@ -106,12 +113,116 @@ describe("repository read commands", () => {
     );
   });
 
+  it("constructs a literal-path commit diff against the first parent with root support", () => {
+    expect(
+      commitDiffArguments(
+        "abcdef",
+        "123456",
+        "-leading-dash.ts",
+        13
+      )
+    ).toEqual([
+      "--literal-pathspecs",
+      "diff",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-color",
+      "--unified=13",
+      "123456",
+      "abcdef",
+      "--",
+      "-leading-dash.ts"
+    ]);
+    expect(
+      commitDiffArguments("abcdef", undefined, "root.ts", 3)
+    ).toEqual(
+      expect.arrayContaining([
+        "diff-tree",
+        "--root",
+        "--no-commit-id",
+        "-p",
+        "-r",
+        "abcdef",
+        "--",
+        "root.ts"
+      ])
+    );
+    expect(commitParentsArguments("abcdef")).toEqual([
+      "rev-list",
+      "--parents",
+      "--max-count=1",
+      "--end-of-options",
+      "abcdef"
+    ]);
+  });
+
   it("reads remote branches merged into the current HEAD", () => {
     expect(MERGED_REMOTE_BRANCH_ARGUMENTS).toEqual([
       "for-each-ref",
       "--merged=HEAD",
       "--format=%(refname)",
       "refs/remotes"
+    ]);
+  });
+
+  it("constructs bounded and literal-path stash queries", () => {
+    expect(stashListArguments(50)).toEqual(
+      expect.arrayContaining([
+        "stash",
+        "list",
+        "--max-count=50",
+        "--format=%gd%x00%H%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%x00"
+      ])
+    );
+    expect(stashFilesArguments("stash@{0}")).toEqual(
+      expect.arrayContaining([
+        "--literal-pathspecs",
+        "--include-untracked",
+        "--numstat",
+        "stash@{0}"
+      ])
+    );
+    expect(
+      stashDiffArguments("stash@{2}", "-leading-dash.ts", 13)
+    ).toEqual(
+      expect.arrayContaining([
+        "--literal-pathspecs",
+        "--unified=13",
+        "stash@{2}^1",
+        "stash@{2}",
+        "--",
+        "-leading-dash.ts"
+      ])
+    );
+    expect(
+      stashUntrackedDiffArguments(
+        "stash@{2}",
+        "new.ts",
+        3
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        "diff-tree",
+        "--root",
+        "--no-commit-id",
+        "-p",
+        "stash@{2}^3",
+        "--",
+        "new.ts"
+      ])
+    );
+    expect(
+      stashUntrackedDiffArguments(
+        "stash@{2}",
+        "new.ts",
+        3
+      )
+    ).not.toContain("stash@{2}^1");
+    expect(resolveStashArguments("stash@{1}")).toEqual([
+      "rev-parse",
+      "--verify",
+      "--end-of-options",
+      "stash@{1}^{commit}"
     ]);
   });
 

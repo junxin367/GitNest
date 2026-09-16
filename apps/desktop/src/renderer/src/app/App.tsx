@@ -21,12 +21,20 @@ import {
   type RepositoryTab,
   type WorkspaceTab
 } from "./navigation";
-import { listWorkspaceTargets } from "../entities/workspace/model";
+import {
+  listActiveWorkspaceTargets,
+  listWorkspaceTargets
+} from "../entities/workspace/model";
 import { useWorkspace } from "../entities/workspace/useWorkspace";
+import type {
+  RepositoryChangeLocation,
+  RepositoryChangeSelectionRequest
+} from "../entities/repository/changeSelection";
 import { useAccounts } from "../features/account-manage/useAccounts";
 import { useExternalApplications } from "../features/external-application/useExternalApplications";
 import { useExternalTerminals } from "../features/external-terminal/useExternalTerminals";
 import { GlobalSearchDialog } from "../features/global-search/GlobalSearchDialog";
+import { useWorkspaceChangedFiles } from "../features/global-search/useWorkspaceChangedFiles";
 import { RepositoryCommandDialog } from "../features/repository-command/RepositoryCommandDialog";
 import { useRepositoryCommands } from "../features/repository-command/useRepositoryCommands";
 import { useAppSettings } from "../features/settings/useAppSettings";
@@ -70,9 +78,19 @@ export function App() {
   const [selectedCommit, setSelectedCommit] = useState<
     RepositoryCommitDto["commit"] | null
   >(null);
+  const [
+    pendingChangeNavigation,
+    setPendingChangeNavigation
+  ] = useState<RepositoryChangeSelectionRequest | null>(null);
+  const changeNavigationSequence = useRef(0);
   const appSettings = useAppSettings();
   const theme = appSettings.settings.appearance.theme;
   const workspace = useWorkspace();
+  const workspaceChangedFiles = useWorkspaceChangedFiles(
+    workspace.workspace,
+    workspace.snapshots,
+    globalSearchOpen
+  );
   const repositoryCommands = useRepositoryCommands(
     workspace.workspace?.selectedTarget,
     workspace.operations
@@ -100,12 +118,16 @@ export function App() {
       operation.state === "running" ||
       operation.state === "cancelling"
   );
-  const workspaceTargets = useMemo(
-    () =>
-      workspace.workspace
-        ? listWorkspaceTargets(workspace.workspace)
-        : [],
+  const activeWorkspaceTargets = useMemo(
+    () => listActiveWorkspaceTargets(workspace.workspace),
     [workspace.workspace]
+  );
+  const activeWorkspaceRepositoryCount = useMemo(
+    () =>
+      new Set(
+        activeWorkspaceTargets.map((target) => target.repositoryId)
+      ).size,
+    [activeWorkspaceTargets]
   );
   const operationAttentionCount = workspace.operations.filter(
     (operation) =>
@@ -319,6 +341,8 @@ export function App() {
   }, [repositoryCommands.preflight]);
 
   const openRepositoryTarget = (target: RepositoryTargetDto) => {
+    changeNavigationSequence.current += 1;
+    setPendingChangeNavigation(null);
     void workspace.selectTarget(target);
     const nextTab = repositoryTabForTargetSwitch(repositoryTab);
     setRepositoryTab(nextTab);
@@ -333,7 +357,40 @@ export function App() {
       { silent: true }
     );
   };
+  const openRepositoryChange = async (
+    location: RepositoryChangeLocation
+  ) => {
+    const navigationId = ++changeNavigationSequence.current;
+    setPendingChangeNavigation(null);
+    const selected = await workspace.selectTarget(
+      location.target
+    );
+    if (
+      !selected ||
+      changeNavigationSequence.current !== navigationId
+    ) {
+      return;
+    }
+
+    setPendingChangeNavigation({
+      ...location,
+      id: navigationId
+    });
+    setRepositoryTab("changes");
+    setView("repository");
+    void appSettings.update(
+      {
+        navigation: {
+          lastContentView: "repository",
+          repositoryTab: "changes"
+        }
+      },
+      { silent: true }
+    );
+  };
   const navigate = (nextView: AppView) => {
+    changeNavigationSequence.current += 1;
+    setPendingChangeNavigation(null);
     if (nextView === "workspace") {
       setWorkspaceTab("overview");
       void appSettings.update(
@@ -356,6 +413,8 @@ export function App() {
   };
 
   const openWorkspaceTab = (tab: WorkspaceTab) => {
+    changeNavigationSequence.current += 1;
+    setPendingChangeNavigation(null);
     setWorkspaceTab(tab);
     setView("workspace");
     void appSettings.update(
@@ -370,6 +429,8 @@ export function App() {
   };
 
   const openRepositoryTab = (tab: RepositoryTab) => {
+    changeNavigationSequence.current += 1;
+    setPendingChangeNavigation(null);
     setRepositoryTab(tab);
     setView("repository");
     void appSettings.update(
@@ -505,7 +566,9 @@ export function App() {
               workspaceCommandBusy={
                 repositoryCommands.busy || runtimeRefreshing
               }
-              workspaceRepositoryCount={workspaceTargets.length}
+              workspaceRepositoryCount={
+                activeWorkspaceRepositoryCount
+              }
               onFetch={() => {
                 if (selectedTarget) {
                   void repositoryCommands.request({
@@ -524,24 +587,24 @@ export function App() {
                 }
               }}
               onFetchWorkspace={() => {
-                if (workspaceTargets.length > 0) {
-                  void fetchTargets(workspaceTargets);
+                if (activeWorkspaceTargets.length > 0) {
+                  void fetchTargets(activeWorkspaceTargets);
                 }
               }}
               onPullWorkspace={() => {
-                if (workspaceTargets.length > 0) {
+                if (activeWorkspaceTargets.length > 0) {
                   void repositoryCommands.request({
                     type: "pull",
-                    targets: workspaceTargets,
+                    targets: activeWorkspaceTargets,
                     strategy: "ff-only"
                   });
                 }
               }}
               onPushWorkspace={() => {
-                if (workspaceTargets.length > 0) {
+                if (activeWorkspaceTargets.length > 0) {
                   void repositoryCommands.request({
                     type: "push",
-                    targets: workspaceTargets,
+                    targets: activeWorkspaceTargets,
                     strategy: appSettings.settings.git.pushStrategy
                   });
                 }
@@ -624,6 +687,9 @@ export function App() {
               ) : view === "repository" ? (
                 <RepositoryPage
                   appSettings={appSettings}
+                  changeSelectionRequest={
+                    pendingChangeNavigation
+                  }
                   externalApplications={externalApplications}
                   operations={workspace.operations}
                   snapshots={workspace.snapshots}
@@ -634,6 +700,13 @@ export function App() {
                   terminals={externalTerminals}
                   onOpenTab={openRepositoryTab}
                   onCommitSelectionChange={setSelectedCommit}
+                  onChangeSelectionHandled={(requestId) =>
+                    setPendingChangeNavigation((current) =>
+                      current?.id === requestId
+                        ? null
+                        : current
+                    )
+                  }
                 />
               ) : view === "operations" ? (
                 <OperationCenterPage
@@ -694,6 +767,11 @@ export function App() {
       )}
       {globalSearchOpen && (
         <GlobalSearchDialog
+          changes={workspaceChangedFiles.changes}
+          changesLoading={workspaceChangedFiles.loading}
+          failedChangeTargetCount={
+            workspaceChangedFiles.failedTargetCount
+          }
           onClose={() => setGlobalSearchOpen(false)}
           onFetchAll={() => {
             if (!workspace.workspace) {
@@ -707,6 +785,9 @@ export function App() {
             }
           }}
           onNavigate={navigate}
+          onOpenChange={(location) =>
+            void openRepositoryChange(location)
+          }
           onOpenTarget={openRepositoryTarget}
           onRefresh={() => void workspace.refresh()}
           onToggleTheme={toggleTheme}

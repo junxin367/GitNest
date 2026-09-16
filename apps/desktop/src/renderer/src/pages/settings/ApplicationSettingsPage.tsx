@@ -393,59 +393,126 @@ export function ApplicationSettingsPage({
                 </SettingsCard>
 
                 <SettingsCard
-                  description="这些偏好由应用中的主题和 Diff 控件实时更新。"
+                  description="按类别查看当前界面与浏览行为偏好。"
                   title="当前偏好"
                 >
-                  <dl className="detail-list settings-preference-list">
-                    <Detail
-                      label="界面主题"
-                      value={
-                        appSettings.settings.appearance.theme ===
-                        "dark"
-                          ? "深色"
-                          : "浅色"
-                      }
-                    />
-                    <Detail
-                      label="文件变更视图"
-                      value={
-                        appSettings.settings.diff.fileView ===
-                        "tree"
-                          ? "树形"
-                          : "列表"
-                      }
-                    />
-                    <Detail
-                      label="Diff 布局"
-                      value={
-                        appSettings.settings.diff.layout ===
-                        "split"
-                          ? "并排"
-                          : "统一"
-                      }
-                    />
-                    <Detail
-                      label="自动换行"
-                      value={
-                        appSettings.settings.diff.wrap
-                          ? "开启"
-                          : "关闭"
-                      }
-                    />
-                    <Detail
-                      label="树形目录"
-                      value={
-                        appSettings.settings.diff
-                          .treeDirectoriesCollapsed
-                          ? "默认收起"
-                          : "默认展开"
-                      }
-                    />
-                    <Detail
-                      label="提交区域高度"
-                      value={`${appSettings.settings.diff.commitPanelHeight}px`}
-                    />
-                  </dl>
+                  <div className="settings-preference-groups">
+                    <section
+                      aria-labelledby="appearance-preference-title"
+                      className="settings-preference-group"
+                    >
+                      <div className="settings-preference-group-header">
+                        <Icon name="sun" size={14} />
+                        <h3
+                          className="settings-preference-group-title"
+                          id="appearance-preference-title"
+                        >
+                          界面外观
+                        </h3>
+                      </div>
+                      <dl className="detail-list settings-preference-list">
+                        <Detail
+                          label="界面主题"
+                          value={
+                            appSettings.settings.appearance
+                              .theme === "dark"
+                              ? "深色"
+                              : "浅色"
+                          }
+                        />
+                      </dl>
+                    </section>
+
+                    <section
+                      aria-labelledby="file-browsing-preference-title"
+                      className="settings-preference-group"
+                    >
+                      <div className="settings-preference-group-header">
+                        <Icon name="folder" size={14} />
+                        <h3
+                          className="settings-preference-group-title"
+                          id="file-browsing-preference-title"
+                        >
+                          文件浏览
+                        </h3>
+                      </div>
+                      <dl className="detail-list settings-preference-list">
+                        <Detail
+                          label="文件变更视图"
+                          value={
+                            appSettings.settings.diff
+                              .fileView === "tree"
+                              ? "树形"
+                              : "列表"
+                          }
+                        />
+                        <Detail
+                          label="树形目录"
+                          value={
+                            appSettings.settings.diff
+                              .treeDirectoriesCollapsed
+                              ? "默认收起"
+                              : "默认展开"
+                          }
+                        />
+                      </dl>
+                    </section>
+
+                    <section
+                      aria-labelledby="diff-preference-title"
+                      className="settings-preference-group"
+                    >
+                      <div className="settings-preference-group-header">
+                        <Icon name="fileCode" size={14} />
+                        <h3
+                          className="settings-preference-group-title"
+                          id="diff-preference-title"
+                        >
+                          差异查看
+                        </h3>
+                      </div>
+                      <dl className="detail-list settings-preference-list">
+                        <Detail
+                          label="Diff 布局"
+                          value={
+                            appSettings.settings.diff.layout ===
+                            "split"
+                              ? "并排"
+                              : "统一"
+                          }
+                        />
+                        <Detail
+                          label="自动换行"
+                          value={
+                            appSettings.settings.diff.wrap
+                              ? "开启"
+                              : "关闭"
+                          }
+                        />
+                      </dl>
+                    </section>
+
+                    <section
+                      aria-labelledby="commit-preference-title"
+                      className="settings-preference-group"
+                    >
+                      <div className="settings-preference-group-header">
+                        <Icon name="commit" size={14} />
+                        <h3
+                          className="settings-preference-group-title"
+                          id="commit-preference-title"
+                        >
+                          提交体验
+                        </h3>
+                      </div>
+                      <dl className="detail-list settings-preference-list">
+                        <Detail
+                          label="提交区域高度"
+                          value={`${appSettings.settings.diff.commitPanelHeight}px`}
+                        />
+                      </dl>
+                    </section>
+                  </div>
                 </SettingsCard>
               </>
             )}

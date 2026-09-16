@@ -5,6 +5,7 @@ import {
   parseComparedCommitHistory,
   parseCommitHistory
 } from "./history";
+import { parseStashList } from "./stashes";
 import { parseWorktrees } from "./worktrees";
 
 describe("structured Git parsers", () => {
@@ -76,6 +77,51 @@ describe("structured Git parsers", () => {
         comparisonSide: "base"
       })
     ]);
+  });
+
+  it("parses stash metadata with its exact reflog selector and base commit", () => {
+    const output =
+      "stash@{0}\0" +
+      "0123456789abcdef0123456789abcdef01234567\0" +
+      "June\0" +
+      "june@example.com\0" +
+      "2026-09-16T10:00:00+08:00\0" +
+      "On main: work in progress\0" +
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\0\0";
+
+    expect(parseStashList(output)).toEqual([
+      {
+        ref: "stash@{0}",
+        hash: "0123456789abcdef0123456789abcdef01234567",
+        authorName: "June",
+        authorEmail: "june@example.com",
+        authoredAt: "2026-09-16T10:00:00+08:00",
+        subject: "On main: work in progress",
+        parentHashes: [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        baseHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]);
+  });
+
+  it("rejects stash object ids between the complete SHA-1 and SHA-256 lengths", () => {
+    for (const length of [41, 52, 63]) {
+      const output =
+        `stash@{0}\0${"a".repeat(length)}\0` +
+        "June\0" +
+        "june@example.com\0" +
+        "2026-09-16T10:00:00+08:00\0" +
+        "On main: work in progress\0" +
+        `${"b".repeat(40)}\0\0`;
+
+      expect(() => parseStashList(output)).toThrowError(
+        expect.objectContaining({
+          code: "INVALID_GIT_OUTPUT"
+        })
+      );
+    }
   });
 
   it("parses primary, linked, locked, and prunable worktrees", () => {

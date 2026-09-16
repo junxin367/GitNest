@@ -583,6 +583,143 @@ describe("GitCliClient integration", () => {
     );
   });
 
+  it("lists stashes and reads their files and per-file patches including untracked files", async () => {
+    const stashFixture = await createTemporaryDirectoryFixture(
+      "stash-browser"
+    );
+
+    try {
+      await runGit(stashFixture.path, [
+        "init",
+        "--initial-branch=main",
+        "."
+      ]);
+      await runGit(stashFixture.path, [
+        "config",
+        "user.name",
+        "Stash Author"
+      ]);
+      await runGit(stashFixture.path, [
+        "config",
+        "user.email",
+        "stash@example.com"
+      ]);
+      await writeFile(
+        join(stashFixture.path, "tracked.txt"),
+        "before\n",
+        "utf8"
+      );
+      await writeFile(
+        join(stashFixture.path, "untouched.txt"),
+        "unchanged\n",
+        "utf8"
+      );
+      await runGit(stashFixture.path, [
+        "add",
+        "tracked.txt",
+        "untouched.txt"
+      ]);
+      await runGit(stashFixture.path, [
+        "commit",
+        "-m",
+        "Stash base"
+      ]);
+      await writeFile(
+        join(stashFixture.path, "tracked.txt"),
+        "after\n",
+        "utf8"
+      );
+      await writeFile(
+        join(stashFixture.path, "untracked.txt"),
+        "new file\n",
+        "utf8"
+      );
+      await runGit(stashFixture.path, [
+        "stash",
+        "push",
+        "--include-untracked",
+        "-m",
+        "Saved work"
+      ]);
+
+      const stashes = await client.readStashes(
+        stashFixture.path
+      );
+
+      expect(stashes).toHaveLength(1);
+      expect(stashes[0]).toMatchObject({
+        ref: "stash@{0}",
+        subject: expect.stringContaining("Saved work"),
+        authorName: "Stash Author",
+        baseHash: expect.stringMatching(/^[0-9a-f]{40,64}$/i)
+      });
+
+      await expect(
+        client.readStashFiles(
+          stashFixture.path,
+          "stash@{0}"
+        )
+      ).resolves.toMatchObject({
+        ref: "stash@{0}",
+        hash: stashes[0]?.hash,
+        additions: 2,
+        deletions: 1,
+        files: expect.arrayContaining([
+          expect.objectContaining({ path: "tracked.txt" }),
+          expect.objectContaining({ path: "untracked.txt" })
+        ])
+      });
+
+      await expect(
+        client.readStashDiff(stashFixture.path, {
+          stashRef: "stash@{0}",
+          path: "untracked.txt",
+          contextLines: 3
+        })
+      ).resolves.toMatchObject({
+        ref: "stash@{0}",
+        path: "untracked.txt",
+        content: expect.stringContaining("+new file"),
+        additions: 1,
+        deletions: 0,
+        binary: false
+      });
+
+      await expect(
+        client.readStashDiff(stashFixture.path, {
+          stashRef: "stash@{0}",
+          path: "untouched.txt",
+          contextLines: 3
+        })
+      ).resolves.toMatchObject({
+        ref: "stash@{0}",
+        path: "untouched.txt",
+        content: "",
+        additions: 0,
+        deletions: 0,
+        binary: false
+      });
+    } finally {
+      await stashFixture.dispose();
+    }
+  });
+
+  it("rejects arbitrary stash revisions and escaping stash paths", async () => {
+    await expect(
+      client.readStashFiles(fixture.repositoryPath, "--all")
+    ).rejects.toMatchObject({
+      code: "INVALID_REQUEST"
+    });
+    await expect(
+      client.readStashDiff(fixture.repositoryPath, {
+        stashRef: "stash@{0}",
+        path: "../outside.txt"
+      })
+    ).rejects.toMatchObject({
+      code: "INVALID_REQUEST"
+    });
+  });
+
   it("marks remote branches merged into the current HEAD", async () => {
     const mergedFixture = await createGitRepositoryFixture();
 
@@ -749,6 +886,195 @@ describe("GitCliClient integration", () => {
     }
   });
 
+  it("reads root, normal, and merge commit file diffs against the first parent", async () => {
+    const commitDiffFixture =
+      await createTemporaryDirectoryFixture("commit-diff");
+
+    try {
+      await runGit(commitDiffFixture.path, [
+        "init",
+        "--initial-branch=main",
+        "."
+      ]);
+      await runGit(commitDiffFixture.path, [
+        "config",
+        "user.name",
+        "Commit Diff Author"
+      ]);
+      await runGit(commitDiffFixture.path, [
+        "config",
+        "user.email",
+        "commit-diff@example.com"
+      ]);
+      await writeFile(
+        join(commitDiffFixture.path, "story.txt"),
+        "root\n",
+        "utf8"
+      );
+      await runGit(commitDiffFixture.path, ["add", "story.txt"]);
+      await runGit(commitDiffFixture.path, [
+        "commit",
+        "-m",
+        "Root commit"
+      ]);
+      const rootHash = (
+        await runGit(commitDiffFixture.path, [
+          "rev-parse",
+          "HEAD"
+        ])
+      ).trim();
+
+      await writeFile(
+        join(commitDiffFixture.path, "story.txt"),
+        "normal\n",
+        "utf8"
+      );
+      await runGit(commitDiffFixture.path, ["add", "story.txt"]);
+      await runGit(commitDiffFixture.path, [
+        "commit",
+        "-m",
+        "Normal commit"
+      ]);
+      const normalHash = (
+        await runGit(commitDiffFixture.path, [
+          "rev-parse",
+          "HEAD"
+        ])
+      ).trim();
+
+      await runGit(commitDiffFixture.path, [
+        "checkout",
+        "-b",
+        "side"
+      ]);
+      await writeFile(
+        join(commitDiffFixture.path, "side-only.txt"),
+        "side\n",
+        "utf8"
+      );
+      await runGit(commitDiffFixture.path, [
+        "add",
+        "side-only.txt"
+      ]);
+      await runGit(commitDiffFixture.path, [
+        "commit",
+        "-m",
+        "Side commit"
+      ]);
+      await runGit(commitDiffFixture.path, [
+        "checkout",
+        "main"
+      ]);
+      await writeFile(
+        join(commitDiffFixture.path, "main-only.txt"),
+        "main\n",
+        "utf8"
+      );
+      await runGit(commitDiffFixture.path, [
+        "add",
+        "main-only.txt"
+      ]);
+      await runGit(commitDiffFixture.path, [
+        "commit",
+        "-m",
+        "Main commit"
+      ]);
+      await runGit(commitDiffFixture.path, [
+        "merge",
+        "--no-ff",
+        "-m",
+        "Merge side",
+        "side"
+      ]);
+      const mergeHash = (
+        await runGit(commitDiffFixture.path, [
+          "rev-parse",
+          "HEAD"
+        ])
+      ).trim();
+
+      await expect(
+        client.readCommitDiff(commitDiffFixture.path, {
+          commitHash: rootHash,
+          path: "story.txt"
+        })
+      ).resolves.toMatchObject({
+        path: "story.txt",
+        content: expect.stringContaining("+root"),
+        additions: 1,
+        deletions: 0,
+        binary: false,
+        truncated: false
+      });
+      await expect(
+        client.readCommitDiff(commitDiffFixture.path, {
+          commitHash: normalHash,
+          path: "story.txt"
+        })
+      ).resolves.toMatchObject({
+        path: "story.txt",
+        content: expect.stringMatching(
+          /(?:^|\n)-root\r?\n\+normal(?:\r?\n|$)/
+        ),
+        additions: 1,
+        deletions: 1
+      });
+      await expect(
+        client.readCommitDiff(commitDiffFixture.path, {
+          commitHash: mergeHash,
+          path: "side-only.txt"
+        })
+      ).resolves.toMatchObject({
+        path: "side-only.txt",
+        content: expect.stringContaining("+side"),
+        additions: 1,
+        deletions: 0
+      });
+      await expect(
+        client.readCommitDiff(commitDiffFixture.path, {
+          commitHash: mergeHash,
+          path: "main-only.txt"
+        })
+      ).resolves.toMatchObject({
+        path: "main-only.txt",
+        content: "",
+        additions: 0,
+        deletions: 0
+      });
+
+      await writeFile(
+        join(commitDiffFixture.path, "large.txt"),
+        "large line\n".repeat(300_000),
+        "utf8"
+      );
+      await runGit(commitDiffFixture.path, ["add", "large.txt"]);
+      await runGit(commitDiffFixture.path, [
+        "commit",
+        "-m",
+        "Large commit"
+      ]);
+      const largeHash = (
+        await runGit(commitDiffFixture.path, [
+          "rev-parse",
+          "HEAD"
+        ])
+      ).trim();
+      const largeDiff = await client.readCommitDiff(
+        commitDiffFixture.path,
+        {
+          commitHash: largeHash,
+          path: "large.txt"
+        }
+      );
+      expect(largeDiff.truncated).toBe(true);
+      expect(
+        Buffer.byteLength(largeDiff.content)
+      ).toBeLessThanOrEqual(2 * 1024 * 1024);
+    } finally {
+      await commitDiffFixture.dispose();
+    }
+  });
+
   it("returns empty read models for a repository with an unborn HEAD", async () => {
     await expect(
       client.readCommitHistory(emptyFixture.path)
@@ -810,6 +1136,22 @@ describe("GitCliClient integration", () => {
     ).rejects.toMatchObject({
       code: "INVALID_REQUEST"
     });
+    await expect(
+      client.readCommitDiff(fixture.repositoryPath, {
+        commitHash: "HEAD~1",
+        path: "README.md"
+      })
+    ).rejects.toMatchObject({
+      code: "INVALID_REQUEST"
+    });
+    await expect(
+      client.readCommitDiff(fixture.repositoryPath, {
+        commitHash: "abcdef",
+        path: "..\\outside.txt"
+      })
+    ).rejects.toMatchObject({
+      code: "INVALID_REQUEST"
+    });
   });
 
   it("truncates a very large untracked diff without returning unbounded output", async () => {
@@ -862,8 +1204,8 @@ describe("GitCliClient integration", () => {
 async function runGit(
   cwd: string,
   args: readonly string[]
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
     const child = spawn("git", [...args], {
       cwd,
       env: {
@@ -875,15 +1217,19 @@ async function runGit(
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"]
     });
+    const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
 
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout.push(chunk);
+    });
     child.stderr.on("data", (chunk: Buffer) => {
       stderr.push(chunk);
     });
     child.once("error", reject);
     child.once("close", (exitCode) => {
       if (exitCode === 0) {
-        resolve();
+        resolve(Buffer.concat(stdout).toString("utf8"));
         return;
       }
 

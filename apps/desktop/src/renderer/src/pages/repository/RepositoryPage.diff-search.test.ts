@@ -8,7 +8,8 @@ import {
 import {
   groupHistoryRefBranches,
   historyRefOptionClassName,
-  resolveHistoryLoadingRegion
+  resolveHistoryLoadingRegion,
+  shouldShowRepositoryChangesSkeleton
 } from "./RepositoryPage";
 
 describe("shared Diff search model", () => {
@@ -192,5 +193,44 @@ describe("history loading presentation", () => {
         loading: true
       })
     ).toBe("ready");
+  });
+});
+
+describe("repository changes loading presentation", () => {
+  it("shows the skeleton before the first changes response", () => {
+    expect(
+      shouldShowRepositoryChangesSkeleton({
+        hasCurrentChanges: false,
+        hasError: false,
+        scopeChanged: false
+      })
+    ).toBe(true);
+  });
+
+  it("shows the skeleton immediately when switching repositories", () => {
+    expect(
+      shouldShowRepositoryChangesSkeleton({
+        hasCurrentChanges: true,
+        hasError: false,
+        scopeChanged: true
+      })
+    ).toBe(true);
+  });
+
+  it("reveals inputs only after current data or an error is ready", () => {
+    expect(
+      shouldShowRepositoryChangesSkeleton({
+        hasCurrentChanges: true,
+        hasError: false,
+        scopeChanged: false
+      })
+    ).toBe(false);
+    expect(
+      shouldShowRepositoryChangesSkeleton({
+        hasCurrentChanges: false,
+        hasError: true,
+        scopeChanged: false
+      })
+    ).toBe(false);
   });
 });

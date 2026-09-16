@@ -9,18 +9,24 @@ import {
 } from "react";
 
 import type {
+  RepositoryChangesDto,
   RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
   WorkspaceDetailsDto
 } from "@gitnest/contracts";
 
 import type { AppView } from "../../app/navigation";
+import type { RepositoryChangeLocation } from "../../entities/repository/changeSelection";
 import {
   findTargetSnapshot,
   getSnapshotChangeCount,
   listWorkspaceTargets,
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
+import {
+  buildDiffViewerFiles,
+  type DiffViewerFile
+} from "../../shared/model/diffViewModel";
 import { Icon, type IconName } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
@@ -29,7 +35,11 @@ import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
 interface GlobalSearchDialogProps {
   workspace: WorkspaceDetailsDto | null;
   snapshots: RepositoryStatusSnapshotDto[];
+  changes: RepositoryChangesDto[];
+  changesLoading: boolean;
+  failedChangeTargetCount: number;
   onClose(): void;
+  onOpenChange(location: RepositoryChangeLocation): void;
   onOpenTarget(target: RepositoryTargetDto): void;
   onNavigate(view: AppView): void;
   onRefresh(): void;
@@ -71,14 +81,32 @@ type CommandSearchResult = {
   action: SearchCommandAction;
 };
 
+type ChangeSearchResult = {
+  kind: "change";
+  id: string;
+  title: string;
+  subtitle: string;
+  status: string;
+  target: RepositoryTargetDto;
+  path: string;
+  originalPath?: string;
+  mode: DiffViewerFile["mode"];
+  icon: "fileCode";
+};
+
 type SearchResult =
+  | ChangeSearchResult
   | RepositorySearchResult
   | CommandSearchResult;
 
 export function GlobalSearchDialog({
   workspace,
   snapshots,
+  changes,
+  changesLoading,
+  failedChangeTargetCount,
   onClose,
+  onOpenChange,
   onOpenTarget,
   onNavigate,
   onRefresh,
@@ -86,7 +114,9 @@ export function GlobalSearchDialog({
   onFetchAll
 }: GlobalSearchDialogProps) {
   const [query, setQuery] = useState("");
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedResultId, setSelectedResultId] = useState<
+    string | null
+  >(null);
   const dialogRef = useRef<HTMLElement>(null);
   useModalFocusTrap(dialogRef);
 
@@ -128,6 +158,48 @@ export function GlobalSearchDialog({
       };
     });
   }, [snapshots, workspace]);
+
+  const changeResults = useMemo<ChangeSearchResult[]>(() => {
+    const repositoriesByTarget = new Map(
+      repositoryResults.map((result) => [
+        targetKey(result.target),
+        result
+      ])
+    );
+
+    return changes
+      .flatMap((repositoryChanges) => {
+        const repository = repositoriesByTarget.get(
+          targetKey(repositoryChanges.target)
+        );
+        if (!repository) {
+          return [];
+        }
+
+        return buildDiffViewerFiles(
+          repositoryChanges.snapshot.changes
+        ).map((file) => ({
+          kind: "change" as const,
+          id: `change:${repository.id}:${file.key}`,
+          title: file.path,
+          subtitle: `${repository.title} · ${repository.subtitle}`,
+          status: formatChangeStatus(file),
+          target: repository.target,
+          path: file.path,
+          ...(file.change.originalPath
+            ? { originalPath: file.change.originalPath }
+            : {}),
+          mode: file.mode,
+          icon: "fileCode" as const
+        }));
+      })
+      .sort(
+        (left, right) =>
+          left.subtitle.localeCompare(right.subtitle, "zh-CN") ||
+          left.title.localeCompare(right.title, "zh-CN") ||
+          left.mode.localeCompare(right.mode)
+      );
+  }, [changes, repositoryResults]);
 
   const commandResults = useMemo<CommandSearchResult[]>(() => {
     const commands: CommandSearchResult[] = [
@@ -219,6 +291,17 @@ export function GlobalSearchDialog({
   }, [repositoryResults.length, workspace?.selectedTarget]);
 
   const normalizedQuery = query.trim().toLowerCase();
+  const matchingChangeResults = useMemo(
+    () =>
+      normalizedQuery
+        ? changeResults
+            .filter((result) =>
+              matchesSearch(result, normalizedQuery)
+            )
+            .slice(0, 20)
+        : [],
+    [changeResults, normalizedQuery]
+  );
   const matchingRepositoryResults = useMemo(
     () =>
       repositoryResults
@@ -237,17 +320,30 @@ export function GlobalSearchDialog({
   );
   const results = useMemo(
     () => [
+      ...matchingChangeResults,
       ...matchingRepositoryResults,
       ...matchingCommandResults
     ],
-    [matchingCommandResults, matchingRepositoryResults]
+    [
+      matchingChangeResults,
+      matchingCommandResults,
+      matchingRepositoryResults
+    ]
+  );
+  const selectedIndex = Math.max(
+    results.findIndex(
+      (result) => result.id === selectedResultId
+    ),
+    0
   );
 
   useEffect(() => {
-    setSelectedIndex((current) =>
-      Math.min(current, Math.max(results.length - 1, 0))
+    setSelectedResultId((current) =>
+      current && results.some((result) => result.id === current)
+        ? current
+        : results[0]?.id ?? null
     );
-  }, [results.length]);
+  }, [results]);
 
   const activate = (result: SearchResult | undefined) => {
     if (!result) {
@@ -255,6 +351,14 @@ export function GlobalSearchDialog({
     }
 
     onClose();
+    if (result.kind === "change") {
+      onOpenChange({
+        target: result.target,
+        path: result.path,
+        mode: result.mode
+      });
+      return;
+    }
     if (result.kind === "repository") {
       onOpenTarget(result.target);
       return;
@@ -291,23 +395,23 @@ export function GlobalSearchDialog({
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setSelectedIndex((current) =>
+      const nextIndex =
         results.length === 0
           ? 0
-          : Math.min(current + 1, results.length - 1)
-      );
+          : Math.min(selectedIndex + 1, results.length - 1);
+      setSelectedResultId(results[nextIndex]?.id ?? null);
       return;
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      setSelectedIndex((current) =>
+      const nextIndex =
         results.length === 0
           ? 0
-          : current <= 0
+          : selectedIndex <= 0
             ? results.length - 1
-            : current - 1
-      );
+            : selectedIndex - 1;
+      setSelectedResultId(results[nextIndex]?.id ?? null);
       return;
     }
 
@@ -349,16 +453,16 @@ export function GlobalSearchDialog({
                 : undefined
             }
             aria-controls="global-search-results"
-            aria-label="搜索仓库、分支或命令"
+            aria-label="搜索仓库、变更文件、分支或命令"
             autoComplete="off"
             className="global-search-input"
             data-modal-initial-focus="true"
             id="global-search-input"
             onChange={(event) => {
               setQuery(event.target.value);
-              setSelectedIndex(0);
+              setSelectedResultId(null);
             }}
-            placeholder="搜索仓库、分支或命令…"
+            placeholder="搜索仓库、变更文件、分支或命令…"
             role="combobox"
             value={query}
           />
@@ -367,6 +471,9 @@ export function GlobalSearchDialog({
 
         <div
           aria-label="搜索结果"
+          aria-busy={Boolean(
+            normalizedQuery && changesLoading
+          )}
           className="global-search-results"
           id="global-search-results"
           role="listbox"
@@ -374,7 +481,11 @@ export function GlobalSearchDialog({
           {results.length === 0 ? (
             <div className="global-search-empty">
               {normalizedQuery
-                ? "没有匹配的仓库或命令。"
+                ? changesLoading
+                  ? "正在读取有变更仓库的文件…"
+                  : failedChangeTargetCount > 0
+                    ? `已读取的仓库中没有匹配结果；${failedChangeTargetCount} 个仓库的变更文件未能读取。`
+                    : "没有匹配的仓库、变更文件或命令。"
                 : "当前 Workspace 暂无可搜索内容。"}
             </div>
           ) : (
@@ -382,9 +493,7 @@ export function GlobalSearchDialog({
               <Fragment key={result.id}>
                 {result.kind !== results[index - 1]?.kind && (
                   <div className="global-search-group-label">
-                    {result.kind === "repository"
-                      ? "仓库与 Worktree"
-                      : "命令"}
+                    {resultGroupLabel(result)}
                   </div>
                 )}
                 <Button variant="unstyled"
@@ -396,8 +505,10 @@ export function GlobalSearchDialog({
                   }`}
                   id={getResultElementId(index)}
                   onClick={() => activate(result)}
-                  onFocus={() => setSelectedIndex(index)}
-                  onMouseEnter={() => setSelectedIndex(index)}
+                  onFocus={() => setSelectedResultId(result.id)}
+                  onMouseEnter={() =>
+                    setSelectedResultId(result.id)
+                  }
                   role="option"
                   type="button"
                 >
@@ -409,7 +520,7 @@ export function GlobalSearchDialog({
                     <span>{result.subtitle}</span>
                   </span>
                   <span className="global-search-result-trailing">
-                    {result.kind === "repository" && (
+                    {result.kind !== "command" && (
                       <span className="global-search-result-status">
                         {result.status}
                       </span>
@@ -424,6 +535,23 @@ export function GlobalSearchDialog({
               </Fragment>
             ))
           )}
+          {normalizedQuery &&
+            results.length > 0 &&
+            (changesLoading ||
+              failedChangeTargetCount > 0) && (
+              <div
+                className={`global-search-index-status${
+                  failedChangeTargetCount > 0
+                    ? " warning"
+                    : ""
+                }`}
+                role="status"
+              >
+                {changesLoading
+                  ? "正在继续读取其他有变更仓库…"
+                  : `${failedChangeTargetCount} 个仓库的变更文件未能读取。`}
+              </div>
+            )}
         </div>
         </section>
       </div>
@@ -442,12 +570,40 @@ function matchesSearch(
   const searchable = [
     result.title,
     result.subtitle,
-    result.kind === "repository" ? result.status : ""
+    result.kind === "command" ? "" : result.status,
+    result.kind === "change"
+      ? `${result.originalPath ?? ""} ${result.mode}`
+      : ""
   ]
     .join(" ")
     .toLowerCase();
 
   return searchable.includes(query);
+}
+
+function resultGroupLabel(result: SearchResult): string {
+  if (result.kind === "change") {
+    return "变更文件";
+  }
+  return result.kind === "repository"
+    ? "仓库与 Worktree"
+    : "命令";
+}
+
+function formatChangeStatus(file: DiffViewerFile): string {
+  const label =
+    file.mode === "staged"
+      ? "已暂存"
+      : file.mode === "untracked"
+        ? "未跟踪"
+        : "未暂存";
+  if (
+    !Number.isFinite(file.additions) ||
+    !Number.isFinite(file.deletions)
+  ) {
+    return label;
+  }
+  return `${label} · +${file.additions} −${file.deletions}`;
 }
 
 function formatTargetStatus(
@@ -482,4 +638,8 @@ function formatTargetStatus(
 
 function getResultElementId(index: number): string {
   return `global-search-result-${index}`;
+}
+
+function targetKey(target: RepositoryTargetDto): string {
+  return `${target.repositoryId}:${target.worktreeId}`;
 }

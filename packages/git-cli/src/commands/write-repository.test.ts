@@ -6,6 +6,7 @@ import {
   restoreWorktreeArguments,
   stageAllArguments,
   stageArguments,
+  stashMutationArguments,
   unstageArguments
 } from "./write-repository";
 
@@ -75,5 +76,31 @@ describe("repository write commands", () => {
       "--",
       "new.txt"
     ]);
+  });
+
+  it("applies immutable stash hashes and drops or pops exact stash refs", () => {
+    const hash = "a".repeat(40);
+
+    expect(
+      stashMutationArguments(
+        "apply",
+        "stash@{2}",
+        hash
+      )
+    ).toEqual(["stash", "apply", hash]);
+    expect(
+      stashMutationArguments(
+        "drop",
+        "stash@{2}",
+        hash
+      )
+    ).toEqual(["stash", "drop", "stash@{2}"]);
+    expect(
+      stashMutationArguments(
+        "pop",
+        "stash@{2}",
+        hash
+      )
+    ).toEqual(["stash", "pop", "stash@{2}"]);
   });
 });

@@ -2161,7 +2161,7 @@
       <div>
         <span class="eyebrow"><svg class="icon"><use href="#i-layers"></use></svg>Component system standard</span>
         <h1>菜单、控件与 Diff 按统一规范分类展示</h1>
-          <p>以共用 Token、控件尺寸和交互状态为基准，集中展示菜单、下拉组件、按钮、输入框与 Diff 工作区。当前 Diff 示例按仓库变更页展示统一布局、路径复制和面板内搜索。</p>
+          <p>以共用 Token、控件尺寸和交互状态为基准，集中展示菜单、下拉组件、按钮、输入框与 Diff 工作区。当前 Diff 示例按仓库变更页展示统一布局、储藏浏览、路径复制和面板内搜索。</p>
         <div class="status-key" aria-label="状态图例">
           <span>默认</span>
           <span class="hover">悬停 / 焦点</span>
@@ -2555,9 +2555,9 @@
       <div class="section-heading">
         <div>
           <h2>右键菜单与子菜单</h2>
-          <p>同一个基础容器根据目标类型产生四种内容结构。</p>
+          <p>同一个基础容器根据目标类型产生五种内容结构，储藏项复用指针定位、键盘导航与危险操作语义。</p>
         </div>
-        <span class="section-count">4 variants</span>
+        <span class="section-count">5 variants</span>
       </div>
 
       <div class="menu-grid">
@@ -2647,13 +2647,45 @@
           </div>
         </article>
 
+        <article class="sample-card">
+          <div class="sample-title">
+            <div>
+              <h3>储藏记录</h3>
+              <p>右键选中目标记录，按“恢复 / 删除 / 恢复并删除”顺序展示。</p>
+            </div>
+            <span class="sample-index">11</span>
+          </div>
+          <div class="sample-stage">
+            <div class="workspace-context-menu" role="menu" aria-label="stash@{0} 储藏操作">
+              <button type="button" role="menuitem">
+                <svg class="icon"><use href="#i-refresh"></use></svg>
+                <span>恢复</span>
+              </button>
+              <button class="danger" type="button" role="menuitem">
+                <svg class="icon"><use href="#i-alert"></use></svg>
+                <span>删除</span>
+              </button>
+              <button class="danger" type="button" role="menuitem">
+                <svg class="icon"><use href="#i-layers"></use></svg>
+                <span>恢复并删除</span>
+              </button>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Position</span><strong>pointer + clamp</strong></div>
+            <div class="sample-spec"><span>Focus</span><strong>first item</strong></div>
+            <div class="sample-spec"><span>Close</span><strong>Esc / outside / scroll</strong></div>
+            <div class="sample-spec"><span>Confirm</span><strong>required</strong></div>
+          </div>
+        </article>
+
         <article class="sample-card full">
           <div class="sample-title">
             <div>
               <h3>文件“打开方式”二级菜单</h3>
               <p>一级右键菜单向右展开应用子菜单；子菜单沿用 Open in 的 222px / 12px 体系。</p>
             </div>
-            <span class="sample-index">11</span>
+            <span class="sample-index">12</span>
           </div>
           <div class="sample-stage wide">
             <div class="nested-menu-stage">
@@ -3211,7 +3243,7 @@
           <div class="sample-title">
             <div>
               <h3>仓库变更页配置</h3>
-              <p>启用文件导航、暂存、提交区和独立窗口入口；文档工具栏及底部状态栏关闭。</p>
+              <p>启用文件导航、暂存、储藏浏览、提交区和独立窗口入口；文档工具栏及底部状态栏关闭。</p>
             </div>
             <span class="sample-index">23</span>
           </div>
@@ -3219,7 +3251,7 @@
             <div class="diff-component-mount" id="diffWorkspaceShowcase"></div>
           </div>
           <div class="sample-specs">
-            <div class="sample-spec"><span>Sidebar</span><strong>files + commit</strong></div>
+            <div class="sample-spec"><span>Sidebar</span><strong>files + stash + commit</strong></div>
             <div class="sample-spec"><span>DiffPanel</span><strong>repository / unified</strong></div>
             <div class="sample-spec"><span>Extension</span><strong>open standalone</strong></div>
             <div class="sample-spec"><span>Search</span><strong>files + Ctrl+F</strong></div>
@@ -3644,6 +3676,7 @@
           openStandaloneDiff: true,
           commitRegion: true,
           pushRegion: true,
+          stashBrowser: true,
           statusbar: false
         },
         commit: {
@@ -3652,6 +3685,52 @@
           aiEnabled: false,
           conflicts: 0
         },
+        stashes: [
+          {
+            hash: "90d2fa712a8c",
+            ref: "stash@{0}",
+            title: "WIP on test: 调整 Diff 工作区交互",
+            branch: "test",
+            author: "林舟",
+            relativeTime: "8 分钟前",
+            files: [
+              {
+                path: "src/main/java/com/faisco/core/service/WorkspaceStateService.java",
+                additions: 28,
+                deletions: 11
+              },
+              {
+                path: "src/test/java/com/faisco/core/service/WorkspaceStateServiceTest.java",
+                additions: 19,
+                deletions: 3
+              }
+            ]
+          },
+          {
+            hash: "c14b96ec1440",
+            ref: "stash@{1}",
+            title: "On master: 临时保留配置升级",
+            branch: "master",
+            author: "陈屿",
+            relativeTime: "昨天",
+            files: [
+              {
+                path: "src/main/java/com/faisco/core/config/CoreApplicationConfig.java",
+                additions: 12,
+                deletions: 6
+              },
+              {
+                path: "docs/git-status-test-cases.md",
+                additions: 21,
+                deletions: 0
+              },
+              {
+                path: "assets/diff-preview.png",
+                binary: true
+              }
+            ]
+          }
+        ],
         files: [
           {
             key: "application-config",
@@ -3734,6 +3813,7 @@
             openStandaloneDiff: false,
             commitRegion: false,
             pushRegion: false,
+            stashBrowser: false,
             statusbar: true
           },
           files: diffWorkspace.options.files

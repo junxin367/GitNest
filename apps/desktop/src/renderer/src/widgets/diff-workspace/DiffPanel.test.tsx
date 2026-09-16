@@ -310,21 +310,31 @@ describe("DiffPanel configuration", () => {
         );
       });
     };
+    const renderSkeleton = () => {
+      act(() => {
+        root.render(
+          <div data-testid="repository-loading" />
+        );
+      });
+    };
 
     renderPanel("unstaged:src/App.tsx", "repository-a");
     const repositoryAInput = openDiffSearch(container);
     setInputValue(repositoryAInput, "first repository");
 
+    renderSkeleton();
     renderPanel("unstaged:src/App.tsx", "repository-b");
     const repositoryBInput = openDiffSearch(container);
     expect(repositoryBInput.value).toBe("");
     setInputValue(repositoryBInput, "second repository");
 
+    renderSkeleton();
     renderPanel("unstaged:src/Other.tsx", "repository-a");
     expect(openDiffSearch(container).value).toBe(
       "first repository"
     );
 
+    renderSkeleton();
     renderPanel("unstaged:src/App.tsx", "repository-b");
     expect(openDiffSearch(container).value).toBe(
       "second repository"
@@ -382,6 +392,219 @@ describe("DiffPanel configuration", () => {
     expect(readHunkText(container, 0)).not.toContain("line 15");
     expect(readHunkText(container, 1)).not.toContain("line 15");
     expect(container.textContent).not.toContain("展开本段");
+  });
+
+  it("offers one right-click action for full or compact hunk context", () => {
+    const onContextRequest = vi.fn();
+
+    act(() => {
+      root.render(
+        <DiffPanel
+          additions={1}
+          config={repositoryDiffWorkspaceConfiguration.document}
+          content={compactMultiHunkContent}
+          contextLines={3}
+          deletions={1}
+          onContextRequest={onContextRequest}
+          path="src/App.tsx"
+          scopeKey="unstaged:src/App.tsx"
+        />
+      );
+    });
+
+    act(() => {
+      openHunkContextMenu(
+        findHunkContextTrigger(container, 0, "expand")
+      );
+    });
+    expect(readHunkContextMenuItems()).toHaveLength(1);
+    expect(readHunkContextMenuItems()[0]?.textContent).toContain(
+      "展开全部"
+    );
+
+    act(() => {
+      readHunkContextMenuItems()[0]?.click();
+    });
+    expect(onContextRequest).toHaveBeenLastCalledWith({
+      direction: "all",
+      hunkIndex: 0,
+      contextLines: 100_000
+    });
+    expect(readHunkContextMenuItems()).toHaveLength(0);
+    expect(document.activeElement).toBe(
+      container.querySelector(
+        '[role="region"][aria-label="文件 Diff"]'
+      )
+    );
+
+    act(() => {
+      root.render(
+        <DiffPanel
+          additions={1}
+          config={repositoryDiffWorkspaceConfiguration.document}
+          content={expandedMultiHunkContent}
+          contextLines={100_000}
+          deletions={1}
+          onContextRequest={onContextRequest}
+          path="src/App.tsx"
+          scopeKey="unstaged:src/App.tsx"
+        />
+      );
+    });
+    expect(document.activeElement).toBe(
+      findHunkContextTrigger(container, 0, "collapse")
+    );
+
+    act(() => {
+      openHunkContextMenu(
+        findHunkContextTrigger(container, 0, "collapse")
+      );
+    });
+    expect(readHunkContextMenuItems()).toHaveLength(1);
+    expect(readHunkContextMenuItems()[0]?.textContent).toContain(
+      "恢复精简"
+    );
+
+    act(() => {
+      readHunkContextMenuItems()[0]?.click();
+    });
+    expect(onContextRequest).toHaveBeenCalledTimes(1);
+    expect(
+      findHunkContextTrigger(container, 0, "expand")
+    ).toBeDefined();
+    expect(document.activeElement).toBe(
+      findHunkContextTrigger(container, 0, "expand")
+    );
+
+    act(() => {
+      root.render(
+        <DiffPanel
+          additions={1}
+          config={repositoryDiffWorkspaceConfiguration.document}
+          content={compactMultiHunkContent}
+          contextLines={3}
+          deletions={1}
+          onContextRequest={onContextRequest}
+          path="src/App.tsx"
+          scopeKey="unstaged:src/App.tsx"
+        />
+      );
+    });
+
+    act(() => {
+      findHunkContextTrigger(container, 1, "expand").click();
+    });
+    expect(onContextRequest).toHaveBeenLastCalledWith({
+      direction: "around",
+      hunkIndex: 1,
+      contextLines: 10
+    });
+
+    act(() => {
+      openHunkContextMenu(
+        findHunkContextTrigger(container, 1, "collapse")
+      );
+    });
+    expect(readHunkContextMenuItems()).toHaveLength(1);
+    expect(readHunkContextMenuItems()[0]?.textContent).toContain(
+      "展开全部"
+    );
+  });
+
+  it("closes only the hunk context menu when Escape is pressed", () => {
+    act(() => {
+      root.render(
+        <DiffPanel
+          config={repositoryDiffWorkspaceConfiguration.document}
+          content={compactMultiHunkContent}
+          onContextRequest={vi.fn()}
+          path="src/App.tsx"
+          scopeKey="unstaged:src/App.tsx"
+        />
+      );
+    });
+
+    const searchInput = openDiffSearch(container);
+    const trigger = findHunkContextTrigger(
+      container,
+      0,
+      "expand"
+    );
+    act(() => {
+      openHunkContextMenu(trigger);
+    });
+    const menuItem = readHunkContextMenuItems()[0];
+    expect(document.activeElement).toBe(menuItem);
+
+    act(() => {
+      menuItem?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          key: "Escape"
+        })
+      );
+    });
+
+    expect(readHunkContextMenuItems()).toHaveLength(0);
+    expect(
+      container.querySelector('input[aria-label="搜索文本"]')
+    ).toBe(searchInput);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("dismisses a hunk context menu when its diff becomes stale", () => {
+    const renderPanel = ({
+      content = compactMultiHunkContent,
+      truncated = false
+    }: {
+      content?: string;
+      truncated?: boolean;
+    } = {}) => {
+      act(() => {
+        root.render(
+          <DiffPanel
+            config={repositoryDiffWorkspaceConfiguration.document}
+            content={content}
+            onContextRequest={vi.fn()}
+            path="src/App.tsx"
+            scopeKey="unstaged:src/App.tsx"
+            truncated={truncated}
+          />
+        );
+      });
+    };
+
+    renderPanel();
+    act(() => {
+      openHunkContextMenu(
+        findHunkContextTrigger(container, 0, "expand")
+      );
+    });
+    expect(readHunkContextMenuItems()).toHaveLength(1);
+
+    renderPanel({
+      content: compactMultiHunkContent.replace(
+        "@@ -4,7 +4,7 @@",
+        "@@ -5,7 +5,7 @@"
+      )
+    });
+    expect(readHunkContextMenuItems()).toHaveLength(0);
+
+    act(() => {
+      openHunkContextMenu(
+        findHunkContextTrigger(container, 0, "expand")
+      );
+    });
+    expect(readHunkContextMenuItems()).toHaveLength(1);
+
+    renderPanel({
+      content: compactMultiHunkContent.replace(
+        "@@ -4,7 +4,7 @@",
+        "@@ -5,7 +5,7 @@"
+      ),
+      truncated: true
+    });
+    expect(readHunkContextMenuItems()).toHaveLength(0);
   });
 
   it("does not expose context expansion for binary or truncated diffs", () => {
@@ -615,6 +838,24 @@ function findHunkContextTrigger(
     );
   }
   return trigger;
+}
+
+function openHunkContextMenu(trigger: HTMLButtonElement): void {
+  trigger.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      clientX: 120,
+      clientY: 80
+    })
+  );
+}
+
+function readHunkContextMenuItems(): HTMLButtonElement[] {
+  return Array.from(
+    document.body.querySelectorAll<HTMLButtonElement>(
+      ".diff-hunk-context-menu [role='menuitem']"
+    )
+  );
 }
 
 function readHunkText(

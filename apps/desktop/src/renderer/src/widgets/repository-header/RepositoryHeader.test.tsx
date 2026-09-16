@@ -103,6 +103,56 @@ describe("RepositoryHeader", () => {
     expect(onFetchWorkspace).toHaveBeenCalledOnce();
   });
 
+  it("scopes Workspace tab counts to the selected entry", () => {
+    act(() => {
+      root.render(
+        <RepositoryHeader
+          commandActive={null}
+          commandCompletionVersion={0}
+          commandLocked={false}
+          externalApplications={externalApplications}
+          inspectorOpen={false}
+          refreshing={false}
+          repositoryTab="overview"
+          snapshots={[]}
+          view="workspace"
+          workspace={multiEntryWorkspace}
+          workspaceCommandBusy={false}
+          workspaceRepositoryCount={2}
+          workspaceTab="repositories"
+          onFetch={vi.fn()}
+          onFetchWorkspace={vi.fn()}
+          onOpenOperations={vi.fn()}
+          onOpenRepository={vi.fn()}
+          onOpenSettings={vi.fn()}
+          onOpenWorkspace={vi.fn()}
+          onPull={vi.fn()}
+          onPullWorkspace={vi.fn()}
+          onPushWorkspace={vi.fn()}
+          onPush={vi.fn()}
+          onRefresh={vi.fn()}
+          onRepositoryTabChange={vi.fn()}
+          onSwitchBranch={vi.fn()}
+          onToggleInspector={vi.fn()}
+          onWorkspaceTabChange={vi.fn()}
+        />
+      );
+    });
+
+    const tabCount = (label: string) =>
+      Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          '.context-tabs [role="tab"]'
+        )
+      )
+        .find((tab) => tab.textContent?.includes(label))
+        ?.querySelector(".tab-count")?.textContent;
+
+    expect(tabCount("仓库")).toBe("2");
+    expect(tabCount("活动")).toBe("2");
+    expect(tabCount("Worktrees")).toBe("3");
+  });
+
   it("shows repository actions without a force-push control", () => {
     act(() => {
       root.render(
@@ -116,7 +166,7 @@ describe("RepositoryHeader", () => {
           repositoryTab="changes"
           snapshots={[]}
           view="repository"
-          workspace={workspace}
+          workspace={repositoryWorkspace}
           workspaceCommandBusy={false}
           workspaceRepositoryCount={0}
           workspaceTab="overview"
@@ -144,6 +194,22 @@ describe("RepositoryHeader", () => {
         ".repository-actions .toolbar-button"
       )
     ).toHaveLength(4);
+
+    const actionGroup = container.querySelector(
+      ".repository-header-action-group"
+    );
+    const actionGroupChildren = Array.from(
+      actionGroup?.children ?? []
+    );
+    expect(actionGroupChildren[0]?.classList).toContain(
+      "toolbar-divider"
+    );
+    expect(actionGroupChildren[1]?.classList).toContain(
+      "header-branch-switcher"
+    );
+    expect(actionGroupChildren[2]?.classList).toContain(
+      "open-in-control"
+    );
   });
 });
 
@@ -182,3 +248,144 @@ const workspace: WorkspaceDetailsDto = {
   selectedEntryId: "entry",
   updatedAt: "2026-09-08T00:00:00.000Z"
 };
+
+const repositoryWorkspace: WorkspaceDetailsDto = {
+  ...workspace,
+  repositories: [
+    {
+      id: "repository",
+      name: "core",
+      commonDir: "C:\\workspace\\.git",
+      canonicalCommonDir: "c:\\workspace\\.git",
+      primaryWorktreeId: "worktree",
+      worktreeIds: ["worktree"]
+    }
+  ],
+  worktrees: [
+    {
+      id: "worktree",
+      repositoryId: "repository",
+      name: "core",
+      path: "C:\\workspace",
+      canonicalPath: "c:\\workspace",
+      head: "1234567890abcdef",
+      branch: "main",
+      isPrimary: true,
+      isBare: false,
+      isDetached: false,
+      isLocked: false,
+      isPrunable: false
+    }
+  ],
+  selectedTarget: {
+    repositoryId: "repository",
+    worktreeId: "worktree"
+  }
+};
+
+const multiEntryWorkspace: WorkspaceDetailsDto = {
+  schemaVersion: 1,
+  id: "multi-entry-workspace",
+  name: "Multi-entry Workspace",
+  entries: [
+    {
+      id: "entry-a",
+      displayName: "Workspace A",
+      path: "C:\\workspace-a",
+      canonicalPath: "c:\\workspace-a",
+      excludes: [],
+      order: 0,
+      groups: [
+        {
+          id: "group-a",
+          name: "Workspace A",
+          collapsed: false,
+          targets: [
+            {
+              repositoryId: "repository-a",
+              worktreeId: "worktree-a"
+            },
+            {
+              repositoryId: "repository-a",
+              worktreeId: "worktree-a-linked"
+            },
+            {
+              repositoryId: "repository-b",
+              worktreeId: "worktree-b"
+            }
+          ]
+        }
+      ],
+      scanIssues: [],
+      lastScannedAt: "2026-09-16T00:00:00.000Z",
+      kind: "workspace-directory"
+    },
+    {
+      id: "entry-c",
+      displayName: "Workspace C",
+      path: "C:\\workspace-c",
+      canonicalPath: "c:\\workspace-c",
+      excludes: [],
+      order: 1,
+      groups: [],
+      scanIssues: [],
+      lastScannedAt: "2026-09-16T00:00:00.000Z",
+      kind: "standalone-repository",
+      target: {
+        repositoryId: "repository-c",
+        worktreeId: "worktree-c"
+      }
+    }
+  ],
+  repositories: [
+    {
+      id: "repository-a",
+      name: "Repository A",
+      commonDir: "C:\\repository-a\\.git",
+      canonicalCommonDir: "c:\\repository-a\\.git",
+      primaryWorktreeId: "worktree-a",
+      worktreeIds: ["worktree-a", "worktree-a-linked"]
+    },
+    {
+      id: "repository-b",
+      name: "Repository B",
+      commonDir: "C:\\repository-b\\.git",
+      canonicalCommonDir: "c:\\repository-b\\.git",
+      primaryWorktreeId: "worktree-b",
+      worktreeIds: ["worktree-b"]
+    },
+    {
+      id: "repository-c",
+      name: "Repository C",
+      commonDir: "C:\\repository-c\\.git",
+      canonicalCommonDir: "c:\\repository-c\\.git",
+      primaryWorktreeId: "worktree-c",
+      worktreeIds: ["worktree-c"]
+    }
+  ],
+  worktrees: [
+    createWorktree("repository-a", "worktree-a"),
+    createWorktree("repository-a", "worktree-a-linked"),
+    createWorktree("repository-b", "worktree-b"),
+    createWorktree("repository-c", "worktree-c")
+  ],
+  selectedEntryId: "entry-a",
+  updatedAt: "2026-09-16T00:00:00.000Z"
+};
+
+function createWorktree(repositoryId: string, id: string) {
+  return {
+    id,
+    repositoryId,
+    name: id,
+    path: `C:\\${id}`,
+    canonicalPath: `c:\\${id}`,
+    head: "1234567890abcdef",
+    branch: "main",
+    isPrimary: id === `worktree-${repositoryId.slice(-1)}`,
+    isBare: false,
+    isDetached: false,
+    isLocked: false,
+    isPrunable: false
+  };
+}

@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type Ref
 } from "react";
@@ -24,6 +25,8 @@ import {
 import { Button } from "../../shared/ui/Button";
 import { DiffSearchPopover } from "../../shared/ui/DiffSearchPopover";
 import { Icon, type IconName } from "../../shared/ui/Icon";
+import { LayerPortal } from "../../shared/ui/LayerPortal";
+import { Menu, MenuItem } from "../../shared/ui/Menu";
 import { Skeleton } from "../../shared/ui/Skeleton";
 import type { DiffDocumentFeatureConfig } from "./diffWorkspaceConfiguration";
 
@@ -35,6 +38,9 @@ export type DiffPathCopyStatus =
 export const DEFAULT_DIFF_CONTEXT_LINES = 3;
 export const DIFF_CONTEXT_STEP = 10;
 export const FULL_DIFF_CONTEXT_LINES = 100_000;
+const HUNK_CONTEXT_MENU_WIDTH = 222;
+const HUNK_CONTEXT_MENU_HEIGHT = 52;
+const CONTEXT_MENU_VIEWPORT_PADDING = 8;
 const DIFF_CONTENT_SKELETON_ROWS = [
   "short",
   "medium",
@@ -47,6 +53,7 @@ const DIFF_CONTENT_SKELETON_ROWS = [
   "short",
   "medium"
 ] as const;
+const searchQueriesByScope = new Map<string, string>();
 
 export type DiffContextDirection =
   | "up"
@@ -68,6 +75,20 @@ interface DiffHunkContextState extends DiffHunkContextRange {
 interface DiffContextState {
   scopeKey: string;
   hunks: Record<number, DiffHunkContextState>;
+}
+
+interface DiffHunkContextMenuState {
+  contentIdentity: string;
+  hunkIndex: number;
+  x: number;
+  y: number;
+}
+
+interface PendingDiffHunkFocus {
+  contentIdentity: string;
+  hunkIndex: number;
+  sawLoading: boolean;
+  waitForRefresh: boolean;
 }
 
 export interface DiffPanelState {
@@ -104,6 +125,7 @@ export interface DiffPanelProps {
   state?: DiffPanelState | undefined;
   headerActions?: ReactNode | undefined;
   className?: string | undefined;
+  keyboardShortcutsEnabled?: boolean | undefined;
   onPathCopyStatusChange?(
     status: DiffPathCopyStatus
   ): void;
@@ -138,6 +160,7 @@ export function DiffPanel({
   state,
   headerActions,
   className,
+  keyboardShortcutsEnabled = true,
   onPathCopyStatusChange,
   preferredLayout,
   preferredWrap,
@@ -172,9 +195,11 @@ export function DiffPanel({
   const resolvedSearchScopeKey = searchScopeKey ?? scopeKey;
   const [searchQueries, setSearchQueries] = useState<
     ReadonlyMap<string, string>
-  >(() => new Map());
+  >(() => new Map(searchQueriesByScope));
   const searchQuery =
-    searchQueries.get(resolvedSearchScopeKey) ?? "";
+    searchQueries.get(resolvedSearchScopeKey) ??
+    searchQueriesByScope.get(resolvedSearchScopeKey) ??
+    "";
   const setSearchQuery = useCallback(
     (value: string) => {
       setSearchQueries((current) => {
@@ -189,6 +214,18 @@ export function DiffPanel({
         } else {
           next.delete(resolvedSearchScopeKey);
         }
+        if (resolvedSearchScopeKey) {
+          if (value) {
+            searchQueriesByScope.set(
+              resolvedSearchScopeKey,
+              value
+            );
+          } else {
+            searchQueriesByScope.delete(
+              resolvedSearchScopeKey
+            );
+          }
+        }
         return next;
       });
     },
@@ -201,8 +238,15 @@ export function DiffPanel({
       scopeKey,
       hunks: {}
     });
+  const [hunkContextMenu, setHunkContextMenu] =
+    useState<DiffHunkContextMenuState | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const hunkContextMenuRef = useRef<HTMLDivElement>(null);
+  const hunkContextMenuReturnFocusRef =
+    useRef<HTMLButtonElement | null>(null);
+  const pendingHunkContextFocusRef =
+    useRef<PendingDiffHunkFocus | null>(null);
   const compactContentRef = useRef({
     scopeKey,
     content: content ?? ""
@@ -213,6 +257,7 @@ export function DiffPanel({
     scrollTop: number;
   } | null>(null);
   const hasMediaPreview = media !== undefined;
+  const contentIdentity = content ?? "";
   if (compactContentRef.current.scopeKey !== scopeKey) {
     compactContentRef.current = {
       scopeKey,
@@ -286,6 +331,16 @@ export function DiffPanel({
     !binary &&
     !hasMediaPreview &&
     !state;
+  const canExpandContext = Boolean(
+    config.allowContextExpansion &&
+      onContextRequest &&
+      limitedContent.content &&
+      !binary &&
+      !hasMediaPreview &&
+      !truncated &&
+      !limitedContent.rendererTruncated &&
+      !state
+  );
   const showToolbar =
     !hasMediaPreview &&
     config.showToolbar &&
@@ -402,21 +457,258 @@ export function DiffPanel({
       scopeKey
     ]
   );
-  const contextControls =
-    config.allowContextExpansion &&
-    onContextRequest &&
-    limitedContent.content &&
-    !binary &&
-    !hasMediaPreview &&
-    !truncated &&
-    !limitedContent.rendererTruncated &&
-    !state
-      ? {
-          hunkContextStates,
-          contextLoading,
-          onContextRequest: requestDiffContext
-        }
-      : undefined;
+  const closeHunkContextMenu = useCallback(
+    (restoreFocus = false) => {
+      const returnFocus =
+        hunkContextMenuReturnFocusRef.current;
+      hunkContextMenuReturnFocusRef.current = null;
+      setHunkContextMenu(null);
+      if (restoreFocus && returnFocus?.isConnected) {
+        window.requestAnimationFrame(() =>
+          returnFocus.focus({ preventScroll: true })
+        );
+      }
+    },
+    []
+  );
+  const openHunkContextMenu = useCallback(
+    (
+      event: ReactMouseEvent<HTMLButtonElement>,
+      hunkIndex: number
+    ) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!canExpandContext || contextLoading) {
+        return;
+      }
+
+      const trigger = event.currentTarget;
+      const triggerRect = trigger.getBoundingClientRect();
+      const useTriggerPosition =
+        event.clientX === 0 && event.clientY === 0;
+      const requestedX = useTriggerPosition
+        ? triggerRect.left + Math.min(triggerRect.width, 24)
+        : event.clientX;
+      const requestedY = useTriggerPosition
+        ? triggerRect.bottom
+        : event.clientY;
+      const maxX = Math.max(
+        CONTEXT_MENU_VIEWPORT_PADDING,
+        window.innerWidth -
+          HUNK_CONTEXT_MENU_WIDTH -
+          CONTEXT_MENU_VIEWPORT_PADDING
+      );
+      const maxY = Math.max(
+        CONTEXT_MENU_VIEWPORT_PADDING,
+        window.innerHeight -
+          HUNK_CONTEXT_MENU_HEIGHT -
+          CONTEXT_MENU_VIEWPORT_PADDING
+      );
+
+      hunkContextMenuReturnFocusRef.current = trigger;
+      setActiveHunk(hunkIndex);
+      setHunkContextMenu({
+        contentIdentity,
+        hunkIndex,
+        x: Math.max(
+          CONTEXT_MENU_VIEWPORT_PADDING,
+          Math.min(requestedX, maxX)
+        ),
+        y: Math.max(
+          CONTEXT_MENU_VIEWPORT_PADDING,
+          Math.min(requestedY, maxY)
+        )
+      });
+    },
+    [canExpandContext, contentIdentity, contextLoading]
+  );
+  const chooseHunkContextMenuAction = useCallback(() => {
+    if (
+      !hunkContextMenu ||
+      !canExpandContext ||
+      contextLoading ||
+      hunkContextMenu.contentIdentity !== contentIdentity
+    ) {
+      closeHunkContextMenu();
+      return;
+    }
+
+    const full = Boolean(
+      hunkContextStates[hunkContextMenu.hunkIndex]?.full
+    );
+    const hunkIndex = hunkContextMenu.hunkIndex;
+    pendingHunkContextFocusRef.current = {
+      contentIdentity,
+      hunkIndex,
+      sawLoading: false,
+      waitForRefresh:
+        !full && FULL_DIFF_CONTEXT_LINES > contextLines
+    };
+    closeHunkContextMenu();
+    contentRef.current?.focus({ preventScroll: true });
+    requestDiffContext({
+      direction: full ? "reset" : "all",
+      hunkIndex,
+      contextLines: full
+        ? DEFAULT_DIFF_CONTEXT_LINES
+        : FULL_DIFF_CONTEXT_LINES
+    });
+  }, [
+    canExpandContext,
+    closeHunkContextMenu,
+    contentIdentity,
+    contextLines,
+    contextLoading,
+    hunkContextMenu,
+    hunkContextStates,
+    requestDiffContext
+  ]);
+  const contextControls = canExpandContext
+    ? {
+        hunkContextStates,
+        contextLoading,
+        onContextMenu: openHunkContextMenu,
+        onContextRequest: requestDiffContext
+      }
+    : undefined;
+  useEffect(() => {
+    hunkContextMenuReturnFocusRef.current = null;
+    pendingHunkContextFocusRef.current = null;
+    setHunkContextMenu(null);
+  }, [scopeKey]);
+  useEffect(() => {
+    if (!hunkContextMenu) {
+      return;
+    }
+    if (
+      !canExpandContext ||
+      contextLoading ||
+      hunkContextMenu.contentIdentity !== contentIdentity ||
+      hunkContextMenu.hunkIndex >= model.hunkCount
+    ) {
+      closeHunkContextMenu();
+      return;
+    }
+
+    const closeFromOutside = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        hunkContextMenuRef.current?.contains(target)
+      ) {
+        return;
+      }
+      closeHunkContextMenu();
+    };
+    const closeFromKeyboard = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeHunkContextMenu(true);
+      }
+    };
+    const closeFromViewportChange = () => {
+      closeHunkContextMenu();
+    };
+    const focusFrame = window.requestAnimationFrame(() => {
+      hunkContextMenuRef.current
+        ?.querySelector<HTMLButtonElement>(
+          "[role='menuitem']:not(:disabled)"
+        )
+        ?.focus();
+    });
+
+    document.addEventListener("pointerdown", closeFromOutside);
+    document.addEventListener("keydown", closeFromKeyboard);
+    document.addEventListener(
+      "scroll",
+      closeFromViewportChange,
+      true
+    );
+    window.addEventListener("blur", closeFromViewportChange);
+    window.addEventListener(
+      "resize",
+      closeFromViewportChange
+    );
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener(
+        "pointerdown",
+        closeFromOutside
+      );
+      document.removeEventListener(
+        "keydown",
+        closeFromKeyboard
+      );
+      document.removeEventListener(
+        "scroll",
+        closeFromViewportChange,
+        true
+      );
+      window.removeEventListener(
+        "blur",
+        closeFromViewportChange
+      );
+      window.removeEventListener(
+        "resize",
+        closeFromViewportChange
+      );
+    };
+  }, [
+    canExpandContext,
+    closeHunkContextMenu,
+    contentIdentity,
+    contextLoading,
+    hunkContextMenu,
+    model.hunkCount
+  ]);
+  useEffect(() => {
+    const pending = pendingHunkContextFocusRef.current;
+    if (!pending) {
+      return;
+    }
+    if (contextLoading) {
+      pending.sawLoading = true;
+      return;
+    }
+    if (
+      pending.waitForRefresh &&
+      !pending.sawLoading &&
+      pending.contentIdentity === contentIdentity
+    ) {
+      return;
+    }
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      const activeElement = document.activeElement;
+      if (
+        activeElement &&
+        activeElement !== document.body &&
+        activeElement !== contentRef.current
+      ) {
+        pendingHunkContextFocusRef.current = null;
+        return;
+      }
+
+      const trigger =
+        contentRef.current?.querySelector<HTMLButtonElement>(
+          `[data-diff-viewer-hunk="${pending.hunkIndex}"] .diff-viewer-hunk-trigger:not(:disabled)`
+        );
+      if (trigger) {
+        trigger.focus({ preventScroll: true });
+      } else {
+        contentRef.current?.focus({ preventScroll: true });
+      }
+      pendingHunkContextFocusRef.current = null;
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [
+    contentIdentity,
+    contextLoading,
+    hunkContextStates,
+    layout,
+    limitedContent.content
+  ]);
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
     setSearchQuery("");
@@ -590,7 +882,14 @@ export function DiffPanel({
   }, [normalizedActiveSearchHit, searchHits]);
 
   useEffect(() => {
+    if (!keyboardShortcutsEnabled) {
+      return;
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
       if (
         (event.ctrlKey || event.metaKey) &&
         event.key.toLocaleLowerCase() === "f" &&
@@ -620,6 +919,7 @@ export function DiffPanel({
   }, [
     canSearch,
     closeSearch,
+    keyboardShortcutsEnabled,
     moveSearchHit,
     searchHits.length,
     searchOpen
@@ -629,6 +929,18 @@ export function DiffPanel({
     ? `${normalizedActiveSearchHit >= 0 ? normalizedActiveSearchHit + 1 : 0} / ${searchHits.length}`
     : "0 / 0";
   const hunkCountLabel = `${normalizedActiveHunk >= 0 ? normalizedActiveHunk + 1 : 0} / ${model.hunkCount}`;
+  const visibleHunkContextMenu =
+    hunkContextMenu &&
+    canExpandContext &&
+    hunkContextMenu.contentIdentity === contentIdentity
+      ? hunkContextMenu
+      : null;
+  const hunkContextMenuFull = Boolean(
+    visibleHunkContextMenu &&
+      hunkContextStates[
+        visibleHunkContextMenu.hunkIndex
+      ]?.full
+  );
   const pathCopyIcon: IconName =
     pathCopyStatus === "copied"
       ? "check"
@@ -894,6 +1206,43 @@ export function DiffPanel({
           ) : null}
         </div>
       </main>
+      {visibleHunkContextMenu ? (
+        <LayerPortal>
+          <Menu
+            aria-label={`第 ${visibleHunkContextMenu.hunkIndex + 1} 个变更块上下文操作`}
+            className="workspace-context-menu diff-hunk-context-menu"
+            ref={hunkContextMenuRef}
+            style={{
+              left: visibleHunkContextMenu.x,
+              top: visibleHunkContextMenu.y
+            }}
+          >
+            <MenuItem
+              disabled={contextLoading}
+              leading={
+                <Icon
+                  name={
+                    hunkContextMenuFull
+                      ? "minimize"
+                      : "maximize"
+                  }
+                  size={14}
+                />
+              }
+              onClick={chooseHunkContextMenuAction}
+              title={
+                hunkContextMenuFull
+                  ? "恢复默认 3 行上下文"
+                  : "显示当前变更块的全部上下文"
+              }
+            >
+              {hunkContextMenuFull
+                ? "恢复精简"
+                : "展开全部"}
+            </MenuItem>
+          </Menu>
+        </LayerPortal>
+      ) : null}
     </section>
   );
 }
@@ -1566,6 +1915,10 @@ interface DiffHunkContextControlsProps {
     Record<number, DiffHunkContextState>
   >;
   contextLoading: boolean;
+  onContextMenu(
+    event: ReactMouseEvent<HTMLButtonElement>,
+    hunkIndex: number
+  ): void;
   onContextRequest(request: DiffContextRequest): void;
 }
 
@@ -1573,6 +1926,7 @@ function DiffHunkContextTrigger({
   hunkContextStates,
   contextLoading,
   hunkIndex,
+  onContextMenu,
   onContextRequest,
   children
 }: DiffHunkContextControlsProps & {
@@ -1599,6 +1953,9 @@ function DiffHunkContextTrigger({
       aria-expanded={expanded}
       className="diff-viewer-hunk-trigger"
       disabled={contextLoading}
+      onContextMenu={(event) =>
+        onContextMenu(event, hunkIndex)
+      }
       onClick={() =>
         onContextRequest({
           direction,

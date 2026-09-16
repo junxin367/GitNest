@@ -46,6 +46,7 @@ import {
   WorkspaceEntryRenameDialog
 } from "./WorkspaceEntryDialogs";
 import {
+  changedRepositoriesOnlyPreferenceKey,
   getRendererPreferenceStorage,
   readChangedRepositoriesOnlyPreference,
   writeChangedRepositoriesOnlyPreference
@@ -175,9 +176,12 @@ export function WorkspaceSidebar({
   const [repositoryMenuOpen, setRepositoryMenuOpen] =
     useState(false);
   const [
-    showChangedRepositoriesOnly,
-    setShowChangedRepositoriesOnly
-  ] = useState(false);
+    changedRepositoriesPreference,
+    setChangedRepositoriesPreference
+  ] = useState<{
+    key: string | undefined;
+    enabled: boolean;
+  }>({ key: undefined, enabled: false });
   const [renameEntryId, setRenameEntryId] =
     useState<string | null>(null);
   const [renameSubmitting, setRenameSubmitting] =
@@ -205,6 +209,22 @@ export function WorkspaceSidebar({
   const workspaceId = workspace?.id;
   const activeEntryId =
     workspace?.selectedEntryId ?? workspace?.entries[0]?.id;
+  const changedRepositoriesPreferenceKey =
+    workspaceId && activeEntryId
+      ? changedRepositoriesOnlyPreferenceKey(
+          workspaceId,
+          activeEntryId
+        )
+      : undefined;
+  const showChangedRepositoriesOnly =
+    changedRepositoriesPreference.key ===
+    changedRepositoriesPreferenceKey
+      ? changedRepositoriesPreference.enabled
+      : readChangedRepositoriesOnlyPreference(
+          getRendererPreferenceStorage(),
+          workspaceId,
+          activeEntryId
+        );
   const entries = useMemo(
     () =>
       getVisibleEntries(
@@ -246,10 +266,14 @@ export function WorkspaceSidebar({
 
   const toggleChangedRepositoriesOnly = () => {
     const next = !showChangedRepositoriesOnly;
-    setShowChangedRepositoriesOnly(next);
+    setChangedRepositoriesPreference({
+      key: changedRepositoriesPreferenceKey,
+      enabled: next
+    });
     writeChangedRepositoriesOnlyPreference(
       getRendererPreferenceStorage(),
       workspaceId,
+      activeEntryId,
       next
     );
   };
@@ -442,13 +466,19 @@ export function WorkspaceSidebar({
   );
 
   useEffect(() => {
-    setShowChangedRepositoriesOnly(
-      readChangedRepositoriesOnlyPreference(
+    setChangedRepositoriesPreference({
+      key: changedRepositoriesPreferenceKey,
+      enabled: readChangedRepositoriesOnlyPreference(
         getRendererPreferenceStorage(),
-        workspaceId
+        workspaceId,
+        activeEntryId
       )
-    );
-  }, [workspaceId]);
+    });
+  }, [
+    activeEntryId,
+    changedRepositoriesPreferenceKey,
+    workspaceId
+  ]);
 
   useEffect(() => {
     if (

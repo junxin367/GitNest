@@ -7,23 +7,28 @@ export interface PreferenceStorage {
 }
 
 export function changedRepositoriesOnlyPreferenceKey(
-  workspaceId: string
+  workspaceId: string,
+  entryId: string
 ): string {
-  return `${CHANGED_REPOSITORIES_ONLY_KEY_PREFIX}${workspaceId}`;
+  return `${CHANGED_REPOSITORIES_ONLY_KEY_PREFIX}${workspaceId}:${entryId}`;
 }
 
 export function readChangedRepositoriesOnlyPreference(
   storage: PreferenceStorage | undefined,
-  workspaceId: string | undefined
+  workspaceId: string | undefined,
+  entryId: string | undefined
 ): boolean {
-  if (!storage || !workspaceId) {
+  if (!storage || !workspaceId || !entryId) {
     return false;
   }
 
   try {
     return (
       storage.getItem(
-        changedRepositoriesOnlyPreferenceKey(workspaceId)
+        changedRepositoriesOnlyPreferenceKey(
+          workspaceId,
+          entryId
+        )
       ) === "true"
     );
   } catch {
@@ -34,15 +39,19 @@ export function readChangedRepositoriesOnlyPreference(
 export function writeChangedRepositoriesOnlyPreference(
   storage: PreferenceStorage | undefined,
   workspaceId: string | undefined,
+  entryId: string | undefined,
   enabled: boolean
 ): void {
-  if (!storage || !workspaceId) {
+  if (!storage || !workspaceId || !entryId) {
     return;
   }
 
   try {
     storage.setItem(
-      changedRepositoriesOnlyPreferenceKey(workspaceId),
+      changedRepositoriesOnlyPreferenceKey(
+        workspaceId,
+        entryId
+      ),
       String(enabled)
     );
   } catch {

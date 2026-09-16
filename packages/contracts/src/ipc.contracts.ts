@@ -39,6 +39,8 @@ import type {
   RepositoryCommandExecutionDto,
   RepositoryCommandPreflightDto,
   RepositoryCommandPreflightRequest,
+  RepositoryCommitDiffDto,
+  RepositoryCommitDiffRequest,
   RepositoryCommitDto,
   RepositoryCommitMutationDto,
   RepositoryCommitRequest,
@@ -46,6 +48,14 @@ import type {
   RepositoryDiffRequest,
   RepositoryHistoryPageDto,
   RepositoryHistoryRequest,
+  RepositoryStashDiffDto,
+  RepositoryStashDiffRequest,
+  RepositoryStashFilesDto,
+  RepositoryStashRequest,
+  RepositoryStashMutationDto,
+  RepositoryStashMutationRequest,
+  RepositoryStashesDto,
+  RepositoryStashesRequest,
   RepositoryPathsMutationDto,
   RepositoryPathsMutationRequest,
   RepositoryQueryRequest
@@ -238,6 +248,22 @@ export interface IpcContractMap {
     [request: RepositoryCommitRequest],
     GitReadResult<RepositoryCommitDto>
   >;
+  [IPC_CHANNELS.repositoryGetCommitDiff]: IpcContract<
+    [request: RepositoryCommitDiffRequest],
+    GitReadResult<RepositoryCommitDiffDto>
+  >;
+  [IPC_CHANNELS.repositoryGetStashes]: IpcContract<
+    [request: RepositoryStashesRequest],
+    GitReadResult<RepositoryStashesDto>
+  >;
+  [IPC_CHANNELS.repositoryGetStashFiles]: IpcContract<
+    [request: RepositoryStashRequest],
+    GitReadResult<RepositoryStashFilesDto>
+  >;
+  [IPC_CHANNELS.repositoryGetStashDiff]: IpcContract<
+    [request: RepositoryStashDiffRequest],
+    GitReadResult<RepositoryStashDiffDto>
+  >;
   [IPC_CHANNELS.repositoryGetBranches]: IpcContract<
     [request: RepositoryQueryRequest],
     GitReadResult<RepositoryBranchesDto>
@@ -257,6 +283,10 @@ export interface IpcContractMap {
   [IPC_CHANNELS.repositoryDiscard]: IpcContract<
     [request: RepositoryPathsMutationRequest],
     GitReadResult<RepositoryPathsMutationDto>
+  >;
+  [IPC_CHANNELS.repositoryMutateStash]: IpcContract<
+    [request: RepositoryStashMutationRequest],
+    GitReadResult<RepositoryStashMutationDto>
   >;
   [IPC_CHANNELS.repositoryCreateCommit]: IpcContract<
     [request: CreateRepositoryCommitRequest],

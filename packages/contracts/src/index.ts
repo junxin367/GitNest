@@ -45,6 +45,8 @@ export type {
   RepositoryCommandPreflightDto,
   RepositoryCommandPreflightRequest,
   RepositoryCommandWarningDto,
+  RepositoryCommitDiffDto,
+  RepositoryCommitDiffRequest,
   RepositoryCommitDto,
   RepositoryCommitMutationDto,
   RepositoryCommitRequest,
@@ -53,12 +55,23 @@ export type {
   RepositoryHistoryPageDto,
   RepositoryHistoryRequest,
   RepositoryHistoryScopeDto,
+  RepositoryStashDiffDto,
+  RepositoryStashDiffRequest,
+  RepositoryStashFilesDto,
+  RepositoryStashMutationAction,
+  RepositoryStashMutationDto,
+  RepositoryStashMutationRequest,
+  RepositoryStashRequest,
+  RepositoryStashesDto,
+  RepositoryStashesRequest,
   RepositoryMediaKindDto,
   RepositoryMediaPreviewDto,
   RepositoryMediaUnavailableReasonDto,
   RepositoryPathsMutationDto,
   RepositoryPathsMutationRequest,
-  RepositoryQueryRequest
+  RepositoryQueryRequest,
+  StashFileStatDto,
+  StashSummaryDto
 } from "./repository.contracts";
 export type {
   IpcArguments,

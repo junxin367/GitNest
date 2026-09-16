@@ -68,15 +68,20 @@ export {
   RepositoryMutationService,
   type RepositoryCommitMutationResult,
   type RepositoryMutationRuntime,
-  type RepositoryPathsMutationResult
+  type RepositoryPathsMutationResult,
+  type RepositoryStashMutationResult
 } from "./repository/repository-mutation-service";
 export {
   RepositoryQueryService,
   type RepositoryBranchesResult,
   type RepositoryChangesResult,
+  type RepositoryCommitDiffResult,
   type RepositoryCommitResult,
   type RepositoryDiffResult,
-  type RepositoryHistoryResult
+  type RepositoryHistoryResult,
+  type RepositoryStashDiffResult,
+  type RepositoryStashFilesResult,
+  type RepositoryStashesResult
 } from "./repository/repository-query-service";
 export { GitRepositoryProbe } from "./workspace/git-repository-probe";
 export {

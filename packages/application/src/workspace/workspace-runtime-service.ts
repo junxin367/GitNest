@@ -46,6 +46,9 @@ export interface WorkspaceOperation {
     | "unstage"
     | "discard"
     | "commit"
+    | "stash-apply"
+    | "stash-drop"
+    | "stash-pop"
     | "fetch"
     | "pull"
     | "push"
@@ -101,7 +104,10 @@ export type WorktreeMutationKind =
   | "stage"
   | "unstage"
   | "discard"
-  | "commit";
+  | "commit"
+  | "stash-apply"
+  | "stash-drop"
+  | "stash-pop";
 
 export interface WorktreeMutationCompleted<Result> {
   operationId: string;
@@ -2189,6 +2195,27 @@ function mutationOperationMessage(
       refreshing: "提交完成，正在刷新仓库状态…",
       succeeded: "提交已创建。",
       failed: "提交失败："
+    },
+    "stash-apply": {
+      queued: "恢复储藏操作正在排队。",
+      running: "正在恢复所选储藏…",
+      refreshing: "储藏已恢复，正在刷新仓库状态…",
+      succeeded: "所选储藏已恢复。",
+      failed: "恢复储藏失败："
+    },
+    "stash-drop": {
+      queued: "删除储藏操作正在排队。",
+      running: "正在删除所选储藏…",
+      refreshing: "储藏已删除，正在刷新仓库状态…",
+      succeeded: "所选储藏已删除。",
+      failed: "删除储藏失败："
+    },
+    "stash-pop": {
+      queued: "恢复并删除储藏操作正在排队。",
+      running: "正在恢复并删除所选储藏…",
+      refreshing: "储藏操作完成，正在刷新仓库状态…",
+      succeeded: "所选储藏已恢复并删除。",
+      failed: "恢复并删除储藏失败："
     }
   };
   return labels[kind][state];
@@ -2225,6 +2252,9 @@ function workspaceOperationLabel(
     unstage: "取消暂存",
     discard: "放弃更改",
     commit: "提交",
+    "stash-apply": "恢复储藏",
+    "stash-drop": "删除储藏",
+    "stash-pop": "恢复并删除储藏",
     fetch: "Fetch",
     pull: "Pull",
     push: "Push",
