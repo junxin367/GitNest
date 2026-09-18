@@ -13,6 +13,7 @@ export interface ReadStashDiffOptions extends GitReadOptions {
   stashRef: string;
   path: string;
   contextLines?: number;
+  includeMedia?: boolean;
 }
 
 export interface GitStashClient {

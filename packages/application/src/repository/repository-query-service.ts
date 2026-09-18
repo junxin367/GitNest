@@ -196,6 +196,7 @@ export class RepositoryQueryService {
             ...(contextLines === undefined
               ? {}
               : { contextLines }),
+            includeMedia: true,
             signal
           }
         )
@@ -255,6 +256,7 @@ export class RepositoryQueryService {
           ...(contextLines === undefined
             ? {}
             : { contextLines }),
+          includeMedia: true,
           signal
         }
       );

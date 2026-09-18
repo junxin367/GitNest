@@ -1,5 +1,6 @@
 import {
   IPC_CHANNELS,
+  type CodeAnalysisStateDto,
   type GitNestBridge,
   type IpcInvoke,
   type WorkspaceRuntimeStateDto
@@ -10,9 +11,30 @@ export function createGitNestBridge(
   resolveDroppedPath: (file: unknown) => string = () => "",
   subscribeWorkspaceState: (
     listener: (state: WorkspaceRuntimeStateDto) => void
+  ) => () => void = () => () => undefined,
+  subscribeCodeAnalysisState: (
+    listener: (state: CodeAnalysisStateDto) => void
   ) => () => void = () => () => undefined
 ): GitNestBridge {
   return {
+    codeAnalysis: {
+      getState: () =>
+        invoke(IPC_CHANNELS.codeAnalysisGetState),
+      start: (request) =>
+        invoke(IPC_CHANNELS.codeAnalysisStart, request),
+      cancel: (request) =>
+        invoke(IPC_CHANNELS.codeAnalysisCancel, request),
+      getSnapshot: () =>
+        invoke(IPC_CHANNELS.codeAnalysisGetSnapshot),
+      readFile: (request) =>
+        invoke(IPC_CHANNELS.codeAnalysisReadFile, request),
+      installLanguageServer: (request) =>
+        invoke(
+          IPC_CHANNELS.codeAnalysisInstallLanguageServer,
+          request
+        ),
+      onStateChanged: subscribeCodeAnalysisState
+    },
     settings: {
       get: () => invoke(IPC_CHANNELS.settingsGet),
       update: (request) =>

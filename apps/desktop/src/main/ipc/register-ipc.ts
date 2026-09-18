@@ -27,14 +27,23 @@ import {
   type AppSettingsLoadDto,
   type AppThemeDto,
   type BindAccountRequest,
+  type CancelCodeAnalysisRequest,
   type CancelRepositoryOperationRequest,
   type CancelRepositoryQueryRequest,
   type ClearAiApiKeyRequest,
+  type CodeAnalysisAcceptedDto,
+  type CodeAnalysisFileDto,
+  type CodeAnalysisScopeDto,
+  type CodeAnalysisSnapshotDto,
+  type CodeAnalysisStateDto,
   type CreateRepositoryCommitRequest,
   type GitReadErrorDto,
   type GitReadResult,
   type GenerateAiCommitMessageRequest,
   type AddWorkspaceEntryRequest,
+  type InstallLanguageServerRequest,
+  type InstallableLanguageServerDto,
+  type LanguageServerInstallResultDto,
   type ExternalApplicationKindDto,
   type ExternalTerminalKindDto,
   type DiffFileViewDto,
@@ -66,9 +75,11 @@ import {
   type RepositoryPathsMutationRequest,
   type RepositoryQueryRequest,
   type RepositoryTabDto,
+  type ReadCodeAnalysisFileRequest,
   type RuntimeInfo,
   type RuntimePlatform,
   type SaveAccountRequest,
+  type StartCodeAnalysisRequest,
   type RepositoryTargetDto,
   type SelectRepositoryTargetRequest,
   type SelectWorkspaceEntryRequest,
@@ -140,6 +151,12 @@ const MAX_AI_API_URL_LENGTH = 2_048;
 const MAX_AI_MODEL_LENGTH = 256;
 const MAX_AI_API_KEY_LENGTH = 8_192;
 const MAX_AI_PROMPT_LENGTH = 12_000;
+const MAX_LSP_COMMAND_LENGTH = 2_048;
+const MAX_LSP_ARGUMENTS = 64;
+const MAX_LSP_ARGUMENT_LENGTH = 2_048;
+const MAX_ANALYSIS_IGNORE_DIRECTORIES = 100;
+const MAX_ANALYSIS_IGNORE_LENGTH = 255;
+const MAX_ANALYSIS_NODE_ID_LENGTH = 512;
 const APP_THEMES = new Set(["dark", "light"]);
 const DIFF_FILE_VIEWS = new Set(["list", "tree"]);
 const DIFF_LAYOUTS = new Set(["split", "unified"]);
@@ -161,6 +178,14 @@ const REPOSITORY_TABS = new Set([
   "history",
   "branches",
   "worktrees"
+]);
+const CODE_ANALYSIS_SCOPES = new Set([
+  "changed",
+  "workspace"
+]);
+const INSTALLABLE_LANGUAGE_SERVERS = new Set([
+  "typescript",
+  "java"
 ]);
 
 export function registerIpcHandlers(
@@ -226,6 +251,81 @@ export function registerIpcHandlers(
       captureGitRead(() =>
         services.aiCommitMessages.generateCommitMessage(
           validateGenerateAiCommitMessageRequest(request).target
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.codeAnalysisGetState,
+    (): Promise<GitReadResult<CodeAnalysisStateDto>> =>
+      captureGitRead(async () =>
+        services.codeAnalysis.getState()
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.codeAnalysisStart,
+    (
+      _event,
+      request
+    ): Promise<GitReadResult<CodeAnalysisAcceptedDto>> =>
+      captureGitRead(() =>
+        services.codeAnalysis.start(
+          validateStartCodeAnalysisRequest(request).scope
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.codeAnalysisCancel,
+    (
+      _event,
+      request
+    ): Promise<GitReadResult<void>> =>
+      captureGitRead(async () => {
+        services.codeAnalysis.cancel(
+          validateCancelCodeAnalysisRequest(request)
+            .analysisId
+        );
+      })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.codeAnalysisGetSnapshot,
+    (): Promise<
+      GitReadResult<CodeAnalysisSnapshotDto | null>
+    > =>
+      captureGitRead(() =>
+        services.codeAnalysis.getSnapshot()
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.codeAnalysisReadFile,
+    (
+      _event,
+      request
+    ): Promise<GitReadResult<CodeAnalysisFileDto>> =>
+      captureGitRead(() =>
+        services.codeAnalysis.readFile(
+          validateReadCodeAnalysisFileRequest(request)
+            .nodeId
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.codeAnalysisInstallLanguageServer,
+    (
+      _event,
+      request
+    ): Promise<
+      GitReadResult<LanguageServerInstallResultDto>
+    > =>
+      captureGitRead(() =>
+        services.languageServerInstaller.install(
+          validateInstallLanguageServerRequest(request)
+            .language
         )
       )
   );
@@ -1171,6 +1271,87 @@ export function validateUpdateAppSettingsRequest(
     result.ai = ai;
   }
 
+  if ("codeAnalysis" in request) {
+    if (!isRecord(request.codeAnalysis)) {
+      throw invalidSettingsRequest();
+    }
+    const codeAnalysis: NonNullable<
+      UpdateAppSettingsRequest["codeAnalysis"]
+    > = {};
+    if ("enabled" in request.codeAnalysis) {
+      codeAnalysis.enabled = requireBoolean(
+        request.codeAnalysis.enabled
+      );
+    }
+    if ("defaultScope" in request.codeAnalysis) {
+      codeAnalysis.defaultScope = requireEnum(
+        request.codeAnalysis.defaultScope,
+        CODE_ANALYSIS_SCOPES
+      ) as CodeAnalysisScopeDto;
+    }
+    if ("staticFallback" in request.codeAnalysis) {
+      codeAnalysis.staticFallback = requireBoolean(
+        request.codeAnalysis.staticFallback
+      );
+    }
+    if ("maxFiles" in request.codeAnalysis) {
+      codeAnalysis.maxFiles = requireIntegerInRange(
+        request.codeAnalysis.maxFiles,
+        100,
+        50_000
+      );
+    }
+    if ("maxFileSizeKb" in request.codeAnalysis) {
+      codeAnalysis.maxFileSizeKb = requireIntegerInRange(
+        request.codeAnalysis.maxFileSizeKb,
+        64,
+        4_096
+      );
+    }
+    if ("readConcurrency" in request.codeAnalysis) {
+      codeAnalysis.readConcurrency = requireIntegerInRange(
+        request.codeAnalysis.readConcurrency,
+        1,
+        4
+      );
+    }
+    if ("graphDepth" in request.codeAnalysis) {
+      codeAnalysis.graphDepth = requireIntegerInRange(
+        request.codeAnalysis.graphDepth,
+        1,
+        12
+      );
+    }
+    if ("lspTimeoutMs" in request.codeAnalysis) {
+      codeAnalysis.lspTimeoutMs = requireIntegerInRange(
+        request.codeAnalysis.lspTimeoutMs,
+        1_000,
+        60_000
+      );
+    }
+    if ("ignoreDirectories" in request.codeAnalysis) {
+      codeAnalysis.ignoreDirectories =
+        requireBoundedStringArray(
+          request.codeAnalysis.ignoreDirectories,
+          MAX_ANALYSIS_IGNORE_DIRECTORIES,
+          MAX_ANALYSIS_IGNORE_LENGTH
+        );
+    }
+    if ("typescript" in request.codeAnalysis) {
+      codeAnalysis.typescript =
+        validateLanguageServerSettingsPatch(
+          request.codeAnalysis.typescript
+        );
+    }
+    if ("java" in request.codeAnalysis) {
+      codeAnalysis.java =
+        validateLanguageServerSettingsPatch(
+          request.codeAnalysis.java
+        );
+    }
+    result.codeAnalysis = codeAnalysis;
+  }
+
   if ("navigation" in request) {
     if (!isRecord(request.navigation)) {
       throw invalidSettingsRequest();
@@ -1215,6 +1396,82 @@ export function validateClearAiApiKeyRequest(
     );
   }
   return { confirmed: request.confirmed };
+}
+
+export function validateStartCodeAnalysisRequest(
+  request: unknown
+): StartCodeAnalysisRequest {
+  if (!isRecord(request)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Starting code analysis requires a supported scope."
+    );
+  }
+  const scope = requireEnum(
+    request.scope,
+    CODE_ANALYSIS_SCOPES
+  ) as CodeAnalysisScopeDto;
+  return { scope };
+}
+
+export function validateCancelCodeAnalysisRequest(
+  request: unknown
+): CancelCodeAnalysisRequest {
+  if (
+    !isRecord(request) ||
+    typeof request.analysisId !== "string"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Cancelling code analysis requires its task id."
+    );
+  }
+  return {
+    analysisId: validateOperationIdentifier(
+      request.analysisId,
+      "Code analysis"
+    )
+  };
+}
+
+export function validateReadCodeAnalysisFileRequest(
+  request: unknown
+): ReadCodeAnalysisFileRequest {
+  if (!isRecord(request)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Reading node source requires a code analysis node id."
+    );
+  }
+  const nodeId = requireBoundedString(
+    request.nodeId,
+    MAX_ANALYSIS_NODE_ID_LENGTH,
+    true
+  );
+  if (!nodeId) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Reading node source requires a code analysis node id."
+    );
+  }
+  return { nodeId };
+}
+
+export function validateInstallLanguageServerRequest(
+  request: unknown
+): InstallLanguageServerRequest {
+  if (!isRecord(request)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Installing a Language Server requires a supported language."
+    );
+  }
+  return {
+    language: requireEnum(
+      request.language,
+      INSTALLABLE_LANGUAGE_SERVERS
+    ) as InstallableLanguageServerDto
+  };
 }
 
 export function validateTestAiConnectionRequest(
@@ -3004,6 +3261,61 @@ function validateOptionalBoolean(
     );
   }
   return value;
+}
+
+function validateLanguageServerSettingsPatch(
+  value: unknown
+): NonNullable<
+  NonNullable<
+    UpdateAppSettingsRequest["codeAnalysis"]
+  >["typescript"]
+> {
+  if (!isRecord(value)) {
+    throw invalidSettingsRequest();
+  }
+  const result: NonNullable<
+    NonNullable<
+      UpdateAppSettingsRequest["codeAnalysis"]
+    >["typescript"]
+  > = {};
+  if ("enabled" in value) {
+    result.enabled = requireBoolean(value.enabled);
+  }
+  if ("command" in value) {
+    result.command = requireBoundedString(
+      value.command,
+      MAX_LSP_COMMAND_LENGTH,
+      false
+    );
+  }
+  if ("args" in value) {
+    result.args = requireBoundedStringArray(
+      value.args,
+      MAX_LSP_ARGUMENTS,
+      MAX_LSP_ARGUMENT_LENGTH
+    );
+  }
+  return result;
+}
+
+function requireBoundedStringArray(
+  value: unknown,
+  maximumItems: number,
+  maximumItemLength: number
+): string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > maximumItems
+  ) {
+    throw invalidSettingsRequest();
+  }
+  return value.map((item) =>
+    requireBoundedString(
+      item,
+      maximumItemLength,
+      false
+    )
+  );
 }
 
 function validateOptionalCommandText(

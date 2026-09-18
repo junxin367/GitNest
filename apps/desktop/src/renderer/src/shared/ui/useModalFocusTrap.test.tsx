@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import React, {
+import {
   act,
   useRef
 } from "react";

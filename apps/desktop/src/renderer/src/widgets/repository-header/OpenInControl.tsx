@@ -298,5 +298,13 @@ function ApplicationFallbackIcon({
           <path d="m6 8 4 4-4 4M12 16h6" fill="none" stroke="#f5f7fa" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
         </svg>
       );
+    case "git-bash":
+      return (
+        <img
+          alt=""
+          className="open-in-app-icon open-in-app-icon-native"
+          src={gitBashIconUrl}
+        />
+      );
   }
 }

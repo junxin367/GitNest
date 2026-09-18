@@ -20,6 +20,13 @@ export const IPC_CHANNELS = {
   settingsClearAiApiKey: "settings:clear-ai-api-key",
   aiTestConnection: "ai:test-connection",
   aiGenerateCommitMessage: "ai:generate-commit-message",
+  codeAnalysisGetState: "code-analysis:get-state",
+  codeAnalysisStart: "code-analysis:start",
+  codeAnalysisCancel: "code-analysis:cancel",
+  codeAnalysisGetSnapshot: "code-analysis:get-snapshot",
+  codeAnalysisReadFile: "code-analysis:read-file",
+  codeAnalysisInstallLanguageServer:
+    "code-analysis:install-language-server",
   windowMinimize: "window:minimize",
   windowToggleMaximize: "window:toggle-maximize",
   windowClose: "window:close",
@@ -61,5 +68,6 @@ export const IPC_CHANNELS = {
 } as const;
 
 export const IPC_EVENTS = {
-  workspaceStateChanged: "workspace:state-changed"
+  workspaceStateChanged: "workspace:state-changed",
+  codeAnalysisStateChanged: "code-analysis:state-changed"
 } as const;

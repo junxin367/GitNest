@@ -83,6 +83,8 @@ import {
   historyArguments,
   historyPageArguments,
   MERGED_REMOTE_BRANCH_ARGUMENTS,
+  revisionFileContentArguments,
+  revisionFileSizeArguments,
   resolveStashArguments,
   stashDiffArguments,
   stashFilesArguments,
@@ -615,13 +617,26 @@ export class GitCliClient
         result.stdout,
         Boolean(result.outputTruncated)
       );
+      const mediaDescriptor = options.includeMedia
+        ? MEDIA_DESCRIPTORS[extname(relativePath).toLowerCase()]
+        : undefined;
       return {
         path: diff.path,
         content: diff.content,
         binary: diff.binary,
         truncated: diff.truncated,
         additions: diff.additions,
-        deletions: diff.deletions
+        deletions: diff.deletions,
+        ...(mediaDescriptor
+          ? {
+              media: await readRevisionMediaPreview(
+                hash,
+                relativePath,
+                mediaDescriptor,
+                commandOptions
+              )
+            }
+          : {})
       };
     } catch (error) {
       throw mapRepositoryError(error, worktreePath);
@@ -729,6 +744,7 @@ export class GitCliClient
         truncateOutput: true
       });
       let diffResult = trackedDiffResult;
+      let mediaRevision = hash;
       if (!trackedDiffResult.stdout) {
         const untrackedDiffResult = await runProcess({
           ...commandOptions,
@@ -743,6 +759,9 @@ export class GitCliClient
         });
         if (untrackedDiffResult.exitCode === 0) {
           diffResult = untrackedDiffResult;
+          if (untrackedDiffResult.stdout) {
+            mediaRevision = `${hash}^3`;
+          }
         }
       }
       const diff = parseRepositoryDiff(
@@ -751,6 +770,9 @@ export class GitCliClient
         diffResult.stdout,
         Boolean(diffResult.outputTruncated)
       );
+      const mediaDescriptor = options.includeMedia
+        ? MEDIA_DESCRIPTORS[extname(relativePath).toLowerCase()]
+        : undefined;
 
       return {
         ref: normalizedRef,
@@ -760,7 +782,17 @@ export class GitCliClient
         binary: diff.binary,
         truncated: diff.truncated,
         additions: diff.additions,
-        deletions: diff.deletions
+        deletions: diff.deletions,
+        ...(mediaDescriptor
+          ? {
+              media: await readRevisionMediaPreview(
+                mediaRevision,
+                relativePath,
+                mediaDescriptor,
+                commandOptions
+              )
+            }
+          : {})
       };
     } catch (error) {
       throw mapRepositoryError(error, worktreePath);
@@ -2100,9 +2132,37 @@ async function readStagedMediaPreview(
   descriptor: MediaDescriptor,
   options: CommandOptions
 ): Promise<RepositoryMediaPreview> {
+  return readGitObjectMediaPreview(
+    stagedFileSizeArguments(path),
+    stagedFileContentArguments(path),
+    descriptor,
+    options
+  );
+}
+
+async function readRevisionMediaPreview(
+  revision: string,
+  path: string,
+  descriptor: MediaDescriptor,
+  options: CommandOptions
+): Promise<RepositoryMediaPreview> {
+  return readGitObjectMediaPreview(
+    revisionFileSizeArguments(revision, path),
+    revisionFileContentArguments(revision, path),
+    descriptor,
+    options
+  );
+}
+
+async function readGitObjectMediaPreview(
+  sizeArguments: string[],
+  contentArguments: string[],
+  descriptor: MediaDescriptor,
+  options: CommandOptions
+): Promise<RepositoryMediaPreview> {
   const sizeResult = await runProcess({
     ...options,
-    args: stagedFileSizeArguments(path),
+    args: sizeArguments,
     allowFailure: true,
     outputLimitBytes: 4_096
   });
@@ -2115,14 +2175,14 @@ async function readStagedMediaPreview(
   if (!/^\d+$/.test(normalizedSize)) {
     throw new GitError(
       "INVALID_GIT_OUTPUT",
-      "Git returned an invalid staged media size."
+      "Git returned an invalid media size."
     );
   }
   const size = Number(normalizedSize);
   if (!Number.isSafeInteger(size)) {
     throw new GitError(
       "INVALID_GIT_OUTPUT",
-      "Git returned an unsupported staged media size."
+      "Git returned an unsupported media size."
     );
   }
   if (size > MEDIA_PREVIEW_LIMIT_BYTES) {
@@ -2135,7 +2195,7 @@ async function readStagedMediaPreview(
 
   const contentResult = await runProcessBuffer({
     ...options,
-    args: stagedFileContentArguments(path),
+    args: contentArguments,
     allowFailure: true,
     outputLimitBytes: MEDIA_PREVIEW_LIMIT_BYTES + 1,
     truncateOutput: true
@@ -3228,7 +3288,9 @@ function validateRemoteConnectionUrl(value: string): string {
   let parsed: URL | undefined;
   try {
     parsed = new URL(normalized);
-  } catch {}
+  } catch {
+    // Non-URL Git remotes are validated below as SCP-like syntax.
+  }
 
   if (parsed) {
     if (

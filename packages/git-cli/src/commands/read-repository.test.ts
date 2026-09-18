@@ -11,6 +11,8 @@ import {
   diffArguments,
   historyPageArguments,
   MERGED_REMOTE_BRANCH_ARGUMENTS,
+  revisionFileContentArguments,
+  revisionFileSizeArguments,
   resolveStashArguments,
   stashDiffArguments,
   stashFilesArguments,
@@ -51,6 +53,25 @@ describe("repository read commands", () => {
     expect(
       stagedFileContentArguments("assets/预览.webp")
     ).toEqual(["show", ":assets/预览.webp"]);
+  });
+
+  it("reads historical media from the exact revision path", () => {
+    expect(
+      revisionFileSizeArguments(
+        "abcdef",
+        "assets/预览.webp"
+      )
+    ).toEqual([
+      "cat-file",
+      "-s",
+      "abcdef:assets/预览.webp"
+    ]);
+    expect(
+      revisionFileContentArguments(
+        "abcdef",
+        "assets/预览.webp"
+      )
+    ).toEqual(["show", "abcdef:assets/预览.webp"]);
   });
 
   it("constructs bounded history and commit detail commands", () => {

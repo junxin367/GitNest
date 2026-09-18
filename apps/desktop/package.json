@@ -7,7 +7,7 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "electron-vite dev --watch",
     "build": "electron-vite build",
     "dist:win": "electron-builder --win --x64 --config electron-builder.yml",
     "preview": "electron-vite preview",
@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@gitnest/application": "workspace:*",
+    "@gitnest/code-analysis": "workspace:*",
     "@gitnest/contracts": "workspace:*",
     "@gitnest/design-system": "workspace:*",
     "@gitnest/git-cli": "workspace:*",

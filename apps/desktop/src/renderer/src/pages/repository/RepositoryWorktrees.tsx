@@ -1,6 +1,8 @@
 import { Button } from "../../shared/ui/Button";
 import {
   useEffect,
+  useMemo,
+  useRef,
   useState,
   type FormEvent
 } from "react";
@@ -50,47 +52,55 @@ export function RepositoryWorktrees({
   const [createBranch, setCreateBranch] = useState("");
   const [createStartPoint, setCreateStartPoint] =
     useState("");
-  const [lockReasons, setLockReasons] = useState<
-    Record<string, string>
-  >({});
-  const [moveDestinations, setMoveDestinations] = useState<
-    Record<string, string>
-  >({});
   const [filterOpen, setFilterOpen] = useState(false);
-  const [inventoryOpen, setInventoryOpen] = useState(false);
   const [filters, setFilters] = useState<WorktreeFilterState>(
     createWorktreeFilterState
   );
-  const repository = workspace.repositories.find(
-    (candidate) => candidate.id === repositoryId
+  const filterInputRef = useRef<HTMLInputElement>(null);
+  const repository = useMemo(
+    () =>
+      workspace.repositories.find(
+        (candidate) => candidate.id === repositoryId
+      ),
+    [repositoryId, workspace.repositories]
   );
-  const worktrees = workspace.worktrees.filter(
-    (worktree) => worktree.repositoryId === repositoryId
+  const worktrees = useMemo(
+    () =>
+      workspace.worktrees.filter(
+        (worktree) => worktree.repositoryId === repositoryId
+      ),
+    [repositoryId, workspace.worktrees]
+  );
+  const snapshotByWorktreeId = useMemo(
+    () =>
+      new Map(
+        snapshots
+          .filter(
+            (snapshot) =>
+              snapshot.repositoryId === repositoryId
+          )
+          .map((snapshot) => [
+            snapshot.worktreeId,
+            snapshot
+          ])
+      ),
+    [repositoryId, snapshots]
   );
   const prunableCount = worktrees.filter(
     (worktree) => worktree.isPrunable
+  ).length;
+  const pruneCandidateCount = worktrees.filter(
+    (worktree) =>
+      worktree.isPrunable &&
+      !worktree.isLocked &&
+      !worktree.isPrimary
   ).length;
   const existingCount = worktrees.length - prunableCount;
   const detachedCount = worktrees.filter(
     (worktree) => worktree.isDetached || !worktree.branch
   ).length;
-  const currentWorktree =
-    worktrees.find((worktree) => worktree.id === worktreeId) ??
-    worktrees.find((worktree) => worktree.isPrimary) ??
-    worktrees[0];
-  const currentSnapshot = currentWorktree
-    ? snapshots.find(
-        (snapshot) =>
-          snapshot.repositoryId === repositoryId &&
-          snapshot.worktreeId === currentWorktree.id
-      )
-    : undefined;
   const snapshotFor = (worktree: WorkspaceWorktreeDto) =>
-    snapshots.find(
-      (snapshot) =>
-        snapshot.repositoryId === repositoryId &&
-        snapshot.worktreeId === worktree.id
-    );
+    snapshotByWorktreeId.get(worktree.id);
   const visibleWorktrees = worktrees.filter((worktree) =>
     matchesWorktreeFilters(worktree, snapshotFor(worktree), filters)
   );
@@ -114,12 +124,9 @@ export function RepositoryWorktrees({
     setCreatePath("");
     setCreateBranch("");
     setCreateStartPoint("");
-    setLockReasons({});
-    setMoveDestinations({});
     setCreateOpen(false);
     setFilters(createWorktreeFilterState());
     setFilterOpen(false);
-    setInventoryOpen(false);
     commands.clearFeedback();
   }, [repositoryId]);
 
@@ -211,27 +218,6 @@ export function RepositoryWorktrees({
           value={detachedCount}
         />
       </div>
-
-      {currentWorktree ? (
-        <div className="worktree-grid worktree-summary-grid">
-          <WorktreeSummaryCard
-            directoryOpening={directoryOpening}
-            onOpenDirectory={onOpenDirectory}
-            snapshot={currentSnapshot}
-            worktree={currentWorktree}
-          />
-        </div>
-      ) : (
-        <div className="empty-state repository-empty-state">
-          <span className="empty-state-icon">
-            <Icon name="worktree" size={20} />
-          </span>
-          <div>
-            <strong>没有可展示的 Worktree</strong>
-            <p>创建或修复 Worktree 后会显示在这里。</p>
-          </div>
-        </div>
-      )}
 
       {createOpen && (
         <section
@@ -359,11 +345,11 @@ export function RepositoryWorktrees({
               <li>主 Worktree 永不允许移除。</li>
               <li>脏、冲突、锁定目录不允许 Remove。</li>
               <li>移动 / 移除不提供强制模式。</li>
-              <li>Prune 只清理失效 Git 登记。</li>
+              <li>清除只会移除失效 Git 登记，不会删除目录。</li>
             </ul>
             <Button size="small"
               aria-busy={commands.active === "prune"}
-              disabled={commands.busy || prunableCount === 0}
+              disabled={commands.busy || pruneCandidateCount === 0}
               onClick={() =>
                 void commands.request({
                   type: "prune",
@@ -373,198 +359,191 @@ export function RepositoryWorktrees({
               type="button"
             >
               <Icon name="refresh" />
-              预检 Prune ({prunableCount})
+              预检清除 ({pruneCandidateCount})
             </Button>
           </article>
         </section>
       )}
 
-      {worktrees.length > 0 && (
-          <details
-            className="worktree-inventory-disclosure"
-            onToggle={(event) =>
-              setInventoryOpen(event.currentTarget.open)
-            }
-            open={inventoryOpen}
-          >
-            <summary>
-              {inventoryOpen
-                ? `收起 ${worktrees.length} 条实际登记路径`
-                : `展开全部 ${worktrees.length} 条实际登记路径`}
-            </summary>
-          <section className="worktree-inventory">
-            <header className="worktree-inventory-header">
-              <div>
-                <span className="eyebrow">Git common directory</span>
-                <h2>已登记 Worktrees</h2>
-              </div>
-              <span>
-                {activeFilterCount === 0
-                  ? `${worktrees.length} 个目录 · ${prunableCount} 个失效登记`
-                  : `已筛出 ${visibleWorktrees.length}/${worktrees.length} 个目录`}
-              </span>
-              {filterOpen && (
-                <Input
-                  appearance="unstyled"
-                  aria-label="筛选 Worktree"
-                  autoFocus
-                  className="worktree-filter-input"
-                  onChange={(event) =>
-                    setFilters((current) => ({
-                      ...current,
-                      query: event.target.value
-                    }))
-                  }
-                  onKeyDown={(event) => {
-                    if (event.key !== "Escape") {
-                      return;
-                    }
-                    event.preventDefault();
-                    setFilterOpen(false);
-                    setFilters((current) => ({
-                      ...current,
-                      query: ""
-                    }));
-                  }}
-                  placeholder="筛选分支、路径或状态"
-                  value={filters.query}
-                />
-              )}
-              <Button size="small"
-                aria-expanded={filterOpen}
-                className={`panel-header-action${
-                  filterOpen ? " worktree-filter-open" : ""
-                }`}
-                onClick={() => setFilterOpen((open) => !open)}
-                type="button"
-              >
-                <Icon name="filter" size={13} />
-                筛选
-              </Button>
-            </header>
-
-            <div
-              aria-label="按状态筛选 Worktree"
-              className="worktree-filter-bar"
-              role="group"
-            >
-              <span className="worktree-filter-bar-label">
-                状态
-              </span>
-              {WORKTREE_FACET_OPTIONS.map((option) => {
-                const selected = filters.facets.includes(option.id);
-                return (
-                  <Button variant="unstyled"
-                    aria-pressed={selected}
-                    className={`worktree-filter-chip${
-                      selected ? " selected" : ""
-                    }`}
-                    disabled={facetCounts[option.id] === 0}
-                    key={option.id}
-                    onClick={() =>
-                      setFilters((current) => ({
-                        ...current,
-                        facets: toggleWorktreeFacet(
-                          current.facets,
-                          option.id
-                        )
-                      }))
-                    }
-                    type="button"
-                  >
-                    {option.label}
-                    <span className="worktree-filter-chip-count">
-                      {facetCounts[option.id]}
-                    </span>
-                  </Button>
-                );
-              })}
-              <Button variant="unstyled"
-                aria-pressed={filters.onlyDirty}
-                className={`worktree-filter-chip worktree-filter-chip-dirty${
-                  filters.onlyDirty ? " selected" : ""
-                }`}
-                disabled={dirtyCount === 0 && !filters.onlyDirty}
-                onClick={() =>
+      {worktrees.length > 0 ? (
+        <>
+          <div className="worktree-toolbar">
+            <span className="worktree-toolbar-title">
+              <Icon name="worktree" size={14} />
+              已登记 Worktrees
+            </span>
+            <span className="worktree-toolbar-count">
+              共 {worktrees.length} 个
+              {activeFilterCount === 0
+                ? ""
+                : ` · 已筛出 ${visibleWorktrees.length} 个`}
+            </span>
+            {filterOpen && (
+              <Input
+                aria-label="筛选 Worktree"
+                autoFocus
+                clearLabel="清除 Worktree 筛选"
+                fieldClassName="worktree-filter-field"
+                fullWidth
+                inputClassName="worktree-filter-input"
+                leading={<Icon name="search" size={13} />}
+                onChange={(event) =>
                   setFilters((current) => ({
                     ...current,
-                    onlyDirty: !current.onlyDirty
+                    query: event.target.value
                   }))
                 }
-                type="button"
-              >
-                仅看有变更
-                <span className="worktree-filter-chip-count">
-                  {dirtyCount}
-                </span>
-              </Button>
-              {activeFilterCount > 0 && (
+                {...(filters.query
+                  ? {
+                      onClear: () => {
+                        setFilters((current) => ({
+                          ...current,
+                          query: ""
+                        }));
+                        filterInputRef.current?.focus({
+                          preventScroll: true
+                        });
+                      }
+                    }
+                  : {})}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") {
+                    return;
+                  }
+                  event.preventDefault();
+                  setFilterOpen(false);
+                  setFilters((current) => ({
+                    ...current,
+                    query: ""
+                  }));
+                }}
+                placeholder="筛选分支、路径或状态"
+                ref={filterInputRef}
+                size="small"
+                value={filters.query}
+              />
+            )}
+            <Button size="small"
+              aria-expanded={filterOpen}
+              className={`panel-header-action${
+                filterOpen ? " worktree-filter-open" : ""
+              }`}
+              onClick={() => setFilterOpen((open) => !open)}
+              type="button"
+            >
+              <Icon name="filter" size={13} />
+              筛选
+            </Button>
+          </div>
+
+          <div
+            aria-label="按类型筛选 Worktree"
+            className="worktree-filter-bar"
+            role="group"
+          >
+            <span className="worktree-filter-bar-label">类型</span>
+            {WORKTREE_FACET_OPTIONS.map((option) => {
+              const selected = filters.facet === option.id;
+              return (
                 <Button variant="unstyled"
-                  className="worktree-filter-clear"
-                  onClick={() => {
-                    setFilters(createWorktreeFilterState());
-                    setFilterOpen(false);
-                  }}
+                  aria-pressed={selected}
+                  className={`worktree-filter-chip${
+                    selected ? " selected" : ""
+                  }`}
+                  disabled={facetCounts[option.id] === 0}
+                  key={option.id}
+                  onClick={() =>
+                    setFilters((current) => ({
+                      ...current,
+                      facet: toggleWorktreeFacet(
+                        current.facet,
+                        option.id
+                      )
+                    }))
+                  }
                   type="button"
                 >
-                  清除筛选（{activeFilterCount}）
+                  {option.label}
+                  <span className="worktree-filter-chip-count">
+                    {facetCounts[option.id]}
+                  </span>
                 </Button>
-              )}
-            </div>
+              );
+            })}
+            <Button variant="unstyled"
+              aria-pressed={filters.onlyDirty}
+              className={`worktree-filter-chip worktree-filter-chip-dirty${
+                filters.onlyDirty ? " selected" : ""
+              }`}
+              disabled={dirtyCount === 0 && !filters.onlyDirty}
+              onClick={() =>
+                setFilters((current) => ({
+                  ...current,
+                  onlyDirty: !current.onlyDirty
+                }))
+              }
+              type="button"
+            >
+              仅看有变更
+              <span className="worktree-filter-chip-count">
+                {dirtyCount}
+              </span>
+            </Button>
+            {activeFilterCount > 0 && (
+              <Button variant="unstyled"
+                className="worktree-filter-clear"
+                onClick={() => {
+                  setFilters(createWorktreeFilterState());
+                  setFilterOpen(false);
+                }}
+                type="button"
+              >
+                清除筛选（{activeFilterCount}）
+              </Button>
+            )}
+          </div>
 
+          {visibleWorktrees.length > 0 ? (
             <div className="worktree-grid">
-              {visibleWorktrees.map((worktree) => {
-                const snapshot = snapshots.find(
-                  (candidate) =>
-                    candidate.repositoryId === repositoryId &&
-                    candidate.worktreeId === worktree.id
-                );
-                const dirty = Boolean(
-                  snapshot &&
-                    (snapshot.staged > 0 ||
-                      snapshot.unstaged > 0 ||
-                      snapshot.untracked > 0 ||
-                      snapshot.conflicted > 0)
-                );
-                return (
-                  <WorktreeCard
-                    commands={commands}
-                    dirty={dirty}
-                    key={worktree.id}
-                    lockReason={lockReasons[worktree.id] ?? ""}
-                    moveDestination={
-                      moveDestinations[worktree.id] ?? ""
-                    }
-                    onLockReasonChange={(value) =>
-                      setLockReasons((current) => ({
-                        ...current,
-                        [worktree.id]: value
-                      }))
-                    }
-                    onMoveDestinationChange={(value) =>
-                      setMoveDestinations((current) => ({
-                        ...current,
-                        [worktree.id]: value
-                      }))
-                    }
-                    worktree={worktree}
-                  />
-                );
-              })}
+              {visibleWorktrees.map((worktree) => (
+                <WorktreeSummaryCard
+                  current={worktree.id === worktreeId}
+                  directoryOpening={directoryOpening}
+                  key={worktree.id}
+                  onPrune={() =>
+                    void commands.request({
+                      type: "prune",
+                      repositoryId
+                    })
+                  }
+                  onOpenDirectory={onOpenDirectory}
+                  pruneBusy={commands.busy}
+                  pruneCandidateCount={pruneCandidateCount}
+                  prunePending={commands.active === "prune"}
+                  repositoryName={repository.name}
+                  snapshot={snapshotFor(worktree)}
+                  worktree={worktree}
+                />
+              ))}
             </div>
-
-
-            {worktrees.length > 0 &&
-              visibleWorktrees.length === 0 && (
-                <div className="worktree-filter-empty">
-                  <Icon name="search" size={18} />
-                  <strong>没有匹配的 Worktree</strong>
-                  <span>可修改筛选关键词后重试。</span>
-                </div>
-              )}
-
-          </section>
-        </details>
+          ) : (
+            <div className="worktree-filter-empty">
+              <Icon name="search" size={18} />
+              <strong>没有匹配的 Worktree</strong>
+              <span>可修改筛选条件后重试。</span>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="empty-state repository-empty-state">
+          <span className="empty-state-icon">
+            <Icon name="worktree" size={20} />
+          </span>
+          <div>
+            <strong>没有可展示的 Worktree</strong>
+            <p>创建或修复 Worktree 后会显示在这里。</p>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -600,21 +579,41 @@ function WorktreeMetricCard({
 function WorktreeSummaryCard({
   worktree,
   snapshot,
+  repositoryName,
+  current,
   directoryOpening,
+  pruneBusy,
+  pruneCandidateCount,
+  prunePending,
+  onPrune,
   onOpenDirectory
 }: {
   worktree: WorkspaceWorktreeDto;
   snapshot: RepositoryStatusSnapshotDto | undefined;
+  repositoryName: string;
+  current: boolean;
   directoryOpening: boolean;
+  pruneBusy: boolean;
+  pruneCandidateCount: number;
+  prunePending: boolean;
+  onPrune(): void;
   onOpenDirectory(worktreeId: string): void;
 }) {
   const changes = snapshot ? worktreeChangeCount(snapshot) : 0;
-  const status = snapshot
-    ? changes > 0
-      ? `${changes} 项变更`
-      : "工作区干净"
-    : "状态待刷新";
-  const openDirectory = () => {
+  const title = worktree.branch ?? "游离 HEAD";
+  const statusLabel = worktreeStatusLabel(worktree);
+  const statusTone = worktreeStatusTone(worktree);
+  const locationLabel = worktree.isPrunable
+    ? "目录不存在"
+    : "目录存在";
+  const pruneAvailable =
+    worktree.isPrunable &&
+    !worktree.isLocked &&
+    !worktree.isPrimary;
+  const activate = () => {
+    if (worktree.isPrunable) {
+      return;
+    }
     if (!directoryOpening) {
       onOpenDirectory(worktree.id);
     }
@@ -622,60 +621,134 @@ function WorktreeSummaryCard({
 
   return (
     <article
-      aria-busy={directoryOpening || undefined}
-      aria-disabled={directoryOpening || undefined}
-      aria-label={`打开当前工作目录，${
-        worktree.branch ?? "游离 HEAD"
-      }，${status}，${worktree.path}`}
-      className="worktree-card worktree-summary-card primary"
-      onClick={openDirectory}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          openDirectory();
-        }
-      }}
-      role="button"
-      tabIndex={0}
+      aria-busy={
+        !worktree.isPrunable && directoryOpening
+          ? true
+          : undefined
+      }
+      aria-current={current ? "location" : undefined}
+      aria-disabled={
+        !worktree.isPrunable && directoryOpening ? true : undefined
+      }
+      aria-label={`${worktree.isPrunable ? "" : "打开 "}${title}，${statusLabel}，提交 ${shortWorktreeHead(
+        worktree.head
+      )}，${locationLabel}，${worktree.path}`}
+      className={`worktree-card worktree-summary-card${
+        worktree.isPrimary ? " primary" : ""
+      }${worktree.isPrunable ? " prunable" : ""}`}
+      onClick={worktree.isPrunable ? undefined : activate}
+      onKeyDown={
+        worktree.isPrunable
+          ? undefined
+          : (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                activate();
+              }
+            }
+      }
+      role={worktree.isPrunable ? undefined : "button"}
+      tabIndex={worktree.isPrunable ? undefined : 0}
     >
       <div className="worktree-card-head">
-          <span className="worktree-symbol">
-            <Icon name="worktree" size={16} />
+        <span className="worktree-symbol">
+          <Icon name="worktree" size={16} />
+        </span>
+        <span className="worktree-card-head-copy">
+          <span className="worktree-title" title={title}>
+            {title}
           </span>
-          <span className="worktree-card-head-copy">
-          <span className="worktree-title">当前工作目录</span>
           <span className="worktree-branch">
-              <Icon name="branch" size={16} />
-            <span>{worktree.branch ?? "游离 HEAD"}</span>
+            <Icon name="commit" size={16} />
+            <span>{shortWorktreeHead(worktree.head)}</span>
           </span>
         </span>
-        <span className="status-pill green worktree-card-status">
-          {worktree.isPrimary ? "主工作目录" : "当前目录"}
+        <span
+          className={`status-pill ${statusTone} worktree-card-status`}
+        >
+          {statusLabel}
         </span>
       </div>
       <div className="worktree-path" title={worktree.path}>
         {worktree.path}
       </div>
       <div className="worktree-foot">
-        <span>{shortWorktreeHead(worktree.head)}</span>
-        <span>·</span>
+        <span className="worktree-repository-tag">
+          <Icon name="repository" size={16} />
+          {repositoryName}
+        </span>
         <span
-          className={
-            changes > 0
-              ? "worktree-summary-status dirty"
-              : "worktree-summary-status"
-          }
+          className={`worktree-location-status${
+            worktree.isPrunable ? " missing" : ""
+          }`}
         >
-          {status}
+          {locationLabel}
         </span>
+        {changes > 0 && (
+          <span className="worktree-change-count">
+            {changes} 项变更
+          </span>
+        )}
         <span className="spacer" />
-        <span className="worktree-foot-action">
+        {worktree.isPrunable ? (
+          <Button variant="unstyled"
+            aria-busy={prunePending}
+            aria-label={`清除 ${title} 所在仓库的失效 Worktree 登记`}
+            className="worktree-clear-action"
+            disabled={pruneBusy || !pruneAvailable}
+            onClick={onPrune}
+            title={
+              pruneAvailable
+                ? `将先预检，再清除 ${repositoryName} 仓库中的 ${pruneCandidateCount} 条失效登记；不会删除目录`
+                : "该失效登记已锁定，需先解锁后才能清除"
+            }
+            type="button"
+          >
+            <Icon name="refresh" size={14} />
+            {prunePending ? "预检中…" : "清除"}
+          </Button>
+        ) : (
+          <span className="worktree-foot-action">
             <Icon name="external" size={16} />
-          打开
-        </span>
+            登记路径
+          </span>
+        )}
       </div>
     </article>
   );
+}
+
+function worktreeStatusLabel(
+  worktree: WorkspaceWorktreeDto
+): string {
+  if (worktree.isPrunable) {
+    return "可清理登记";
+  }
+  if (worktree.isPrimary) {
+    return "主工作目录";
+  }
+  if (worktree.isDetached || !worktree.branch) {
+    return "游离 HEAD";
+  }
+  if (worktree.isLocked) {
+    return "已锁定";
+  }
+  return "已登记";
+}
+
+function worktreeStatusTone(
+  worktree: WorkspaceWorktreeDto
+): "green" | "neutral" | "red" | "yellow" {
+  if (worktree.isPrunable) {
+    return "red";
+  }
+  if (worktree.isDetached || !worktree.branch) {
+    return "yellow";
+  }
+  if (worktree.isPrimary) {
+    return "green";
+  }
+  return "neutral";
 }
 
 function worktreeChangeCount(
@@ -691,224 +764,4 @@ function worktreeChangeCount(
 
 function shortWorktreeHead(head: string): string {
   return head ? head.slice(0, 7) : "—";
-}
-
-function WorktreeCard({
-  worktree,
-  dirty,
-  commands,
-  lockReason,
-  moveDestination,
-  onLockReasonChange,
-  onMoveDestinationChange
-}: {
-  worktree: WorkspaceWorktreeDto;
-  dirty: boolean;
-  commands: WorktreeCommandController;
-  lockReason: string;
-  moveDestination: string;
-  onLockReasonChange(value: string): void;
-  onMoveDestinationChange(value: string): void;
-}) {
-  const linked = !worktree.isPrimary && !worktree.isBare;
-  const mutable =
-    linked && !worktree.isLocked && !worktree.isPrunable;
-  const removable = mutable && !dirty;
-
-  return (
-    <article
-      className={`worktree-card worktree-management-card${
-        worktree.isPrunable ? " prunable" : ""
-      }`}
-    >
-      <div className="worktree-card-heading">
-        <span className="runtime-hero-icon">
-          <Icon name="worktree" size={20} />
-        </span>
-        <div>
-          <strong>{worktree.name}</strong>
-          <code title={worktree.path}>{worktree.path}</code>
-        </div>
-      </div>
-
-      <div className="worktree-badges">
-        <span className="status-pill neutral">
-          {worktree.isPrimary ? "主工作目录" : "已登记"}
-        </span>
-        <span className="status-pill blue">
-          {worktree.branch ?? "游离 HEAD"}
-        </span>
-        {worktree.isLocked && (
-          <span className="status-pill yellow">已锁定</span>
-        )}
-        {worktree.isPrunable && (
-          <span className="status-pill yellow">可清理登记</span>
-        )}
-        {dirty && (
-          <span className="status-pill yellow">有未提交变更</span>
-        )}
-      </div>
-
-      {(worktree.lockReason || worktree.pruneReason) && (
-        <div className="worktree-reason">
-          {worktree.lockReason && (
-            <span>锁定原因：{worktree.lockReason}</span>
-          )}
-          {worktree.pruneReason && (
-            <span>失效原因：{worktree.pruneReason}</span>
-          )}
-        </div>
-      )}
-
-      <div className="worktree-card-actions">
-        {linked && !worktree.isLocked && !worktree.isPrunable && (
-          <div className="worktree-inline-action">
-            <Input
-              appearance="unstyled"
-              aria-label={`${worktree.name} 锁定原因`}
-              disabled={commands.busy}
-              maxLength={512}
-              onChange={(event) =>
-                onLockReasonChange(event.target.value)
-              }
-              placeholder="锁定原因（可选）"
-              value={lockReason}
-            />
-            <Button variant="unstyled"
-              className="mini-action"
-              disabled={commands.busy}
-              onClick={() =>
-                void commands.request({
-                  type: "lock",
-                  worktreeId: worktree.id,
-                  ...(lockReason.trim()
-                    ? { reason: lockReason.trim() }
-                    : {})
-                })
-              }
-              type="button"
-            >
-              锁定
-            </Button>
-          </div>
-        )}
-
-        {linked && worktree.isLocked && (
-          <Button size="small"
-            disabled={commands.busy}
-            onClick={() =>
-              void commands.request({
-                type: "unlock",
-                worktreeId: worktree.id
-              })
-            }
-            type="button"
-          >
-            解锁 Worktree
-          </Button>
-        )}
-
-        {mutable && (
-          <div className="worktree-inline-action move">
-            <Input
-              appearance="unstyled"
-              aria-label={`${worktree.name} 移动目标`}
-              disabled={commands.busy}
-              onChange={(event) =>
-                onMoveDestinationChange(event.target.value)
-              }
-              placeholder="新的绝对路径"
-              spellCheck={false}
-              value={moveDestination}
-            />
-            <Button variant="unstyled"
-              aria-label={`选择 ${worktree.name} 移动父目录`}
-              className="mini-action"
-              disabled={commands.busy}
-              onClick={() => {
-                void commands
-                  .chooseDirectory()
-                  .then((path) => {
-                    if (path) {
-                      onMoveDestinationChange(
-                        joinWindowsPath(
-                          path,
-                          pathBasename(worktree.path)
-                        )
-                      );
-                    }
-                  });
-              }}
-              type="button"
-            >
-              选择
-            </Button>
-            <Button variant="unstyled"
-              className="mini-action"
-              disabled={
-                commands.busy || !moveDestination.trim()
-              }
-              onClick={() =>
-                void commands.request({
-                  type: "move",
-                  worktreeId: worktree.id,
-                  destination: moveDestination.trim()
-                })
-              }
-              type="button"
-            >
-              移动
-            </Button>
-          </div>
-        )}
-
-        <div className="worktree-button-row">
-          <Button size="small"
-            disabled={commands.busy || worktree.isBare}
-            onClick={() =>
-              void commands.request({
-                type: "repair",
-                worktreeId: worktree.id
-              })
-            }
-            type="button"
-          >
-            修复登记
-          </Button>
-          {linked && (
-            <Button size="small" emphasis="strong" variant="danger"
-              disabled={commands.busy || !removable}
-              onClick={() =>
-                void commands.request({
-                  type: "remove",
-                  worktreeId: worktree.id
-                })
-              }
-              title={
-                worktree.isLocked
-                  ? "请先解锁 Worktree"
-                  : worktree.isPrunable
-                    ? "可清理登记请使用 Prune"
-                    : dirty
-                      ? "脏 Worktree 不允许移除"
-                      : "安全移除 linked Worktree"
-              }
-              type="button"
-            >
-              移除
-            </Button>
-          )}
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function pathBasename(path: string): string {
-  const normalized = path.replace(/[\\/]+$/, "");
-  return normalized.split(/[\\/]/).pop() || "worktree";
-}
-
-function joinWindowsPath(parent: string, child: string): string {
-  return `${parent.replace(/[\\/]+$/, "")}\\${child}`;
 }

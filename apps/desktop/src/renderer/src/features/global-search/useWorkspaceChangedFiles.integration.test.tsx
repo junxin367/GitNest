@@ -156,9 +156,11 @@ describe("useWorkspaceChangedFiles", () => {
           enabled
           snapshots={[
             createSnapshot(TARGET_A, {
+              contentVersion: 1,
               unstaged: 1
             }),
             createSnapshot(TARGET_B, {
+              contentVersion: 1,
               untracked: 1
             })
           ]}
@@ -180,10 +182,41 @@ describe("useWorkspaceChangedFiles", () => {
           enabled
           snapshots={[
             createSnapshot(TARGET_A, {
+              contentVersion: 1,
               refreshedAt: "2026-09-16T12:01:00.000Z",
               unstaged: 1
             }),
-            createSnapshot(TARGET_B)
+            createSnapshot(TARGET_B, {
+              contentVersion: 2
+            })
+          ]}
+          onChange={(value) => {
+            latest = value;
+          }}
+        />
+      );
+      await flushPromises();
+    });
+
+    expect(getChanges).toHaveBeenCalledTimes(2);
+    expect(
+      latest?.changes[0]?.snapshot.changes[0]?.path
+    ).toBe("src/first.ts");
+    expect(latest?.failedTargetCount).toBe(0);
+
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled
+          snapshots={[
+            createSnapshot(TARGET_A, {
+              contentVersion: 2,
+              refreshedAt: "2026-09-16T12:01:00.000Z",
+              unstaged: 1
+            }),
+            createSnapshot(TARGET_B, {
+              contentVersion: 2
+            })
           ]}
           onChange={(value) => {
             latest = value;

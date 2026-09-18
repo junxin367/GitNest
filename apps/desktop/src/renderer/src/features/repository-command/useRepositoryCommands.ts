@@ -332,7 +332,7 @@ export function useRepositoryCommands(
   };
 }
 
-function isRepositoryCommandOperation(
+export function isRepositoryCommandOperation(
   kind: WorkspaceOperationDto["kind"]
 ): boolean {
   return [

@@ -5,6 +5,7 @@ import {
 } from "react";
 
 import type {
+  CodeAnalysisSettingsDto,
   ExternalTerminalProfileDto,
   GitEnvironmentDto,
   GitReadErrorDto,
@@ -18,6 +19,10 @@ import { Icon, type IconName } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
 import {
+  MenuItem,
+  MenuPopover
+} from "../../shared/ui/Menu";
+import {
   Skeleton,
   SkeletonBoundary
 } from "../../shared/ui/Skeleton";
@@ -26,7 +31,12 @@ import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
 import { SettingsPage as AccountAuthSettings } from "./SettingsPage";
 
-type SettingsSection = "general" | "ai" | "git" | "account";
+export type ApplicationSettingsSection =
+  | "general"
+  | "ai"
+  | "analysis"
+  | "git"
+  | "account";
 
 interface ApplicationSettingsPageProps {
   workspace: WorkspaceDetailsDto | null;
@@ -34,10 +44,11 @@ interface ApplicationSettingsPageProps {
   terminalProfiles: ExternalTerminalProfileDto[];
   accounts: AccountController;
   appSettings: AppSettingsController;
+  initialSection?: ApplicationSettingsSection;
 }
 
 const SETTINGS_SECTIONS: Array<{
-  id: SettingsSection;
+  id: ApplicationSettingsSection;
   label: string;
   subtitle: string;
   icon: IconName;
@@ -53,6 +64,12 @@ const SETTINGS_SECTIONS: Array<{
     label: "AI 提交信息",
     subtitle: "生成提交信息",
     icon: "sparkle"
+  },
+  {
+    id: "analysis",
+    label: "LSP 与代码分析",
+    subtitle: "请求链与调用关系",
+    icon: "graph"
   },
   {
     id: "git",
@@ -73,10 +90,11 @@ export function ApplicationSettingsPage({
   gitEnvironment,
   terminalProfiles,
   accounts,
-  appSettings
+  appSettings,
+  initialSection = "general"
 }: ApplicationSettingsPageProps) {
   const [section, setSection] =
-    useState<SettingsSection>("general");
+    useState<ApplicationSettingsSection>(initialSection);
   const [aiUrl, setAiUrl] = useState(
     appSettings.settings.ai.apiUrl
   );
@@ -90,6 +108,7 @@ export function ApplicationSettingsPage({
     appSettings.settings.ai.enabled
   );
   const [aiKey, setAiKey] = useState("");
+  const [aiKeyVisible, setAiKeyVisible] = useState(true);
   const [aiTesting, setAiTesting] = useState(false);
   const [aiFeedback, setAiFeedback] = useState<{
     title: string;
@@ -98,6 +117,16 @@ export function ApplicationSettingsPage({
   } | null>(null);
   const [clearKeyConfirmOpen, setClearKeyConfirmOpen] =
     useState(false);
+  const [analysisDraft, setAnalysisDraft] =
+    useState<CodeAnalysisSettingsDto>(() =>
+      cloneCodeAnalysisSettings(
+        appSettings.settings.codeAnalysis
+      )
+    );
+
+  useEffect(() => {
+    setSection(initialSection);
+  }, [initialSection]);
 
   useEffect(() => {
     setAiUrl(appSettings.settings.ai.apiUrl);
@@ -105,6 +134,14 @@ export function ApplicationSettingsPage({
     setAiPrompt(appSettings.settings.ai.prompt);
     setAiEnabled(appSettings.settings.ai.enabled);
   }, [appSettings.settings.ai]);
+
+  useEffect(() => {
+    setAnalysisDraft(
+      cloneCodeAnalysisSettings(
+        appSettings.settings.codeAnalysis
+      )
+    );
+  }, [appSettings.settings.codeAnalysis]);
 
   const saveAiSettings = async () => {
     const url = aiUrl.trim();
@@ -135,7 +172,6 @@ export function ApplicationSettingsPage({
       }
     );
     if (saved) {
-      setAiKey("");
       setAiFeedback(null);
     }
   };
@@ -199,6 +235,20 @@ export function ApplicationSettingsPage({
     }
   };
 
+  const saveAnalysisSettings = async () => {
+    await appSettings.update(
+      {
+        codeAnalysis: cloneCodeAnalysisSettings(
+          analysisDraft
+        )
+      },
+      {
+        notice:
+          "LSP 与代码分析设置已保存；已有分析结果会在下次运行时按新设置重建。"
+      }
+    );
+  };
+
   const selectedTerminal =
     terminalProfiles.find(
       (profile) =>
@@ -226,7 +276,7 @@ export function ApplicationSettingsPage({
             <span className="eyebrow">应用偏好</span>
             <h1>设置</h1>
             <p>
-              管理应用行为、AI 提交信息、Git 同步策略以及账号认证。
+              管理应用行为、AI、LSP 代码分析、Git 同步策略以及账号认证。
             </p>
           </div>
           <div className="page-actions">
@@ -350,37 +400,19 @@ export function ApplicationSettingsPage({
                   description="左侧活动栏的终端入口会使用这里解析出的默认终端。"
                   title="默认终端"
                 >
-                  <label className="settings-select-field">
-                    默认终端
-                    <select
-                      disabled={
-                        appSettings.saving ||
-                        terminalProfiles.length === 0
-                      }
-                      onChange={(event) =>
-                        void appSettings.update({
-                          general: {
-                            defaultTerminalKind:
-                              event.target
-                                .value as typeof terminalProfiles[number]["kind"]
-                          }
-                        })
-                      }
-                      value={selectedTerminal?.kind ?? ""}
-                    >
-                      {terminalProfiles.length === 0 && (
-                        <option value="">没有可用终端</option>
-                      )}
-                      {terminalProfiles.map((profile) => (
-                        <option
-                          key={profile.kind}
-                          value={profile.kind}
-                        >
-                          {profile.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <TerminalProfileDropdown
+                    disabled={
+                      appSettings.saving ||
+                      terminalProfiles.length === 0
+                    }
+                    onChange={(defaultTerminalKind) =>
+                      void appSettings.update({
+                        general: { defaultTerminalKind }
+                      })
+                    }
+                    profiles={terminalProfiles}
+                    value={selectedTerminal?.kind}
+                  />
                   {appSettings.settings.general
                     .defaultTerminalKind &&
                     !savedTerminalAvailable &&
@@ -393,36 +425,10 @@ export function ApplicationSettingsPage({
                 </SettingsCard>
 
                 <SettingsCard
-                  description="按类别查看当前界面与浏览行为偏好。"
+                  description="按类别查看当前文件浏览、差异与提交偏好。"
                   title="当前偏好"
                 >
                   <div className="settings-preference-groups">
-                    <section
-                      aria-labelledby="appearance-preference-title"
-                      className="settings-preference-group"
-                    >
-                      <div className="settings-preference-group-header">
-                        <Icon name="sun" size={14} />
-                        <h3
-                          className="settings-preference-group-title"
-                          id="appearance-preference-title"
-                        >
-                          界面外观
-                        </h3>
-                      </div>
-                      <dl className="detail-list settings-preference-list">
-                        <Detail
-                          label="界面主题"
-                          value={
-                            appSettings.settings.appearance
-                              .theme === "dark"
-                              ? "深色"
-                              : "浅色"
-                          }
-                        />
-                      </dl>
-                    </section>
-
                     <section
                       aria-labelledby="file-browsing-preference-title"
                       className="settings-preference-group"
@@ -438,7 +444,7 @@ export function ApplicationSettingsPage({
                       </div>
                       <dl className="detail-list settings-preference-list">
                         <Detail
-                          label="文件变更视图"
+                          label="变更文件视图"
                           value={
                             appSettings.settings.diff
                               .fileView === "tree"
@@ -586,7 +592,30 @@ export function ApplicationSettingsPage({
                         : "输入 API Key"
                     }
                     spellCheck={false}
-                    type="password"
+                    trailing={
+                      <Button
+                        aria-label={
+                          aiKeyVisible
+                            ? "隐藏 API Key"
+                            : "显示 API Key"
+                        }
+                        aria-pressed={aiKeyVisible}
+                        className="gn-input__action"
+                        onClick={() =>
+                          setAiKeyVisible((visible) => !visible)
+                        }
+                        title={
+                          aiKeyVisible
+                            ? "隐藏 API Key"
+                            : "显示 API Key"
+                        }
+                        type="button"
+                        variant="unstyled"
+                      >
+                        <Icon name="eye" size={14} />
+                      </Button>
+                    }
+                    type={aiKeyVisible ? "text" : "password"}
                     value={aiKey}
                   />
                   <Textarea
@@ -757,6 +786,241 @@ export function ApplicationSettingsPage({
               </>
             )}
 
+            {section === "analysis" && (
+              <>
+                <SettingsCard
+                  action={
+                    <button
+                      aria-label="启用代码分析"
+                      aria-pressed={analysisDraft.enabled}
+                      className={`settings-switch${
+                        analysisDraft.enabled ? " active" : ""
+                      }`}
+                      disabled={appSettings.saving}
+                      onClick={() =>
+                        setAnalysisDraft((current) => ({
+                          ...current,
+                          enabled: !current.enabled
+                        }))
+                      }
+                      type="button"
+                    >
+                      <span className="settings-switch-thumb" />
+                    </button>
+                  }
+                  description="分析当前选中的 Workspace 条目，不在项目目录写入索引或配置。"
+                  title="代码分析"
+                >
+                  <div className="settings-option-grid">
+                    <SettingsOption
+                      active={
+                        analysisDraft.defaultScope === "changed"
+                      }
+                      description="只读取 Git 变动文件，并从现有索引补充直接相关关系。"
+                      icon="diff"
+                      onClick={() =>
+                        setAnalysisDraft((current) => ({
+                          ...current,
+                          defaultScope: "changed"
+                        }))
+                      }
+                      title="默认分析变动代码"
+                    />
+                    <SettingsOption
+                      active={
+                        analysisDraft.defaultScope ===
+                        "workspace"
+                      }
+                      description="默认选中全部代码；仍需在代码分析页手动启动。"
+                      icon="files"
+                      onClick={() =>
+                        setAnalysisDraft((current) => ({
+                          ...current,
+                          defaultScope: "workspace"
+                        }))
+                      }
+                      title="默认分析全部代码"
+                    />
+                  </div>
+                  <SettingsToggle
+                    checked={analysisDraft.staticFallback}
+                    description="Language Server 未安装、超时或失败时，继续使用内置框架分析器生成请求链。"
+                    disabled={appSettings.saving}
+                    label="允许内置分析降级"
+                    onChange={(staticFallback) =>
+                      setAnalysisDraft((current) => ({
+                        ...current,
+                        staticFallback
+                      }))
+                    }
+                  />
+                  <div className="settings-safety-note">
+                    <Icon name="check" size={15} />
+                    <div>
+                      <strong>Workspace 保持只读</strong>
+                      <p>
+                        源码只执行目录遍历与读取；分析缓存和 Java LSP
+                        数据统一保存在 GitNest 应用数据目录。
+                      </p>
+                    </div>
+                  </div>
+                </SettingsCard>
+
+                <LanguageServerSettingsCard
+                  description="用于 JavaScript、TypeScript、TSX、JSX 和 Vue 的符号增强。"
+                  disabled={appSettings.saving}
+                  label="TypeScript Language Server"
+                  settings={analysisDraft.typescript}
+                  onChange={(typescript) =>
+                    setAnalysisDraft((current) => ({
+                      ...current,
+                      typescript
+                    }))
+                  }
+                />
+
+                <LanguageServerSettingsCard
+                  description="用于 Java/Spring 的符号和调用层级增强；GitNest 会自动设置独立 -data 目录。"
+                  disabled={appSettings.saving}
+                  label="Java Language Server"
+                  settings={analysisDraft.java}
+                  onChange={(java) =>
+                    setAnalysisDraft((current) => ({
+                      ...current,
+                      java
+                    }))
+                  }
+                />
+
+                <SettingsCard
+                  description="限制大型项目的文件读取、内存占用和关系图展开规模。"
+                  title="性能预算"
+                >
+                  <div className="analysis-settings-number-grid">
+                    <Input
+                      fullWidth
+                      id="analysis-max-files"
+                      label="最大文件数"
+                      max={50000}
+                      min={100}
+                      onChange={(event) =>
+                        setAnalysisDraft((current) => ({
+                          ...current,
+                          maxFiles: Number(event.target.value)
+                        }))
+                      }
+                      type="number"
+                      value={analysisDraft.maxFiles}
+                    />
+                    <Input
+                      fullWidth
+                      id="analysis-max-file-size"
+                      label="单文件上限（KiB）"
+                      max={4096}
+                      min={64}
+                      onChange={(event) =>
+                        setAnalysisDraft((current) => ({
+                          ...current,
+                          maxFileSizeKb: Number(
+                            event.target.value
+                          )
+                        }))
+                      }
+                      type="number"
+                      value={analysisDraft.maxFileSizeKb}
+                    />
+                    <Input
+                      fullWidth
+                      id="analysis-concurrency"
+                      label="读取并发数"
+                      max={4}
+                      min={1}
+                      onChange={(event) =>
+                        setAnalysisDraft((current) => ({
+                          ...current,
+                          readConcurrency: Number(
+                            event.target.value
+                          )
+                        }))
+                      }
+                      type="number"
+                      value={analysisDraft.readConcurrency}
+                    />
+                    <Input
+                      fullWidth
+                      id="analysis-graph-depth"
+                      label="默认关系深度"
+                      max={12}
+                      min={1}
+                      onChange={(event) =>
+                        setAnalysisDraft((current) => ({
+                          ...current,
+                          graphDepth: Number(
+                            event.target.value
+                          )
+                        }))
+                      }
+                      type="number"
+                      value={analysisDraft.graphDepth}
+                    />
+                    <Input
+                      fullWidth
+                      id="analysis-lsp-timeout"
+                      label="LSP 超时（ms）"
+                      max={60000}
+                      min={1000}
+                      onChange={(event) =>
+                        setAnalysisDraft((current) => ({
+                          ...current,
+                          lspTimeoutMs: Number(
+                            event.target.value
+                          )
+                        }))
+                      }
+                      type="number"
+                      value={analysisDraft.lspTimeoutMs}
+                    />
+                  </div>
+                  <Textarea
+                    fullWidth
+                    helpText="每行一个目录名；匹配目录后不会继续向下扫描。"
+                    id="analysis-ignore-directories"
+                    label="忽略目录"
+                    onChange={(event) =>
+                      setAnalysisDraft((current) => ({
+                        ...current,
+                        ignoreDirectories: splitLines(
+                          event.target.value
+                        )
+                      }))
+                    }
+                    rows={7}
+                    value={analysisDraft.ignoreDirectories.join(
+                      "\n"
+                    )}
+                  />
+                  <div className="settings-ai-actions">
+                    <p className="settings-field-help">
+                      全部代码分析始终需要在代码分析页手动启动。
+                    </p>
+                    <Button
+                      aria-busy={appSettings.saving}
+                      disabled={appSettings.saving}
+                      onClick={() =>
+                        void saveAnalysisSettings()
+                      }
+                      size="small"
+                      type="button"
+                      variant="primary"
+                    >
+                      <Icon name="check" />
+                      保存代码分析设置
+                    </Button>
+                  </div>
+                </SettingsCard>
+              </>
+            )}
+
             {section === "account" && (
               <AccountAuthSettings
                 accounts={accounts}
@@ -778,6 +1042,7 @@ export function ApplicationSettingsPage({
               const cleared = await appSettings.clearAiApiKey();
               if (cleared) {
                 setAiKey("");
+                setAiKeyVisible(true);
                 setClearKeyConfirmOpen(false);
               }
             }}
@@ -785,6 +1050,147 @@ export function ApplicationSettingsPage({
         )}
       </div>
     </SkeletonBoundary>
+  );
+}
+
+function TerminalProfileDropdown({
+  disabled,
+  onChange,
+  profiles,
+  value
+}: {
+  disabled: boolean;
+  onChange(
+    value: ExternalTerminalProfileDto["kind"]
+  ): void;
+  profiles: ExternalTerminalProfileDto[];
+  value: ExternalTerminalProfileDto["kind"] | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const selected =
+    profiles.find((profile) => profile.kind === value) ??
+    profiles[0];
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const close = () => setOpen(false);
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !triggerRef.current?.contains(event.target) &&
+        !menuRef.current?.contains(event.target)
+      ) {
+        close();
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      close();
+      triggerRef.current?.focus();
+    };
+    const focusFrame = window.requestAnimationFrame(() => {
+      const items =
+        menuRef.current?.querySelectorAll<HTMLButtonElement>(
+          '[role="menuitemradio"]'
+        ) ?? [];
+      const current = [...items].find(
+        (item) => item.getAttribute("aria-checked") === "true"
+      );
+      (current ?? items[0])?.focus();
+    });
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("blur", close);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener(
+        "pointerdown",
+        handlePointerDown
+      );
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [open]);
+
+  return (
+    <div className="settings-tool-select">
+      <span className="settings-tool-select-label">
+        默认终端
+      </span>
+      <div className="settings-tool-menu">
+        <Button
+          aria-expanded={open}
+          aria-haspopup="menu"
+          aria-label="选择默认终端"
+          className="settings-tool-menu-trigger"
+          disabled={disabled}
+          onClick={() => setOpen((current) => !current)}
+          onKeyDown={(event) => {
+            if (
+              event.key === "ArrowDown" ||
+              event.key === "ArrowUp"
+            ) {
+              event.preventDefault();
+              setOpen(true);
+            }
+          }}
+          ref={triggerRef}
+          type="button"
+          variant="unstyled"
+        >
+          <span className="settings-tool-menu-trigger-value">
+            <Icon name="terminal" size={15} />
+            <span>{selected?.label ?? "没有可用终端"}</span>
+          </span>
+          <Icon name="chevron" size={14} />
+        </Button>
+        {open && selected && (
+          <MenuPopover
+            align="start"
+            anchor={triggerRef.current}
+            aria-label="默认终端选项"
+            className="settings-tool-menu-surface"
+            ref={menuRef}
+            side="bottom"
+          >
+            {profiles.map((profile) => (
+              <MenuItem
+                aria-checked={profile.kind === selected.kind}
+                className={
+                  profile.kind === selected.kind
+                    ? "is-selected"
+                    : undefined
+                }
+                key={profile.kind}
+                leading={<Icon name="terminal" size={14} />}
+                onClick={() => {
+                  onChange(profile.kind);
+                  setOpen(false);
+                  triggerRef.current?.focus();
+                }}
+                role="menuitemradio"
+              >
+                {profile.label}
+              </MenuItem>
+            ))}
+          </MenuPopover>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -840,6 +1246,92 @@ function ApplicationSettingsSkeleton() {
   );
 }
 
+function LanguageServerSettingsCard({
+  label,
+  description,
+  settings,
+  disabled,
+  onChange
+}: {
+  label: string;
+  description: string;
+  settings: CodeAnalysisSettingsDto["typescript"];
+  disabled: boolean;
+  onChange(
+    settings: CodeAnalysisSettingsDto["typescript"]
+  ): void;
+}) {
+  return (
+    <SettingsCard
+      action={
+        <button
+          aria-label={`启用 ${label}`}
+          aria-pressed={settings.enabled}
+          className={`settings-switch${
+            settings.enabled ? " active" : ""
+          }`}
+          disabled={disabled}
+          onClick={() =>
+            onChange({
+              ...settings,
+              enabled: !settings.enabled
+            })
+          }
+          type="button"
+        >
+          <span className="settings-switch-thumb" />
+        </button>
+      }
+      description={description}
+      title={label}
+    >
+      <Input
+        autoComplete="off"
+        fullWidth
+        id={`lsp-command-${label
+          .toLocaleLowerCase("en-US")
+          .replaceAll(" ", "-")}`}
+        label="启动命令"
+        maxLength={2048}
+        onChange={(event) =>
+          onChange({
+            ...settings,
+            command: event.target.value
+          })
+        }
+        placeholder={
+          label.startsWith("Java")
+            ? "jdtls"
+            : "typescript-language-server"
+        }
+        spellCheck={false}
+        value={settings.command}
+      />
+      <Textarea
+        fullWidth
+        helpText="每行一个参数；进程通过 stdio 启动，不使用 Shell 拼接。"
+        id={`lsp-args-${label
+          .toLocaleLowerCase("en-US")
+          .replaceAll(" ", "-")}`}
+        label="启动参数"
+        onChange={(event) =>
+          onChange({
+            ...settings,
+            args: splitLines(event.target.value)
+          })
+        }
+        placeholder={
+          label.startsWith("Java")
+            ? "通常留空，GitNest 会自动追加 -data"
+            : "--stdio"
+        }
+        rows={4}
+        value={settings.args.join("\n")}
+      />
+    </SettingsCard>
+  );
+}
+
 function SettingsCard({
   title,
   description,
@@ -870,6 +1362,30 @@ function SettingsCard({
       <div className="settings-card-body">{children}</div>
     </article>
   );
+}
+
+function cloneCodeAnalysisSettings(
+  settings: CodeAnalysisSettingsDto
+): CodeAnalysisSettingsDto {
+  return {
+    ...settings,
+    ignoreDirectories: [...settings.ignoreDirectories],
+    typescript: {
+      ...settings.typescript,
+      args: [...settings.typescript.args]
+    },
+    java: {
+      ...settings.java,
+      args: [...settings.java.args]
+    }
+  };
+}
+
+function splitLines(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 function SettingsToggle({

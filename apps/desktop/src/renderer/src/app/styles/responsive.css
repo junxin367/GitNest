@@ -1,0 +1,241 @@
+@media (max-width: 1140px) {
+  .build-pill {
+    display: none;
+  }
+
+  .repository-header {
+    padding: 0 var(--space-3);
+  }
+
+  .context-tabs {
+    gap: var(--space-3);
+    padding: 0 var(--space-3);
+  }
+
+  .page-heading {
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .page-actions {
+    width: 100%;
+  }
+
+  .settings-page .page-actions {
+    justify-content: flex-end;
+  }
+
+  .toolbar-button {
+    gap: var(--space-1);
+    font-size: var(--font-size-caption);
+  }
+
+  .header-branch-switcher {
+    flex-basis: 104px;
+    max-width: 104px;
+  }
+
+  .account-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-token-field {
+    grid-column: auto;
+  }
+
+  .account-test-row,
+  .account-form-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .operation-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .operation-history-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .operation-filter-tabs {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .operation-history-meta {
+    grid-template-columns: auto;
+  }
+
+  .operation-history-meta > div {
+    justify-self: start;
+  }
+
+  .repository-health-grid {
+    gap: var(--space-2);
+  }
+
+  .repository-health-card {
+    padding: var(--space-2);
+  }
+
+  .repository-health-card > strong {
+    font-size: var(--font-size-emphasis);
+  }
+
+  .worktree-management-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .worktree-create-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .worktree-form-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .command-dialog-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .command-dialog-footer p {
+    max-width: none;
+  }
+
+  .command-dialog-footer > div {
+    justify-content: flex-end;
+  }
+
+  .analysis-workbench {
+    grid-template-columns: minmax(220px, 270px) minmax(0, 1fr);
+  }
+
+  .analysis-skeleton-workbench {
+    grid-template-columns: minmax(220px, 270px) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .settings-page-scroll {
+    padding: var(--space-4);
+  }
+
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-nav-label {
+    grid-column: 1 / -1;
+  }
+
+  .settings-ai-field-grid,
+  .analysis-settings-number-grid,
+  .settings-option-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-setting-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: var(--space-2);
+  }
+
+  .settings-ai-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-ai-actions-buttons {
+    justify-content: flex-end;
+  }
+
+  .analysis-page-title-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .analysis-skeleton-title-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .analysis-header-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .analysis-skeleton-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .analysis-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .analysis-skeleton-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .analysis-workbench {
+    flex: 0 0 auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .analysis-skeleton-workbench {
+    flex: 0 0 auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .analysis-chain-panel,
+  .analysis-graph-workspace,
+  .analysis-graph-panel {
+    grid-column: auto;
+    min-height: 420px;
+  }
+
+  .analysis-skeleton-navigation,
+  .analysis-skeleton-graph {
+    grid-column: auto;
+    min-height: 420px;
+  }
+
+  .analysis-node-diff-drawer {
+    width: 100%;
+  }
+
+  .repository-overview-commit-row,
+  .commit-row {
+    grid-template-columns:
+      var(--control-large)
+      minmax(0, 1fr);
+  }
+
+  .repository-overview-commit-author,
+  .repository-overview-commit-time,
+  .repository-overview-commit-id,
+  .commit-author,
+  .commit-time,
+  .commit-id {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

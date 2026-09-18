@@ -67,7 +67,7 @@ export function repositoryTargetSelected(
   );
 }
 
-export function workspaceEntryContainsTarget(
+function workspaceEntryContainsTarget(
   entry: WorkspaceEntryDto,
   target: RepositoryTargetDto
 ): boolean {
@@ -111,6 +111,30 @@ export function getSnapshotChangeCount(
     : 0;
 }
 
+export function getSnapshotContentRevision(
+  snapshot: RepositoryStatusSnapshotDto | undefined
+): string {
+  if (!snapshot) {
+    return "missing";
+  }
+
+  return [
+    snapshot.contentVersion ?? snapshot.refreshedAt,
+    snapshot.head,
+    snapshot.branch ?? "",
+    snapshot.upstream ?? "",
+    snapshot.ahead,
+    snapshot.behind,
+    snapshot.staged,
+    snapshot.unstaged,
+    snapshot.untracked,
+    snapshot.conflicted,
+    snapshot.operationState ?? "",
+    snapshot.error?.code ?? "",
+    snapshot.error?.message ?? ""
+  ].join("|");
+}
+
 export function getEntryRepositoryCount(
   entry: WorkspaceEntryDto
 ): number {
@@ -126,12 +150,6 @@ export function getEntryRepositoryCount(
   return new Set(
     targets.map((target) => target.repositoryId)
   ).size;
-}
-
-export function getWorkspaceTargetCount(
-  workspace: WorkspaceDetailsDto
-): number {
-  return listWorkspaceTargets(workspace).length;
 }
 
 export function getActiveWorkspaceEntry(

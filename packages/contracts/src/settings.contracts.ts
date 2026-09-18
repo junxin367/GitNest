@@ -1,5 +1,12 @@
 import type { RepositoryTargetDto } from "./workspace.contracts";
-import type { ExternalTerminalKindDto } from "./system.contracts";
+import type {
+  ExternalTerminalKindDto
+} from "./external.contracts";
+import {
+  createDefaultCodeAnalysisSettings,
+  type CodeAnalysisSettingsDto,
+  type UpdateCodeAnalysisSettingsRequest
+} from "./analysis.contracts";
 
 export const DEFAULT_AI_COMMIT_PROMPT =
   "根据下一次提交将包含的文件和代码变更，生成一条简洁准确的 Git 提交信息。使用 Conventional Commits 格式，使用中文，只返回提交信息，不要 Markdown。";
@@ -51,6 +58,7 @@ export interface AppSettingsDto {
     prompt: string;
     apiKeyConfigured: boolean;
   };
+  codeAnalysis: CodeAnalysisSettingsDto;
   navigation: {
     lastContentView: LastContentViewDto;
     workspaceTab: WorkspaceTabDto;
@@ -89,6 +97,7 @@ export interface UpdateAppSettingsRequest {
     apiKey?: string;
     prompt?: string;
   };
+  codeAnalysis?: UpdateCodeAnalysisSettingsRequest;
   navigation?: {
     lastContentView?: LastContentViewDto;
     workspaceTab?: WorkspaceTabDto;
@@ -148,6 +157,7 @@ export function createDefaultAppSettings(): AppSettingsDto {
       prompt: DEFAULT_AI_COMMIT_PROMPT,
       apiKeyConfigured: false
     },
+    codeAnalysis: createDefaultCodeAnalysisSettings(),
     navigation: {
       lastContentView: "workspace",
       workspaceTab: "overview",

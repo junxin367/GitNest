@@ -8,7 +8,12 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "noImplicitOverride": true,
+    "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "resolveJsonModule": true,
@@ -38,6 +43,9 @@
       ],
       "@gitnest/design-system": [
         "./packages/design-system/src/index.ts"
+      ],
+      "@gitnest/code-analysis": [
+        "./packages/code-analysis/src/index.ts"
       ]
     }
   }

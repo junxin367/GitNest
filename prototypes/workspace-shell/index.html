@@ -3,12 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:," />
   <meta name="theme-color" content="#090d12" id="themeColorMeta" />
   <title>GitNest · SC 代码聚合</title>
   <link rel="stylesheet" href="./button.css" />
   <link rel="stylesheet" href="./input.css" />
   <link rel="stylesheet" href="./textarea.css" />
   <link rel="stylesheet" href="./toast.css" />
+  <link rel="stylesheet" href="./diff-search-popover.css" />
+  <link rel="stylesheet" href="./diff-panel.css" />
   <style>
     :root {
       color-scheme: dark;
@@ -115,6 +118,10 @@
       --red-soft: var(--color-danger-soft);
       --purple: #ae8cff;
       --shadow: 0 24px 64px rgba(0, 0, 0, 0.32);
+      --shadow-subtle: 0 1px 3px rgba(0, 0, 0, 0.2);
+      --shadow-floating: 0 14px 38px rgba(0, 0, 0, 0.28);
+      --shadow-popover: 0 14px 38px rgba(0, 0, 0, 0.28);
+      --z-selected: 10;
       --scrollbar: #314154;
       --code-bg: #0b1118;
     }
@@ -150,6 +157,9 @@
       --sidebar: #f7f9fc;
       --purple: #7653d4;
       --shadow: 0 24px 64px rgba(37, 55, 72, 0.16);
+      --shadow-subtle: 0 1px 3px rgba(37, 55, 72, 0.1);
+      --shadow-floating: 0 14px 38px rgba(37, 55, 72, 0.16);
+      --shadow-popover: 0 14px 38px rgba(37, 55, 72, 0.16);
       --scrollbar: #c2ced9;
       --code-bg: #f7f9fb;
     }
@@ -577,12 +587,14 @@
     }
 
     .workspace-frame.operations-view,
-    .workspace-frame.settings-view {
+    .workspace-frame.settings-view,
+    .workspace-frame.analysis-view {
       grid-template-columns: 52px minmax(0, 1fr);
     }
 
     .workspace-frame.operations-view .workspace-sidebar,
-    .workspace-frame.settings-view .workspace-sidebar {
+    .workspace-frame.settings-view .workspace-sidebar,
+    .workspace-frame.analysis-view .workspace-sidebar {
       display: none;
     }
 
@@ -1353,13 +1365,21 @@
       background: var(--canvas);
     }
 
-    .workbench.operations-view {
+    .workbench.operations-view,
+    .workbench.analysis-view {
       grid-template-rows: minmax(0, 1fr);
     }
 
     .workbench.operations-view .commandbar,
-    .workbench.operations-view .context-tabs {
+    .workbench.operations-view .context-tabs,
+    .workbench.analysis-view .commandbar,
+    .workbench.analysis-view .context-tabs,
+    .workbench.analysis-view .inspector {
       display: none;
+    }
+
+    .workbench.analysis-view .content-frame {
+      grid-template-columns: minmax(0, 1fr);
     }
 
     .commandbar {
@@ -1777,9 +1797,8 @@
     }
 
     .settings-page {
-      max-width: 1100px;
-      margin-right: auto;
-      margin-left: auto;
+      width: 100%;
+      min-width: 0;
     }
 
     .settings-page .page-heading {
@@ -2061,7 +2080,8 @@
 
     .settings-preference-groups {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns:
+        repeat(auto-fit, minmax(min(220px, 100%), 1fr));
       gap: var(--space-3);
       padding: var(--space-3) 0 var(--space-4);
     }
@@ -2131,7 +2151,7 @@
       width: 100%;
     }
 
-    .settings-tool-menu > summary {
+    .settings-tool-menu-trigger {
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -2144,15 +2164,12 @@
       border: 1px solid var(--border);
       border-radius: var(--radius-regular);
       cursor: pointer;
-      list-style: none;
+      font: inherit;
+      text-align: left;
     }
 
-    .settings-tool-menu > summary::-webkit-details-marker {
-      display: none;
-    }
-
-    .settings-tool-menu > summary:hover,
-    .settings-tool-menu[open] > summary {
+    .settings-tool-menu-trigger:hover:not(:disabled),
+    .settings-tool-menu-trigger[aria-expanded="true"] {
       border-color: var(--accent);
       background: var(--surface-hover);
     }
@@ -2179,7 +2196,11 @@
       overflow: auto;
     }
 
-    .settings-tool-menu .menu-item.is-selected {
+    .settings-tool-menu-surface[hidden] {
+      display: none;
+    }
+
+    .settings-tool-menu-surface .menu-item.is-selected {
       color: var(--text);
       background: var(--accent-soft);
     }
@@ -5119,27 +5140,25 @@
       font-size: var(--font-size-caption);
     }
 
-    .worktree-filter-input {
+    .worktree-filter-field {
       flex: 0 1 240px;
       width: 240px;
       min-width: 120px;
-      height: var(--control-compact);
       margin-left: auto;
-      padding: 0 var(--space-2);
-      color: var(--text);
+    }
+
+    .worktree-filter-field > .worktree-filter-input {
       background: var(--surface-2);
-      border: 1px solid var(--border-soft);
-      border-radius: var(--radius-regular);
+      border-color: var(--border-soft);
+    }
+
+    .worktree-filter-input .gn-input__control {
       font-size: var(--font-size-caption);
     }
 
-    .worktree-filter-input:focus {
-      border-color: var(--accent);
-    }
-
-    .worktree-filter-input + .panel-header-action {
+    .worktree-filter-field + .panel-header-action {
       margin-left: 0;
-}
+    }
 
     .worktree-filter-bar {
       display: flex;
@@ -5321,6 +5340,14 @@
       border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
     }
 
+    .worktree-card.prunable {
+      cursor: default;
+    }
+
+    .worktree-card.prunable:active {
+      transform: none;
+    }
+
     .worktree-card.primary {
       background: linear-gradient(140deg, var(--accent-soft), var(--surface) 48%);
       border-color: color-mix(in srgb, var(--accent) 25%, var(--border));
@@ -5399,6 +5426,37 @@
 
     .worktree-foot .spacer {
       flex: 1;
+    }
+
+    .worktree-clear-action {
+      display: inline-flex;
+      align-items: center;
+      flex: 0 0 auto;
+      gap: var(--space-1);
+      height: 26px;
+      padding: 0 var(--space-2);
+      color: var(--red);
+      background: var(--red-soft);
+      border: 1px solid color-mix(in srgb, var(--red) 28%, var(--border-soft));
+      border-radius: var(--radius-small);
+      cursor: pointer;
+      font: inherit;
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .worktree-clear-action:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--red) 15%, var(--surface));
+      border-color: color-mix(in srgb, var(--red) 44%, var(--border));
+    }
+
+    .worktree-clear-action:focus-visible {
+      outline: 2px solid var(--red);
+      outline-offset: 2px;
+    }
+
+    .worktree-clear-action:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
     }
 
     .inspector-head {
@@ -6132,6 +6190,34 @@
       padding: var(--space-2);
     }
 
+    .command-results-skeleton {
+      display: grid;
+      gap: var(--space-1);
+      min-height: 224px;
+    }
+
+    .command-result-skeleton {
+      display: grid;
+      grid-template-columns: var(--control-compact) minmax(0, 1fr) auto;
+      align-items: center;
+      column-gap: var(--space-2);
+      min-height: var(--control-large);
+      padding: 0 var(--space-2);
+    }
+
+    .command-result-skeleton-copy {
+      display: grid;
+      gap: var(--space-2);
+      min-width: 0;
+    }
+
+    .command-index-status {
+      padding: var(--space-2) var(--space-3);
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+      text-align: center;
+    }
+
     .command-group-label {
       padding: var(--space-2);
       color: var(--muted);
@@ -6337,7 +6423,7 @@
 
     .history-layout {
       display: grid;
-      grid-template-rows: minmax(320px, 1fr) auto;
+      grid-template-rows: minmax(0, 1fr) 300px;
       height: 100%;
       min-height: 0;
       background: var(--surface);
@@ -6360,9 +6446,9 @@
     .history-commit-detail {
       display: grid;
       grid-template-rows: var(--control-default) minmax(0, 1fr);
-      height: min(350px, 42vh);
-      min-height: 0;
-      max-height: min(350px, 42vh);
+      height: 300px;
+      min-height: 300px;
+      max-height: 300px;
       overflow: hidden;
       border-top: 1px solid var(--border);
       background: var(--surface);
@@ -6413,43 +6499,143 @@
       margin-top: var(--space-2);
     }
 
+    .history-commit-heading {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      width: 100%;
+      min-width: 0;
+    }
+
+    .history-commit-breadcrumb {
+      min-width: 0;
+    }
+
+    .history-commit-breadcrumb ol {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      min-width: 0;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .history-commit-breadcrumb li {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .history-commit-breadcrumb button {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-1);
+      min-width: 0;
+      min-height: 28px;
+      padding: 0 var(--space-2);
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-small);
+      cursor: pointer;
+      font: inherit;
+      font-size: var(--font-size-caption);
+    }
+
+    .history-commit-breadcrumb button:hover,
+    .history-commit-breadcrumb button:focus-visible {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .history-commit-breadcrumb button:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: -1px;
+    }
+
+    .history-commit-breadcrumb button[aria-current="page"] {
+      color: var(--text);
+      background: var(--surface-2);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .history-commit-breadcrumb button .icon {
+      flex: 0 0 auto;
+      color: var(--muted);
+    }
+
+    .history-commit-breadcrumb-separator {
+      color: var(--muted);
+      font-size: var(--font-size-emphasis);
+      line-height: 1;
+    }
+
+    .history-commit-breadcrumb-count {
+      display: inline-grid;
+      place-items: center;
+      min-width: 20px;
+      height: 18px;
+      padding: 0 var(--space-1);
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: 999px;
+      font-size: calc(var(--font-size-caption) - 1px);
+      font-weight: var(--font-weight-regular);
+      line-height: 1;
+    }
+
+    .history-commit-heading-stats {
+      flex: 0 0 auto;
+      margin-left: auto;
+    }
+
     .history-commit-detail-content {
-      display: grid;
-      grid-template-columns: minmax(250px, 36%) minmax(0, 1fr);
+      display: flex;
+      flex-direction: column;
+      height: 100%;
       min-width: 0;
       min-height: 0;
       overflow: hidden;
     }
 
     .history-commit-overview {
+      flex: 1 1 auto;
+      height: 100%;
       min-width: 0;
       min-height: 0;
+      max-height: none;
       overflow: auto;
-      border-right: 1px solid var(--border);
     }
 
     .history-commit-files {
-      border-top: 1px solid var(--border);
+      display: block;
+      flex: 1 1 auto;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
     }
 
-    .history-commit-files-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: var(--space-2);
-      min-height: var(--control-default);
-      padding: 0 var(--space-3);
-      color: var(--muted);
-      font-size: var(--font-size-caption);
-    }
-
-    .history-commit-files-head strong {
-      color: var(--text-soft);
-      font-weight: var(--font-weight-semibold);
+    .history-commit-file-browser {
+      display: grid;
+      grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
     }
 
     .history-commit-file-list {
-      border-top: 1px solid var(--border-soft);
+      display: grid;
+      align-content: start;
+      grid-auto-rows: max-content;
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      overscroll-behavior: contain;
+      border-right: 1px solid var(--border-soft);
+      background: var(--surface);
     }
 
     .history-commit-file {
@@ -6458,8 +6644,8 @@
       align-items: center;
       gap: var(--space-2);
       width: 100%;
-      min-height: 38px;
-      padding: 0 var(--space-3);
+      min-height: 42px;
+      padding: var(--space-2) var(--space-3);
       color: var(--text-soft);
       text-align: left;
       background: transparent;
@@ -7063,6 +7249,1398 @@
 
     }
 
+    .analysis-page-scroll {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-4);
+    }
+
+    .analysis-page-skeleton {
+      flex: 1 0 auto;
+      min-height: 0;
+    }
+
+    .analysis-skeleton-header {
+      display: grid;
+      gap: var(--space-2);
+      min-width: 0;
+    }
+
+    .analysis-skeleton-description,
+    .analysis-skeleton-summary-label,
+    .analysis-skeleton-summary-value,
+    .analysis-skeleton-navigation-meta {
+      display: flex;
+      align-items: center;
+    }
+
+    .analysis-skeleton-description {
+      min-height: 21px;
+    }
+
+    .analysis-skeleton-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+      min-width: 0;
+    }
+
+    .analysis-skeleton-actions {
+      display: flex;
+      flex: 0 0 auto;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: var(--space-2);
+    }
+
+    .analysis-skeleton-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: var(--space-3);
+    }
+
+    .analysis-skeleton-summary-card {
+      display: grid;
+      gap: var(--space-1);
+      min-height: 0;
+      padding: var(--space-3) var(--space-4);
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-large);
+    }
+
+    .analysis-skeleton-summary-label {
+      min-height: 18px;
+    }
+
+    .analysis-skeleton-summary-value {
+      min-height: 21px;
+    }
+
+    .analysis-skeleton-runtime {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .analysis-skeleton-runtime > .gn-skeleton {
+      border-radius: 999px;
+    }
+
+    .analysis-skeleton-workbench {
+      display: grid;
+      flex: 1 0 590px;
+      grid-template-columns:
+        minmax(230px, 280px)
+        minmax(520px, 1fr);
+      gap: var(--space-3);
+      min-width: 0;
+      min-height: 590px;
+    }
+
+    .analysis-skeleton-navigation,
+    .analysis-skeleton-graph {
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-large);
+    }
+
+    .analysis-skeleton-navigation {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .analysis-skeleton-navigation-header {
+      display: grid;
+      gap: var(--space-2);
+      padding: var(--space-3);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .analysis-skeleton-heading-row,
+    .analysis-skeleton-graph-header,
+    .analysis-skeleton-graph-heading {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .analysis-skeleton-heading-row {
+      justify-content: space-between;
+      min-height: 21px;
+    }
+
+    .analysis-skeleton-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 3px;
+      padding: 3px;
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .analysis-skeleton-navigation-list {
+      display: grid;
+      align-content: start;
+    }
+
+    .analysis-skeleton-navigation-row {
+      display: grid;
+      gap: var(--space-1);
+      padding: var(--space-3);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .analysis-skeleton-navigation-row > div {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .analysis-skeleton-navigation-row > div:first-child {
+      min-height: 20px;
+    }
+
+    .analysis-skeleton-navigation-meta {
+      min-height: 16.5px;
+    }
+
+    .analysis-skeleton-navigation-row:last-child {
+      border-bottom: 0;
+    }
+
+    .analysis-skeleton-graph {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .analysis-skeleton-graph-header {
+      min-height: 50px;
+      padding: 0 var(--space-3);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .analysis-skeleton-graph-heading {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .analysis-skeleton-graph-body {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      align-items: center;
+      gap: var(--space-6);
+      min-height: 0;
+      padding: var(--space-6);
+      background: color-mix(in srgb, var(--canvas) 72%, var(--surface));
+    }
+
+    .analysis-skeleton-graph-column {
+      display: grid;
+      justify-items: center;
+      gap: var(--space-6);
+      min-width: 0;
+    }
+
+    .analysis-skeleton-graph-node {
+      width: min(180px, 100%);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .analysis-page-header {
+      display: grid;
+      min-width: 0;
+    }
+
+    .analysis-page-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+      min-width: 0;
+    }
+
+    .analysis-page-header h1 {
+      margin: 0;
+      color: var(--text);
+      font-size: var(--font-size-title);
+    }
+
+    .analysis-page-header p {
+      max-width: 720px;
+      margin: var(--space-2) 0 0;
+      color: var(--muted);
+      font-size: var(--font-size-body);
+    }
+
+    .analysis-header-actions {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: var(--space-2);
+    }
+
+    .analysis-scope-switch {
+      display: inline-flex;
+      gap: 2px;
+      padding: 3px;
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .analysis-scope-switch button {
+      min-width: 84px;
+      height: 30px;
+      padding: 0 var(--space-3);
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: calc(var(--radius-regular) - 2px);
+    }
+
+    .analysis-scope-switch button:hover:not(:disabled) {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .analysis-scope-switch button.active {
+      color: var(--text);
+      background: var(--surface);
+      box-shadow: 0 1px 3px rgb(0 0 0 / 18%);
+    }
+
+    .analysis-progress-panel {
+      display: grid;
+      gap: var(--space-2);
+      padding: var(--space-3) var(--space-4);
+    }
+
+    .analysis-progress-copy {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      min-width: 0;
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+      white-space: nowrap;
+    }
+
+    .analysis-progress-copy > span:first-child {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .analysis-progress-copy > span:last-child {
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+
+    .analysis-progress-copy strong {
+      margin-left: var(--space-2);
+      color: var(--text-soft);
+      font-weight: var(--font-weight-medium);
+    }
+
+    .analysis-progress-track {
+      height: 4px;
+      overflow: hidden;
+      background: var(--surface-3);
+      border-radius: 999px;
+    }
+
+    .analysis-progress-track span {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: var(--accent);
+      border-radius: inherit;
+      transform-origin: left center;
+      transition: transform 160ms ease;
+    }
+
+    .analysis-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: var(--space-3);
+    }
+
+    .analysis-summary-card {
+      display: grid;
+      gap: var(--space-1);
+      padding: var(--space-3) var(--space-4);
+    }
+
+    .analysis-summary-grid > .analysis-summary-card {
+      margin-top: 0;
+    }
+
+    .analysis-summary-card span {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .analysis-summary-card strong {
+      color: var(--text);
+      font-size: var(--font-size-heading);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .analysis-runtime-strip {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .analysis-runtime-strip > span,
+    .analysis-warning-panel > summary {
+      box-sizing: border-box;
+      display: inline-flex;
+      align-items: center;
+      height: 28px;
+      padding: 0 var(--space-2);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+
+    .analysis-runtime-strip .analysis-server-state {
+      gap: var(--space-2);
+    }
+
+    .analysis-runtime-strip .connected {
+      color: var(--green);
+      border-color: color-mix(in srgb, var(--green) 26%, var(--border-soft));
+    }
+
+    .analysis-runtime-strip .unavailable {
+      color: var(--yellow);
+      border-color: color-mix(in srgb, var(--yellow) 24%, var(--border-soft));
+    }
+
+    .analysis-warning-panel {
+      position: relative;
+      flex: 0 0 auto;
+    }
+
+    .analysis-warning-panel > summary {
+      gap: 4px;
+      color: var(--yellow);
+      border-color: color-mix(in srgb, var(--yellow) 24%, var(--border-soft));
+      cursor: pointer;
+      list-style: none;
+    }
+
+    .analysis-warning-panel > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .analysis-warning-panel > summary::marker {
+      content: "";
+    }
+
+    .analysis-warning-panel > summary:hover,
+    .analysis-warning-panel[open] > summary {
+      background: var(--yellow-soft);
+    }
+
+    .analysis-warning-panel > summary:focus-visible {
+      outline: 2px solid var(--yellow);
+      outline-offset: 1px;
+    }
+
+    .analysis-warning-panel > .analysis-warning-menu {
+      position: absolute;
+      top: calc(100% + var(--space-2));
+      right: 0;
+      display: grid;
+      gap: var(--space-1);
+      width: max-content;
+      min-width: 260px;
+      max-width: min(420px, calc(100vw - var(--space-6)));
+      margin: 0;
+      padding: var(--space-3) var(--space-4) var(--space-3) calc(var(--space-4) + var(--space-2));
+      color: var(--text-soft);
+      font-size: var(--font-size-caption);
+      line-height: var(--line-height-body);
+    }
+
+    .analysis-server-install {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      min-width: 0;
+      height: 22px;
+      padding: 1px 6px;
+      color: var(--accent);
+      font: inherit;
+      font-weight: var(--font-weight-semibold);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+      border: 0;
+      border-radius: 999px;
+      cursor: pointer;
+    }
+
+    .analysis-server-install:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--accent) 20%, transparent);
+    }
+
+    .analysis-server-install:disabled {
+      cursor: default;
+      opacity: 0.62;
+    }
+
+    .analysis-workbench {
+      display: grid;
+      flex: 1 0 590px;
+      grid-template-columns:
+        minmax(230px, 280px)
+        minmax(520px, 1fr);
+      gap: var(--space-3);
+      min-width: 0;
+      min-height: 590px;
+    }
+
+    .analysis-chain-panel,
+    .analysis-graph-workspace,
+    .analysis-graph-panel,
+    .analysis-node-diff-drawer {
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .analysis-graph-workspace {
+      position: relative;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr);
+      gap: var(--space-3);
+    }
+
+    .analysis-graph-workspace > .panel + .panel {
+      margin-top: 0;
+    }
+
+    .analysis-graph-workspace.is-fullscreen {
+      position: fixed;
+      inset: 0;
+      z-index: var(--z-modal);
+      padding: var(--space-3);
+      background: var(--canvas);
+    }
+
+    .analysis-chain-panel {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .analysis-chain-panel.is-node-detail {
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+
+    .analysis-chain-panel > header {
+      display: grid;
+      gap: var(--space-2);
+      padding: var(--space-3);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .analysis-chain-panel > header.analysis-node-detail-header {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-2);
+      min-height: 50px;
+      padding-right: calc(var(--space-3) + 22px);
+    }
+
+    .analysis-chain-panel > .analysis-node-detail-header > div:first-child {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .analysis-node-detail-header > div > span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .analysis-node-detail-back.gn-button[data-variant="icon"] {
+      --gn-button-height: 22px;
+      position: absolute;
+      top: var(--space-3);
+      right: var(--space-3);
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-small);
+      box-shadow: none;
+    }
+
+    .analysis-node-detail-back.gn-button[data-variant="icon"]:hover:not(:disabled) {
+      color: var(--text);
+      background: transparent;
+    }
+
+    .analysis-chain-panel > header > div:first-child,
+    .analysis-panel-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-2);
+    }
+
+    .analysis-chain-panel > header strong,
+    .analysis-panel-heading strong {
+      color: var(--text);
+      font-size: var(--font-size-body);
+    }
+
+    .analysis-chain-panel > header span,
+    .analysis-panel-heading span {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .analysis-navigation-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 3px;
+      padding: 3px;
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .analysis-navigation-tabs button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      min-width: 0;
+      height: 28px;
+      padding: 0 var(--space-2);
+      overflow: hidden;
+      color: var(--muted);
+      font-size: calc(var(--font-size-caption) - 1px);
+      white-space: nowrap;
+      background: transparent;
+      border: 0;
+      border-radius: calc(var(--radius-regular) - 2px);
+    }
+
+    .analysis-navigation-tabs button:hover {
+      color: var(--text-soft);
+    }
+
+    .analysis-navigation-tabs button.active {
+      color: var(--text);
+      background: var(--surface);
+      box-shadow: var(--shadow-subtle);
+    }
+
+    .analysis-navigation-tabs button span {
+      min-width: 20px;
+      padding: 0 5px;
+      color: inherit;
+      font-size: calc(var(--font-size-caption) - 2px);
+      line-height: 18px;
+      text-align: center;
+      background: color-mix(in srgb, var(--border) 52%, transparent);
+      border-radius: 999px;
+    }
+
+    .analysis-chain-filter {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .analysis-chain-filter .gn-input {
+      background: var(--surface-2);
+      border-color: var(--border-soft);
+    }
+
+    .analysis-method-menu {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .analysis-method-menu > summary {
+      list-style: none;
+    }
+
+    .analysis-method-menu > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .analysis-method-menu-trigger {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-2);
+      width: 100%;
+      height: var(--control-compact);
+      padding: 0 var(--space-2);
+      color: var(--text);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+      cursor: pointer;
+      font-size: var(--font-size-caption);
+    }
+
+    .analysis-method-menu-trigger:hover,
+    .analysis-method-menu[open] > .analysis-method-menu-trigger {
+      background: var(--surface-hover);
+      border-color: var(--border);
+    }
+
+    .analysis-method-menu-trigger > span {
+      min-width: 0;
+      overflow: hidden;
+      color: inherit;
+      font-size: inherit;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .analysis-method-menu-surface {
+      gap: var(--space-1);
+      width: min(244px, calc(100vw - var(--space-6)));
+      max-height: 252px;
+      overflow: auto;
+    }
+
+    .analysis-method-menu-surface .menu-item-label {
+      color: inherit;
+      font-size: inherit;
+    }
+
+    .analysis-chain-list {
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .analysis-chain-list > button {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: var(--space-1) var(--space-2);
+      width: 100%;
+      min-width: 0;
+      padding: var(--space-3);
+      color: var(--text-soft);
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .analysis-chain-list > button:hover {
+      background: var(--surface-hover);
+    }
+
+    .analysis-chain-list > button.active {
+      background: var(--accent-soft);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+
+    .analysis-chain-list > button strong {
+      align-self: center;
+      min-width: 0;
+      overflow: hidden;
+      font-size: var(--font-size-caption);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .analysis-chain-list > button small {
+      grid-column: 1 / -1;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .analysis-chain-list > button.analysis-symbol-result {
+      grid-template-columns: 12px minmax(0, 1fr);
+    }
+
+    .analysis-symbol-result .analysis-node-dot {
+      width: 8px;
+      height: 8px;
+      margin-top: 4px;
+    }
+
+    .analysis-method,
+    .http-method {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 48px;
+      height: 20px;
+      padding: 0 6px;
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: var(--font-weight-semibold);
+      background: var(--accent-soft);
+      border-radius: 999px;
+    }
+
+    .analysis-method.post,
+    .http-method.method-post {
+      color: var(--blue);
+      background: color-mix(in srgb, var(--blue) 12%, transparent);
+    }
+
+    .http-method.method-delete {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .http-method.method-put,
+    .http-method.method-patch {
+      color: var(--yellow);
+      background: var(--yellow-soft);
+    }
+
+    .analysis-list-empty,
+    .analysis-graph-empty {
+      display: grid;
+      place-content: center;
+      justify-items: center;
+      gap: var(--space-2);
+      min-height: 240px;
+      padding: var(--space-5);
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .analysis-list-empty strong,
+    .analysis-graph-empty strong {
+      color: var(--text-soft);
+    }
+
+    .analysis-list-empty p,
+    .analysis-graph-empty p {
+      max-width: 320px;
+      margin: 0;
+      font-size: var(--font-size-caption);
+      line-height: var(--line-height-body);
+    }
+
+    .analysis-panel-heading {
+      min-height: 50px;
+      padding: 0 var(--space-3);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .analysis-panel-heading > div {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .analysis-panel-heading-actions {
+      display: flex !important;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: var(--space-2) !important;
+    }
+
+    .analysis-panel-heading > div > span {
+      max-width: 360px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .analysis-graph-panel {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .analysis-graph-stage {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .analysis-graph-scroll {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+      background:
+        linear-gradient(color-mix(in srgb, var(--border-soft) 36%, transparent) 1px, transparent 1px),
+        linear-gradient(90deg, color-mix(in srgb, var(--border-soft) 36%, transparent) 1px, transparent 1px),
+        var(--canvas);
+      background-size: 24px 24px;
+    }
+
+    .analysis-graph-scroll.is-panning {
+      cursor: grabbing;
+    }
+
+    .analysis-graph-canvas {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      display: block;
+      width: max-content;
+      height: max-content;
+      transform: translate(-50%, -50%);
+      will-change: margin;
+    }
+
+    .analysis-graph-svg {
+      display: block;
+      max-width: none;
+    }
+
+    .analysis-graph-edge {
+      pointer-events: none;
+      fill: none;
+      stroke: var(--muted);
+      stroke-width: 1.4;
+      opacity: 0.72;
+    }
+
+    .analysis-graph-edge.edge-http-request {
+      stroke: var(--accent);
+      stroke-width: 2;
+    }
+
+    .analysis-graph-edge.edge-calls {
+      stroke: var(--blue);
+    }
+
+    .analysis-graph-edge-label {
+      fill: var(--accent);
+      font-size: calc(var(--font-size-caption) - 3px);
+      font-weight: var(--font-weight-semibold);
+      text-anchor: middle;
+    }
+
+    .analysis-graph-arrow path {
+      fill: var(--muted);
+    }
+
+    .analysis-graph-node {
+      cursor: pointer;
+    }
+
+    .analysis-graph-node rect {
+      fill: var(--surface);
+      stroke: var(--border);
+      stroke-width: 1;
+    }
+
+    .analysis-graph-node:hover rect,
+    .analysis-graph-node:focus-visible rect {
+      stroke: var(--text-soft);
+    }
+
+    .analysis-graph-node.selected rect {
+      fill: var(--accent-soft);
+      stroke: var(--accent);
+      stroke-width: 2;
+    }
+
+    .analysis-graph-node.changed rect {
+      stroke-dasharray: 5 3;
+    }
+
+    .analysis-graph-node circle {
+      fill: var(--muted);
+    }
+
+    .analysis-graph-node.node-client-request circle {
+      fill: var(--blue);
+    }
+
+    .analysis-graph-node.node-server-endpoint circle {
+      fill: var(--accent);
+    }
+
+    .analysis-graph-node.node-method circle {
+      fill: var(--yellow);
+    }
+
+    .analysis-node-kind {
+      fill: var(--muted);
+      font-size: calc(var(--font-size-caption) - 2px);
+    }
+
+    .analysis-node-copy {
+      overflow: visible;
+      pointer-events: none;
+    }
+
+    .analysis-node-copy-inner {
+      display: grid;
+      align-content: start;
+      gap: 1px;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      padding: 0;
+      overflow: hidden;
+      font-family: var(--font-sans);
+      line-height: 1.2;
+    }
+
+    .analysis-node-copy-inner > * {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .analysis-node-name {
+      color: var(--text);
+      fill: var(--text);
+      font-size: calc(var(--font-size-caption) - 1px);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .analysis-node-path {
+      display: block;
+      overflow: hidden;
+      color: var(--muted);
+      fill: var(--muted);
+      font-size: calc(var(--font-size-caption) - 3.5px);
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+      text-overflow: clip;
+      white-space: normal;
+      word-break: break-word;
+    }
+
+    .analysis-node-description {
+      color: color-mix(in srgb, var(--green) 62%, var(--muted));
+      fill: color-mix(in srgb, var(--green) 62%, var(--muted));
+      font-size: calc(var(--font-size-caption) - 3px);
+    }
+
+    .analysis-graph-controls {
+      position: absolute;
+      top: var(--space-2);
+      right: var(--space-2);
+      z-index: var(--z-selected);
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 3px;
+      color: var(--muted);
+      background: color-mix(in srgb, var(--surface) 94%, transparent);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+      box-shadow: var(--shadow-floating);
+      backdrop-filter: blur(8px);
+    }
+
+    .analysis-graph-controls button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: calc(var(--radius-regular) - 2px);
+    }
+
+    .analysis-graph-controls button:hover:not(:disabled) {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .analysis-graph-controls button:disabled {
+      opacity: 0.35;
+    }
+
+    .analysis-graph-controls > span {
+      min-width: 38px;
+      font-size: calc(var(--font-size-caption) - 2px);
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .analysis-graph-controls input[type="range"] {
+      width: 84px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .analysis-graph-direction-hint {
+      position: absolute;
+      bottom: var(--space-2);
+      left: var(--space-2);
+      z-index: var(--z-selected);
+      padding: 5px 8px;
+      color: var(--muted);
+      font-size: calc(var(--font-size-caption) - 2px);
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+      backdrop-filter: blur(8px);
+    }
+
+    .analysis-node-diff-drawer {
+      position: absolute;
+      inset: 0 auto 0 0;
+      z-index: var(--z-navigation);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      width: min(760px, calc(100% - var(--space-4)));
+      box-shadow: var(--shadow-floating);
+    }
+
+    .analysis-graph-workspace.is-fullscreen .analysis-node-diff-drawer {
+      inset:
+        var(--space-3)
+        auto
+        var(--space-3)
+        var(--space-3);
+    }
+
+    .analysis-node-details {
+      min-height: 0;
+      padding: var(--space-3);
+      overflow: auto;
+    }
+
+    .analysis-node-overview {
+      min-width: 0;
+    }
+
+    .analysis-node-title {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-2);
+      margin-bottom: var(--space-3);
+    }
+
+    .analysis-node-title > div {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .analysis-node-dot {
+      flex: 0 0 auto;
+      width: 10px;
+      height: 10px;
+      margin-top: 5px;
+      background: var(--muted);
+      border-radius: 50%;
+    }
+
+    .analysis-node-dot.node-client-request {
+      background: var(--blue);
+    }
+
+    .analysis-node-dot.node-server-endpoint {
+      background: var(--accent);
+    }
+
+    .analysis-node-dot.node-method {
+      background: var(--yellow);
+    }
+
+    .analysis-node-title strong,
+    .analysis-node-title span {
+      overflow-wrap: anywhere;
+    }
+
+    .analysis-node-title > div > span {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .analysis-node-details .detail-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--space-2);
+      margin: 0;
+      padding: 0;
+    }
+
+    .analysis-node-details .detail-row {
+      grid-template-columns: minmax(0, 1fr);
+      align-content: start;
+      align-items: start;
+      gap: 3px;
+      min-height: 0;
+      padding: var(--space-2);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .analysis-node-details .detail-row.analysis-detail-wide {
+      grid-column: 1 / -1;
+    }
+
+    .analysis-node-details .detail-row dt {
+      line-height: 1.2;
+    }
+
+    .analysis-node-details .detail-row dd {
+      overflow: visible;
+      overflow-wrap: anywhere;
+      text-align: left;
+      text-overflow: clip;
+      white-space: normal;
+    }
+
+    .analysis-node-documentation,
+    .analysis-metadata {
+      display: grid;
+      gap: var(--space-2);
+      margin-top: var(--space-4);
+      padding-top: var(--space-3);
+      border-top: 1px solid var(--border-soft);
+    }
+
+    .analysis-node-diff-trigger {
+      display: grid;
+      gap: var(--space-2);
+      padding: var(--space-3);
+      background: var(--surface);
+      border-top: 1px solid var(--border-soft);
+    }
+
+    .analysis-node-documentation h3,
+    .analysis-metadata h3 {
+      margin: 0;
+      color: var(--text);
+      font-size: var(--font-size-caption);
+    }
+
+    .analysis-node-documentation p {
+      margin: 0;
+      overflow-wrap: anywhere;
+      color: var(--text-soft);
+      font-size: var(--font-size-caption);
+      line-height: var(--line-height-body);
+      white-space: pre-wrap;
+    }
+
+    .analysis-metadata > div {
+      display: grid;
+      gap: 2px;
+    }
+
+    .analysis-metadata span {
+      margin: 0;
+      color: var(--muted);
+      font-size: calc(var(--font-size-caption) - 1px);
+    }
+
+    .analysis-metadata strong {
+      overflow: visible;
+      overflow-wrap: anywhere;
+      color: var(--text-soft);
+      font-size: var(--font-size-caption);
+      text-overflow: clip;
+      white-space: normal;
+    }
+
+    .analysis-node-diff-trigger > button {
+      width: 100%;
+      justify-content: center;
+    }
+
+    .analysis-node-diff-trigger p {
+      margin: 0;
+      color: var(--muted);
+      font-size: calc(var(--font-size-caption) - 1px);
+      line-height: var(--line-height-body);
+    }
+
+    .analysis-node-diff-content {
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .analysis-node-diff-content > div {
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .analysis-node-diff-panel {
+      height: 100%;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    .analysis-node-diff-panel .gn-diff-panel__main {
+      grid-template-rows: 38px minmax(0, 1fr);
+    }
+
+    .analysis-node-diff-panel .gn-diff-panel__file-header {
+      min-height: 38px;
+    }
+
+    .analysis-node-diff-panel .gn-diff-panel__file-heading {
+      justify-content: flex-start;
+      text-align: left;
+    }
+
+    .analysis-node-diff-panel .gn-diff-panel__file-path {
+      text-align: left;
+    }
+
+    .analysis-node-diff-panel .analysis-diff-mode-tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 2px;
+      background: var(--canvas);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .analysis-node-diff-panel .analysis-diff-mode-button.gn-button {
+      min-width: 0;
+      height: 22px;
+      padding: 0 7px;
+      color: var(--muted);
+      font-size: calc(var(--font-size-caption) - 2px);
+      background: transparent;
+      border: 0;
+      border-radius: calc(var(--radius-regular) - 2px);
+      box-shadow: none;
+    }
+
+    .analysis-node-diff-panel .analysis-diff-mode-button.gn-button:hover {
+      color: var(--text-soft);
+      background: transparent;
+    }
+
+    .analysis-node-diff-panel .analysis-diff-mode-button.gn-button[data-selected="true"] {
+      color: var(--text);
+      background: var(--surface);
+      box-shadow: var(--shadow-subtle);
+    }
+
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__stats,
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__file-header-separator,
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__change-marker,
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__row > .gn-diff-panel__line-number:first-child {
+      display: none;
+    }
+
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__table {
+      min-width: max(100%, 680px);
+    }
+
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__row,
+    .analysis-node-diff-panel.is-code-view[data-wrap="true"] .gn-diff-panel__row {
+      grid-template-columns: 56px minmax(610px, 1fr);
+      min-width: 680px;
+    }
+
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__syntax-token.is-comment {
+      color: color-mix(in srgb, var(--green) 62%, var(--muted));
+      font-style: italic;
+    }
+
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__syntax-token.is-keyword,
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__syntax-token.is-annotation {
+      color: color-mix(in srgb, var(--purple) 84%, var(--text));
+    }
+
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__syntax-token.is-string {
+      color: color-mix(in srgb, var(--green) 82%, var(--text));
+    }
+
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__syntax-token.is-number,
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__syntax-token.is-literal {
+      color: color-mix(in srgb, var(--yellow) 78%, var(--text));
+    }
+
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__syntax-token.is-type,
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__syntax-token.is-tag {
+      color: color-mix(in srgb, var(--blue) 82%, var(--text));
+    }
+
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__syntax-token.is-function {
+      color: color-mix(in srgb, var(--yellow) 88%, var(--text-soft));
+    }
+
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__syntax-token.is-property {
+      color: color-mix(in srgb, var(--blue) 64%, var(--text-soft));
+    }
+
+    .analysis-node-diff-panel.is-code-view .gn-diff-panel__syntax-token.is-operator {
+      color: color-mix(in srgb, var(--accent) 62%, var(--text-soft));
+    }
+
+    .analysis-node-diff-panel.is-code-view
+      .gn-diff-panel__search-hit.is-current
+      .gn-diff-panel__syntax-token {
+      color: inherit;
+      font-style: inherit;
+    }
+
+    .analysis-node-code-empty {
+      display: grid;
+      place-items: center;
+      align-content: center;
+      gap: var(--space-2);
+      width: 100%;
+      height: 100%;
+      min-height: 240px;
+      padding: var(--space-5);
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .analysis-node-code-empty strong {
+      color: var(--text);
+    }
+
+    .analysis-settings-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--space-3);
+    }
+
+    .analysis-settings-grid .settings-ai-field {
+      min-width: 0;
+    }
+
     @media (max-width: 1120px) {
       .workspace-frame {
         grid-template-columns: 48px 244px minmax(0, 1fr);
@@ -7074,6 +8652,14 @@
 
       .page-scroll {
         padding: var(--page-safe-margin-narrow);
+      }
+
+      .analysis-workbench {
+        grid-template-columns: minmax(220px, 270px) minmax(0, 1fr);
+      }
+
+      .analysis-skeleton-workbench {
+        grid-template-columns: minmax(220px, 270px) minmax(0, 1fr);
       }
     }
 
@@ -7145,12 +8731,64 @@
       .settings-info-grid,
       .settings-option-grid,
       .settings-option-grid.three,
-      .settings-ai-field-grid {
+      .settings-ai-field-grid,
+      .analysis-settings-grid {
         grid-template-columns: minmax(0, 1fr);
       }
 
-      .settings-preference-groups {
+      .analysis-summary-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .analysis-skeleton-summary-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .analysis-page-title-row {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .analysis-skeleton-title-row {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .analysis-header-actions {
+        justify-content: flex-start;
+        width: 100%;
+      }
+
+      .analysis-skeleton-actions {
+        justify-content: flex-start;
+        width: 100%;
+      }
+
+      .analysis-workbench {
+        flex: 0 0 auto;
         grid-template-columns: minmax(0, 1fr);
+      }
+
+      .analysis-skeleton-workbench {
+        flex: 0 0 auto;
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .analysis-chain-panel,
+      .analysis-graph-workspace,
+      .analysis-graph-panel {
+        grid-column: auto;
+        min-height: 420px;
+      }
+
+      .analysis-skeleton-navigation,
+      .analysis-skeleton-graph {
+        grid-column: auto;
+        min-height: 420px;
+      }
+
+      .analysis-node-diff-drawer {
+        width: 100%;
       }
 
       .settings-setting-row,
@@ -7204,6 +8842,17 @@
   </style>
 </head>
 <body>
+  <svg aria-hidden="true" height="0" style="position:absolute;overflow:hidden" width="0">
+    <defs>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+      <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="m7 10 5-5 5 5M12 5v14"/></symbol>
+      <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="m7 14 5 5 5-5M12 5v14"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+      <symbol id="i-wrap" viewBox="0 0 24 24"><path d="M4 6h11"/><path d="M4 10h13a3 3 0 0 1 0 6h-3"/><path d="m16 13-3 3 3 3"/><path d="M4 16h5"/></symbol>
+    </defs>
+  </svg>
   <a class="skip-link" href="#mainContent">跳到主内容</a>
   <div class="app-shell">
     <header class="titlebar">
@@ -7238,6 +8887,7 @@
         <button class="rail-button" id="sidebarToggleRail" aria-label="折叠仓库目录" aria-pressed="false" title="折叠仓库目录" onclick="toggleRepositorySidebar()"></button>
         <div class="rail-divider" aria-hidden="true"></div>
         <button class="rail-button active" id="workspaceRail" aria-label="Workspace 总览" title="Workspace 总览" onclick="openWorkspace()"></button>
+        <button class="rail-button" id="analysisRail" aria-label="代码分析" title="代码分析" onclick="openCodeAnalysis()"></button>
         <button class="rail-button" id="operationRail" aria-label="操作中心" title="操作中心" onclick="showOperationCenter()">
         </button>
         <button class="rail-button" id="searchRail" aria-label="全局搜索" title="全局搜索" onclick="openCommandPalette()"></button>
@@ -7307,7 +8957,7 @@
       <span id="commandPaletteTitle" hidden>GitNest 命令面板</span>
       <div class="command-input-wrap">
         <span id="paletteSearchIcon"></span>
-        <input id="commandInput" name="command-search" class="command-input" aria-label="搜索仓库、变更文件、分支或命令" autocomplete="off" spellcheck="false" placeholder="搜索仓库、变更文件、分支或命令…" oninput="renderCommandResults()" onkeydown="handleCommandInputKeydown(event)" />
+        <input id="commandInput" name="command-search" class="command-input" aria-label="搜索仓库、变更文件、分支或命令" autocomplete="off" spellcheck="false" placeholder="搜索仓库、变更文件、分支或命令…" oninput="queueCommandResults()" onkeydown="handleCommandInputKeydown(event)" />
         <kbd class="command-key">Esc</kbd>
       </div>
       <div class="command-results" id="commandResults"></div>
@@ -7406,6 +9056,8 @@
   <script src="./textarea.js"></script>
   <script src="./toast.js"></script>
   <script src="./dropdown.js"></script>
+  <script src="./diff-search-popover.js"></script>
+  <script src="./diff-panel.js"></script>
   <script>
     const iconPaths = {
       nest: '<path d="M4 5.5h5.5a2.5 2.5 0 0 1 0 5H7.8a2.3 2.3 0 0 0 0 4.6H14"/><circle cx="4" cy="5.5" r="1.6"/><circle cx="14" cy="15.1" r="1.6"/><path d="M9.5 10.5v-4"/>',
@@ -7413,6 +9065,7 @@
       repository: '<path d="M6 3.5h10a2 2 0 0 1 2 2v15H8a2 2 0 0 1-2-2z"/><path d="M6 17.5h12"/><path d="M9 3.5v14"/>',
       branch: '<circle cx="6" cy="5" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10"/><path d="M8 7c5 0 4-1 8-1"/><path d="M8 17c5 0 4-9 8-9"/>',
       operations: '<path d="M4 7h10"/><path d="M4 12h16"/><path d="M4 17h8"/><circle cx="18" cy="7" r="2"/><circle cx="14" cy="17" r="2"/>',
+      graph: '<circle cx="5" cy="6" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="8" cy="19" r="2"/><circle cx="19" cy="18" r="2"/><path d="m7 6 10-1M6 8l2 9M10 18l7-1M18 7v9M7 7l10 9"/>',
       activity: '<path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19V3"/>',
       search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
       terminal: '<path d="m5 7 4 4-4 4"/><path d="M11 17h8"/>',
@@ -7452,6 +9105,8 @@
       x: '<path d="M6 6l12 12M18 6 6 18"/>',
       minimize: '<path d="M5 12h14"/>',
       maximize: '<rect x="5" y="5" width="14" height="14"/>',
+      expand: '<path d="M9 3H3v6M15 3h6v6M21 15v6h-6M3 15v6h6"/>',
+      collapse: '<path d="M9 3v6H3M15 3v6h6M21 15h-6v6M3 15h6v6"/>',
       eye: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/>',
       sparkle: '<path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/><path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
       tag: '<path d="M20 13 13 20a2 2 0 0 1-2.8 0L4 13V4h9l7 7a2 2 0 0 1 0 2z"/><circle cx="8.5" cy="8.5" r="1.3"/>'
@@ -7621,7 +9276,7 @@
     function repositionVisibleAnchoredMenus() {
       document
         .querySelectorAll(
-          ".titlebar-file-menu[open], .titlebar-help-menu[open], .toolbar-menu[open], .settings-tool-menu[open], .worktree-repo-menu[open]"
+          ".titlebar-file-menu[open], .titlebar-help-menu[open], .toolbar-menu[open], .worktree-repo-menu[open], .analysis-method-menu[open]"
         )
         .forEach((details) =>
           positionDetailsMenu(details, { side: "bottom" })
@@ -8120,7 +9775,7 @@
             "",
             "该页面不会执行真实 Git 命令。",
             "",
-            "返回文件变更列表。"
+            "返回变更文件列表。"
           ]
         : [
             "    return sourcePath;",
@@ -9116,6 +10771,7 @@
       state.historyFilterOpen = false;
       state.historyDetailOpen = false;
       state.historySelectedFile = "";
+      state.historyCommitView = "details";
       state.selectedCommit = currentCommits()[0]?.hash || "";
       renderHistory();
     }
@@ -9447,6 +11103,225 @@
       }
     ];
 
+    const analysisChains = [
+      {
+        id: "get-user",
+        method: "GET",
+        route: "/api/users/:id",
+        changed: true,
+        nodes: [
+          {
+            id: "user-request",
+            kind: "client",
+            kindLabel: "前端请求",
+            name: "GET /api/users/:id",
+            qualifiedName: "loadUser",
+            documentation: "加载用户详情并更新页面状态",
+            path: "apps/web/src/pages/UserDetailsPage.tsx:44",
+            language: "TypeScript",
+            source: "LSP + 内置分析",
+            confidence: "精确",
+            changed: true,
+            edgeLabel: ""
+          },
+          {
+            id: "user-controller",
+            kind: "endpoint",
+            kindLabel: "Spring Endpoint",
+            name: "UserController.getUser",
+            qualifiedName: "GET /api/users/:id",
+            documentation: "接收用户详情查询请求",
+            path: "services/user/src/main/java/app/UserController.java:31",
+            language: "Java",
+            source: "LSP + 内置分析",
+            confidence: "精确",
+            changed: true,
+            edgeLabel: "HTTP 路由匹配"
+          },
+          {
+            id: "user-service",
+            kind: "service",
+            kindLabel: "服务方法",
+            name: "UserService.findById",
+            qualifiedName: "UserService.findById",
+            documentation: "按用户 ID 查询领域对象",
+            path: "services/user/src/main/java/app/UserService.java:48",
+            language: "Java",
+            source: "LSP Call Hierarchy",
+            confidence: "精确",
+            changed: false,
+            edgeLabel: "calls"
+          },
+          {
+            id: "user-repository",
+            kind: "service",
+            kindLabel: "数据访问",
+            name: "UserRepository.findById",
+            qualifiedName: "UserRepository.findById",
+            documentation: "从持久层读取用户记录",
+            path: "services/user/src/main/java/app/UserRepository.java:17",
+            language: "Java",
+            source: "LSP + 内置分析",
+            confidence: "高概率",
+            changed: false,
+            edgeLabel: "calls"
+          }
+        ]
+      },
+      {
+        id: "create-order",
+        method: "POST",
+        route: "/api/orders",
+        changed: false,
+        nodes: [
+          {
+            id: "order-request",
+            kind: "client",
+            kindLabel: "前端请求",
+            name: "POST /api/orders",
+            qualifiedName: "submitOrder",
+            documentation: "提交结算表单并创建订单",
+            path: "apps/web/src/features/checkout/CheckoutForm.vue:86",
+            language: "Vue",
+            source: "内置分析器",
+            confidence: "精确",
+            changed: false,
+            edgeLabel: ""
+          },
+          {
+            id: "order-controller",
+            kind: "endpoint",
+            kindLabel: "Spring Endpoint",
+            name: "OrderController.createOrder",
+            qualifiedName: "POST /api/orders",
+            documentation: "接收并校验创建订单请求",
+            path: "services/order/src/main/java/app/OrderController.java:39",
+            language: "Java",
+            source: "LSP + 内置分析",
+            confidence: "精确",
+            changed: false,
+            edgeLabel: "HTTP 路由匹配"
+          },
+          {
+            id: "order-service",
+            kind: "service",
+            kindLabel: "服务方法",
+            name: "OrderService.create",
+            qualifiedName: "OrderService.create",
+            documentation: "创建订单并执行业务规则",
+            path: "services/order/src/main/java/app/OrderService.java:57",
+            language: "Java",
+            source: "LSP Call Hierarchy",
+            confidence: "精确",
+            changed: false,
+            edgeLabel: "calls"
+          },
+          {
+            id: "order-repository",
+            kind: "service",
+            kindLabel: "数据访问",
+            name: "OrderRepository.save",
+            qualifiedName: "OrderRepository.save",
+            documentation: "持久化新建订单",
+            path: "services/order/src/main/java/app/OrderRepository.java:21",
+            language: "Java",
+            source: "LSP + 内置分析",
+            confidence: "高概率",
+            changed: false,
+            edgeLabel: "calls"
+          }
+        ]
+      }
+    ];
+
+    const analysisSourceFiles = {
+      "services/user/src/main/java/app/UserService.java": {
+        startLine: 44,
+        lines: [
+          "  private final UserRepository repository;",
+          "  private final AuditService audit;",
+          "",
+          "  @Transactional(readOnly = true)",
+          "  public UserDto findById(String id) {",
+          "    UserEntity user = repository.findById(id)",
+          "      .orElseThrow(UserNotFoundException::new);",
+          "    audit.recordUserLookup(id);",
+          "    return UserMapper.toDto(user);",
+          "  }",
+          "}"
+        ]
+      },
+      "services/user/src/main/java/app/UserRepository.java": {
+        startLine: 13,
+        lines: [
+          "@Repository",
+          "public interface UserRepository extends JpaRepository<UserEntity, String> {",
+          "",
+          "  @EntityGraph(attributePaths = \"roles\")",
+          "  Optional<UserEntity> findById(String id);",
+          "}"
+        ]
+      },
+      "apps/web/src/features/checkout/CheckoutForm.vue": {
+        startLine: 83,
+        lines: [
+          "const submitting = ref(false);",
+          "",
+          "async function validateCheckout() {",
+          "async function submitOrder() {",
+          "  submitting.value = true;",
+          "  try {",
+          "    await orderApi.create(form.value);",
+          "    router.push({ name: \"order-success\" });",
+          "  } finally {",
+          "    submitting.value = false;",
+          "  }",
+          "}"
+        ]
+      },
+      "services/order/src/main/java/app/OrderController.java": {
+        startLine: 34,
+        lines: [
+          "@RestController",
+          "@RequestMapping(\"/api/orders\")",
+          "public class OrderController {",
+          "",
+          "  @PostMapping",
+          "  public OrderDto createOrder(@Valid @RequestBody CreateOrderRequest request) {",
+          "    return orderService.create(request);",
+          "  }",
+          "}"
+        ]
+      },
+      "services/order/src/main/java/app/OrderService.java": {
+        startLine: 53,
+        lines: [
+          "  private final OrderRepository repository;",
+          "  private final PricingService pricing;",
+          "",
+          "  @Transactional",
+          "  public OrderDto create(CreateOrderRequest request) {",
+          "    Money total = pricing.calculate(request.items());",
+          "    Order order = Order.create(request.customerId(), total);",
+          "    return OrderMapper.toDto(repository.save(order));",
+          "  }"
+        ]
+      },
+      "services/order/src/main/java/app/OrderRepository.java": {
+        startLine: 17,
+        lines: [
+          "@Repository",
+          "public class OrderRepository {",
+          "  private final JpaOrderRepository jpaRepository;",
+          "",
+          "  public Order save(Order order) {",
+            "    OrderEntity entity = mapper.toEntity(order);",
+            "    return mapper.toDomain(jpaRepository.save(entity));",
+          "  }"
+        ]
+      }
+    };
+
     const inspectorOverlayBreakpoint = 0;
 
     const state = {
@@ -9459,6 +11334,7 @@
       selectedCommit: repositories[0].head,
       historyDetailOpen: false,
       historySelectedFile: "",
+      historyCommitView: "details",
       selectedFile: "",
       pendingChangeRevealPath: "",
       changeFilter: "",
@@ -9475,18 +11351,20 @@
       diffSkeletonVisible: false,
       diffSkeletonMinimumTimer: null,
       diffSkeletonShownAt: 0,
+      commandSearchLoading: false,
+      commandSearchLoadingTimer: null,
       historyFilter: "",
       historyFilterOpen: false,
       historyScope: null,
       historyLastSingleRef: null,
       workspaceWorktreeFilter: "",
       workspaceWorktreeFilterOpen: false,
-      workspaceWorktreeFacets: [],
+      workspaceWorktreeFacet: "",
       workspaceWorktreeOnlyDirty: false,
       workspaceWorktreeRepo: "",
       repoWorktreeFilter: "",
       repoWorktreeFilterOpen: false,
-      repoWorktreeFacets: [],
+      repoWorktreeFacet: "",
       repoWorktreeOnlyDirty: false,
       changeViewMode: savedChangeViewMode === "tree" ? "tree" : "list",
       sidebarCollapsed: false,
@@ -9525,6 +11403,7 @@
           : "vscode"
       },
       aiSettings: { ...savedAiSettings },
+      aiKeyVisible: true,
       openInMenuOpen: false,
       selectedBranch: repositories[0].branch,
       commitDraft: { ...initialCommitDraft },
@@ -9548,6 +11427,43 @@
       settingsPushStrategy: "rebase",
       settingsDiffLayout: "unified",
       settingsDiffWrap: false,
+      analysisScope: "changed",
+      analysisGeneratedAt: "2026-09-17T08:42:00.000Z",
+      analysisLoading: false,
+      analysisLoadingTimer: null,
+      analysisRunning: false,
+      analysisProgress: 100,
+      analysisProgressLabel: "请求链与关系图已生成",
+      analysisSelectedChain: "get-user",
+      analysisSelectedNode: "",
+      analysisNavigationMode: "chains",
+      analysisFilter: "",
+      analysisNodeFilter: "",
+      analysisMethod: "all",
+      analysisDiffExpanded: false,
+      analysisGraphFullscreen: false,
+      analysisGraphZoom: 1,
+      analysisGraphPanX: 384,
+      analysisGraphPanY: 0,
+      analysisGraphPointer: null,
+      analysisTimer: null,
+      analysisEnabled: true,
+      analysisStaticFallback: true,
+      analysisTypeScriptEnabled: true,
+      analysisTypeScriptCommand: "typescript-language-server",
+      analysisTypeScriptArgs: "--stdio",
+      analysisTypeScriptInstalled: false,
+      analysisJavaEnabled: true,
+      analysisJavaCommand: "jdtls",
+      analysisJavaArgs: "",
+      analysisJavaInstalled: true,
+      analysisInstallingLanguage: null,
+      analysisMaxFiles: 5000,
+      analysisMaxFileSize: 768,
+      analysisConcurrency: 2,
+      analysisGraphDepth: 6,
+      analysisLspTimeout: 8000,
+      analysisIgnoreDirectories: ".git\nnode_modules\n.pnpm\ntarget\ndist\nbuild\ntemp\ntest-results\n.idea\ncoverage",
       transientLoadingTimer: null,
       paletteReturnFocus: null,
       palettePointerDownOnBackdrop: false,
@@ -9591,6 +11507,7 @@
       removedEntryIds: new Set(),
       removedRepositoryIds: new Set()
     };
+    let analysisNodeDiffPanelController = null;
 
     const currentRepo = () => repositories.find((repo) => repo.id === state.repoId) || repositories[0];
 
@@ -9964,6 +11881,7 @@
       document.getElementById("sidebarToggleRail").insertAdjacentHTML("afterbegin", icon("sidebarCollapse"));
       document.getElementById("workspaceRail").insertAdjacentHTML("afterbegin", icon("workspace"));
       document.getElementById("operationRail").insertAdjacentHTML("afterbegin", icon("operations"));
+      document.getElementById("analysisRail").insertAdjacentHTML("afterbegin", icon("graph"));
       document.getElementById("searchRail").innerHTML = icon("search");
       document.getElementById("terminalRail").innerHTML = icon("terminal");
       document.getElementById("settingsRail").innerHTML = icon("settings");
@@ -11186,7 +13104,8 @@
       closeOpenInMenu();
       if (
         state.view === "settings" ||
-        state.view === "operations"
+        state.view === "operations" ||
+        state.view === "analysis"
       ) {
         document.getElementById("commandbar").replaceChildren();
         return;
@@ -11388,7 +13307,42 @@
       state.toolPreferences.defaultTerminal = kind;
       persistToolPreferences();
       renderSettingsPage();
+      document
+        .getElementById("settingsTerminalTrigger")
+        ?.focus({ preventScroll: true });
       showToast("默认终端已更新", `${tool.label} 将用于打开新的终端会话。`, "terminal");
+    }
+
+    function mountSettingsTerminalDropdown() {
+      dropdownManager.unregister("settings-terminal");
+      const trigger = document.getElementById(
+        "settingsTerminalTrigger"
+      );
+      const menu = document.getElementById(
+        "settingsTerminalMenu"
+      );
+      if (!trigger || !menu) return;
+      dropdownManager.register({
+        id: "settings-terminal",
+        trigger,
+        menu,
+        autoToggle: true,
+        placement: {
+          align: "start",
+          side: "bottom"
+        }
+      });
+    }
+
+    function openSettingsTerminalDropdownFromKeyboard(event) {
+      if (
+        event.key !== "ArrowDown" &&
+        event.key !== "ArrowUp"
+      ) {
+        return;
+      }
+      event.preventDefault();
+      dropdownManager.get("settings-terminal")?.open();
     }
 
     function openDefaultTerminal(scope) {
@@ -11535,7 +13489,11 @@
 
     function renderTabs() {
       const contextTabs = document.getElementById("contextTabs");
-      if (state.view === "settings" || state.view === "operations") {
+      if (
+        state.view === "settings" ||
+        state.view === "operations" ||
+        state.view === "analysis"
+      ) {
         contextTabs.innerHTML = "";
         contextTabs.removeAttribute("role");
         return;
@@ -11568,15 +13526,21 @@
     }
 
     function renderMain() {
+      if (state.view !== "analysis") {
+        destroyAnalysisNodeDiffPanel();
+      }
       document.title = state.view === "workspace"
         ? `GitNest · ${currentWorkspaceSnapshot().name}`
         : state.view === "settings"
           ? "设置 · GitNest"
           : state.view === "operations"
             ? "操作中心 · GitNest"
+            : state.view === "analysis"
+              ? "代码分析 · GitNest"
           : `${currentRepo().name} · GitNest`;
       document.querySelector(".workbench").classList.toggle("settings-view", state.view === "settings");
       document.querySelector(".workbench").classList.toggle("operations-view", state.view === "operations");
+      document.querySelector(".workbench").classList.toggle("analysis-view", state.view === "analysis");
       renderCommandbar();
       renderTabs();
       updateNavigationState();
@@ -11590,6 +13554,8 @@
         renderSettingsPage();
       } else if (state.view === "operations") {
         renderOperationCenter();
+      } else if (state.view === "analysis") {
+        renderCodeAnalysis();
       } else {
         if (state.tab === "changes") renderChanges();
         else if (state.tab === "history") renderHistory();
@@ -11608,7 +13574,8 @@
       const sidebarToggleRail = document.getElementById("sidebarToggleRail");
       const fullPageView =
         state.view === "operations" ||
-        state.view === "settings";
+        state.view === "settings" ||
+        state.view === "analysis";
       const sidebarHidden =
         state.sidebarCollapsed || fullPageView;
       const sidebarLabel = sidebarHidden ? "展开仓库目录" : "折叠仓库目录";
@@ -11626,8 +13593,10 @@
         18
       );
       document.getElementById("operationRail").classList.toggle("active", state.view === "operations");
+      document.getElementById("analysisRail").classList.toggle("active", state.view === "analysis");
       document.getElementById("settingsRail").classList.toggle("active", state.view === "settings");
       document.getElementById("operationRail").setAttribute("aria-current", state.view === "operations" ? "page" : "false");
+      document.getElementById("analysisRail").setAttribute("aria-current", state.view === "analysis" ? "page" : "false");
       document.getElementById("settingsRail").setAttribute("aria-current", state.view === "settings" ? "page" : "false");
       const activeWorkspaceSnapshot = currentWorkspaceSnapshot();
       document.getElementById("statusWorkspace").innerHTML = `${icon("workspace")}${activeWorkspaceSnapshot.name}`;
@@ -11635,12 +13604,14 @@
       document.querySelector(".workspace-frame").classList.toggle("sidebar-collapsed", sidebarHidden);
       document.querySelector(".workspace-frame").classList.toggle("operations-view", state.view === "operations");
       document.querySelector(".workspace-frame").classList.toggle("settings-view", state.view === "settings");
+      document.querySelector(".workspace-frame").classList.toggle("analysis-view", state.view === "analysis");
     }
 
     const settingsSections = [
       { id: "general", label: "通用", subtitle: "应用行为与偏好", iconName: "settings" },
       { id: "ai", label: "AI 提交信息", subtitle: "生成提交信息", iconName: "sparkle" },
       { id: "git", label: "Git", subtitle: "运行环境与 Fetch", iconName: "branch" },
+      { id: "analysis", label: "LSP 与代码分析", subtitle: "请求链与关系图", iconName: "graph" },
       { id: "account", label: "账号与认证", subtitle: "凭据与仓库绑定", iconName: "repository" }
     ];
 
@@ -11731,6 +13702,18 @@
       );
     }
 
+    function toggleAiApiKeyVisibility() {
+      captureAiSettings();
+      state.aiKeyVisible = !state.aiKeyVisible;
+      renderSettingsPage();
+      requestAnimationFrame(() => {
+        const apiKey = document.getElementById("aiCommitApiKey");
+        if (!apiKey) return;
+        apiKey.focus();
+        apiKey.setSelectionRange(apiKey.value.length, apiKey.value.length);
+      });
+    }
+
     function clearAiApiKey() {
       captureAiSettings();
       if (!state.aiSettings.apiKey) {
@@ -11743,6 +13726,7 @@
         actionLabel: "确认清空 Key",
         onConfirm: () => {
           state.aiSettings.apiKey = "";
+          state.aiKeyVisible = true;
           persistAiSettings();
           renderSettingsPage();
           showToast("AI API Key 已清空", "其他 AI 设置已保留。", "check");
@@ -11876,7 +13860,7 @@
               <div>
                 <div class="eyebrow">${icon("settings", 14)}应用偏好</div>
                 <h1 class="page-title">设置</h1>
-                <p class="page-description">管理应用行为、AI 提交信息、Git 同步策略以及账号认证。</p>
+                <p class="page-description">管理应用行为、AI、LSP 代码分析、Git 同步策略以及账号认证。</p>
               </div>
               <div class="page-actions">
                 ${renderButton({
@@ -11903,9 +13887,144 @@
         </div>
       `;
       syncAccessibleHints();
+      mountSettingsTerminalDropdown();
     }
 
     function renderSettingsSection(section) {
+      if (section === "analysis") {
+        return `
+          <section class="panel settings-card">
+            <div class="settings-card-header">
+              <div>
+                <div class="settings-card-title">代码分析</div>
+                <div class="settings-card-description">分析当前选中的 Workspace 条目，不在项目目录写入索引或配置。</div>
+              </div>
+              <button type="button" class="settings-switch ${state.analysisEnabled ? "active" : ""}" aria-label="启用代码分析" aria-pressed="${state.analysisEnabled}" onclick="toggleSetting('analysisEnabled', '代码分析')">
+                <span class="settings-switch-thumb"></span>
+              </button>
+            </div>
+            <div class="settings-card-body">
+              <div class="settings-option-grid">
+                ${settingsOption("analysisScope", "changed", "fileCode", "默认分析变动代码", "只读取 Git 变动文件，并从现有索引补充直接相关关系。")}
+                ${settingsOption("analysisScope", "workspace", "files", "默认分析全部代码", "默认选中全部代码；仍需在代码分析页手动启动。")}
+              </div>
+              ${settingsToggle("允许内置分析降级", "Language Server 未安装、超时或失败时，继续使用内置框架分析器生成请求链。", "analysisStaticFallback")}
+              <div class="settings-inline-note">${icon("check", 14)}Workspace 保持只读；缓存与 Java LSP 数据保存在 GitNest 应用数据目录。</div>
+            </div>
+          </section>
+
+          <section class="panel settings-card">
+            <div class="settings-card-header">
+              <div>
+                <div class="settings-card-title">TypeScript Language Server</div>
+                <div class="settings-card-description">用于 JavaScript、TypeScript、TSX、JSX 和 Vue 的符号与调用层级增强。</div>
+              </div>
+              <button type="button" class="settings-switch ${state.analysisTypeScriptEnabled ? "active" : ""}" aria-label="启用 TypeScript Language Server" aria-pressed="${state.analysisTypeScriptEnabled}" onclick="toggleSetting('analysisTypeScriptEnabled', 'TypeScript Language Server')">
+                <span class="settings-switch-thumb"></span>
+              </button>
+            </div>
+            <div class="settings-card-body">
+              <div class="settings-ai-field-grid">
+                <label class="settings-ai-field">
+                  命令
+                  <input autocomplete="off" spellcheck="false" type="text" value="${escapeHtml(state.analysisTypeScriptCommand)}" oninput="state.analysisTypeScriptCommand = this.value" />
+                </label>
+                <label class="settings-ai-field">
+                  参数
+                  <input autocomplete="off" spellcheck="false" type="text" value="${escapeHtml(state.analysisTypeScriptArgs)}" oninput="state.analysisTypeScriptArgs = this.value" />
+                </label>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel settings-card">
+            <div class="settings-card-header">
+              <div>
+                <div class="settings-card-title">Java Language Server</div>
+                <div class="settings-card-description">用于 Java/Spring 的符号和调用层级增强；GitNest 自动使用独立 -data 目录。</div>
+              </div>
+              <button type="button" class="settings-switch ${state.analysisJavaEnabled ? "active" : ""}" aria-label="启用 Java Language Server" aria-pressed="${state.analysisJavaEnabled}" onclick="toggleSetting('analysisJavaEnabled', 'Java Language Server')">
+                <span class="settings-switch-thumb"></span>
+              </button>
+            </div>
+            <div class="settings-card-body">
+              <div class="settings-ai-field-grid">
+                <label class="settings-ai-field">
+                  命令
+                  <input autocomplete="off" spellcheck="false" type="text" value="${escapeHtml(state.analysisJavaCommand)}" oninput="state.analysisJavaCommand = this.value" />
+                </label>
+                <label class="settings-ai-field">
+                  参数
+                  <input autocomplete="off" spellcheck="false" type="text" value="${escapeHtml(state.analysisJavaArgs)}" oninput="state.analysisJavaArgs = this.value" />
+                </label>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel settings-card">
+            <div class="settings-card-header">
+              <div>
+                <div class="settings-card-title">性能预算</div>
+                <div class="settings-card-description">限制大型项目的文件读取、内存占用和关系图展开规模。</div>
+              </div>
+            </div>
+            <div class="settings-card-body">
+              <div class="analysis-settings-grid">
+                <label class="settings-ai-field">
+                  最大文件数
+                  <input min="100" max="50000" type="number" value="${state.analysisMaxFiles}" oninput="state.analysisMaxFiles = Number(this.value)" />
+                </label>
+                <label class="settings-ai-field">
+                  单文件上限（KiB）
+                  <input min="64" max="4096" type="number" value="${state.analysisMaxFileSize}" oninput="state.analysisMaxFileSize = Number(this.value)" />
+                </label>
+                <label class="settings-ai-field">
+                  读取并发数
+                  <input min="1" max="4" type="number" value="${state.analysisConcurrency}" oninput="state.analysisConcurrency = Number(this.value)" />
+                </label>
+                <label class="settings-ai-field">
+                  默认关系深度
+                  <input min="1" max="12" type="number" value="${state.analysisGraphDepth}" oninput="state.analysisGraphDepth = Number(this.value)" />
+                </label>
+                <label class="settings-ai-field">
+                  LSP 超时（ms）
+                  <input min="1000" max="60000" type="number" value="${state.analysisLspTimeout}" oninput="state.analysisLspTimeout = Number(this.value)" />
+                </label>
+              </div>
+              ${renderTextarea({
+                id: "analysisIgnoreDirectories",
+                value: state.analysisIgnoreDirectories,
+                label: "忽略目录",
+                size: "large",
+                fullWidth: true,
+                fieldClassName: "settings-ai-prompt",
+                placeholder: "每行一个目录名",
+                attributes: 'oninput="state.analysisIgnoreDirectories = this.value"'
+              })}
+              <div class="settings-ai-actions">
+                <span class="settings-card-description">全部代码分析始终需要在代码分析页手动启动。</span>
+                <div class="settings-ai-actions-buttons">
+                  ${renderButton({
+                    label: "打开代码分析",
+                    size: "small",
+                    variant: "default",
+                    icon: icon("graph", 13),
+                    attributes: 'onclick="openCodeAnalysis()"'
+                  })}
+                  ${renderButton({
+                    label: "保存代码分析设置",
+                    size: "small",
+                    variant: "primary",
+                    icon: icon("check", 13),
+                    attributes: 'onclick="saveSettings()"'
+                  })}
+                </div>
+              </div>
+            </div>
+          </section>
+        `;
+      }
+
       if (section === "ai") {
         return `
           <section class="panel settings-card">
@@ -11930,10 +14049,25 @@
                 </label>
               </div>
               <div class="settings-ai-field-grid single">
-                <label class="settings-ai-field">
-                  API Key
-                  <input id="aiCommitApiKey" autocomplete="off" placeholder="输入用于生成提交信息的 API Key" type="password" value="${escapeHtml(state.aiSettings.apiKey)}" oninput="captureAiSettings()" />
-                </label>
+                ${renderInput({
+                  id: "aiCommitApiKey",
+                  value: state.aiSettings.apiKey,
+                  label: "API Key",
+                  type: state.aiKeyVisible ? "text" : "password",
+                  autocomplete: "off",
+                  spellcheck: false,
+                  fullWidth: true,
+                  placeholder: "输入用于生成提交信息的 API Key",
+                  attributes: 'oninput="captureAiSettings()"',
+                  actions: [
+                    {
+                      content: icon("eye", 14),
+                      ariaLabel: state.aiKeyVisible ? "隐藏 API Key" : "显示 API Key",
+                      title: state.aiKeyVisible ? "隐藏 API Key" : "显示 API Key",
+                      attributes: `aria-pressed="${state.aiKeyVisible}" onclick="toggleAiApiKeyVisibility()"`
+                    }
+                  ]
+                })}
               </div>
               ${renderTextarea({
                 id: "aiCommitPrompt",
@@ -12157,13 +14291,28 @@
           </div>
           <div class="settings-card-body">
             <div class="settings-tool-select">
-              默认终端
-              <details class="settings-tool-menu" data-dropdown-id="settings-terminal" ontoggle="positionDetailsMenu(event.currentTarget, { side: 'bottom' })">
-                <summary class="settings-tool-menu-trigger" aria-haspopup="menu" aria-label="选择默认终端">
+              <span class="settings-tool-select-label">默认终端</span>
+              <div class="settings-tool-menu">
+                <button
+                  type="button"
+                  class="settings-tool-menu-trigger"
+                  id="settingsTerminalTrigger"
+                  aria-controls="settingsTerminalMenu"
+                  aria-expanded="false"
+                  aria-haspopup="menu"
+                  aria-label="选择默认终端"
+                  onkeydown="openSettingsTerminalDropdownFromKeyboard(event)"
+                >
                   <span class="settings-tool-menu-trigger-value">${icon(selectedTerminal.iconName || "terminal", 15)}<span>${escapeHtml(selectedTerminal.label)}</span></span>
                   ${icon("chevronDown", 14)}
-                </summary>
-                <div class="settings-tool-menu-surface menu-surface" role="menu" aria-label="默认终端">
+                </button>
+                <div
+                  class="settings-tool-menu-surface menu-surface"
+                  id="settingsTerminalMenu"
+                  role="menu"
+                  aria-label="默认终端选项"
+                  hidden
+                >
                   ${allTerminalTools().map((tool) => renderMenuItem({
                     label: tool.label,
                     leading: icon(tool.iconName || "terminal", 14),
@@ -12172,35 +14321,26 @@
                     attributes: `aria-checked="${tool.kind === selectedTerminal.kind}" onclick="setDefaultTerminal('${escapeHtml(tool.kind)}')"`
                   })).join("")}
                 </div>
-              </details>
+              </div>
             </div>
           </div>
         </section>
-        <section class="panel settings-card">
-          <div class="settings-card-header">
-            <div>
+          <section class="panel settings-card">
+            <div class="settings-card-header">
+              <div>
               <div class="settings-card-title">当前偏好</div>
-              <div class="settings-card-description">按类别查看当前界面与浏览行为偏好。</div>
+              <div class="settings-card-description">按类别查看当前文件浏览、差异与提交偏好。</div>
             </div>
           </div>
           <div class="settings-card-body">
             <div class="settings-preference-groups" aria-label="当前偏好分类">
-              <section class="settings-preference-group" aria-labelledby="settingsPreferenceAppearance">
-                <div class="settings-preference-group-header">
-                  ${icon("sun", 14)}
-                  <h3 class="settings-preference-group-title" id="settingsPreferenceAppearance">界面外观</h3>
-                </div>
-                <dl class="detail-list settings-preference-list">
-                  <div class="detail-row"><dt class="detail-label">界面主题</dt><dd class="detail-value">${state.theme === "dark" ? "深色" : "浅色"}</dd></div>
-                </dl>
-              </section>
               <section class="settings-preference-group" aria-labelledby="settingsPreferenceFiles">
                 <div class="settings-preference-group-header">
                   ${icon("folder", 14)}
                   <h3 class="settings-preference-group-title" id="settingsPreferenceFiles">文件浏览</h3>
                 </div>
                 <dl class="detail-list settings-preference-list">
-                  <div class="detail-row"><dt class="detail-label">文件变更视图</dt><dd class="detail-value">${state.changeViewMode === "tree" ? "树形" : "列表"}</dd></div>
+                  <div class="detail-row"><dt class="detail-label">变更文件视图</dt><dd class="detail-value">${state.changeViewMode === "tree" ? "树形" : "列表"}</dd></div>
                   <div class="detail-row"><dt class="detail-label">树形目录</dt><dd class="detail-value">${state.changeTreeDirectoriesCollapsedPreference ? "已收起" : "已展开"}</dd></div>
                 </dl>
               </section>
@@ -12240,13 +14380,1378 @@
       `;
     }
 
+    function analysisChainsInCurrentScope() {
+      return analysisChains.filter(
+        (chain) => state.analysisScope === "workspace" || chain.changed
+      );
+    }
+
+    function analysisChainsForCurrentScope() {
+      const normalizedFilter = state.analysisFilter.trim().toLocaleLowerCase("zh-CN");
+      return analysisChainsInCurrentScope().filter((chain) => {
+        if (state.analysisMethod !== "all" && chain.method !== state.analysisMethod) {
+          return false;
+        }
+        if (!normalizedFilter) return true;
+        return `${chain.method} ${chain.route} ${chain.nodes.map((node) => `${node.name} ${node.path}`).join(" ")}`
+          .toLocaleLowerCase("zh-CN")
+          .includes(normalizedFilter);
+      });
+    }
+
+    function analysisAllNodesInCurrentScope() {
+      const uniqueNodes = new Map();
+      analysisChainsInCurrentScope().forEach((chain) => {
+        chain.nodes.forEach((node) => uniqueNodes.set(node.id, node));
+      });
+      return [...uniqueNodes.values()];
+    }
+
+    function analysisNodesForCurrentScope() {
+      const normalizedFilter = state.analysisNodeFilter.trim().toLocaleLowerCase("zh-CN");
+      return analysisAllNodesInCurrentScope().filter((node) => {
+        if (!normalizedFilter) return true;
+        return `${node.name} ${node.qualifiedName} ${node.path} ${node.kindLabel}`
+          .toLocaleLowerCase("zh-CN")
+          .includes(normalizedFilter);
+      });
+    }
+
+    function selectedAnalysisChain() {
+      const scoped = analysisChainsInCurrentScope();
+      const selected = scoped.find((chain) => chain.id === state.analysisSelectedChain);
+      return selected || scoped[0] || null;
+    }
+
+    function analysisNodeById(nodeId) {
+      for (const chain of analysisChainsInCurrentScope()) {
+        const node = chain.nodes.find((candidate) => candidate.id === nodeId);
+        if (node) return { chain, node };
+      }
+      return null;
+    }
+
+    function analysisNodeLocation(node) {
+      const match = String(node?.path || "").match(/^(.*):(\d+)$/);
+      return {
+        path: match?.[1] || String(node?.path || ""),
+        line: Number(match?.[2] || 1)
+      };
+    }
+
+    function analysisNodeKindClass(node) {
+      return {
+        client: "client-request",
+        endpoint: "server-endpoint",
+        service: "method"
+      }[node?.kind] || "function";
+    }
+
+    function renderAnalysisChainList(chains, selectedChain) {
+      if (!chains.length) {
+        return `
+          <div class="analysis-list-empty">
+            ${icon("search", 20)}
+            <strong>没有匹配的请求链</strong>
+            <p>可清除筛选、切换到函数搜索，或重新运行全部代码分析。</p>
+          </div>
+        `;
+      }
+      return chains.map((chain) => `
+        <button type="button" class="${chain.id === selectedChain?.id ? "active" : ""}" ${chain.id === selectedChain?.id ? 'aria-current="true"' : ""} onclick="selectAnalysisChain('${chain.id}')">
+          <span class="http-method method-${chain.method.toLocaleLowerCase("en-US")}">${chain.method}</span>
+          <strong>${escapeHtml(chain.route)}</strong>
+          <small>${chain.nodes.length} 个节点</small>
+        </button>
+      `).join("");
+    }
+
+    function renderAnalysisNodeList(nodes, selectedNode) {
+      if (!nodes.length) {
+        return `
+          <div class="analysis-list-empty">
+            ${icon("search", 20)}
+            <strong>没有匹配的函数或接口</strong>
+            <p>可按名称、限定名或文件路径搜索。</p>
+          </div>
+        `;
+      }
+      return nodes.map((node) => `
+        <button
+          type="button"
+          class="analysis-symbol-result ${node.id === selectedNode?.id ? "active" : ""}"
+          ${node.id === selectedNode?.id ? 'aria-current="true"' : ""}
+          onclick="focusAnalysisNode('${node.id}')"
+        >
+          <span class="analysis-node-dot node-${analysisNodeKindClass(node)}"></span>
+          <strong>${escapeHtml(node.name)}</strong>
+          <small>${escapeHtml(node.kindLabel)} · ${escapeHtml(node.path)}</small>
+        </button>
+      `).join("");
+    }
+
+    function renderAnalysisNavigationPanel(chains, selectedChain) {
+      const nodes = analysisNodesForCurrentScope();
+      const searchableNodeCount = analysisAllNodesInCurrentScope().length;
+      const selected = analysisNodeById(state.analysisSelectedNode)?.node || null;
+      const chainsMode = state.analysisNavigationMode === "chains";
+      const selectedMethodLabel = state.analysisMethod === "all"
+        ? "全部方法"
+        : state.analysisMethod;
+      return `
+        <header>
+          <div>
+            <strong>代码导航</strong>
+            <span>${chainsMode ? `${chains.length} 条请求链` : `${nodes.length}/${searchableNodeCount} 个节点`}</span>
+          </div>
+          <div class="analysis-navigation-tabs" role="tablist" aria-label="代码导航类型">
+            <button
+              type="button"
+              role="tab"
+              class="${chainsMode ? "active" : ""}"
+              aria-selected="${chainsMode}"
+              onclick="setAnalysisNavigationMode('chains')"
+            >
+              请求链
+              <span>${analysisChainsInCurrentScope().length}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              class="${chainsMode ? "" : "active"}"
+              aria-selected="${!chainsMode}"
+              onclick="setAnalysisNavigationMode('symbols')"
+            >
+              函数 / 接口
+              <span>${searchableNodeCount}</span>
+            </button>
+          </div>
+          ${chainsMode ? `
+            ${renderInput({
+              id: "analysisChainFilter",
+              name: "analysis-chain-filter",
+              size: "small",
+              fullWidth: true,
+              ariaLabel: "筛选请求链",
+              placeholder: "搜索路径或文件",
+              value: state.analysisFilter,
+              autocomplete: "off",
+              spellcheck: false,
+              leadingIcon: icon("search", 14),
+              clearButton: state.analysisFilter
+                ? {
+                    icon: icon("x", 12),
+                    ariaLabel: "清空请求链筛选",
+                    title: "清空请求链筛选",
+                    attributes: "onclick=\"setAnalysisFilter('')\""
+                  }
+                : null,
+              fieldClassName: "analysis-chain-filter",
+              attributes: 'data-analysis-navigation-filter="true" oninput="setAnalysisFilter(this.value)"'
+            })}
+            <details
+              class="analysis-method-menu"
+              data-dropdown-id="analysis-method-filter"
+              ontoggle="onAnalysisMethodMenuToggle(event.currentTarget)"
+            >
+              <summary
+                class="analysis-method-menu-trigger"
+                aria-haspopup="menu"
+                aria-label="按 HTTP 方法筛选"
+              >
+                <span>${selectedMethodLabel}</span>
+                ${icon("chevronDown", 14)}
+              </summary>
+              <div
+                class="analysis-method-menu-surface menu-surface"
+                role="menu"
+                aria-label="HTTP 方法筛选选项"
+              >
+                ${["all", "GET", "POST", "PUT", "DELETE", "PATCH"].map((method) =>
+                  renderMenuItem({
+                    label: method === "all" ? "全部方法" : method,
+                    className: state.analysisMethod === method ? "is-selected" : "",
+                    role: "menuitemradio",
+                    attributes: `aria-checked="${state.analysisMethod === method}" onclick="setAnalysisMethod('${method}')"`
+                  })
+                ).join("")}
+              </div>
+            </details>
+          ` : `
+            ${renderInput({
+              id: "analysisNodeFilter",
+              name: "analysis-node-filter",
+              size: "small",
+              fullWidth: true,
+              ariaLabel: "搜索函数或接口",
+              placeholder: "搜索函数、方法或接口",
+              value: state.analysisNodeFilter,
+              autocomplete: "off",
+              spellcheck: false,
+              leadingIcon: icon("search", 14),
+              clearButton: state.analysisNodeFilter
+                ? {
+                    icon: icon("x", 12),
+                    ariaLabel: "清空函数或接口筛选",
+                    title: "清空函数或接口筛选",
+                    attributes: "onclick=\"setAnalysisNodeFilter('')\""
+                  }
+                : null,
+              fieldClassName: "analysis-chain-filter",
+              attributes: 'data-analysis-navigation-filter="true" oninput="setAnalysisNodeFilter(this.value)"'
+            })}
+          `}
+        </header>
+        <div class="analysis-chain-list">
+          ${chainsMode
+            ? renderAnalysisChainList(chains, selectedChain)
+            : renderAnalysisNodeList(nodes, selected)}
+        </div>
+      `;
+    }
+
+    function renderAnalysisNodePanel(chain, selectedNode) {
+      const location = analysisNodeLocation(selectedNode);
+      return `
+        <header class="analysis-node-detail-header">
+          <div>
+            <strong>节点详情</strong>
+            <span>${escapeHtml(selectedNode.kindLabel)} · ${escapeHtml(location.path)}:${location.line}</span>
+          </div>
+          ${renderButton({
+            label: "返回代码导航",
+            ariaLabel: "返回代码导航",
+            title: "返回代码导航",
+            size: "small",
+            variant: "icon",
+            icon: icon("undo", 14),
+            className: "analysis-node-detail-back",
+            attributes: 'onclick="clearAnalysisNodeInspection()"'
+          })}
+        </header>
+        ${renderAnalysisNodeDetails(chain, selectedNode)}
+      `;
+    }
+
+    function analysisGraphLayout(chain) {
+      const nodeWidth = 184;
+      const nodeHeight = 88;
+      const nodeTextInset = 8;
+      const nodeTextTop = 24;
+      const nodeTextBottomInset = 6;
+      const columnGap = 72;
+      const graphPadding = 28;
+      const nodes = (chain?.nodes || []).map((node, index) => ({
+        node,
+        x: graphPadding + index * (nodeWidth + columnGap),
+        y: 58
+      }));
+      return {
+        nodes,
+        nodeWidth,
+        nodeHeight,
+        nodeTextInset,
+        nodeTextTop,
+        nodeTextHeight: nodeHeight - nodeTextTop - nodeTextBottomInset,
+        width: graphPadding * 2 + Math.max(1, nodes.length) * nodeWidth + Math.max(0, nodes.length - 1) * columnGap,
+        height: 198
+      };
+    }
+
+    function renderAnalysisFlow(chain, selectedNode) {
+      if (!chain?.nodes.length) {
+        return `
+          <div class="analysis-graph-empty">
+            ${icon("graph", 24)}
+            <strong>当前没有可绘制的调用关系</strong>
+            <p>搜索并选择函数、方法或接口后，这里会同时展示上游调用者与下游依赖。</p>
+          </div>
+        `;
+      }
+      const layout = analysisGraphLayout(chain);
+      const edges = layout.nodes.slice(1).map((positioned, index) => {
+        const from = layout.nodes[index];
+        const to = positioned;
+        const startX = from.x + layout.nodeWidth;
+        const startY = from.y + layout.nodeHeight / 2;
+        const endX = to.x;
+        const endY = to.y + layout.nodeHeight / 2;
+        const curve = Math.max(36, (endX - startX) * 0.45);
+        const http = to.node.edgeLabel.startsWith("HTTP");
+        return `
+          <g>
+            <path
+              class="analysis-graph-edge edge-${http ? "http-request" : "calls"}"
+              d="M ${startX} ${startY} C ${startX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}"
+              marker-end="url(#analysisGraphArrow)"
+            ></path>
+            ${http ? `<text class="analysis-graph-edge-label" x="${(startX + endX) / 2}" y="${startY - 8}">HTTP</text>` : ""}
+          </g>
+        `;
+      }).join("");
+      const nodes = layout.nodes.map(({ node, x, y }) => {
+        const location = analysisNodeLocation(node);
+        const locationLabel = `${location.path}:${location.line}`;
+        const kindClass = analysisNodeKindClass(node);
+        return `
+          <g
+            role="button"
+            tabindex="0"
+            aria-label="${escapeHtml(`${node.kindLabel} ${node.qualifiedName}`)}"
+            class="analysis-graph-node node-${kindClass}${node.id === selectedNode?.id ? " selected" : ""}${node.changed ? " changed" : ""}"
+            data-graph-node="true"
+            data-analysis-node-id="${escapeHtml(node.id)}"
+            transform="translate(${x} ${y})"
+            onpointerdown="event.stopPropagation()"
+            onclick="event.stopPropagation(); inspectAnalysisNode('${node.id}')"
+            onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); inspectAnalysisNode('${node.id}'); }"
+          >
+            <title>${escapeHtml(`${node.qualifiedName}\n${node.documentation || ""}\n${locationLabel}`)}</title>
+            <rect width="${layout.nodeWidth}" height="${layout.nodeHeight}" rx="9"></rect>
+            <circle cx="12" cy="13" r="5"></circle>
+            <text class="analysis-node-kind" x="22" y="17">${escapeHtml(node.kindLabel)}</text>
+            <foreignObject
+              class="analysis-node-copy"
+              x="${layout.nodeTextInset}"
+              y="${layout.nodeTextTop}"
+              width="${layout.nodeWidth - layout.nodeTextInset * 2}"
+              height="${layout.nodeTextHeight}"
+              pointer-events="none"
+              aria-hidden="true"
+            >
+              <div class="analysis-node-copy-inner" xmlns="http://www.w3.org/1999/xhtml">
+                <strong class="analysis-node-name" title="${escapeHtml(node.name)}">${escapeHtml(node.name)}</strong>
+                ${node.documentation ? `<span class="analysis-node-description" title="${escapeHtml(node.documentation)}">${escapeHtml(node.documentation)}</span>` : ""}
+                <span class="analysis-node-path" title="${escapeHtml(locationLabel)}">${escapeHtml(locationLabel)}</span>
+              </div>
+            </foreignObject>
+          </g>
+        `;
+      }).join("");
+      return `
+        <div class="analysis-graph-stage">
+          <div
+            class="analysis-graph-scroll"
+            id="analysisGraphViewport"
+            onwheel="zoomAnalysisGraphFromWheel(event)"
+            onpointerdown="beginAnalysisGraphPan(event)"
+            onpointermove="moveAnalysisGraphPan(event)"
+            onpointerup="endAnalysisGraphPan(event)"
+            onpointercancel="endAnalysisGraphPan(event, true)"
+          >
+            <div
+              class="analysis-graph-canvas"
+              id="analysisGraphCanvas"
+              style="margin-left:${state.analysisGraphPanX}px;margin-top:${state.analysisGraphPanY}px"
+            >
+              <svg
+                class="analysis-graph-svg"
+                role="group"
+                aria-label="代码调用关系图"
+                data-base-width="${layout.width}"
+                data-base-height="${layout.height}"
+                viewBox="0 0 ${layout.width} ${layout.height}"
+                width="${layout.width * state.analysisGraphZoom}"
+                height="${layout.height * state.analysisGraphZoom}"
+              >
+                <defs>
+                  <marker id="analysisGraphArrow" class="analysis-graph-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" viewBox="0 0 8 8">
+                    <path d="M0 0 8 4 0 8z"></path>
+                  </marker>
+                </defs>
+                <g class="analysis-graph-edges">${edges}</g>
+                <g class="analysis-graph-nodes">${nodes}</g>
+              </svg>
+            </div>
+          </div>
+          <div class="analysis-graph-controls" role="group" aria-label="关系图视图控制">
+            <button type="button" aria-label="缩小关系图" title="缩小" onclick="zoomAnalysisGraphBy(${1 / 1.2})">${icon("minus", 14)}</button>
+            <input
+              type="range"
+              min="25"
+              max="300"
+              step="1"
+              value="${Math.round(state.analysisGraphZoom * 100)}"
+              aria-label="调整关系图缩放"
+              oninput="setAnalysisGraphZoom(Number(this.value) / 100)"
+            />
+            <span id="analysisGraphZoomLabel">${Math.round(state.analysisGraphZoom * 100)}%</span>
+            <button type="button" aria-label="放大关系图" title="放大" onclick="zoomAnalysisGraphBy(1.2)">${icon("plus", 14)}</button>
+            <button type="button" aria-label="定位当前节点" title="定位当前节点" onclick="centerAnalysisGraphNode()">${icon("eye", 14)}</button>
+            <button type="button" aria-label="重置关系图布局" title="重置布局" onclick="resetAnalysisGraphView()">${icon("refresh", 14)}</button>
+          </div>
+          <div class="analysis-graph-direction-hint">滚轮缩放 · 任意方向拖动画布 · 点击空白关闭详情</div>
+        </div>
+      `;
+    }
+
+    function renderAnalysisNodeDetails(chain, selectedNode) {
+      if (!selectedNode) return "";
+      const location = analysisNodeLocation(selectedNode);
+      const metadata = selectedNode.kind === "endpoint"
+        ? [["HTTP 路由", `${chain?.method || "GET"} ${chain?.route || selectedNode.qualifiedName}`], ["框架", "Spring MVC"]]
+        : selectedNode.kind === "client"
+          ? [["请求目标", chain?.route || selectedNode.qualifiedName], ["解析器", "TypeScript / Vue"]]
+          : [["调用类型", selectedNode.edgeLabel || "calls"], ["符号来源", "Language Server"]];
+      return `
+        <div class="analysis-node-details">
+          <div class="analysis-node-overview">
+            <div class="analysis-node-title">
+              <span class="analysis-node-dot node-${analysisNodeKindClass(selectedNode)}"></span>
+              <div>
+                <strong>${escapeHtml(selectedNode.name)}</strong>
+                <span>${escapeHtml(selectedNode.qualifiedName)}</span>
+              </div>
+            </div>
+            <dl class="detail-list">
+              <div class="detail-row"><dt class="detail-label">类型</dt><dd class="detail-value">${escapeHtml(selectedNode.kindLabel)}</dd></div>
+              <div class="detail-row"><dt class="detail-label">语言</dt><dd class="detail-value">${escapeHtml(selectedNode.language)}</dd></div>
+              <div class="detail-row analysis-detail-wide"><dt class="detail-label">位置</dt><dd class="detail-value">${escapeHtml(`${location.path}:${location.line}`)}</dd></div>
+              <div class="detail-row analysis-detail-wide"><dt class="detail-label">分析来源</dt><dd class="detail-value">${escapeHtml(selectedNode.source)}</dd></div>
+              <div class="detail-row"><dt class="detail-label">置信度</dt><dd class="detail-value">${escapeHtml(selectedNode.confidence)}</dd></div>
+              <div class="detail-row"><dt class="detail-label">变动代码</dt><dd class="detail-value">${selectedNode.changed ? "是" : "否"}</dd></div>
+            </dl>
+            ${selectedNode.documentation ? `
+              <section class="analysis-node-documentation">
+                <h3>代码注释</h3>
+                <p>${escapeHtml(selectedNode.documentation)}</p>
+              </section>
+            ` : ""}
+            <section class="analysis-metadata">
+              <h3>框架信息</h3>
+              ${metadata.map(([label, value]) => `
+                <div>
+                  <span>${escapeHtml(label)}</span>
+                  <strong>${escapeHtml(value)}</strong>
+                </div>
+              `).join("")}
+            </section>
+          </div>
+        </div>
+        <section class="analysis-node-diff-trigger">
+          ${renderButton({
+            label: state.analysisDiffExpanded
+              ? selectedNode.changed ? "收起文件 Diff" : "收起代码"
+              : selectedNode.changed ? "查看文件 Diff" : "查看代码",
+            size: "small",
+            variant: "default",
+            icon: icon(
+              state.analysisDiffExpanded
+                ? "x"
+                : selectedNode.changed ? "fileCode" : "file"
+            , 14),
+            attributes: `aria-controls="analysis-node-diff-drawer" aria-expanded="${state.analysisDiffExpanded}" onclick="toggleAnalysisNodeDiff()"`
+          })}
+          <p>${selectedNode.changed ? "打开后将自动定位到对应变更行" : "打开后将读取当前文件并定位到对应行"} L${location.line}。</p>
+        </section>
+      `;
+    }
+
+    function analysisNodeDiffRows(node) {
+      const location = analysisNodeLocation(node);
+      const line = Math.max(1, location.line);
+      const java = node.language === "Java";
+      const memberName = String(
+        node.kind === "client"
+          ? node.qualifiedName
+          : node.name.split(".").pop()
+      ).replace(/[^\w$]/g, "") || (java ? "findById" : "loadUser");
+      const ownerName = String(node.name).split(".")[0]
+        .replace(/[^\w$]/g, "") || "UserService";
+      const domainName = ownerName
+        .replace(/(?:Controller|Service|Repository)$/, "") || "User";
+      const javaResultType = `${domainName}Dto`;
+      const beforeContext = java
+        ? [
+            "import org.springframework.stereotype.Service;",
+            "import org.springframework.transaction.annotation.Transactional;",
+            "",
+            "@Service",
+            `public class ${ownerName} {`,
+            "  private final AuditService audit;",
+            "",
+            `  public ${ownerName}(AuditService audit) {`,
+            "    this.audit = audit;",
+            "  }",
+            "",
+            "  @Transactional(readOnly = true)"
+          ]
+        : [
+            'import { api } from "@/lib/api";',
+            'import type { User } from "@/types/user";',
+            "",
+            "const userCache = new Map<string, User>();",
+            "",
+            "function normalizeUserId(id: string) {",
+            "  return id.trim();",
+            "}",
+            "",
+            "// User detail data source",
+            "",
+            ""
+          ];
+      const afterContext = java
+        ? [
+            "",
+            "  public void invalidateUser(String id) {",
+            "    audit.recordCacheInvalidation(id);",
+            "  }",
+            "}"
+          ]
+        : [
+            "",
+            "export function invalidateUser(id: string) {",
+            "  userCache.delete(id);",
+            "}",
+            ""
+          ];
+      const contextStart = Math.max(1, line - beforeContext.length);
+      const before = java
+        ? `return repository.findById(id).orElseThrow(UserNotFoundException::new);`
+        : `const response = await api.get(\`/api/users/\${id}\`);`;
+      const after = java
+        ? `${javaResultType} result = repository.findById(id).map(UserMapper::toDto).orElseThrow(UserNotFoundException::new);`
+        : `const response = await api.get<User>(\`/api/users/\${id}\`);`;
+      const signature = java
+        ? `  public ${javaResultType} ${memberName}(String id) {`
+        : `export async function ${memberName}(id: string): Promise<User> {`;
+      const beforeRows = beforeContext.map((text, index) => ({
+        kind: "context",
+        oldNo: contextStart + index,
+        newNo: contextStart + index,
+        text
+      }));
+      const afterRows = afterContext.map((text, index) => ({
+        kind: "context",
+        oldNo: line + 4 + index,
+        newNo: line + 5 + index,
+        text
+      }));
+      return [
+        {
+          kind: "hunk",
+          text: `@@ -${contextStart},${beforeRows.length + afterRows.length + 4} +${contextStart},${beforeRows.length + afterRows.length + 5} @@ ${node.name}`
+        },
+        ...beforeRows,
+        { kind: "context", oldNo: line, newNo: line, text: signature },
+        { kind: "delete", oldNo: line + 1, text: `  ${before}` },
+        { kind: "add", newNo: line + 1, text: `  ${after}` },
+        { kind: "add", newNo: line + 2, text: java ? "  audit.recordUserLookup(id);" : "  userCache.set(id, response.data);" },
+        { kind: "context", oldNo: line + 2, newNo: line + 3, text: java ? "    return result;" : "  return response.data;" },
+        { kind: "context", oldNo: line + 3, newNo: line + 4, text: java ? "  }" : "}" },
+        ...afterRows
+      ];
+    }
+
+    function analysisNodeCodeRows(node) {
+      const location = analysisNodeLocation(node);
+      const source = analysisSourceFiles[location.path];
+      if (!source) return [];
+      const syntaxLines =
+        window.GitNestDiffPanel.tokenizeSourceLines(
+          source.lines,
+          node.language,
+          location.path
+        );
+      return source.lines.map((text, index) => {
+        const lineNumber = source.startLine + index;
+        return {
+          kind: "context",
+          oldNo: lineNumber,
+          newNo: lineNumber,
+          text,
+          syntaxTokens: syntaxLines[index] || []
+        };
+      });
+    }
+
+    function renderAnalysisNodeDiffDrawer(node) {
+      const location = analysisNodeLocation(node);
+      const codeMode = !node.changed;
+      return `
+        <section class="panel analysis-node-diff-drawer${codeMode ? " analysis-node-source-drawer" : ""}" id="analysis-node-diff-drawer" aria-label="${codeMode ? "节点代码" : "节点文件 Diff"}">
+          <header class="analysis-panel-heading">
+            <div>
+              <strong>${codeMode ? "节点所在代码" : "节点所在文件 Diff"}</strong>
+              <span>${escapeHtml(location.path)} · L${location.line}</span>
+            </div>
+            <div class="analysis-panel-heading-actions">
+              ${renderButton({
+                label: codeMode ? "搜索节点代码" : "搜索节点 Diff",
+                ariaLabel: codeMode ? "搜索节点代码" : "搜索节点 Diff",
+                title: codeMode ? "搜索代码（Ctrl+F）" : "搜索 Diff（Ctrl+F）",
+                size: "small",
+                variant: "icon",
+                icon: icon("search", 14),
+                className: "analysis-node-diff-search",
+                attributes: 'aria-keyshortcuts="Control+F Meta+F" onclick="openAnalysisNodeDiffSearch()"'
+              })}
+              ${renderButton({
+                label: codeMode ? "关闭节点代码" : "关闭节点文件 Diff",
+                ariaLabel: codeMode ? "关闭节点代码" : "关闭节点文件 Diff",
+                title: codeMode ? "关闭代码" : "关闭 Diff",
+                size: "small",
+                variant: "icon",
+                icon: icon("x", 14),
+                className: "analysis-node-diff-close",
+                attributes: 'onclick="closeAnalysisNodeDiff()"'
+              })}
+            </div>
+          </header>
+          <div class="analysis-node-diff-content">
+            <div id="analysisNodeDiffPanelMount"></div>
+          </div>
+        </section>
+      `;
+    }
+
+    function destroyAnalysisNodeDiffPanel() {
+      analysisNodeDiffPanelController?.destroy();
+      analysisNodeDiffPanelController = null;
+    }
+
+    function mountAnalysisNodeDiffPanel(node) {
+      const mount = document.getElementById("analysisNodeDiffPanelMount");
+      if (!mount || !window.GitNestDiffPanel?.create) return;
+      destroyAnalysisNodeDiffPanel();
+      const location = analysisNodeLocation(node);
+      const codeMode = !node.changed;
+      const rows = codeMode
+        ? analysisNodeCodeRows(node)
+        : analysisNodeDiffRows(node);
+      if (codeMode && rows.length === 0) {
+        mount.innerHTML = `
+          <div class="analysis-node-code-empty" role="status">
+            ${icon("alert", 22)}
+            <strong>无法读取节点代码</strong>
+            <span>原型中没有 ${escapeHtml(location.path)} 的源码样例。</span>
+          </div>
+        `;
+        return;
+      }
+      analysisNodeDiffPanelController = window.GitNestDiffPanel.create({
+        ariaLabel: `${location.path} 的${codeMode ? "节点代码" : "节点 Diff"}`,
+        className: `analysis-node-diff-panel${codeMode ? " is-code-view" : ""}`,
+        path: location.path,
+        focusLine: location.line,
+        rows,
+        viewportAriaLabel: codeMode ? "文件代码" : "文件 Diff",
+        searchAriaLabel: codeMode ? "在代码中搜索" : "在 Diff 中搜索",
+        searchInputAriaLabel: codeMode ? "在代码中搜索" : "在 Diff 中搜索",
+        searchPlaceholder: codeMode ? "在当前代码中搜索" : "在当前 Diff 中搜索",
+        headerActions: codeMode ? "" : `
+          <div class="analysis-diff-mode-tabs" role="tablist" aria-label="节点 Diff 类型">
+            ${renderButton({
+              label: "未暂存",
+              size: "small",
+              variant: "toolbar",
+              selected: true,
+              className: "analysis-diff-mode-button",
+              attributes: 'role="tab" aria-selected="true"'
+            })}
+          </div>
+        `,
+        config: {
+          layouts: ["unified"],
+          defaultLayout: "unified",
+          showToolbar: false,
+          allowWrap: true,
+          showHunkNavigation: false,
+          allowContextExpansion: false
+        }
+      });
+      mount.replaceChildren(analysisNodeDiffPanelController.element);
+      analysisNodeDiffPanelController.revealFocusLine?.();
+    }
+
+    function openAnalysisNodeDiffSearch() {
+      if (!state.analysisDiffExpanded) return;
+      analysisNodeDiffPanelController?.openSearch();
+    }
+
+    function renderCodeAnalysisSkeleton() {
+      destroyAnalysisNodeDiffPanel();
+      document.getElementById("mainContent").innerHTML = `
+        <div class="page-scroll analysis-page-scroll analysis-page-skeleton" role="status" aria-busy="true" aria-label="正在读取代码分析">
+          <header class="analysis-skeleton-header" aria-hidden="true">
+            <div class="analysis-skeleton-title-row">
+              <span class="gn-skeleton" style="width: 96px; height: 24px;"></span>
+              <div class="analysis-skeleton-actions">
+                <span class="gn-skeleton" style="width: 178px; height: 38px;"></span>
+                <span class="gn-skeleton" style="width: 88px; height: 32px;"></span>
+                <span class="gn-skeleton" style="width: 96px; height: 32px;"></span>
+              </div>
+            </div>
+            <div class="analysis-skeleton-description">
+              <span class="gn-skeleton" style="width: 260px; height: 10px; border-radius: 999px;"></span>
+            </div>
+          </header>
+
+          <section class="analysis-skeleton-summary-grid" aria-hidden="true">
+            ${[56, 48, 52, 46, 50].map((width) => `
+              <article class="analysis-skeleton-summary-card">
+                <div class="analysis-skeleton-summary-label">
+                  <span class="gn-skeleton" style="width: ${width}%; height: 9px; border-radius: 999px;"></span>
+                </div>
+                <div class="analysis-skeleton-summary-value">
+                  <span class="gn-skeleton" style="width: 42%; height: 16px;"></span>
+                </div>
+              </article>
+            `).join("")}
+          </section>
+
+          <div class="analysis-skeleton-runtime" aria-hidden="true">
+            ${[168, 72, 88, 118, 104].map((width) => `
+              <span class="gn-skeleton" style="width: ${width}px; height: 28px;"></span>
+            `).join("")}
+          </div>
+
+          <div class="analysis-skeleton-workbench" aria-hidden="true">
+            <aside class="analysis-skeleton-navigation">
+              <div class="analysis-skeleton-navigation-header">
+                <div class="analysis-skeleton-heading-row">
+                  <span class="gn-skeleton" style="width: 72px; height: 13px;"></span>
+                  <span class="gn-skeleton" style="width: 68px; height: 9px; border-radius: 999px;"></span>
+                </div>
+                <div class="analysis-skeleton-tabs">
+                  <span class="gn-skeleton" style="height: 28px;"></span>
+                  <span class="gn-skeleton" style="height: 28px;"></span>
+                </div>
+                <span class="gn-skeleton" style="height: 32px;"></span>
+                <span class="gn-skeleton" style="height: 32px;"></span>
+              </div>
+              <div class="analysis-skeleton-navigation-list">
+                ${[76, 62, 82, 68, 72].map((width) => `
+                  <div class="analysis-skeleton-navigation-row">
+                    <div>
+                      <span class="gn-skeleton" style="width: 42px; height: 18px;"></span>
+                      <span class="gn-skeleton" style="width: ${width}%; height: 11px;"></span>
+                    </div>
+                    <div class="analysis-skeleton-navigation-meta">
+                      <span class="gn-skeleton" style="width: ${Math.max(44, width - 18)}%; height: 9px; border-radius: 999px;"></span>
+                    </div>
+                  </div>
+                `).join("")}
+              </div>
+            </aside>
+
+            <section class="analysis-skeleton-graph">
+              <div class="analysis-skeleton-graph-header">
+                <div class="analysis-skeleton-graph-heading">
+                  <span class="gn-skeleton" style="width: 58px; height: 13px;"></span>
+                  <span class="gn-skeleton" style="width: 148px; height: 9px; border-radius: 999px;"></span>
+                </div>
+                <span class="gn-skeleton" style="width: 146px; height: 28px;"></span>
+                <span class="gn-skeleton" style="width: 32px; height: 32px; border-radius: 50%;"></span>
+              </div>
+              <div class="analysis-skeleton-graph-body">
+                ${[2, 3, 2].map((nodeCount) => `
+                  <div class="analysis-skeleton-graph-column">
+                    ${Array.from({ length: nodeCount }, () => `
+                      <span class="gn-skeleton analysis-skeleton-graph-node" style="height: 72px;"></span>
+                    `).join("")}
+                  </div>
+                `).join("")}
+              </div>
+            </section>
+          </div>
+        </div>
+      `;
+      syncAccessibleHints();
+    }
+
+    function renderCodeAnalysis() {
+      if (state.analysisLoading) {
+        renderCodeAnalysisSkeleton();
+        return;
+      }
+      const chains = analysisChainsForCurrentScope();
+      const chain = selectedAnalysisChain();
+      if (chain && state.analysisSelectedChain !== chain.id) {
+        state.analysisSelectedChain = chain.id;
+      }
+      const selectedMatch = analysisNodeById(state.analysisSelectedNode);
+      const selected = selectedMatch?.node || null;
+      const graphSelected = selected || chain?.nodes[0] || null;
+      const workspaceScope = state.analysisScope === "workspace";
+      const summary = workspaceScope
+        ? { files: 468, nodes: 1286, edges: 1734, chains: 2, cached: 392 }
+        : { files: 17, nodes: 84, edges: 119, chains: 1, cached: 12 };
+      const runningButton = state.analysisRunning
+        ? renderButton({
+            label: "取消分析",
+            size: "small",
+            variant: "danger",
+            icon: icon("x"),
+            attributes: 'onclick="cancelCodeAnalysisPrototype()"'
+          })
+        : renderButton({
+            label: "重新分析",
+            size: "small",
+            variant: "primary",
+            icon: icon("refresh"),
+            disabled: !state.analysisEnabled,
+            attributes: 'onclick="runCodeAnalysisPrototype()"'
+          });
+
+      destroyAnalysisNodeDiffPanel();
+      document.getElementById("mainContent").innerHTML = `
+        <div class="page-scroll analysis-page-scroll">
+          <header class="analysis-page-header">
+            <div class="analysis-page-title-row">
+              <h1>代码分析</h1>
+              <div class="analysis-header-actions">
+                <div class="analysis-scope-switch" role="group" aria-label="代码分析范围">
+                  <button type="button" class="${state.analysisScope === "changed" ? "active" : ""}" aria-pressed="${state.analysisScope === "changed"}" ${state.analysisRunning ? "disabled" : ""} onclick="setAnalysisScope('changed')">变动代码</button>
+                  <button type="button" class="${state.analysisScope === "workspace" ? "active" : ""}" aria-pressed="${state.analysisScope === "workspace"}" ${state.analysisRunning ? "disabled" : ""} onclick="setAnalysisScope('workspace')">全部代码</button>
+                </div>
+                ${renderButton({
+                  label: "LSP 设置",
+                  size: "small",
+                  variant: "default",
+                  icon: icon("settings"),
+                  attributes: "onclick=\"setSettingsSection('analysis')\""
+                })}
+                ${runningButton}
+              </div>
+            </div>
+            <p>当前范围：${escapeHtml(currentWorkspaceSnapshot().name)}</p>
+          </header>
+
+          ${!state.analysisEnabled ? `
+            <div class="settings-inline-note">${icon("alert", 14)}代码分析已关闭。请前往 LSP 设置启用后再启动分析。</div>
+          ` : ""}
+
+          ${state.analysisRunning ? `
+            <section class="panel analysis-progress-panel" aria-label="代码分析进度">
+              <div class="analysis-progress-copy">
+                <span>正在分析<strong>${escapeHtml(state.analysisProgressLabel)}</strong></span>
+                <span>${state.analysisProgress}%</span>
+              </div>
+              <div class="analysis-progress-track"><span style="transform: scaleX(${Math.max(0.02, state.analysisProgress / 100)})"></span></div>
+            </section>
+          ` : ""}
+
+          <section class="analysis-summary-grid" aria-label="代码分析摘要">
+            ${[
+              ["分析文件", summary.files],
+              ["代码节点", summary.nodes],
+              ["关系边", summary.edges],
+              ["请求链", summary.chains],
+              ["缓存复用", summary.cached]
+            ].map(([label, value]) => `
+              <article class="panel analysis-summary-card">
+                <span>${label}</span>
+                <strong>${value}</strong>
+              </article>
+            `).join("")}
+          </section>
+
+          <div class="analysis-runtime-strip">
+            <span>分析时间 ${formatSnapshotDate(state.analysisGeneratedAt)}</span>
+            <span>${workspaceScope ? "全部代码" : "变动代码"}</span>
+            <span>耗时 ${workspaceScope ? "3.8 s" : "620 ms"}</span>
+            ${renderAnalysisLanguageServerState("typescript", "TS LSP")}
+            ${renderAnalysisLanguageServerState("java", "Java LSP")}
+            <details class="analysis-warning-panel">
+              <summary aria-label="查看 1 条分析提示">
+                ${icon("alert", 13)}
+                <span>1 条分析提示</span>
+              </summary>
+              <ul class="analysis-warning-menu menu-surface">
+                <li>部分动态调用无法静态解析，关系图中已标记为推测关系。</li>
+              </ul>
+            </details>
+          </div>
+
+          <div class="analysis-workbench">
+            <aside class="panel analysis-chain-panel${selected ? " is-node-detail" : ""}" id="analysisNavigationPanel">
+              ${selected
+                ? renderAnalysisNodePanel(chain, selected)
+                : renderAnalysisNavigationPanel(chains, chain)}
+            </aside>
+
+            <div class="analysis-graph-workspace${state.analysisGraphFullscreen ? " is-fullscreen" : ""}" id="analysisGraphWorkspace" aria-label="关系图工作区">
+              ${selected && state.analysisDiffExpanded ? renderAnalysisNodeDiffDrawer(selected) : ""}
+              <section class="panel analysis-graph-panel">
+                <header class="analysis-panel-heading">
+                  <div>
+                    <strong>关系图</strong>
+                    <span>${chain ? `${chain.method} ${escapeHtml(chain.route)}` : "代码节点上下游"}</span>
+                  </div>
+                  <div class="analysis-panel-heading-actions">
+                    <span class="status-pill neutral">自由拖动 · 滚轮缩放</span>
+                    ${renderButton({
+                      label: state.analysisGraphFullscreen ? "退出关系图全屏" : "全屏显示关系图",
+                      ariaLabel: state.analysisGraphFullscreen ? "退出关系图全屏" : "全屏显示关系图",
+                      title: state.analysisGraphFullscreen ? "退出全屏（Esc）" : "全屏显示",
+                      size: "small",
+                      variant: "icon",
+                      selected: state.analysisGraphFullscreen,
+                      icon: icon(state.analysisGraphFullscreen ? "collapse" : "expand", 14),
+                      className: "analysis-graph-fullscreen",
+                      attributes: `id="analysisGraphFullscreenButton" aria-pressed="${state.analysisGraphFullscreen}" onclick="toggleAnalysisGraphFullscreen()"`
+                    })}
+                  </div>
+                </header>
+                ${renderAnalysisFlow(chain, graphSelected)}
+              </section>
+            </div>
+          </div>
+        </div>
+      `;
+      syncAccessibleHints();
+      if (selected && state.analysisDiffExpanded) {
+        mountAnalysisNodeDiffPanel(selected);
+      }
+    }
+
+    function openCodeAnalysis() {
+      withCommitDraftGuard(() => {
+        const enteringAnalysis = state.view !== "analysis";
+        if (enteringAnalysis) {
+          window.clearTimeout(state.analysisLoadingTimer);
+          state.analysisLoading = true;
+        }
+        state.view = "analysis";
+        state.inspectorOpen = false;
+        renderMain();
+        if (enteringAnalysis) {
+          state.analysisLoadingTimer = window.setTimeout(() => {
+            state.analysisLoadingTimer = null;
+            state.analysisLoading = false;
+            if (state.view === "analysis") {
+              renderCodeAnalysis();
+            }
+          }, 650);
+        }
+      });
+    }
+
+    function renderAnalysisLanguageServerState(language, label) {
+      const installed = language === "typescript"
+        ? state.analysisTypeScriptInstalled
+        : state.analysisJavaInstalled;
+      if (installed) {
+        return `<span class="analysis-server-state connected">${label}：已连接</span>`;
+      }
+      const installing = state.analysisInstallingLanguage === language;
+      const installDisabled = state.analysisRunning || (
+        state.analysisInstallingLanguage &&
+        !installing
+      );
+      return `
+        <span class="analysis-server-state unavailable">
+          <span>${label}：未安装</span>
+          ${renderButton({
+            label: installing ? "安装中…" : "安装",
+            ariaLabel: `安装 ${label}`,
+            size: "small",
+            variant: "toolbar",
+            icon: icon("download", 12),
+            disabled: Boolean(installing || installDisabled),
+            className: "analysis-server-install",
+            attributes: `onclick="installAnalysisLanguageServer('${language}')"`
+          })}
+        </span>
+      `;
+    }
+
+    function installAnalysisLanguageServer(language) {
+      if (
+        !["typescript", "java"].includes(language) ||
+        state.analysisRunning ||
+        state.analysisInstallingLanguage
+      ) {
+        return;
+      }
+      state.analysisInstallingLanguage = language;
+      renderCodeAnalysis();
+      window.setTimeout(() => {
+        if (language === "typescript") {
+          state.analysisTypeScriptInstalled = true;
+        } else {
+          state.analysisJavaInstalled = true;
+        }
+        state.analysisInstallingLanguage = null;
+        renderCodeAnalysis();
+        showToast(
+          "Language Server 安装完成",
+          `${language === "typescript" ? "TypeScript" : "Java"} Language Server 已安装，正在重新分析。`,
+          "check"
+        );
+        runCodeAnalysisPrototype();
+      }, 1200);
+    }
+
+    function setAnalysisScope(scope) {
+      if (state.analysisRunning || !["changed", "workspace"].includes(scope)) return;
+      state.analysisScope = scope;
+      state.analysisFilter = "";
+      state.analysisNodeFilter = "";
+      state.analysisMethod = "all";
+      state.analysisNavigationMode = "chains";
+      const chain = analysisChains.find((candidate) => scope === "workspace" || candidate.changed);
+      state.analysisSelectedChain = chain?.id || "";
+      state.analysisSelectedNode = "";
+      state.analysisDiffExpanded = false;
+      resetAnalysisGraphViewState(chain);
+      renderCodeAnalysis();
+    }
+
+    function setAnalysisNavigationMode(mode) {
+      if (!["chains", "symbols"].includes(mode) || state.analysisNavigationMode === mode) return;
+      state.analysisNavigationMode = mode;
+      syncAnalysisNodeInspection();
+      const input = document.querySelector('[data-analysis-navigation-filter="true"]');
+      if (input instanceof HTMLInputElement) input.focus();
+    }
+
+    function setAnalysisFilter(value) {
+      state.analysisFilter = value;
+      const input = document.activeElement;
+      const selectionStart = input instanceof HTMLInputElement ? input.selectionStart : null;
+      syncAnalysisNodeInspection();
+      const nextInput = document.querySelector('[data-analysis-navigation-filter="true"]');
+      if (nextInput instanceof HTMLInputElement) {
+        nextInput.focus();
+        if (selectionStart !== null) {
+          nextInput.setSelectionRange(selectionStart, selectionStart);
+        }
+      }
+    }
+
+    function setAnalysisNodeFilter(value) {
+      state.analysisNodeFilter = value;
+      const input = document.activeElement;
+      const selectionStart = input instanceof HTMLInputElement ? input.selectionStart : null;
+      syncAnalysisNodeInspection();
+      const nextInput = document.querySelector('[data-analysis-navigation-filter="true"]');
+      if (nextInput instanceof HTMLInputElement) {
+        nextInput.focus();
+        if (selectionStart !== null) {
+          nextInput.setSelectionRange(selectionStart, selectionStart);
+        }
+      }
+    }
+
+    function setAnalysisMethod(method) {
+      if (!["all", "GET", "POST", "PUT", "DELETE", "PATCH"].includes(method)) return;
+      state.analysisMethod = method;
+      syncAnalysisNodeInspection();
+      document.querySelector(".analysis-method-menu > summary")?.focus();
+    }
+
+    function onAnalysisMethodMenuToggle(details) {
+      positionDetailsMenu(details, {
+        side: "bottom",
+        align: "start"
+      });
+      if (!details.open) return;
+      requestAnimationFrame(() => {
+        const items = [
+          ...details.querySelectorAll('[role="menuitemradio"]')
+        ];
+        const selected = items.find(
+          (item) => item.getAttribute("aria-checked") === "true"
+        );
+        (selected || items[0])?.focus();
+      });
+    }
+
+    function selectAnalysisChain(chainId) {
+      const chain = analysisChainsInCurrentScope().find((candidate) => candidate.id === chainId);
+      if (!chain) return;
+      state.analysisNavigationMode = "chains";
+      state.analysisSelectedChain = chain.id;
+      state.analysisSelectedNode = "";
+      state.analysisDiffExpanded = false;
+      resetAnalysisGraphViewState(chain);
+      renderCodeAnalysis();
+    }
+
+    function focusAnalysisNode(nodeId) {
+      const match = analysisNodeById(nodeId);
+      if (!match) return;
+      state.analysisNavigationMode = "symbols";
+      state.analysisSelectedChain = match.chain.id;
+      state.analysisSelectedNode = match.node.id;
+      state.analysisDiffExpanded = false;
+      resetAnalysisGraphViewState(match.chain, nodeId);
+      renderCodeAnalysis();
+    }
+
+    function inspectAnalysisNode(nodeId) {
+      const match = analysisNodeById(nodeId);
+      if (!match) return;
+      if (state.analysisSelectedNode !== nodeId) {
+        state.analysisDiffExpanded = false;
+      }
+      state.analysisSelectedNode = nodeId;
+      syncAnalysisNodeInspection();
+    }
+
+    function clearAnalysisNodeInspection() {
+      state.analysisSelectedNode = "";
+      state.analysisDiffExpanded = false;
+      syncAnalysisNodeInspection();
+    }
+
+    function toggleAnalysisNodeDiff() {
+      const selected = analysisNodeById(state.analysisSelectedNode)?.node;
+      if (!selected) {
+        state.analysisDiffExpanded = false;
+        return;
+      }
+      state.analysisDiffExpanded = !state.analysisDiffExpanded;
+      syncAnalysisNodeInspection();
+    }
+
+    function closeAnalysisNodeDiff() {
+      if (!state.analysisDiffExpanded) return;
+      state.analysisDiffExpanded = false;
+      syncAnalysisNodeInspection();
+    }
+
+    function syncAnalysisNodeInspection() {
+      if (state.view !== "analysis") return;
+      const panel = document.getElementById("analysisNavigationPanel");
+      const workspace = document.getElementById("analysisGraphWorkspace");
+      if (!panel || !workspace) return;
+      const chain = selectedAnalysisChain();
+      const selected = analysisNodeById(state.analysisSelectedNode)?.node || null;
+      const graphSelected = selected || chain?.nodes[0] || null;
+      const chains = analysisChainsForCurrentScope();
+      panel.classList.toggle("is-node-detail", Boolean(selected));
+      panel.innerHTML = selected
+        ? renderAnalysisNodePanel(chain, selected)
+        : renderAnalysisNavigationPanel(chains, chain);
+      document.querySelectorAll("[data-analysis-node-id]").forEach((element) => {
+        element.classList.toggle(
+          "selected",
+          element.getAttribute("data-analysis-node-id") === graphSelected?.id
+        );
+      });
+      destroyAnalysisNodeDiffPanel();
+      workspace.querySelector(".analysis-node-diff-drawer")?.remove();
+      if (selected && state.analysisDiffExpanded) {
+        workspace.insertAdjacentHTML("afterbegin", renderAnalysisNodeDiffDrawer(selected));
+        mountAnalysisNodeDiffPanel(selected);
+      }
+      syncAccessibleHints();
+    }
+
+    function resetAnalysisGraphViewState(chain, nodeId = "") {
+      const layout = analysisGraphLayout(chain);
+      const target = layout.nodes.find((positioned) => positioned.node.id === nodeId)
+        || layout.nodes[0];
+      state.analysisGraphZoom = 1;
+      state.analysisGraphPanX = target
+        ? layout.width / 2 - (target.x + layout.nodeWidth / 2)
+        : 0;
+      state.analysisGraphPanY = target
+        ? layout.height / 2 - (target.y + layout.nodeHeight / 2)
+        : 0;
+      state.analysisGraphPointer = null;
+    }
+
+    function syncAnalysisGraphTransform() {
+      const canvas = document.getElementById("analysisGraphCanvas");
+      const svg = document.querySelector(".analysis-graph-svg");
+      const zoomLabel = document.getElementById("analysisGraphZoomLabel");
+      const zoomInput = document.querySelector('.analysis-graph-controls input[type="range"]');
+      if (canvas) {
+        canvas.style.marginLeft = `${state.analysisGraphPanX}px`;
+        canvas.style.marginTop = `${state.analysisGraphPanY}px`;
+      }
+      if (svg) {
+        const baseWidth = Number(svg.getAttribute("data-base-width")) || 1;
+        const baseHeight = Number(svg.getAttribute("data-base-height")) || 1;
+        svg.setAttribute("width", String(baseWidth * state.analysisGraphZoom));
+        svg.setAttribute("height", String(baseHeight * state.analysisGraphZoom));
+      }
+      if (zoomLabel) zoomLabel.textContent = `${Math.round(state.analysisGraphZoom * 100)}%`;
+      if (zoomInput instanceof HTMLInputElement) {
+        zoomInput.value = String(Math.round(state.analysisGraphZoom * 100));
+      }
+    }
+
+    function setAnalysisGraphZoom(value, clientX = null, clientY = null) {
+      const nextZoom = Math.min(3, Math.max(0.25, Number(value) || 1));
+      const currentZoom = state.analysisGraphZoom;
+      if (Math.abs(nextZoom - currentZoom) < 0.001) return;
+      const viewport = document.getElementById("analysisGraphViewport");
+      if (viewport) {
+        const bounds = viewport.getBoundingClientRect();
+        const pointerX = Number.isFinite(clientX)
+          ? clientX - (bounds.left + bounds.width / 2)
+          : 0;
+        const pointerY = Number.isFinite(clientY)
+          ? clientY - (bounds.top + bounds.height / 2)
+          : 0;
+        const ratio = nextZoom / currentZoom;
+        state.analysisGraphPanX += (pointerX - state.analysisGraphPanX) * (1 - ratio);
+        state.analysisGraphPanY += (pointerY - state.analysisGraphPanY) * (1 - ratio);
+      }
+      state.analysisGraphZoom = nextZoom;
+      syncAnalysisGraphTransform();
+    }
+
+    function zoomAnalysisGraphBy(factor) {
+      setAnalysisGraphZoom(state.analysisGraphZoom * factor);
+    }
+
+    function zoomAnalysisGraphFromWheel(event) {
+      if (event.deltaY === 0) return;
+      event.preventDefault();
+      const factor = Math.exp(-event.deltaY * 0.0015);
+      setAnalysisGraphZoom(
+        state.analysisGraphZoom * factor,
+        event.clientX,
+        event.clientY
+      );
+    }
+
+    function beginAnalysisGraphPan(event) {
+      if (event.button !== 0 || event.target.closest("[data-graph-node]")) return;
+      event.preventDefault();
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      state.analysisGraphPointer = {
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startPanX: state.analysisGraphPanX,
+        startPanY: state.analysisGraphPanY,
+        moved: false
+      };
+      event.currentTarget.classList.add("is-panning");
+    }
+
+    function moveAnalysisGraphPan(event) {
+      const drag = state.analysisGraphPointer;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      const deltaX = event.clientX - drag.startClientX;
+      const deltaY = event.clientY - drag.startClientY;
+      if (!drag.moved && Math.hypot(deltaX, deltaY) >= 3) {
+        drag.moved = true;
+      }
+      if (!drag.moved) return;
+      state.analysisGraphPanX = drag.startPanX + deltaX;
+      state.analysisGraphPanY = drag.startPanY + deltaY;
+      syncAnalysisGraphTransform();
+    }
+
+    function endAnalysisGraphPan(event, cancelled = false) {
+      const drag = state.analysisGraphPointer;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+        event.currentTarget.releasePointerCapture?.(event.pointerId);
+      }
+      event.currentTarget.classList.remove("is-panning");
+      state.analysisGraphPointer = null;
+      if (!cancelled && !drag.moved) {
+        clearAnalysisNodeInspection();
+      }
+    }
+
+    function centerAnalysisGraphNode() {
+      const chain = selectedAnalysisChain();
+      const layout = analysisGraphLayout(chain);
+      const target = layout.nodes.find(
+        (positioned) => positioned.node.id === state.analysisSelectedNode
+      ) || layout.nodes[0];
+      if (!target) return;
+      state.analysisGraphPanX = (
+        layout.width / 2 - (target.x + layout.nodeWidth / 2)
+      ) * state.analysisGraphZoom;
+      state.analysisGraphPanY = (
+        layout.height / 2 - (target.y + layout.nodeHeight / 2)
+      ) * state.analysisGraphZoom;
+      syncAnalysisGraphTransform();
+    }
+
+    function resetAnalysisGraphView() {
+      resetAnalysisGraphViewState(selectedAnalysisChain());
+      syncAnalysisGraphTransform();
+    }
+
+    function toggleAnalysisGraphFullscreen(force) {
+      state.analysisGraphFullscreen =
+        typeof force === "boolean" ? force : !state.analysisGraphFullscreen;
+      const workspace = document.getElementById("analysisGraphWorkspace");
+      const button = document.getElementById("analysisGraphFullscreenButton");
+      workspace?.classList.toggle("is-fullscreen", state.analysisGraphFullscreen);
+      if (button) {
+        button.setAttribute(
+          "aria-label",
+          state.analysisGraphFullscreen ? "退出关系图全屏" : "全屏显示关系图"
+        );
+        button.setAttribute("aria-pressed", String(state.analysisGraphFullscreen));
+        button.setAttribute(
+          "title",
+          state.analysisGraphFullscreen ? "退出全屏（Esc）" : "全屏显示"
+        );
+        button.dataset.selected = String(state.analysisGraphFullscreen);
+        const iconSlot = button.querySelector(".gn-button__icon");
+        if (iconSlot) {
+          iconSlot.innerHTML = icon(
+            state.analysisGraphFullscreen ? "collapse" : "expand",
+            14
+          );
+        }
+      }
+    }
+
+    function runCodeAnalysisPrototype() {
+      if (!state.analysisEnabled || state.analysisRunning) return;
+      clearInterval(state.analysisTimer);
+      const steps = [
+        [12, "正在发现 Workspace 源文件"],
+        [35, "正在复用增量索引并读取变动文件"],
+        [58, "正在连接 TypeScript 与 Java Language Server"],
+        [78, "正在合并符号与调用层级"],
+        [92, "正在匹配前端请求与 Spring 路由"],
+        [100, "请求链与关系图已生成"]
+      ];
+      let index = 0;
+      state.analysisRunning = true;
+      state.analysisProgress = steps[0][0];
+      state.analysisProgressLabel = steps[0][1];
+      renderCodeAnalysis();
+      state.analysisTimer = setInterval(() => {
+        index += 1;
+        const step = steps[index];
+        if (!step) {
+          clearInterval(state.analysisTimer);
+          state.analysisTimer = null;
+          state.analysisRunning = false;
+          state.analysisGeneratedAt = new Date().toISOString();
+          if (state.view === "analysis") renderCodeAnalysis();
+          showToast("代码分析完成", "已更新请求链、关系图和 LSP 状态；原型未读取或写入真实项目。", "check");
+          return;
+        }
+        state.analysisProgress = step[0];
+        state.analysisProgressLabel = step[1];
+        if (state.view === "analysis") renderCodeAnalysis();
+      }, 420);
+    }
+
+    function cancelCodeAnalysisPrototype() {
+      clearInterval(state.analysisTimer);
+      state.analysisTimer = null;
+      state.analysisRunning = false;
+      state.analysisProgressLabel = "分析已取消";
+      renderCodeAnalysis();
+      showToast("代码分析已取消", "已停止后续读取和 Language Server 请求。", "x");
+    }
+
     function renderOperationCenter() {
       const activeWorkspaceSnapshot = currentWorkspaceSnapshot();
       document.getElementById("mainContent").innerHTML = `
         <div class="page-scroll operation-center-page">
           <div class="page-heading">
             <div>
-              <span class="eyebrow">${icon("operations", 13)}可观察后台任务</span>
               <h1 class="page-title">操作中心</h1>
               <p class="page-description">集中查看 Workspace 与仓库任务的排队、执行和终态；原型只展示状态，不会执行真实 Git 操作。</p>
             </div>
@@ -12567,7 +16072,7 @@
     function renderWorktreeFilterBar({
       counts,
       dirtyCount,
-      facets,
+      facet,
       onlyDirty,
       scope,
       activeCount = 0,
@@ -12576,16 +16081,16 @@
       const chips = WORKTREE_FACET_OPTIONS.map((option) => `
         <button
           type="button"
-          class="worktree-filter-chip${facets.includes(option.id) ? " selected" : ""}"
+          class="worktree-filter-chip${facet === option.id ? " selected" : ""}"
           data-worktree-facet="${option.id}"
-          aria-pressed="${facets.includes(option.id)}"
+          aria-pressed="${facet === option.id}"
           ${counts[option.id] === 0 ? "disabled" : ""}
           onclick="toggleWorktreeFacet('${scope}', '${option.id}')"
         >${option.label}<span class="worktree-filter-chip-count">${counts[option.id]}</span></button>
       `).join("");
       return `
-        <div class="worktree-filter-bar" role="group" aria-label="按状态筛选 Worktree">
-          <span class="worktree-filter-bar-label">状态</span>
+        <div class="worktree-filter-bar" role="group" aria-label="按类型筛选 Worktree">
+          <span class="worktree-filter-bar-label">类型</span>
           ${chips}
           <button
             type="button"
@@ -12603,11 +16108,9 @@
     }
 
     function toggleWorktreeFacet(scope, facet) {
-      const key = scope === "workspace" ? "workspaceWorktreeFacets" : "repoWorktreeFacets";
+      const key = scope === "workspace" ? "workspaceWorktreeFacet" : "repoWorktreeFacet";
       const current = state[key];
-      state[key] = current.includes(facet)
-        ? current.filter((candidate) => candidate !== facet)
-        : [...current, facet];
+      state[key] = current === facet ? "" : facet;
       renderWorktreeScope(scope);
       document.querySelector(`[data-worktree-facet="${facet}"]`)?.focus();
     }
@@ -12640,13 +16143,13 @@
 
     function clearWorktreeFilters(scope) {
       if (scope === "workspace") {
-        state.workspaceWorktreeFacets = [];
+        state.workspaceWorktreeFacet = "";
         state.workspaceWorktreeOnlyDirty = false;
         state.workspaceWorktreeRepo = "";
         state.workspaceWorktreeFilter = "";
         state.workspaceWorktreeFilterOpen = false;
       } else {
-        state.repoWorktreeFacets = [];
+        state.repoWorktreeFacet = "";
         state.repoWorktreeOnlyDirty = false;
         state.repoWorktreeFilter = "";
         state.repoWorktreeFilterOpen = false;
@@ -12711,9 +16214,11 @@
 
     function matchesWorktreeFilters(entry, options) {
       if (options.repo && entry.repo !== options.repo) return false;
-      if (options.facets.length) {
-        const facets = worktreeFacetIds(entry);
-        if (!facets.some((facet) => options.facets.includes(facet))) return false;
+      if (
+        options.facet &&
+        !worktreeFacetIds(entry).includes(options.facet)
+      ) {
+        return false;
       }
       if (options.onlyDirty && !(entry.changes > 0)) return false;
       return matchesWorktreeQuery(options.query, worktreeSearchValues(entry));
@@ -12723,7 +16228,7 @@
       return currentWorkspaceSnapshot().worktreeEntries.filter((entry) =>
         matchesWorktreeFilters(entry, {
           query: (state.workspaceWorktreeFilter || "").trim().toLowerCase(),
-          facets: state.workspaceWorktreeFacets,
+          facet: state.workspaceWorktreeFacet,
           onlyDirty: state.workspaceWorktreeOnlyDirty,
           repo: state.workspaceWorktreeRepo
         })
@@ -12757,7 +16262,7 @@
       const activeWorkspaceSnapshot = currentWorkspaceSnapshot();
       const visibleWorktrees = filteredWorkspaceWorktrees();
       const activeFilterCount =
-        state.workspaceWorktreeFacets.length +
+        (state.workspaceWorktreeFacet ? 1 : 0) +
         (state.workspaceWorktreeOnlyDirty ? 1 : 0) +
         (state.workspaceWorktreeRepo ? 1 : 0) +
         ((state.workspaceWorktreeFilter || "").trim() ? 1 : 0);
@@ -12768,20 +16273,30 @@
             <div class="worktree-toolbar">
               <span class="worktree-toolbar-title">${icon("worktree")}已登记 Worktrees</span>
               <span class="worktree-toolbar-count">共 ${activeWorkspaceSnapshot.worktreeEntries.length} 个${activeFilterCount === 0 ? "" : ` · 已筛出 ${visibleWorktrees.length} 个`}</span>
-              ${state.workspaceWorktreeFilterOpen ? `
-                <input
-                  id="workspaceWorktreeFilter"
-                  class="worktree-filter-input"
-                  type="text"
-                  aria-label="筛选跨仓 Worktree"
-                  autocomplete="off"
-                  spellcheck="false"
-                  placeholder="筛选分支、路径或状态"
-                  value="${escapeHtml(state.workspaceWorktreeFilter)}"
-                  oninput="filterWorkspaceWorktrees(this.value, this.selectionStart ?? this.value.length)"
-                  onkeydown="if (event.key === 'Escape') { event.preventDefault(); toggleWorkspaceWorktreeFilter(); }"
-                />
-              ` : ""}
+              ${state.workspaceWorktreeFilterOpen
+                ? renderInput({
+                    id: "workspaceWorktreeFilter",
+                    value: state.workspaceWorktreeFilter,
+                    placeholder: "筛选分支、路径或状态",
+                    size: "small",
+                    fullWidth: true,
+                    fieldClassName: "worktree-filter-field",
+                    inputClassName: "worktree-filter-input",
+                    leadingIcon: icon("search", 13),
+                    ariaLabel: "筛选跨仓 Worktree",
+                    autocomplete: "off",
+                    spellcheck: false,
+                    attributes: `oninput="filterWorkspaceWorktrees(this.value, this.selectionStart ?? this.value.length)" onkeydown="if (event.key === 'Escape') { event.preventDefault(); toggleWorkspaceWorktreeFilter(); }"`,
+                    clearButton: state.workspaceWorktreeFilter
+                      ? {
+                          icon: icon("x", 12),
+                          ariaLabel: "清除跨仓 Worktree 筛选",
+                          title: "清除跨仓 Worktree 筛选",
+                          attributes: `onclick="filterWorkspaceWorktrees('', 0)"`
+                        }
+                      : null
+                  })
+                : ""}
               ${renderButton({
                 label: "筛选",
                 size: "small",
@@ -12797,7 +16312,7 @@
                 activeWorkspaceSnapshot.worktreeEntries.map(worktreeFacetIds)
               ),
               dirtyCount: activeWorkspaceSnapshot.worktreeEntries.filter((entry) => entry.changes > 0).length,
-              facets: state.workspaceWorktreeFacets,
+              facet: state.workspaceWorktreeFacet,
               onlyDirty: state.workspaceWorktreeOnlyDirty,
               scope: "workspace",
               activeCount: activeFilterCount
@@ -12814,8 +16329,12 @@
     function workspaceWorktreeCard(entry) {
       const status = workspaceWorktreeStatus(entry);
       const tone = entry.prunable ? "red" : entry.detached ? "yellow" : entry.primary ? "green" : "neutral";
+      const cardClass = `worktree-card ${entry.primary ? "primary" : ""}${entry.prunable ? " prunable" : ""}`;
+      const cardInteraction = entry.prunable
+        ? `class="${cardClass}"`
+        : `role="button" tabindex="0" class="${cardClass}" onclick="showToast('sc_code Worktree', '${entry.path}', 'worktree')" onkeydown="activateOnKey(event)"`;
       return `
-        <article role="button" tabindex="0" class="worktree-card ${entry.primary ? "primary" : ""}" onclick="showToast('sc_code Worktree', '${entry.path}', 'worktree')" onkeydown="activateOnKey(event)">
+        <article ${cardInteraction}>
           <div class="worktree-card-head">
             <span class="worktree-symbol">${icon("worktree")}</span>
             <span>
@@ -12830,10 +16349,37 @@
             ${entry.exists ? "目录存在" : "目录不存在"}
             ${entry.changes > 0 ? `<span class="diff-add">${entry.changes} 项变更</span>` : ""}
             <span class="spacer"></span>
-            ${entry.prunable ? "" : `${icon("external", 16)}登记路径`}
+            ${entry.prunable
+              ? `<button
+                  type="button"
+                  class="worktree-clear-action"
+                  data-worktree-path="${escapeHtml(entry.path)}"
+                  data-worktree-repository="${escapeHtml(entry.repo || "当前仓库")}"
+                  ${entry.locked ? "disabled" : ""}
+                  title="${entry.locked ? "该失效登记已锁定，需先解锁后才能清除" : "预检并清除该仓库内所有失效 Worktree 登记；不会删除目录"}"
+                  onclick="event.stopPropagation(); previewPruneWorktree(event.currentTarget)"
+                >${icon("refresh", 14)}清除</button>`
+              : `${icon("external", 16)}登记路径`}
           </div>
         </article>
       `;
+    }
+
+    function previewPruneWorktree(trigger) {
+      if (!(trigger instanceof HTMLElement) || trigger.hasAttribute("disabled")) return;
+      const path = trigger.dataset.worktreePath || "失效 Worktree 登记";
+      const repository = trigger.dataset.worktreeRepository || "当前仓库";
+      openConfirmDialog({
+        title: "清除失效 Worktree 登记？",
+        description: `${path} 的目录已不存在。正式程序会先预检，并清除 ${repository} 中所有可清理的失效 Git 登记；不会递归删除仍存在的目录。`,
+        actionLabel: "确认清除",
+        onConfirm: () =>
+          showToast(
+            "清除预览已完成",
+            `${repository} 的失效登记已通过预检；设计预览未执行 Git 命令。`,
+            "refresh"
+          )
+      });
     }
 
     function renderWorkspaceInspector() {
@@ -13132,7 +16678,7 @@
             <section class="changes-layout">
               <div class="changes-file-pane">
             <div class="file-pane-header">
-              <strong>文件变更</strong>
+              <strong>变更文件</strong>
               <div class="file-pane-tools">
                 <label class="change-filter-field">
                   <input id="changeFilter" type="text" aria-label="筛选变更文件" autocomplete="off" spellcheck="false" placeholder="筛选变更…" value="${escapeHtml(state.changeFilter)}" oninput="filterChanges(this.value, this.selectionStart ?? this.value.length)" />
@@ -14188,31 +17734,21 @@
       selectedFile = null
     } = {}) {
       const titleIdAttribute = titleId ? ` id="${titleId}"` : "";
-      const detailMarkup = compact
-        ? `
-          <div class="history-commit-detail-content">
-            <div class="history-commit-overview">
-              <section class="inspector-section history-commit-summary">
-                <h3 class="selected-commit-title">${escapeHtml(commit.subject)}</h3>
-                <div class="history-commit-meta">
-                  <span>${escapeHtml(commit.author)}</span>
-                  <code>${escapeHtml(commit.hash)}</code>
-                  <span>${escapeHtml(commit.time)}</span>
-                </div>
-                ${commit.refs.length
-                  ? `
-                    <div class="commit-refs">
-                      ${commit.refs.map((ref) => `<span>${escapeHtml(ref)}</span>`).join("")}
-                    </div>
-                  `
-                  : ""}
-                <p class="selected-commit-body">${escapeHtml(commit.body)}</p>
-              </section>
-              <section class="history-commit-files" aria-label="提交修改文件">
-                <div class="history-commit-files-head">
-                  <strong>修改文件</strong>
-                  <span>${commit.files.length}</span>
-                </div>
+      const totalAdditions = commit.files.reduce(
+        (total, file) => total + file.additions,
+        0
+      );
+      const totalDeletions = commit.files.reduce(
+        (total, file) => total + file.deletions,
+        0
+      );
+      const historyCommitView =
+        state.historyCommitView === "files" ? "files" : "details";
+      const compactDetailMarkup =
+        historyCommitView === "files"
+          ? `
+            <section class="history-commit-files" aria-label="提交变更文件">
+              <div class="history-commit-file-browser">
                 <div class="history-commit-file-list">
                   ${commit.files.map((file) => {
                     const isSelected = file.path === selectedFile?.path;
@@ -14235,11 +17771,39 @@
                     `;
                   }).join("")}
                 </div>
+                <section class="history-commit-diff" aria-label="所选提交文件 Diff">
+                  ${renderHistoryCommitDiff(selectedFile)}
+                </section>
+              </div>
+            </section>
+          `
+          : `
+            <div class="history-commit-overview">
+              <section class="inspector-section history-commit-summary">
+                <h3 class="selected-commit-title">${escapeHtml(commit.subject)}</h3>
+                <div class="history-commit-meta">
+                  <span>${escapeHtml(commit.author)}</span>
+                  <code>${escapeHtml(commit.hash)}</code>
+                  <span>${escapeHtml(commit.time)}</span>
+                </div>
+                ${commit.refs.length
+                  ? `
+                    <div class="commit-refs">
+                      ${commit.refs.map((ref) => `<span>${escapeHtml(ref)}</span>`).join("")}
+                    </div>
+                  `
+                  : ""}
+                <p class="selected-commit-body">${escapeHtml(commit.body)}</p>
               </section>
             </div>
-            <section class="history-commit-diff" aria-label="所选提交文件 Diff">
-              ${renderHistoryCommitDiff(selectedFile)}
-            </section>
+          `;
+      const detailMarkup = compact
+        ? `
+          <div
+            class="history-commit-detail-content"
+            data-history-commit-view="${historyCommitView}"
+          >
+            ${compactDetailMarkup}
           </div>
         `
         : `
@@ -14276,16 +17840,65 @@
             </div>
           </section>
         `;
-      return `
-        <div class="inspector-head">
-          <div class="inspector-title"${titleIdAttribute}>${icon("commit")}提交详情</div>
-          ${showActions ? `
-            <div class="inspector-actions">
-              <button class="icon-button" aria-label="打开提交菜单" onclick="showToast('提交菜单', 'Cherry-pick、Revert、创建分支和复制信息位于这里。', 'more')">${icon("more")}</button>
-              <button class="icon-button inspector-close" aria-label="关闭提交详情" onclick="${closeAction}">${icon("x")}</button>
+      const headerMarkup = compact
+        ? `
+          <div class="inspector-head">
+            <div class="history-commit-heading">
+              <nav
+                class="history-commit-breadcrumb"
+                aria-label="提交详情导航"
+                ${titleIdAttribute}
+              >
+                <ol>
+                  <li>
+                    <button
+                      type="button"
+                      data-history-commit-view="details"
+                      ${historyCommitView === "details" ? 'aria-current="page"' : ""}
+                      onclick="setHistoryCommitView('details')"
+                    >
+                      ${icon("commit", 14)}
+                      <span>提交详情</span>
+                    </button>
+                  </li>
+                  <li class="history-commit-breadcrumb-separator" aria-hidden="true">›</li>
+                  <li>
+                    <button
+                      type="button"
+                      data-history-commit-view="files"
+                      ${historyCommitView === "files" ? 'aria-current="page"' : ""}
+                      onclick="setHistoryCommitView('files')"
+                    >
+                      <span>变更文件</span>
+                      <span class="history-commit-breadcrumb-count" aria-label="${commit.files.length} 个文件">${commit.files.length}</span>
+                    </button>
+                  </li>
+                </ol>
+              </nav>
+              ${historyCommitView === "files"
+                ? `
+                  <span class="history-commit-file-stats history-commit-heading-stats" aria-label="新增 ${totalAdditions} 行，删除 ${totalDeletions} 行">
+                    <strong>+${totalAdditions}</strong>
+                    <em>-${totalDeletions}</em>
+                  </span>
+                `
+                : ""}
             </div>
-          ` : ""}
-        </div>
+          </div>
+        `
+        : `
+          <div class="inspector-head">
+            <div class="inspector-title"${titleIdAttribute}>${icon("commit")}提交详情</div>
+            ${showActions ? `
+              <div class="inspector-actions">
+                <button class="icon-button" aria-label="打开提交菜单" onclick="showToast('提交菜单', 'Cherry-pick、Revert、创建分支和复制信息位于这里。', 'more')">${icon("more")}</button>
+                <button class="icon-button inspector-close" aria-label="关闭提交详情" onclick="${closeAction}">${icon("x")}</button>
+              </div>
+            ` : ""}
+          </div>
+        `;
+      return `
+        ${headerMarkup}
         ${detailMarkup}
       `;
     }
@@ -14507,9 +18120,9 @@
 
     function filteredRepoWorktreeRows(repo) {
       const query = (state.repoWorktreeFilter || "").trim().toLowerCase();
-      const facets = state.repoWorktreeFacets;
+      const facet = state.repoWorktreeFacet;
       return repositoryWorktreeRows(repo).filter((row) => {
-        if (facets.length && !row.facets.some((facet) => facets.includes(facet))) {
+        if (facet && !row.facets.includes(facet)) {
           return false;
         }
         if (state.repoWorktreeOnlyDirty && !(row.changes > 0)) return false;
@@ -14545,7 +18158,7 @@
       const worktreeRows = repositoryWorktreeRows(repo);
       const visibleWorktreeRows = filteredRepoWorktreeRows(repo);
       const repoWorktreeActiveFilterCount =
-        state.repoWorktreeFacets.length +
+        (state.repoWorktreeFacet ? 1 : 0) +
         (state.repoWorktreeOnlyDirty ? 1 : 0) +
         ((state.repoWorktreeFilter || "").trim() ? 1 : 0);
       const existingWorktrees = Math.max(0, repo.worktrees - repo.prunable);
@@ -14576,20 +18189,30 @@
             <div class="worktree-toolbar">
               <span class="worktree-toolbar-title">${icon("worktree")}已登记 Worktrees</span>
               <span class="worktree-toolbar-count">共 ${worktreeRows.length} 个${repoWorktreeActiveFilterCount === 0 ? "" : ` · 已筛出 ${visibleWorktreeRows.length} 个`}</span>
-              ${state.repoWorktreeFilterOpen ? `
-                <input
-                  id="repoWorktreeFilter"
-                  class="worktree-filter-input"
-                  type="text"
-                  aria-label="筛选 Worktree"
-                  autocomplete="off"
-                  spellcheck="false"
-                  placeholder="筛选分支、路径或状态"
-                  value="${escapeHtml(state.repoWorktreeFilter)}"
-                  oninput="filterRepoWorktrees(this.value, this.selectionStart ?? this.value.length)"
-                  onkeydown="if (event.key === 'Escape') { event.preventDefault(); toggleRepoWorktreeFilter(); }"
-                />
-              ` : ""}
+              ${state.repoWorktreeFilterOpen
+                ? renderInput({
+                    id: "repoWorktreeFilter",
+                    value: state.repoWorktreeFilter,
+                    placeholder: "筛选分支、路径或状态",
+                    size: "small",
+                    fullWidth: true,
+                    fieldClassName: "worktree-filter-field",
+                    inputClassName: "worktree-filter-input",
+                    leadingIcon: icon("search", 13),
+                    ariaLabel: "筛选 Worktree",
+                    autocomplete: "off",
+                    spellcheck: false,
+                    attributes: `oninput="filterRepoWorktrees(this.value, this.selectionStart ?? this.value.length)" onkeydown="if (event.key === 'Escape') { event.preventDefault(); toggleRepoWorktreeFilter(); }"`,
+                    clearButton: state.repoWorktreeFilter
+                      ? {
+                          icon: icon("x", 12),
+                          ariaLabel: "清除 Worktree 筛选",
+                          title: "清除 Worktree 筛选",
+                          attributes: `onclick="filterRepoWorktrees('', 0)"`
+                        }
+                      : null
+                  })
+                : ""}
               ${renderButton({
                 label: "筛选",
                 size: "small",
@@ -14602,7 +18225,7 @@
             ${renderWorktreeFilterBar({
               counts: worktreeFacetCounts(worktreeRows.map((row) => row.facets)),
               dirtyCount: worktreeRows.filter((row) => row.changes > 0).length,
-              facets: state.repoWorktreeFacets,
+              facet: state.repoWorktreeFacet,
               onlyDirty: state.repoWorktreeOnlyDirty,
               scope: "repo",
               activeCount: repoWorktreeActiveFilterCount
@@ -14751,6 +18374,9 @@
     function clearCommandSearch() {
       const input = document.getElementById("commandInput");
       if (!input) return;
+      clearTimeout(state.commandSearchLoadingTimer);
+      state.commandSearchLoadingTimer = null;
+      state.commandSearchLoading = false;
       input.value = "";
       renderCommandResults();
       input.focus();
@@ -14793,6 +18419,7 @@
         state.selectedCommit === hash;
       if (togglingSelectedHistoryCommit) {
         state.historyDetailOpen = false;
+        state.historyCommitView = "details";
       } else {
         if (state.selectedCommit !== hash) {
           state.historySelectedFile = "";
@@ -14800,6 +18427,7 @@
         state.selectedCommit = hash;
         if (state.tab === "history") {
           state.historyDetailOpen = true;
+          state.historyCommitView = "details";
         }
       }
       if (state.tab === "history") {
@@ -14807,6 +18435,20 @@
       } else {
         renderRepositoryOverview();
       }
+    }
+
+    function setHistoryCommitView(view) {
+      if (view !== "details" && view !== "files") return;
+      if (state.historyCommitView === view) return;
+      state.historyCommitView = view;
+      renderHistory();
+      requestAnimationFrame(() => {
+        document
+          .querySelector(
+            `.history-commit-breadcrumb button[data-history-commit-view="${view}"]`
+          )
+          ?.focus({ preventScroll: true });
+      });
     }
 
     function selectHistoryCommitFile(path) {
@@ -14862,6 +18504,7 @@
         state.repositoryTab = tab;
         state.selectedCommit = repo.head;
         state.historyDetailOpen = false;
+        state.historyCommitView = "details";
         state.selectedFile =
           requestedFile?.path || changedFiles[0]?.path || "";
         state.pendingChangeRevealPath =
@@ -14873,7 +18516,7 @@
           repositoryStashes[0]?.hash || "";
         state.repoWorktreeFilter = "";
         state.repoWorktreeFilterOpen = false;
-        state.repoWorktreeFacets = [];
+        state.repoWorktreeFacet = "";
         state.repoWorktreeOnlyDirty = false;
         state.diffHunkContexts = {};
         clearTimeout(state.diffLoadingTimer);
@@ -14936,6 +18579,7 @@
         if (tab === "history") {
           state.historyDetailOpen = false;
           state.historySelectedFile = "";
+          state.historyCommitView = "details";
         }
         if (tab !== "changes") resetDiffSearch();
         renderMain();
@@ -15130,6 +18774,9 @@
       overlay.classList.add("open");
       overlay.setAttribute("aria-hidden", "false");
       const input = document.getElementById("commandInput");
+      clearTimeout(state.commandSearchLoadingTimer);
+      state.commandSearchLoadingTimer = null;
+      state.commandSearchLoading = false;
       input.value = "";
       renderCommandResults();
       focusAfterInertSettles(input, state.paletteReturnFocus);
@@ -15141,6 +18788,9 @@
       overlay.classList.remove("open");
       overlay.setAttribute("aria-hidden", "true");
       overlay.inert = true;
+      clearTimeout(state.commandSearchLoadingTimer);
+      state.commandSearchLoadingTimer = null;
+      state.commandSearchLoading = false;
       document.querySelector(".app-shell").inert = false;
       updateInspectorState();
       if (state.paletteReturnFocus?.isConnected) {
@@ -15378,15 +19028,59 @@
         .slice(0, 10);
     }
 
+    function queueCommandResults() {
+      const query = (document.getElementById("commandInput")?.value || "")
+        .trim();
+      clearTimeout(state.commandSearchLoadingTimer);
+      state.commandSearchLoadingTimer = null;
+
+      if (!query) {
+        state.commandSearchLoading = false;
+        renderCommandResults();
+        return;
+      }
+
+      state.commandSearchLoading = true;
+      renderCommandResults();
+      state.commandSearchLoadingTimer = setTimeout(() => {
+        state.commandSearchLoadingTimer = null;
+        state.commandSearchLoading = false;
+        renderCommandResults();
+      }, 500);
+    }
+
+    function renderCommandResultsSkeleton() {
+      return `
+        <div
+          class="command-results-skeleton"
+          role="status"
+          aria-label="正在读取有变更仓库的文件"
+        >
+          ${[74, 58, 82, 66].map((width) => `
+            <div class="command-result-skeleton" aria-hidden="true">
+              <span class="gn-skeleton" style="width: 32px; height: 32px; border-radius: 50%;"></span>
+              <span class="command-result-skeleton-copy">
+                <span class="gn-skeleton" style="width: ${width}%; height: 10px;"></span>
+                <span class="gn-skeleton" style="width: ${Math.max(46, width - 18)}%; height: 8px; border-radius: 999px;"></span>
+              </span>
+              <span class="gn-skeleton" style="width: 58px; height: 10px; border-radius: 999px;"></span>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+
     function renderCommandResults() {
       const query = (document.getElementById("commandInput")?.value || "")
         .trim()
         .toLocaleLowerCase();
       const searchableRepositories = visibleCommandRepositories();
-      const changeResults = changedFileSearchResults(
-        query,
-        searchableRepositories
-      );
+      const changeResults = state.commandSearchLoading
+        ? []
+        : changedFileSearchResults(
+            query,
+            searchableRepositories
+          );
       const repoResults = searchableRepositories
         .filter((repo) => {
           const searchText = [
@@ -15403,8 +19097,14 @@
         { title: "重新扫描 Workspace", sub: "发现新增、移动或移除的仓库", icon: "refresh", action: "runOperation('scan')" },
         { title: "切换深色 / 浅色主题", sub: "修改当前界面外观", icon: "sun", action: "toggleTheme()" }
       ].filter((command) => !query || `${command.title} ${command.sub}`.toLowerCase().includes(query));
+      const showSearchSkeleton =
+        state.commandSearchLoading &&
+        Boolean(query) &&
+        repoResults.length === 0 &&
+        commands.length === 0;
 
       document.getElementById("commandResults").innerHTML = `
+        ${showSearchSkeleton ? renderCommandResultsSkeleton() : ""}
         ${changeResults.length ? '<div class="command-group-label">变更文件</div>' : ""}
         ${changeResults.map(({ repo, file, displayName }) => `
           <button
@@ -15439,7 +19139,10 @@
             <kbd class="command-key">Enter</kbd>
           </button>
         `).join("")}
-        ${!changeResults.length && !repoResults.length && !commands.length ? `
+        ${state.commandSearchLoading && !showSearchSkeleton ? `
+          <div class="command-index-status" role="status">正在继续读取其他有变更仓库…</div>
+        ` : ""}
+        ${!state.commandSearchLoading && !changeResults.length && !repoResults.length && !commands.length ? `
           <div class="empty-state command-empty-state">
             <div>
               <div class="empty-state-icon">${icon("search", 22)}</div>
@@ -15597,6 +19300,15 @@
 
     document.addEventListener("keydown", (event) => {
       if (handleMenuKeyboard(event)) return;
+      if (
+        event.key === "Escape" &&
+        state.view === "analysis" &&
+        state.analysisGraphFullscreen
+      ) {
+        event.preventDefault();
+        toggleAnalysisGraphFullscreen(false);
+        return;
+      }
       if (
         (event.ctrlKey || event.metaKey) &&
         event.key.toLowerCase() === "f" &&

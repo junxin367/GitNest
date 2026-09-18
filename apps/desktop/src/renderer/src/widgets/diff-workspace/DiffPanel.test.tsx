@@ -98,6 +98,7 @@ describe("DiffPanel configuration", () => {
     | undefined;
   let createObjectUrlMock: ReturnType<typeof vi.fn>;
   let revokeObjectUrlMock: ReturnType<typeof vi.fn>;
+  let scrollIntoViewMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.stubGlobal("React", React);
@@ -113,12 +114,13 @@ describe("DiffPanel configuration", () => {
       configurable: true,
       value: vi.fn()
     });
+    scrollIntoViewMock = vi.fn();
     Object.defineProperty(
       HTMLElement.prototype,
       "scrollIntoView",
       {
         configurable: true,
-        value: vi.fn()
+        value: scrollIntoViewMock
       }
     );
     createObjectUrlDescriptor = Object.getOwnPropertyDescriptor(
@@ -225,6 +227,69 @@ describe("DiffPanel configuration", () => {
     expect(container.textContent).not.toContain("--- a/");
     expect(container.textContent).not.toContain("+++ b/");
     expect(findButton(container, "打开独立 Diff")).toBeDefined();
+  });
+
+  it("opens controlled search even when global shortcuts are disabled", () => {
+    const onSearchOpenChange = vi.fn();
+    act(() => {
+      root.render(
+        <DiffPanel
+          config={repositoryDiffWorkspaceConfiguration.document}
+          content={content}
+          keyboardShortcutsEnabled={false}
+          onSearchOpenChange={onSearchOpenChange}
+          path="src/App.tsx"
+          scopeKey="unstaged:src/App.tsx"
+          searchOpen
+        />
+      );
+    });
+
+    const input = container.querySelector<HTMLInputElement>(
+      'input[aria-label="搜索文本"]'
+    );
+    expect(input).not.toBeNull();
+    expect(document.activeElement).toBe(input);
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          ctrlKey: true,
+          key: "f"
+        })
+      );
+    });
+    expect(onSearchOpenChange).not.toHaveBeenCalledWith(true);
+  });
+
+  it("focuses the added side of a replacement line and scrolls it into view", () => {
+    act(() => {
+      root.render(
+        <DiffPanel
+          config={repositoryDiffWorkspaceConfiguration.document}
+          content={content}
+          focusLine={1}
+          path="src/App.tsx"
+          scopeKey="unstaged:src/App.tsx"
+        />
+      );
+    });
+
+    const focusedRows = container.querySelectorAll<HTMLElement>(
+      '[data-diff-viewer-focus-line="true"]'
+    );
+    expect(focusedRows).toHaveLength(1);
+    expect(focusedRows[0]?.textContent).toContain(
+      "const newValue = true;"
+    );
+    expect(focusedRows[0]?.getAttribute("aria-current")).toBe(
+      "location"
+    );
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({
+      block: "center",
+      inline: "nearest"
+    });
   });
 
   it("renders a diff-shaped skeleton while content is loading", () => {

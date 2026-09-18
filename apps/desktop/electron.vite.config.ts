@@ -35,6 +35,10 @@ const designSystemEntry = resolve(
   workspaceRoot,
   "packages/design-system/src/index.ts"
 );
+const codeAnalysisEntry = resolve(
+  workspaceRoot,
+  "packages/code-analysis/src/index.ts"
+);
 const designSystemTokens = resolve(
   workspaceRoot,
   "packages/design-system/src/tokens/tokens.css"
@@ -46,6 +50,7 @@ export default defineConfig({
       externalizeDepsPlugin({
         exclude: [
           "@gitnest/application",
+          "@gitnest/code-analysis",
           "@gitnest/contracts",
           "@gitnest/git-cli",
           "@gitnest/git-core",
@@ -56,6 +61,10 @@ export default defineConfig({
     ],
     resolve: {
       alias: [
+        {
+          find: /^@gitnest\/code-analysis$/,
+          replacement: codeAnalysisEntry
+        },
         {
           find: /^@gitnest\/application$/,
           replacement: applicationEntry

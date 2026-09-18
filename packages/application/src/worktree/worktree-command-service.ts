@@ -942,7 +942,7 @@ export class WorktreeCommandService {
                 worktreeId: workspaceWorktree.id
               }
             : context.anchorTarget,
-          summary: "Prune 失效 Worktree 登记",
+          summary: "清除失效 Worktree 登记",
           detail: `${worktree.path}${
             worktree.pruneReason
               ? `；原因：${worktree.pruneReason}`
@@ -963,7 +963,7 @@ export class WorktreeCommandService {
           code: "PRUNE_REGISTRATION",
           severity: "warning",
           message:
-            "Prune 只清理上方列出的 Git 登记，不会递归删除仍存在的目录。"
+            "清除只会移除上方列出的失效 Git 登记，不会递归删除仍存在的目录。"
         }
       ],
       confirmationRequired: true,

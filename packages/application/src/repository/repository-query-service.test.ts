@@ -210,6 +210,7 @@ describe("RepositoryQueryService", () => {
         stashRef: "stash@{0}",
         path: "src/app.ts",
         contextLines: 13,
+        includeMedia: true,
         signal: expect.any(AbortSignal)
       }
     ]);
@@ -241,6 +242,7 @@ describe("RepositoryQueryService", () => {
         commitHash: "abcdef",
         path: "src/app.ts",
         contextLines: 13,
+        includeMedia: true,
         signal: expect.any(AbortSignal)
       }
     ]);
@@ -275,6 +277,7 @@ class FakeGitClient
     commitHash: string;
     path: string;
     contextLines: number | undefined;
+    includeMedia: boolean | undefined;
     signal: AbortSignal;
   }> = [];
   branchCalls = 0;
@@ -293,6 +296,7 @@ class FakeGitClient
     stashRef: string;
     path: string;
     contextLines: number | undefined;
+    includeMedia: boolean | undefined;
     signal: AbortSignal;
   }> = [];
   readonly snapshotStarted: Promise<void>;
@@ -407,6 +411,7 @@ class FakeGitClient
       commitHash: options.commitHash,
       path: options.path,
       contextLines: options.contextLines,
+      includeMedia: options.includeMedia,
       signal:
         options.signal ?? new AbortController().signal
     });
@@ -468,6 +473,7 @@ class FakeGitClient
       stashRef: options.stashRef,
       path: options.path,
       contextLines: options.contextLines,
+      includeMedia: options.includeMedia,
       signal:
         options.signal ?? new AbortController().signal
     });

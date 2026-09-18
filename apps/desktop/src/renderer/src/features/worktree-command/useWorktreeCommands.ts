@@ -334,7 +334,7 @@ export function useWorktreeCommands(
   };
 }
 
-export function isWorktreeOperation(
+function isWorktreeOperation(
   kind: WorkspaceOperationDto["kind"]
 ): boolean {
   return [
@@ -357,7 +357,7 @@ export function worktreeCommandLabel(
     unlock: "解锁 Worktree",
     move: "移动 Worktree",
     repair: "修复 Worktree 登记",
-    prune: "Prune Worktree 登记",
+    prune: "清除失效 Worktree 登记",
     remove: "移除 Worktree"
   }[type];
 }

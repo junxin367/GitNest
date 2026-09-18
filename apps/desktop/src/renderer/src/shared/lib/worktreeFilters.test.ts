@@ -35,9 +35,9 @@ describe("worktree filters", () => {
   });
 
   it("combines facet, repository, dirty and query filters", () => {
-    const filters = {
+    const filters: WorktreeFilterState = {
       ...createWorktreeFilterState(),
-      facets: ["detached"] as const
+      facet: "detached"
     };
     const detached = worktree({
       isDetached: true,
@@ -47,17 +47,10 @@ describe("worktree filters", () => {
     const linked = worktree({ id: "linked" });
 
     expect(
-      matchesWorktreeFilters(
-        detached,
-        undefined,
-        { ...filters, facets: [...filters.facets] }
-      )
+      matchesWorktreeFilters(detached, undefined, filters)
     ).toBe(true);
     expect(
-      matchesWorktreeFilters(linked, undefined, {
-        ...filters,
-        facets: [...filters.facets]
-      })
+      matchesWorktreeFilters(linked, undefined, filters)
     ).toBe(false);
 
     const dirtyFilters = {
@@ -95,22 +88,17 @@ describe("worktree filters", () => {
     ).toBe(false);
   });
 
-  it("counts active filters and toggles facets", () => {
+  it("counts active filters and keeps the selected type single", () => {
     const filters: WorktreeFilterState = {
-      facets: ["detached"],
+      facet: "detached",
       onlyDirty: true,
       query: "core",
       repositoryId: "repo"
     };
     expect(activeWorktreeFilterCount(filters)).toBe(4);
 
-    expect(toggleWorktreeFacet(["detached"], "locked")).toEqual([
-      "detached",
-      "locked"
-    ]);
-    expect(toggleWorktreeFacet(["detached", "locked"], "detached")).toEqual(
-      ["locked"]
-    );
+    expect(toggleWorktreeFacet("detached", "locked")).toBe("locked");
+    expect(toggleWorktreeFacet("detached", "detached")).toBeNull();
   });
 
   it("treats only dirty worktree snapshots as dirty", () => {

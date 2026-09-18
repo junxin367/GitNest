@@ -1,10 +1,10 @@
+import { createHash } from "node:crypto";
+
 import type {
   GitClient,
   RepositorySnapshot
 } from "@gitnest/git-core";
 import {
-  findTargetEntry,
-  getEntryDefaultTarget,
   listWorkspaceTargets,
   repositoryTargetKey,
   repositoryTargetsEqual,
@@ -210,6 +210,10 @@ export class WorkspaceRuntimeService {
   readonly #snapshots = new Map<
     string,
     RepositoryStatusSnapshot
+  >();
+  readonly #snapshotContentSignatures = new Map<
+    string,
+    string
   >();
   readonly #inFlight = new Map<
     string,
@@ -840,7 +844,11 @@ export class WorkspaceRuntimeService {
         const key = repositoryTargetKey(target);
 
         try {
-          const snapshot = await this.#refreshTarget(target);
+          const snapshot = await this.#refreshTarget(
+            target,
+            reason !== "heartbeat" ||
+              this.#monitor.mode === "polling"
+          );
           if (this.#targetStillAvailable(target)) {
             this.#snapshots.set(key, snapshot);
           }
@@ -899,7 +907,8 @@ export class WorkspaceRuntimeService {
   }
 
   #refreshTarget(
-    target: RepositoryTarget
+    target: RepositoryTarget,
+    forceContentVersion: boolean
   ): Promise<RepositoryStatusSnapshot> {
     const key = repositoryTargetKey(target);
     const existing = this.#inFlight.get(key);
@@ -909,7 +918,12 @@ export class WorkspaceRuntimeService {
     }
 
     const promise = this.#limiter
-      .run(() => this.#readTargetSnapshot(target))
+      .run(() =>
+        this.#readTargetSnapshot(
+          target,
+          forceContentVersion
+        )
+      )
       .finally(() => {
         this.#inFlight.delete(key);
       });
@@ -918,7 +932,8 @@ export class WorkspaceRuntimeService {
   }
 
   async #readTargetSnapshot(
-    target: RepositoryTarget
+    target: RepositoryTarget,
+    forceContentVersion: boolean
   ): Promise<RepositoryStatusSnapshot> {
     const workspace = this.#workspace as Workspace;
     const worktree = workspace.worktrees.find(
@@ -933,7 +948,23 @@ export class WorkspaceRuntimeService {
 
     const snapshot =
       await this.#gitClient.readRepositorySnapshot(worktree.path);
-    return mapStatusSnapshot(target, snapshot);
+    const key = repositoryTargetKey(target);
+    const signature = repositorySnapshotContentSignature(snapshot);
+    const existingSignature =
+      this.#snapshotContentSignatures.get(key);
+    const existing = this.#snapshots.get(key);
+    const contentVersion =
+      existing?.contentVersion ?? 0;
+    const nextContentVersion =
+      forceContentVersion || existingSignature !== signature
+        ? contentVersion + 1
+        : contentVersion;
+    this.#snapshotContentSignatures.set(key, signature);
+    return mapStatusSnapshot(
+      target,
+      snapshot,
+      nextContentVersion
+    );
   }
 
   async #executeWorktreeMutation<Result>(
@@ -1302,7 +1333,7 @@ export class WorkspaceRuntimeService {
 
         try {
           const snapshot = await this.#limiter.run(() =>
-            this.#readTargetSnapshot(target)
+            this.#readTargetSnapshot(target, true)
           );
           if (this.#targetStillAvailable(target)) {
             this.#snapshots.set(key, snapshot);
@@ -1395,6 +1426,7 @@ export class WorkspaceRuntimeService {
     for (const key of this.#snapshots.keys()) {
       if (!available.has(key)) {
         this.#snapshots.delete(key);
+        this.#snapshotContentSignatures.delete(key);
       }
     }
 
@@ -1945,7 +1977,8 @@ function uniqueTargets(
 
 function mapStatusSnapshot(
   target: RepositoryTarget,
-  snapshot: RepositorySnapshot
+  snapshot: RepositorySnapshot,
+  contentVersion: number
 ): RepositoryStatusSnapshot {
   return {
     ...target,
@@ -1958,10 +1991,57 @@ function mapStatusSnapshot(
     unstaged: snapshot.unstaged,
     untracked: snapshot.untracked,
     conflicted: snapshot.conflicted,
+    contentVersion,
     refreshPending: false,
     stale: false,
     refreshedAt: snapshot.refreshedAt
   };
+}
+
+function repositorySnapshotContentSignature(
+  snapshot: RepositorySnapshot
+): string {
+  const hash = createHash("sha256");
+  hash.update(
+    JSON.stringify([
+      snapshot.branch ?? "",
+      snapshot.head,
+      snapshot.upstream ?? "",
+      snapshot.ahead,
+      snapshot.behind,
+      snapshot.staged,
+      snapshot.unstaged,
+      snapshot.untracked,
+      snapshot.conflicted
+    ])
+  );
+  const changes = [...snapshot.changes].sort(
+    (left, right) =>
+      left.path.localeCompare(right.path) ||
+      (left.originalPath ?? "").localeCompare(
+        right.originalPath ?? ""
+      ) ||
+      left.indexStatus.localeCompare(right.indexStatus) ||
+      left.worktreeStatus.localeCompare(right.worktreeStatus)
+  );
+  for (const change of changes) {
+    hash.update(
+      JSON.stringify([
+        change.path,
+        change.originalPath ?? "",
+        change.indexStatus,
+        change.worktreeStatus,
+        change.kind,
+        change.stagedStats?.additions ?? null,
+        change.stagedStats?.deletions ?? null,
+        change.unstagedStats?.additions ?? null,
+        change.unstagedStats?.deletions ?? null,
+        change.untrackedStats?.additions ?? null,
+        change.untrackedStats?.deletions ?? null
+      ])
+    );
+  }
+  return hash.digest("base64url");
 }
 
 function createPendingSnapshot(

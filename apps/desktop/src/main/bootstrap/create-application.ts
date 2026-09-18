@@ -4,14 +4,12 @@ import { registerIpcHandlers } from "../ipc/register-ipc";
 import { createMainWindow } from "../windows/main-window";
 import { registerServices } from "./register-services";
 
-let mainWindow: BrowserWindow | null = null;
-
 export async function createApplication(): Promise<void> {
   await app.whenReady();
 
   const services = registerServices();
   registerIpcHandlers(services);
-  mainWindow = await createMainWindow(
+  await createMainWindow(
     services.windowState,
     services.diagnostics
   );
@@ -35,22 +33,51 @@ export async function createApplication(): Promise<void> {
       .catch(() => undefined);
   });
 
-  app.on("before-quit", () => {
-    void services.workspace
-      .dispose()
-      .catch((error) =>
-        services.diagnostics.warning(
-          "workspace.dispose-failed",
-          { error }
-        )
-      )
-      .catch(() => undefined);
-    void services.diagnostics
-      .info("application.before-quit", {
-        windowCount: BrowserWindow.getAllWindows().length
-      })
-      .then(() => services.diagnostics.flush())
-      .catch(() => undefined);
+  let shutdownStarted = false;
+  let shutdownComplete = false;
+  app.on("before-quit", (event) => {
+    if (shutdownComplete) {
+      return;
+    }
+    event.preventDefault();
+    if (shutdownStarted) {
+      return;
+    }
+    shutdownStarted = true;
+    void (async () => {
+      try {
+        const [codeAnalysisResult, workspaceResult] =
+          await Promise.allSettled([
+            services.codeAnalysis.dispose(),
+            services.workspace.dispose()
+          ]);
+        if (codeAnalysisResult.status === "rejected") {
+          await services.diagnostics
+            .warning("code-analysis.dispose-failed", {
+              error: codeAnalysisResult.reason
+            })
+            .catch(() => undefined);
+        }
+        if (workspaceResult.status === "rejected") {
+          await services.diagnostics
+            .warning("workspace.dispose-failed", {
+              error: workspaceResult.reason
+            })
+            .catch(() => undefined);
+        }
+        await services.diagnostics
+          .info("application.before-quit", {
+            windowCount: BrowserWindow.getAllWindows().length
+          })
+          .catch(() => undefined);
+        await services.diagnostics
+          .flush()
+          .catch(() => undefined);
+      } finally {
+        shutdownComplete = true;
+        app.quit();
+      }
+    })();
   });
 
   app.on("activate", () => {
@@ -58,9 +85,7 @@ export async function createApplication(): Promise<void> {
       void createMainWindow(
         services.windowState,
         services.diagnostics
-      ).then((window) => {
-        mainWindow = window;
-      }).catch((error) =>
+      ).catch((error) =>
         services.diagnostics.error(
           "window.create-failed",
           { error }
@@ -74,8 +99,4 @@ export async function createApplication(): Promise<void> {
       app.quit();
     }
   });
-}
-
-export function getMainWindow(): BrowserWindow | null {
-  return mainWindow;
 }

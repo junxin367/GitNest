@@ -213,7 +213,8 @@ AI Key rules:
 - a non-empty `apiKey` replaces it;
 - an empty or whitespace-only `apiKey` is rejected by the save validator;
 - clearing uses a dedicated request with `confirmed: true`;
-- after a successful save, the Renderer clears its Key input;
+- after a successful save, the Renderer keeps the current Key draft for the
+  active settings session and lets the user show or hide it;
 - test requests may carry a newly typed Key transiently; otherwise they
   use the saved Key;
 - Key values never appear in IPC responses, diagnostic events, error

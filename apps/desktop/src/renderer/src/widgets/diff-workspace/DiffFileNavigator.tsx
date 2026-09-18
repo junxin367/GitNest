@@ -749,7 +749,7 @@ export function DiffFileNavigator({
   return (
     <>
       <header className="diff-workspace-sidebar-header">
-        <strong>文件变更</strong>
+        <strong>变更文件</strong>
         <div className="diff-workspace-sidebar-tools">
           <Input
             aria-label="筛选变更文件"

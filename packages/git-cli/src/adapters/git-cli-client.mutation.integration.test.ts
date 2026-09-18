@@ -11,8 +11,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
-  createTemporaryDirectoryFixture,
-  type TemporaryDirectoryFixture
+  createTemporaryDirectoryFixture
 } from "@gitnest/testkit";
 
 import { GitCliClient } from "./git-cli-client";

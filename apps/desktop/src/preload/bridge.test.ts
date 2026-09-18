@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   IPC_CHANNELS,
+  type CodeAnalysisStateDto,
   type IpcInvoke,
   type WorkspaceRuntimeStateDto
 } from "@gitnest/contracts";
@@ -58,6 +59,9 @@ describe("createGitNestBridge", () => {
     let stateListener:
       | ((state: WorkspaceRuntimeStateDto) => void)
       | undefined;
+    let analysisStateListener:
+      | ((state: CodeAnalysisStateDto) => void)
+      | undefined;
     const bridge = createGitNestBridge(
       invoke,
       () => "C:\\workspace",
@@ -66,9 +70,34 @@ describe("createGitNestBridge", () => {
         return () => {
           stateListener = undefined;
         };
+      },
+      (listener) => {
+        analysisStateListener = listener;
+        return () => {
+          analysisStateListener = undefined;
+        };
       }
     );
 
+    await bridge.codeAnalysis.getState();
+    await bridge.codeAnalysis.start({
+      scope: "changed"
+    });
+    await bridge.codeAnalysis.cancel({
+      analysisId: "analysis-1"
+    });
+    await bridge.codeAnalysis.getSnapshot();
+    await bridge.codeAnalysis.readFile({
+      nodeId: "function_123"
+    });
+    await bridge.codeAnalysis.installLanguageServer({
+      language: "typescript"
+    });
+    const unsubscribeAnalysis =
+      bridge.codeAnalysis.onStateChanged(() => undefined);
+    expect(analysisStateListener).toBeDefined();
+    unsubscribeAnalysis();
+    expect(analysisStateListener).toBeUndefined();
     await bridge.settings.get();
     await bridge.settings.update({
       general: {
@@ -361,6 +390,7 @@ describe("createGitNestBridge", () => {
     await bridge.window.close();
 
     expect(Object.keys(bridge)).toEqual([
+      "codeAnalysis",
       "settings",
       "ai",
       "account",
@@ -372,6 +402,31 @@ describe("createGitNestBridge", () => {
       "window"
     ]);
     expect(calls).toEqual([
+      {
+        channel: IPC_CHANNELS.codeAnalysisGetState,
+        args: []
+      },
+      {
+        channel: IPC_CHANNELS.codeAnalysisStart,
+        args: [{ scope: "changed" }]
+      },
+      {
+        channel: IPC_CHANNELS.codeAnalysisCancel,
+        args: [{ analysisId: "analysis-1" }]
+      },
+      {
+        channel: IPC_CHANNELS.codeAnalysisGetSnapshot,
+        args: []
+      },
+      {
+        channel: IPC_CHANNELS.codeAnalysisReadFile,
+        args: [{ nodeId: "function_123" }]
+      },
+      {
+        channel:
+          IPC_CHANNELS.codeAnalysisInstallLanguageServer,
+        args: [{ language: "typescript" }]
+      },
       {
         channel: IPC_CHANNELS.settingsGet,
         args: []

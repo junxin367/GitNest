@@ -15,6 +15,7 @@ import type {
 import { repositoryTargetsMatch } from "../../entities/repository/changeSelection";
 import {
   findTargetSnapshot,
+  getSnapshotContentRevision,
   getSnapshotChangeCount,
   listWorkspaceTargets
 } from "../../entities/workspace/model";
@@ -68,14 +69,13 @@ export function useWorkspaceChangedFiles(
       const freshAndClean = Boolean(
         snapshot &&
           !snapshot.error &&
-          !snapshot.refreshPending &&
           !snapshot.stale &&
           getSnapshotChangeCount(snapshot) === 0
       );
 
       return {
         key: targetKey(target),
-        revision: statusRevision(snapshot),
+        revision: getSnapshotContentRevision(snapshot),
         skipRead: freshAndClean,
         target
       };
@@ -236,35 +236,13 @@ export function useWorkspaceChangedFiles(
       active = false;
       cancelActiveQueries(activeQueriesRef.current);
     };
-  }, [enabled, planSignature, plans, workspace?.id]);
+  }, [enabled, planSignature, workspace?.id]);
 
   return state;
 }
 
 function targetKey(target: RepositoryTargetDto): string {
   return `${target.repositoryId}:${target.worktreeId}`;
-}
-
-function statusRevision(
-  snapshot: RepositoryStatusSnapshotDto | undefined
-): string {
-  if (!snapshot) {
-    return "missing";
-  }
-
-  return [
-    snapshot.refreshedAt,
-    snapshot.head,
-    snapshot.branch ?? "",
-    snapshot.staged,
-    snapshot.unstaged,
-    snapshot.untracked,
-    snapshot.conflicted,
-    snapshot.refreshPending,
-    snapshot.stale,
-    snapshot.error?.code ?? "",
-    snapshot.error?.message ?? ""
-  ].join("|");
 }
 
 function cancelActiveQueries(queryIds: Set<string>) {

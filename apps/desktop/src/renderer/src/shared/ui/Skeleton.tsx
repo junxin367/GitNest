@@ -1,4 +1,4 @@
-import React, {
+import {
   createElement,
   type CSSProperties,
   type HTMLAttributes,

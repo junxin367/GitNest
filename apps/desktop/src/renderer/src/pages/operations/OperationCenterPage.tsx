@@ -51,15 +51,84 @@ export function OperationCenterPage({
     useState<OperationFilter>("all");
   const [now, setNow] = useState(Date.now());
 
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(timer);
-  }, []);
-
   const targets = useMemo(
     () => (workspace ? listWorkspaceTargets(workspace) : []),
     [workspace]
   );
+  const snapshotByTarget = useMemo(
+    () =>
+      new Map(
+        snapshots.map((snapshot) => [
+          operationTargetKey(snapshot),
+          snapshot
+        ])
+      ),
+    [snapshots]
+  );
+  const pullTargets = useMemo(
+    () =>
+      targets.filter((target) => {
+        const snapshot = snapshotByTarget.get(
+          operationTargetKey(target)
+        );
+        return Boolean(
+          snapshot?.upstream &&
+            snapshot.behind > 0 &&
+            snapshot.staged === 0 &&
+            snapshot.unstaged === 0 &&
+            snapshot.untracked === 0 &&
+            snapshot.conflicted === 0
+        );
+      }),
+    [snapshotByTarget, targets]
+  );
+  const pushTargets = useMemo(
+    () =>
+      targets.filter((target) => {
+        const snapshot = snapshotByTarget.get(
+          operationTargetKey(target)
+        );
+        return Boolean(snapshot?.branch && snapshot.ahead > 0);
+      }),
+    [snapshotByTarget, targets]
+  );
+  const visibleOperations = useMemo(
+    () =>
+      operations.filter((operation) =>
+        operationMatchesFilter(operation, filter)
+      ),
+    [filter, operations]
+  );
+  const operationCounts = useMemo(
+    () =>
+      operations.reduce(
+        (counts, operation) => {
+          if (isActive(operation.state)) {
+            counts.active += 1;
+          } else if (
+            operation.state === "failed" ||
+            operation.state === "interrupted"
+          ) {
+            counts.failed += 1;
+          } else if (operation.state === "succeeded") {
+            counts.completed += 1;
+          }
+          return counts;
+        },
+        { active: 0, completed: 0, failed: 0 }
+      ),
+    [operations]
+  );
+  const hasActiveOperations = operationCounts.active > 0;
+
+  useEffect(() => {
+    if (!hasActiveOperations) {
+      return;
+    }
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [hasActiveOperations]);
 
   if (!workspace) {
     return (
@@ -73,7 +142,6 @@ export function OperationCenterPage({
         <div className="page-scroll operation-center-page">
           <section className="page-heading">
             <div>
-              <span className="eyebrow">可观察后台任务</span>
               <h1>操作中心</h1>
               <p>当前没有可展示的 Workspace 操作记录。</p>
             </div>
@@ -91,49 +159,10 @@ export function OperationCenterPage({
       </SkeletonBoundary>
     );
   }
-  const pullTargets = targets.filter((target) => {
-    const snapshot = snapshots.find(
-      (candidate) =>
-        candidate.repositoryId === target.repositoryId &&
-        candidate.worktreeId === target.worktreeId
-    );
-    return Boolean(
-      snapshot?.upstream &&
-        snapshot.behind > 0 &&
-        snapshot.staged === 0 &&
-        snapshot.unstaged === 0 &&
-        snapshot.untracked === 0 &&
-        snapshot.conflicted === 0
-    );
-  });
-  const pushTargets = targets.filter((target) => {
-    const snapshot = snapshots.find(
-      (candidate) =>
-        candidate.repositoryId === target.repositoryId &&
-        candidate.worktreeId === target.worktreeId
-    );
-    return Boolean(snapshot?.branch && snapshot.ahead > 0);
-  });
-  const visibleOperations = operations.filter((operation) =>
-    operationMatchesFilter(operation, filter)
-  );
-  const activeCount = operations.filter((operation) =>
-    isActive(operation.state)
-  ).length;
-  const failedCount = operations.filter(
-    (operation) =>
-      operation.state === "failed" ||
-      operation.state === "interrupted"
-  ).length;
-  const completedCount = operations.filter(
-    (operation) => operation.state === "succeeded"
-  ).length;
-
   return (
     <div className="page-scroll operation-center-page">
       <section className="page-heading">
         <div>
-          <span className="eyebrow">可观察后台任务</span>
           <h1>操作中心</h1>
           <p>
             Workspace 与单仓操作统一展示目标、阶段、进度、耗时和终态；取消不会伪造对已完成 Git 写入的回滚。
@@ -169,21 +198,21 @@ export function OperationCenterPage({
           icon="refresh"
           label="活动"
           tone="blue"
-          value={activeCount}
+          value={operationCounts.active}
         />
         <OperationMetric
           description="最近完成的仓库操作"
           icon="check"
           label="成功"
           tone="green"
-          value={completedCount}
+          value={operationCounts.completed}
         />
         <OperationMetric
           description="需要人工处理"
           icon="warning"
           label="失败"
           tone="yellow"
-          value={failedCount}
+          value={operationCounts.failed}
         />
         <OperationMetric
           description="当前 Workspace 操作记录"
@@ -607,6 +636,12 @@ function operationMatchesFilter(
   return true;
 }
 
+function operationTargetKey(
+  target: RepositoryTargetDto
+): string {
+  return `${target.repositoryId}\u0000${target.worktreeId}`;
+}
+
 function isActive(
   state: WorkspaceOperationDto["state"]
 ): boolean {
@@ -663,7 +698,7 @@ function operationKindLabel(
     "worktree-unlock": "解锁 Worktree",
     "worktree-move": "移动 Worktree",
     "worktree-repair": "修复 Worktree 登记",
-    "worktree-prune": "Prune Worktree 登记",
+    "worktree-prune": "清除失效 Worktree 登记",
     "worktree-remove": "移除 Worktree"
   }[kind];
 }

@@ -192,6 +192,7 @@ export interface RepositoryCommitDiffDto {
     truncated: boolean;
     additions: number;
     deletions: number;
+    media?: RepositoryMediaPreviewDto;
   };
 }
 
@@ -245,6 +246,7 @@ export interface RepositoryStashDiffDto {
     truncated: boolean;
     additions: number;
     deletions: number;
+    media?: RepositoryMediaPreviewDto;
   };
 }
 

@@ -9,7 +9,6 @@ import type {
   GitEnvironment,
   GitMutationClient,
   GitReadOptions,
-  GitWriteOptions,
   InspectRepositoryOptions,
   ReadCommitHistoryOptions,
   ReadRepositoryDiffOptions,

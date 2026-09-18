@@ -1,5 +1,16 @@
 import { IPC_CHANNELS } from "./channels";
 import type {
+  CancelCodeAnalysisRequest,
+  CodeAnalysisAcceptedDto,
+  CodeAnalysisFileDto,
+  CodeAnalysisSnapshotDto,
+  CodeAnalysisStateDto,
+  InstallLanguageServerRequest,
+  LanguageServerInstallResultDto,
+  ReadCodeAnalysisFileRequest,
+  StartCodeAnalysisRequest
+} from "./analysis.contracts";
+import type {
   AccountConnectionTestResultDto,
   AccountOverviewDto,
   AccountProfileDto,
@@ -22,10 +33,12 @@ import type {
   ExternalApplicationProfileDto,
   ExternalTerminalOpenedDto,
   ExternalTerminalProfileDto,
+  OpenExternalApplicationRequest,
+  OpenExternalTerminalRequest
+} from "./external.contracts";
+import type {
   OpenDirectoryRequest,
   OpenDiffViewerRequest,
-  OpenExternalApplicationRequest,
-  OpenExternalTerminalRequest,
   OpenFileLocationRequest,
   RuntimeInfo
 } from "./system.contracts";
@@ -100,6 +113,30 @@ interface IpcContract<
 }
 
 export interface IpcContractMap {
+  [IPC_CHANNELS.codeAnalysisGetState]: IpcContract<
+    [],
+    GitReadResult<CodeAnalysisStateDto>
+  >;
+  [IPC_CHANNELS.codeAnalysisStart]: IpcContract<
+    [request: StartCodeAnalysisRequest],
+    GitReadResult<CodeAnalysisAcceptedDto>
+  >;
+  [IPC_CHANNELS.codeAnalysisCancel]: IpcContract<
+    [request: CancelCodeAnalysisRequest],
+    GitReadResult<void>
+  >;
+  [IPC_CHANNELS.codeAnalysisGetSnapshot]: IpcContract<
+    [],
+    GitReadResult<CodeAnalysisSnapshotDto | null>
+  >;
+  [IPC_CHANNELS.codeAnalysisReadFile]: IpcContract<
+    [request: ReadCodeAnalysisFileRequest],
+    GitReadResult<CodeAnalysisFileDto>
+  >;
+  [IPC_CHANNELS.codeAnalysisInstallLanguageServer]: IpcContract<
+    [request: InstallLanguageServerRequest],
+    GitReadResult<LanguageServerInstallResultDto>
+  >;
   [IPC_CHANNELS.settingsGet]: IpcContract<
     [],
     GitReadResult<AppSettingsLoadDto>

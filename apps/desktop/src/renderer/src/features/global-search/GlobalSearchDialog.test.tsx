@@ -123,12 +123,39 @@ describe("GlobalSearchDialog", () => {
     );
   });
 
+  it("shows a layout skeleton while matching changed files are still loading", () => {
+    renderDialog({
+      changes: [],
+      changesLoading: true
+    });
+    const input = document.querySelector<HTMLInputElement>(
+      "#global-search-input"
+    );
+
+    act(() => setInputValue(input, "src/pending.ts"));
+
+    const skeleton = document.querySelector(
+      '.global-search-results-skeleton[aria-label="正在读取有变更仓库的文件"]'
+    );
+    expect(skeleton).not.toBeNull();
+    expect(
+      skeleton?.querySelectorAll(
+        ".global-search-result-skeleton"
+      )
+    ).toHaveLength(4);
+    expect(document.body.textContent).not.toContain(
+      "当前 Workspace 暂无可搜索内容"
+    );
+  });
+
   function renderDialog({
     changes,
+    changesLoading = false,
     failedChangeTargetCount = 0,
     onOpenChange = () => undefined
   }: {
     changes: RepositoryChangesDto[];
+    changesLoading?: boolean;
     failedChangeTargetCount?: number;
     onOpenChange?: (
       location: RepositoryChangeLocation
@@ -138,7 +165,7 @@ describe("GlobalSearchDialog", () => {
       root.render(
         <GlobalSearchDialog
           changes={changes}
-          changesLoading={false}
+          changesLoading={changesLoading}
           failedChangeTargetCount={failedChangeTargetCount}
           snapshots={[SNAPSHOT]}
           workspace={WORKSPACE}

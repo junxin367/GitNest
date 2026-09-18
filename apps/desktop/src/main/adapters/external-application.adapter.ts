@@ -17,7 +17,6 @@ import {
 import { app, shell } from "electron";
 
 import type {
-  ExternalApplicationKind,
   ExternalApplicationPort,
   ExternalApplicationProfile,
   ExternalTerminalPort

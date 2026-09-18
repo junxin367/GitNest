@@ -810,6 +810,27 @@
   background: var(--green-soft);
 }
 
+.diff-viewer-unified-line.focus-target {
+  position: relative;
+  scroll-margin-block: var(--space-5);
+}
+
+.diff-viewer-unified-line.focus-target::after {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+  background: color-mix(
+    in srgb,
+    var(--accent) 10%,
+    transparent
+  );
+  box-shadow:
+    inset 3px 0 0 var(--accent),
+    inset 0 0 0 1px
+      color-mix(in srgb, var(--accent) 54%, transparent);
+}
+
 .diff-viewer-line-number.empty,
 .diff-viewer-change-marker.empty,
 .diff-viewer-code-cell.empty {

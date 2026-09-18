@@ -1,4 +1,40 @@
 export { IPC_CHANNELS, IPC_EVENTS } from "./channels";
+export {
+  DEFAULT_CODE_ANALYSIS_IGNORES,
+  createDefaultCodeAnalysisSettings
+} from "./analysis.contracts";
+export type {
+  AnalysisConfidenceDto,
+  CancelCodeAnalysisRequest,
+  CodeAnalysisAcceptedDto,
+  CodeAnalysisFileDto,
+  CodeAnalysisLanguageDto,
+  CodeAnalysisProgressDto,
+  CodeAnalysisProgressStageDto,
+  CodeAnalysisRootDto,
+  CodeAnalysisRunStateDto,
+  CodeAnalysisScopeDto,
+  CodeAnalysisSettingsDto,
+  CodeAnalysisSnapshotDto,
+  CodeAnalysisSnapshotResultDto,
+  CodeAnalysisStateDto,
+  CodeAnalysisStatsDto,
+  CodeGraphEdgeDto,
+  CodeGraphEdgeKindDto,
+  CodeGraphLocationDto,
+  CodeGraphNodeDto,
+  CodeGraphNodeKindDto,
+  CodeRequestChainDto,
+  InstallableLanguageServerDto,
+  InstallLanguageServerRequest,
+  LanguageServerInstallResultDto,
+  LanguageServerCommandSettingsDto,
+  LanguageServerStateDto,
+  LanguageServerStatusDto,
+  ReadCodeAnalysisFileRequest,
+  StartCodeAnalysisRequest,
+  UpdateCodeAnalysisSettingsRequest
+} from "./analysis.contracts";
 export type {
   AccountAuthTypeDto,
   AccountConnectionTestResultDto,
@@ -89,10 +125,12 @@ export type {
   ExternalTerminalProfileDto,
   OpenExternalApplicationContextDto,
   OpenExternalApplicationRequest,
+  OpenExternalTerminalRequest
+} from "./external.contracts";
+export type {
   OpenDirectoryRequest,
   OpenDiffViewerRequest,
   GitNestBridge,
-  OpenExternalTerminalRequest,
   OpenFileLocationRequest,
   RuntimeInfo,
   RuntimePlatform

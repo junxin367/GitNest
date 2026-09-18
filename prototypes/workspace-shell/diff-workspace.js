@@ -2,7 +2,7 @@
  * GitNest 完整 Diff Workspace 原型组件。
  *
  * 组件封装：
- * - 左侧文件变更筛选、分组、列表/树视图、选择与暂存切换；
+ * - 左侧变更文件筛选、分组、列表/树视图、选择与暂存切换；
  * - 仓库模式的视图菜单、储藏入口和提交信息区域；
  * - 右侧 DiffPanel 或储藏列表 + 储藏文件双栏；
  * - 底部语言、编码和快捷键状态栏。
@@ -301,9 +301,9 @@
       );
       this.element.innerHTML = `
         <div class="gn-diff-workspace__body">
-          <aside class="gn-diff-workspace__sidebar" aria-label="文件变更">
+          <aside class="gn-diff-workspace__sidebar" aria-label="变更文件">
             <header class="gn-diff-workspace__sidebar-header">
-              <strong>文件变更</strong>
+              <strong>变更文件</strong>
               <div class="gn-diff-workspace__sidebar-tools">
                 <div class="gn-diff-workspace__filter-mount" data-diff-workspace-filter></div>
                 <span data-diff-workspace-view-toggle></span>

@@ -4,11 +4,12 @@ import { Icon } from "../../shared/ui/Icon";
 import type { AppView } from "../../app/navigation";
 
 const primaryItems: Array<{
-  id: "workspace" | "operations";
+  id: "workspace" | "analysis" | "operations";
   label: string;
   icon: IconName;
 }> = [
   { id: "workspace", label: "Workspace 总览", icon: "grid" },
+  { id: "analysis", label: "代码分析", icon: "graph" },
   { id: "operations", label: "操作中心", icon: "operations" }
 ];
 

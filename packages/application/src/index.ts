@@ -32,6 +32,13 @@ export {
 } from "./external-application/external-application-service";
 export { ConcurrencyLimiter } from "./operations/concurrency-limiter";
 export {
+  CodeAnalysisService,
+  type CodeAnalysisAccepted,
+  type CodeAnalysisFile,
+  type CodeAnalysisServiceOptions,
+  type CodeAnalysisState
+} from "./code-analysis/code-analysis-service";
+export {
   RepositoryCommandService,
   type CommandImpact,
   type CommandPreflight,

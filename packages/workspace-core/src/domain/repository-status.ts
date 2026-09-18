@@ -22,6 +22,7 @@ export interface RepositoryStatusSnapshot
     | "cherry-pick"
     | "revert"
     | "bisect";
+  contentVersion?: number;
   refreshPending: boolean;
   stale: boolean;
   refreshedAt: string;

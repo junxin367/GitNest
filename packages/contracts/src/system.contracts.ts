@@ -11,6 +11,25 @@ import type {
   UnbindAccountRequest
 } from "./account.contracts";
 import type {
+  CancelCodeAnalysisRequest,
+  CodeAnalysisAcceptedDto,
+  CodeAnalysisFileDto,
+  CodeAnalysisSnapshotDto,
+  CodeAnalysisStateDto,
+  InstallLanguageServerRequest,
+  LanguageServerInstallResultDto,
+  ReadCodeAnalysisFileRequest,
+  StartCodeAnalysisRequest
+} from "./analysis.contracts";
+import type {
+  ExternalApplicationOpenedDto,
+  ExternalApplicationProfileDto,
+  ExternalTerminalOpenedDto,
+  ExternalTerminalProfileDto,
+  OpenExternalApplicationRequest,
+  OpenExternalTerminalRequest
+} from "./external.contracts";
+import type {
   GitEnvironmentDto,
   GitReadResult,
   RepositoryInspectionDto,
@@ -79,62 +98,6 @@ import type {
   UpdateAppSettingsRequest
 } from "./settings.contracts";
 
-export type ExternalTerminalKindDto =
-  | "windows-terminal"
-  | "powershell"
-  | "cmd"
-  | "git-bash";
-
-export interface ExternalTerminalProfileDto {
-  kind: ExternalTerminalKindDto;
-  label: string;
-}
-
-export type ExternalApplicationKindDto =
-  | "vscode"
-  | "cursor"
-  | "intellij-idea"
-  | "sublime-text"
-  | "file-explorer"
-  | "terminal"
-  | "git-bash";
-
-export interface ExternalApplicationProfileDto {
-  kind: ExternalApplicationKindDto;
-  label: string;
-  iconDataUrl?: string;
-}
-
-export type OpenExternalApplicationContextDto =
-  | {
-      scope: "workspace";
-    }
-  | {
-      scope: "repository";
-      target: RepositoryTargetDto;
-    }
-  | {
-      scope: "file";
-      target: RepositoryTargetDto;
-      path: string;
-    };
-
-export interface OpenExternalApplicationRequest {
-  context: OpenExternalApplicationContextDto;
-  kind: ExternalApplicationKindDto;
-}
-
-export interface ExternalApplicationOpenedDto {
-  kind: ExternalApplicationKindDto;
-  label: string;
-  scope: OpenExternalApplicationContextDto["scope"];
-}
-
-export interface OpenExternalTerminalRequest {
-  target: RepositoryQueryRequest["target"];
-  kind: ExternalTerminalKindDto;
-}
-
 export interface OpenDirectoryRequest {
   target: RepositoryTargetDto;
 }
@@ -148,12 +111,6 @@ export interface OpenDiffViewerRequest {
   target: RepositoryTargetDto;
   path: string;
   mode: RepositoryDiffRequest["mode"];
-}
-
-export interface ExternalTerminalOpenedDto {
-  target: RepositoryQueryRequest["target"];
-  kind: ExternalTerminalKindDto;
-  label: string;
 }
 
 export type RuntimePlatform =
@@ -178,6 +135,27 @@ export interface RuntimeInfo {
 }
 
 export interface GitNestBridge {
+  codeAnalysis: {
+    getState(): Promise<GitReadResult<CodeAnalysisStateDto>>;
+    start(
+      request: StartCodeAnalysisRequest
+    ): Promise<GitReadResult<CodeAnalysisAcceptedDto>>;
+    cancel(
+      request: CancelCodeAnalysisRequest
+    ): Promise<GitReadResult<void>>;
+    getSnapshot(): Promise<
+      GitReadResult<CodeAnalysisSnapshotDto | null>
+    >;
+    readFile(
+      request: ReadCodeAnalysisFileRequest
+    ): Promise<GitReadResult<CodeAnalysisFileDto>>;
+    installLanguageServer(
+      request: InstallLanguageServerRequest
+    ): Promise<GitReadResult<LanguageServerInstallResultDto>>;
+    onStateChanged(
+      listener: (state: CodeAnalysisStateDto) => void
+    ): () => void;
+  };
   settings: {
     get(): Promise<GitReadResult<AppSettingsLoadDto>>;
     update(

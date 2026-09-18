@@ -20,6 +20,7 @@ export type IconName =
   | "filter"
   | "folder"
   | "grid"
+  | "graph"
   | "history"
   | "layers"
   | "maximize"
@@ -199,6 +200,16 @@ function renderIcon(name: IconName): ReactNode {
           <rect height="7" rx="1.5" width="7" x="14" y="3" />
           <rect height="7" rx="1.5" width="7" x="3" y="14" />
           <rect height="7" rx="1.5" width="7" x="14" y="14" />
+        </>
+      );
+    case "graph":
+      return (
+        <>
+          <circle cx="5" cy="6" r="2" />
+          <circle cx="19" cy="5" r="2" />
+          <circle cx="8" cy="19" r="2" />
+          <circle cx="19" cy="18" r="2" />
+          <path d="m7 6 10-1M6 8l2 9M10 18l7-1M18 7v9M7 7l10 9" />
         </>
       );
     case "history":

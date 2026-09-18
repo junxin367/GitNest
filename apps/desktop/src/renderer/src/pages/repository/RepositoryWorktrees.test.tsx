@@ -19,11 +19,12 @@ import type { WorkspaceDetailsDto } from "@gitnest/contracts";
 import type { WorktreeCommandController } from "../../features/worktree-command/useWorktreeCommands";
 import { RepositoryWorktrees } from "./RepositoryWorktrees";
 
-describe("RepositoryWorktrees summary card", () => {
+describe("RepositoryWorktrees registered cards", () => {
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.stubGlobal("React", React);
     (
       globalThis as typeof globalThis & {
@@ -66,8 +67,9 @@ describe("RepositoryWorktrees summary card", () => {
     expect(card?.tabIndex).toBe(0);
     expect(
       card?.querySelector(".worktree-foot-action")?.textContent
-    ).toContain("打开");
+    ).toContain("登记路径");
     expect(card?.querySelector("button")).toBeNull();
+    expect(container.querySelector(".worktree-card-manage-action")).toBeNull();
 
     act(() => card?.click());
     act(() => {
@@ -147,6 +149,9 @@ describe("RepositoryWorktrees summary card", () => {
       "可清理",
       "游离 HEAD"
     ]);
+    expect(
+      container.querySelector(".metric-card.tone-red")
+    ).toBeTruthy();
     expect(container.textContent).not.toContain("Detached");
   });
 
@@ -190,7 +195,148 @@ describe("RepositoryWorktrees summary card", () => {
       headingActions?.querySelector<HTMLButtonElement>("button");
     act(() => createButton?.click());
 
-    expect(container.textContent).toContain("预检 Prune (1)");
+    expect(container.textContent).toContain("预检清除 (1)");
+  });
+
+  it("matches the prototype hierarchy without duplicating the current worktree", () => {
+    const onOpenDirectory = vi.fn();
+
+    act(() => {
+      root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={false}
+          onOpenDirectory={onOpenDirectory}
+          repositoryId="repository"
+          snapshots={[]}
+          worktreeId="worktree"
+          workspace={workspaceWithTwoWorktrees}
+        />
+      );
+    });
+
+    expect(container.querySelector(".worktree-toolbar")).toBeTruthy();
+    expect(
+      container.querySelector("details.worktree-inventory-disclosure")
+    ).toBeNull();
+    expect(
+      container.querySelectorAll(".worktree-summary-card").length
+    ).toBe(2);
+    expect(container.querySelector(".worktree-management-panel")).toBeNull();
+    expect(container.querySelector(".worktree-card-actions")).toBeNull();
+    expect(container.textContent).toContain("共 2 个");
+
+    const cards = [
+      ...container.querySelectorAll<HTMLElement>(
+        ".worktree-summary-card"
+      )
+    ];
+    act(() => cards[1]?.click());
+
+    expect(onOpenDirectory).toHaveBeenCalledOnce();
+    expect(onOpenDirectory).toHaveBeenCalledWith("linked");
+  });
+
+  it("runs the repository prune preflight from a prunable card", () => {
+    const onOpenDirectory = vi.fn();
+    const workspaceWithPrunableWorktree: WorkspaceDetailsDto = {
+      ...workspaceWithTwoWorktrees,
+      worktrees: workspaceWithTwoWorktrees.worktrees.map(
+        (worktree, index) =>
+          index === 1
+            ? {
+                ...worktree,
+                isPrunable: true,
+                pruneReason: "登记路径已失效"
+              }
+            : worktree
+      )
+    };
+
+    act(() => {
+      root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={false}
+          onOpenDirectory={onOpenDirectory}
+          repositoryId="repository"
+          snapshots={[]}
+          worktreeId="worktree"
+          workspace={workspaceWithPrunableWorktree}
+        />
+      );
+    });
+
+    const prunableCard = [
+      ...container.querySelectorAll<HTMLElement>(
+        ".worktree-summary-card"
+      )
+    ][1];
+
+    expect(container.querySelector(".worktree-card-manage-action")).toBeNull();
+    expect(container.querySelector(".worktree-management-panel")).toBeNull();
+    expect(prunableCard?.getAttribute("role")).toBeNull();
+    expect(prunableCard?.tabIndex).toBe(-1);
+    expect(
+      prunableCard?.querySelector(".worktree-foot-action")
+    ).toBeNull();
+    const clearButton =
+      prunableCard?.querySelector<HTMLButtonElement>(
+        ".worktree-clear-action"
+      );
+    expect(clearButton?.textContent).toContain("清除");
+    expect(clearButton?.disabled).toBe(false);
+    expect(clearButton?.title).toContain(
+      "core 仓库中的 1 条失效登记"
+    );
+
+    act(() => clearButton?.click());
+    expect(commands.request).toHaveBeenCalledWith({
+      type: "prune",
+      repositoryId: "repository"
+    });
+    expect(onOpenDirectory).not.toHaveBeenCalled();
+  });
+
+  it("disables clear for a locked prunable registration", () => {
+    const workspaceWithLockedPrunableWorktree: WorkspaceDetailsDto = {
+      ...workspaceWithTwoWorktrees,
+      worktrees: workspaceWithTwoWorktrees.worktrees.map(
+        (worktree, index) =>
+          index === 1
+            ? {
+                ...worktree,
+                isLocked: true,
+                isPrunable: true,
+                lockReason: "保留登记",
+                pruneReason: "登记路径已失效"
+              }
+            : worktree
+      )
+    };
+
+    act(() => {
+      root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={false}
+          onOpenDirectory={vi.fn()}
+          repositoryId="repository"
+          snapshots={[]}
+          worktreeId="worktree"
+          workspace={workspaceWithLockedPrunableWorktree}
+        />
+      );
+    });
+
+    const clearButton =
+      container.querySelector<HTMLButtonElement>(
+        ".worktree-clear-action"
+      );
+    expect(clearButton?.disabled).toBe(true);
+    expect(clearButton?.title).toContain("需先解锁");
+    act(() => clearButton?.click());
+    expect(commands.request).not.toHaveBeenCalled();
   });
 
   it("filters the registered worktrees and reports the match count", () => {
@@ -232,10 +378,25 @@ describe("RepositoryWorktrees summary card", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
 
-    expect(container.textContent).toContain("已筛出 1/2 个目录");
+    expect(container.textContent).toContain("共 2 个 · 已筛出 1 个");
     expect(
-      container.querySelectorAll(".worktree-management-card").length
+      container.querySelectorAll(".worktree-summary-card").length
     ).toBe(1);
+
+    const clearQueryButton =
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="清除 Worktree 筛选"]'
+      );
+    expect(clearQueryButton).toBeTruthy();
+
+    act(() => clearQueryButton?.click());
+
+    expect(input?.value).toBe("");
+    expect(document.activeElement).toBe(input);
+    expect(container.textContent).toContain("共 2 个");
+    expect(
+      container.querySelectorAll(".worktree-summary-card").length
+    ).toBe(2);
 
     act(() => {
       if (!input) {
@@ -252,7 +413,7 @@ describe("RepositoryWorktrees summary card", () => {
     expect(container.querySelector(".worktree-filter-empty")).toBeTruthy();
   });
 
-  it("filters worktrees by status facet with counts", () => {
+  it("filters worktrees by one type at a time with counts", () => {
     act(() => {
       root.render(
         <RepositoryWorktrees
@@ -279,18 +440,35 @@ describe("RepositoryWorktrees summary card", () => {
       "仅看有变更0"
     ]);
 
-    const primaryChip = container.querySelector<HTMLButtonElement>(
-      ".worktree-filter-chip[aria-pressed=\"false\"]"
+    const typeGroup = container.querySelector(
+      '[aria-label="按类型筛选 Worktree"]'
     );
+    expect(typeGroup?.querySelector(".worktree-filter-bar-label")?.textContent)
+      .toBe("类型");
+
+    const primaryChip = [...chips].find(
+      (chip) => chip.textContent?.trim() === "主工作目录1"
+    ) as HTMLButtonElement | undefined;
+    const linkedChip = [...chips].find(
+      (chip) => chip.textContent?.trim() === "已登记1"
+    ) as HTMLButtonElement | undefined;
     expect(primaryChip?.textContent?.trim()).toBe("主工作目录1");
 
     act(() => primaryChip?.click());
 
     expect(primaryChip?.getAttribute("aria-pressed")).toBe("true");
-    expect(container.textContent).toContain("已筛出 1/2 个目录");
+    expect(container.textContent).toContain("共 2 个 · 已筛出 1 个");
     expect(
-      container.querySelectorAll(".worktree-management-card").length
+      container.querySelectorAll(".worktree-summary-card").length
     ).toBe(1);
+
+    act(() => linkedChip?.click());
+
+    expect(primaryChip?.getAttribute("aria-pressed")).toBe("false");
+    expect(linkedChip?.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      container.querySelector(".worktree-title")?.textContent
+    ).toBe("feature/worktree");
 
     const clearButton = [
       ...container.querySelectorAll("button")
@@ -299,7 +477,7 @@ describe("RepositoryWorktrees summary card", () => {
     act(() => clearButton?.click());
     expect(container.textContent).not.toContain("已筛出");
     expect(
-      container.querySelectorAll(".worktree-management-card").length
+      container.querySelectorAll(".worktree-summary-card").length
     ).toBe(2);
   });
 });

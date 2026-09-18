@@ -54,6 +54,425 @@
     };
   }
 
+  function normalizeFocusLine(value) {
+    const line = Number(value);
+    return Number.isFinite(line) && line > 0
+      ? Math.trunc(line)
+      : null;
+  }
+
+  const SOURCE_TOKEN_KINDS = new Set([
+    "annotation",
+    "comment",
+    "function",
+    "keyword",
+    "literal",
+    "number",
+    "operator",
+    "property",
+    "string",
+    "tag",
+    "type"
+  ]);
+  const SOURCE_JAVASCRIPT_KEYWORDS = new Set([
+    "abstract", "as", "asserts", "async", "await", "break",
+    "case", "catch", "class", "const", "continue", "debugger",
+    "declare", "default", "delete", "do", "else", "enum",
+    "export", "extends", "finally", "for", "from", "function",
+    "get", "if", "implements", "import", "in", "infer",
+    "instanceof", "interface", "is", "keyof", "let", "module",
+    "namespace", "new", "of", "package", "private", "protected",
+    "public", "readonly", "require", "return", "satisfies", "set",
+    "static", "super", "switch", "this", "throw", "try", "typeof",
+    "var", "while", "with", "yield"
+  ]);
+  const SOURCE_JAVA_KEYWORDS = new Set([
+    "abstract", "assert", "break", "case", "catch", "class",
+    "continue", "default", "do", "else", "enum", "exports",
+    "extends", "final", "finally", "for", "if", "implements",
+    "import", "instanceof", "interface", "module", "native", "new",
+    "open", "opens", "package", "permits", "private", "protected",
+    "provides", "public", "record", "requires", "return", "sealed",
+    "static", "strictfp", "super", "switch", "synchronized", "this",
+    "throw", "throws", "to", "transient", "transitive", "try", "uses",
+    "volatile", "while", "with", "yield"
+  ]);
+  const SOURCE_JAVASCRIPT_TYPES = new Set([
+    "any", "Array", "bigint", "BigInt", "boolean", "Boolean", "Date",
+    "Error", "Map", "never", "Number", "number", "object", "Object",
+    "Promise", "Record", "Set", "String", "string", "symbol", "Symbol",
+    "unknown", "void"
+  ]);
+  const SOURCE_JAVA_TYPES = new Set([
+    "boolean", "byte", "char", "double", "float", "int", "long",
+    "short", "void"
+  ]);
+  const SOURCE_LITERALS = new Set([
+    "false", "Infinity", "NaN", "null", "true", "undefined"
+  ]);
+  const SOURCE_NUMBER_PATTERN =
+    /^(?:0[xX][\dA-Fa-f_]+|0[bB][01_]+|0[oO][0-7_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?[fFdDlLn]?)/;
+  const SOURCE_OPERATOR_PATTERN =
+    /^(?:===|!==|>>>|>>=|<<=|=>|\?\?=|&&=|\|\|=|\*\*=|==|!=|<=|>=|\+\+|--|&&|\|\||\?\?|\?\.|<<|>>|\+=|-=|\*=|\/=|%=|&=|\|=|\^=|\*\*|::|->|[=+\-*/%<>!&|^~?:])/;
+  const MAX_SOURCE_TOKENS = 20000;
+
+  function normalizeSourceLanguage(value) {
+    const language = String(value || "").toLocaleLowerCase();
+    if (language === "java") return "java";
+    if (language === "vue") return "vue";
+    if (language === "javascript") return "javascript";
+    return "typescript";
+  }
+
+  function tokenizeSourceLines(lines, rawLanguage, path = "") {
+    const language = normalizeSourceLanguage(rawLanguage);
+    const markupEnabled =
+      language === "vue" || /\.[jt]sx$/i.test(path);
+    const state = {
+      blockCommentEnd: null,
+      multilineString: null,
+      vueTag: false
+    };
+    let tokenCount = 0;
+    return (Array.isArray(lines) ? lines : []).map((rawLine) => {
+      if (tokenCount >= MAX_SOURCE_TOKENS) return [];
+      const tokens = tokenizeSourceLine(
+        String(rawLine || ""),
+        language,
+        markupEnabled,
+        state,
+        MAX_SOURCE_TOKENS - tokenCount
+      );
+      tokenCount += tokens.length;
+      return tokens;
+    });
+  }
+
+  function tokenizeSourceLine(
+    line,
+    language,
+    markupEnabled,
+    state,
+    tokenBudget
+  ) {
+    const tokens = [];
+    const pushToken = (start, end, kind) => {
+      if (
+        end <= start ||
+        tokens.length >= tokenBudget ||
+        !SOURCE_TOKEN_KINDS.has(kind)
+      ) {
+        return false;
+      }
+      tokens.push({ start, end, kind });
+      return true;
+    };
+    let index = 0;
+
+    while (index < line.length && tokens.length < tokenBudget) {
+      if (state.blockCommentEnd) {
+        const endMarker = state.blockCommentEnd;
+        const endIndex = line.indexOf(endMarker, index);
+        const tokenEnd =
+          endIndex < 0 ? line.length : endIndex + endMarker.length;
+        pushToken(index, tokenEnd, "comment");
+        index = tokenEnd;
+        if (endIndex < 0) break;
+        state.blockCommentEnd = null;
+        continue;
+      }
+
+      if (state.multilineString) {
+        const delimiter = state.multilineString;
+        const tokenEnd = findSourceStringEnd(
+          line,
+          index,
+          delimiter,
+          true
+        );
+        pushToken(
+          index,
+          tokenEnd < 0 ? line.length : tokenEnd,
+          "string"
+        );
+        if (tokenEnd < 0) break;
+        index = tokenEnd;
+        state.multilineString = null;
+        continue;
+      }
+
+      if (markupEnabled && state.vueTag) {
+        if (line.startsWith("/>", index)) {
+          pushToken(index, index + 2, "operator");
+          index += 2;
+          state.vueTag = false;
+          continue;
+        }
+        if (line[index] === ">") {
+          pushToken(index, index + 1, "operator");
+          index += 1;
+          state.vueTag = false;
+          continue;
+        }
+        const character = line[index] || "";
+        if (character === '"' || character === "'") {
+          const tokenEnd = findSourceStringEnd(
+            line,
+            index,
+            character,
+            false
+          );
+          pushToken(
+            index,
+            tokenEnd < 0 ? line.length : tokenEnd,
+            "string"
+          );
+          index = tokenEnd < 0 ? line.length : tokenEnd;
+          continue;
+        }
+        const attribute = line
+          .slice(index)
+          .match(/^[:@#]?[A-Za-z_][\w:.-]*/)?.[0];
+        if (attribute) {
+          pushToken(index, index + attribute.length, "property");
+          index += attribute.length;
+          continue;
+        }
+        if (character === "=") {
+          pushToken(index, index + 1, "operator");
+        }
+        index += 1;
+        continue;
+      }
+
+      if (markupEnabled && line.startsWith("<!--", index)) {
+        const endIndex = line.indexOf("-->", index + 4);
+        const tokenEnd =
+          endIndex < 0 ? line.length : endIndex + 3;
+        pushToken(index, tokenEnd, "comment");
+        index = tokenEnd;
+        if (endIndex < 0) {
+          state.blockCommentEnd = "-->";
+          break;
+        }
+        continue;
+      }
+
+      if (markupEnabled && line[index] === "<") {
+        const tagMatch = line
+          .slice(index)
+          .match(/^<(\/?)([A-Za-z][\w.-]*)/);
+        if (tagMatch) {
+          const prefixLength = 1 + (tagMatch[1] || "").length;
+          const tagName = tagMatch[2] || "";
+          pushToken(index, index + prefixLength, "operator");
+          pushToken(
+            index + prefixLength,
+            index + prefixLength + tagName.length,
+            "tag"
+          );
+          index += tagMatch[0].length;
+          state.vueTag = true;
+          continue;
+        }
+      }
+
+      if (line.startsWith("//", index)) {
+        pushToken(index, line.length, "comment");
+        break;
+      }
+      if (line.startsWith("/*", index)) {
+        const endIndex = line.indexOf("*/", index + 2);
+        const tokenEnd =
+          endIndex < 0 ? line.length : endIndex + 2;
+        pushToken(index, tokenEnd, "comment");
+        index = tokenEnd;
+        if (endIndex < 0) {
+          state.blockCommentEnd = "*/";
+          break;
+        }
+        continue;
+      }
+
+      if (language === "java" && line.startsWith('"""', index)) {
+        const tokenEnd = findSourceStringEnd(
+          line,
+          index,
+          '"""',
+          false
+        );
+        pushToken(
+          index,
+          tokenEnd < 0 ? line.length : tokenEnd,
+          "string"
+        );
+        if (tokenEnd < 0) {
+          state.multilineString = '"""';
+          break;
+        }
+        index = tokenEnd;
+        continue;
+      }
+
+      const character = line[index] || "";
+      if (
+        character === '"' ||
+        character === "'" ||
+        character === "`"
+      ) {
+        const tokenEnd = findSourceStringEnd(
+          line,
+          index,
+          character,
+          false
+        );
+        pushToken(
+          index,
+          tokenEnd < 0 ? line.length : tokenEnd,
+          "string"
+        );
+        if (tokenEnd < 0 && character === "`") {
+          state.multilineString = "`";
+          break;
+        }
+        index = tokenEnd < 0 ? line.length : tokenEnd;
+        continue;
+      }
+
+      if (character === "@") {
+        const annotation = line
+          .slice(index)
+          .match(/^@[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/)?.[0];
+        if (annotation) {
+          pushToken(index, index + annotation.length, "annotation");
+          index += annotation.length;
+          continue;
+        }
+      }
+
+      const number = line
+        .slice(index)
+        .match(SOURCE_NUMBER_PATTERN)?.[0];
+      if (number) {
+        pushToken(index, index + number.length, "number");
+        index += number.length;
+        continue;
+      }
+
+      const identifier = line
+        .slice(index)
+        .match(/^[A-Za-z_$][\w$]*/)?.[0];
+      if (identifier) {
+        const kind = sourceIdentifierKind(
+          line,
+          index,
+          identifier,
+          language
+        );
+        if (kind) {
+          pushToken(index, index + identifier.length, kind);
+        }
+        index += identifier.length;
+        continue;
+      }
+
+      const operator = line
+        .slice(index)
+        .match(SOURCE_OPERATOR_PATTERN)?.[0];
+      if (operator) {
+        pushToken(index, index + operator.length, "operator");
+        index += operator.length;
+        continue;
+      }
+      index += 1;
+    }
+
+    return tokens;
+  }
+
+  function sourceIdentifierKind(
+    line,
+    start,
+    identifier,
+    language
+  ) {
+    const keywords =
+      language === "java"
+        ? SOURCE_JAVA_KEYWORDS
+        : SOURCE_JAVASCRIPT_KEYWORDS;
+    const types =
+      language === "java"
+        ? SOURCE_JAVA_TYPES
+        : SOURCE_JAVASCRIPT_TYPES;
+    if (keywords.has(identifier)) return "keyword";
+    if (SOURCE_LITERALS.has(identifier)) return "literal";
+    if (
+      types.has(identifier) ||
+      /^[A-Z][A-Za-z0-9_$]*$/.test(identifier)
+    ) {
+      return "type";
+    }
+
+    const end = start + identifier.length;
+    if (nextSourceCharacter(line, end) === "(") {
+      return "function";
+    }
+    if (
+      previousSourceCharacter(line, start) === "." ||
+      nextSourceCharacter(line, end) === "="
+    ) {
+      return "property";
+    }
+    return null;
+  }
+
+  function nextSourceCharacter(line, start) {
+    for (let index = start; index < line.length; index += 1) {
+      const character = line[index] || "";
+      if (!/\s/.test(character)) return character;
+    }
+    return "";
+  }
+
+  function previousSourceCharacter(line, start) {
+    for (let index = start - 1; index >= 0; index -= 1) {
+      const character = line[index] || "";
+      if (!/\s/.test(character)) return character;
+    }
+    return "";
+  }
+
+  function findSourceStringEnd(
+    line,
+    start,
+    delimiter,
+    continued
+  ) {
+    if (delimiter === '"""') {
+      const searchStart = continued ? start : start + 3;
+      const end = line.indexOf(delimiter, searchStart);
+      return end < 0 ? -1 : end + delimiter.length;
+    }
+    let escaped = false;
+    for (
+      let index = continued ? start : start + 1;
+      index < line.length;
+      index += 1
+    ) {
+      const character = line[index] || "";
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (character === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (character === delimiter) return index + 1;
+    }
+    return -1;
+  }
+
   function rowsForContext(
     rows,
     hunkContexts = {}
@@ -168,18 +587,87 @@
     });
   }
 
-  function highlightedText(value, key, hits, activeHit) {
+  function normalizedSyntaxTokens(tokens, textLength) {
+    if (!Array.isArray(tokens)) return [];
+    let previousEnd = 0;
+    return tokens
+      .map((token) => ({
+        start: Math.max(0, Math.trunc(Number(token?.start))),
+        end: Math.min(
+          textLength,
+          Math.trunc(Number(token?.end))
+        ),
+        kind: String(token?.kind || "")
+      }))
+      .sort((left, right) => left.start - right.start)
+      .filter((token) => {
+        const valid =
+          SOURCE_TOKEN_KINDS.has(token.kind) &&
+          token.start >= previousEnd &&
+          token.end > token.start;
+        if (valid) previousEnd = token.end;
+        return valid;
+      });
+  }
+
+  function syntaxMarkup(text, start, end, tokens) {
+    const parts = [];
+    let cursor = start;
+    tokens.forEach((token) => {
+      if (token.end <= start || token.start >= end) return;
+      const tokenStart = Math.max(start, token.start);
+      const tokenEnd = Math.min(end, token.end);
+      if (tokenStart > cursor) {
+        parts.push(escapeHtml(text.slice(cursor, tokenStart)));
+      }
+      if (tokenEnd > tokenStart) {
+        parts.push(
+          `<span class="gn-diff-panel__syntax-token is-${token.kind}">${escapeHtml(text.slice(tokenStart, tokenEnd))}</span>`
+        );
+        cursor = tokenEnd;
+      }
+    });
+    if (cursor < end) {
+      parts.push(escapeHtml(text.slice(cursor, end)));
+    }
+    return parts.join("");
+  }
+
+  function highlightedText(
+    value,
+    key,
+    hits,
+    activeHit,
+    syntaxTokens = []
+  ) {
     const text = String(value || "");
+    if (!text) return " ";
     const lineHits = hits.filter((hit) => hit.key === key);
-    if (!lineHits.length) return escapeHtml(text || " ");
+    const tokens = normalizedSyntaxTokens(
+      syntaxTokens,
+      text.length
+    );
+    if (!lineHits.length) {
+      return syntaxMarkup(text, 0, text.length, tokens);
+    }
 
     let cursor = 0;
     return `${lineHits.map((hit) => {
-      const before = escapeHtml(text.slice(cursor, hit.start));
-      const highlighted = escapeHtml(text.slice(hit.start, hit.end));
+      const before = syntaxMarkup(
+        text,
+        cursor,
+        hit.start,
+        tokens
+      );
+      const highlighted = syntaxMarkup(
+        text,
+        hit.start,
+        hit.end,
+        tokens
+      );
       cursor = hit.end;
       return `${before}<mark class="gn-diff-panel__search-hit${hit.id === activeHit ? " is-current" : ""}" data-diff-search-hit="${hit.id}">${highlighted}</mark>`;
-    }).join("")}${escapeHtml(text.slice(cursor))}`;
+    }).join("")}${syntaxMarkup(text, cursor, text.length, tokens)}`;
   }
 
   function lineCell(kind, lineNumber, text, key, hits, activeHit) {
@@ -208,6 +696,7 @@
         fullRows: Array.isArray(rawOptions.fullRows)
           ? rawOptions.fullRows
           : null,
+        focusLine: normalizeFocusLine(rawOptions.focusLine),
         binary: Boolean(rawOptions.binary),
         truncated: Boolean(rawOptions.truncated),
         headerActions:
@@ -227,6 +716,7 @@
         hunkContexts: {}
       };
       this.copyResetTimer = 0;
+      this.focusPulseTimer = 0;
       this.splitScrollCleanup = null;
       this.handleClick = this.handleClick.bind(this);
       this.handleKeydown = this.handleKeydown.bind(this);
@@ -241,6 +731,28 @@
         this.options.fullRows,
         this.state.hunkContexts
       );
+    }
+
+    focusRowMetadata(oldNo, newNo) {
+      const focusLine = this.options.focusLine;
+      if (!focusLine) {
+        return {
+          className: "",
+          attributes: ""
+        };
+      }
+      const oldMatches = Number(oldNo) === focusLine;
+      const newMatches = Number(newNo) === focusLine;
+      if (!oldMatches && !newMatches) {
+        return {
+          className: "",
+          attributes: ""
+        };
+      }
+      return {
+        className: " is-focus-target",
+        attributes: ` data-diff-focus-line="${focusLine}" data-diff-focus-side="${newMatches ? "new" : "old"}" aria-current="location"`
+      };
     }
 
     canExpandContext() {
@@ -339,14 +851,17 @@
         );
       }
 
-      const unifiedLine = (kind, oldNo, newNo, text, key) => `
-        <div class="gn-diff-panel__row">
+      const unifiedLine = (kind, oldNo, newNo, text, key) => {
+        const focus = this.focusRowMetadata(oldNo, newNo);
+        return `
+        <div class="gn-diff-panel__row${focus.className}"${focus.attributes}>
           <span class="gn-diff-panel__line-number ${kind}">${oldNo ?? ""}</span>
           <span class="gn-diff-panel__line-number ${kind}">${newNo ?? ""}</span>
           <span class="gn-diff-panel__change-marker ${kind}">${kind === "removed" ? "−" : kind === "added" ? "+" : ""}</span>
-          <span class="gn-diff-panel__code-cell ${kind}"><code>${highlightedText(text, key, hits, activeSearchHit)}</code></span>
+          <span class="gn-diff-panel__code-cell ${kind}"><code>${highlightedText(text, key, hits, activeSearchHit, row.syntaxTokens)}</code></span>
         </div>
       `;
+      };
 
       if (row.kind === "context") {
         return unifiedLine(
@@ -448,8 +963,9 @@
         );
       }
 
+      const focus = this.focusRowMetadata(row.oldNo, row.newNo);
       return `
-        <div class="gn-diff-panel__row split">
+        <div class="gn-diff-panel__row split${focus.className}"${focus.attributes}>
           ${oldCell}
           ${newCell}
         </div>
@@ -515,8 +1031,12 @@
         );
       }
 
+      const focus = this.focusRowMetadata(
+        side === "old" ? row.oldNo : null,
+        side === "new" ? row.newNo : null
+      );
       return `
-        <div class="gn-diff-panel__split-pane-row">
+        <div class="gn-diff-panel__split-pane-row${focus.className}"${focus.attributes}>
           ${cell}
         </div>
       `;
@@ -813,14 +1333,14 @@
               </span>
               ${this.options.headerActions ? `
                 <span class="gn-diff-panel__file-header-separator" aria-hidden="true"></span>
-                <span class="gn-diff-panel__header-action-slot">
+                <div class="gn-diff-panel__header-action-slot">
                   ${this.options.headerActions}
-                </span>
+                </div>
               ` : ""}
             </div>
           </header>
           <div class="gn-diff-panel__search" data-diff-search-mount></div>
-          <div class="gn-diff-panel__viewport${splitNoWrap ? " split-nowrap" : ""}" role="region" aria-label="文件 Diff" tabindex="0">
+          <div class="gn-diff-panel__viewport${splitNoWrap ? " split-nowrap" : ""}" role="region" aria-label="${escapeHtml(this.options.viewportAriaLabel || "文件 Diff")}" tabindex="0">
             ${rows.length ? `
               ${splitNoWrap
                 ? this.renderSplitNoWrap(
@@ -857,7 +1377,9 @@
           ? `${activeSearchHit >= 0 ? activeSearchHit + 1 : 0} / ${hits.length}`
           : "0 / 0",
         hasMatches: hits.length > 0,
-        inputAriaLabel: "在 Diff 中搜索",
+        ariaLabel: this.options.searchAriaLabel || "在 Diff 中搜索",
+        inputAriaLabel: this.options.searchInputAriaLabel || "在 Diff 中搜索",
+        placeholder: this.options.searchPlaceholder || "在当前 Diff 中搜索",
         icons: {
           search: iconMarkup("search"),
           previous: iconMarkup("arrow-up"),
@@ -888,6 +1410,41 @@
           .querySelector(`[data-diff-hunk="${activeHunk}"]`)
           ?.scrollIntoView({ block: "center", inline: "nearest" });
       }
+    }
+
+    revealFocusLine() {
+      const focusLine = this.options.focusLine;
+      if (!focusLine) return false;
+      const targets = [
+        ...this.element.querySelectorAll(
+          `[data-diff-focus-line="${focusLine}"]`
+        )
+      ];
+      const target = targets.find(
+        (candidate) => candidate.dataset.diffFocusSide === "new"
+      ) || targets[0];
+      const viewport = this.element.querySelector(
+        ".gn-diff-panel__viewport"
+      );
+      if (!target || !viewport) return false;
+
+      const viewportRect = viewport.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const centeredTop =
+        viewport.scrollTop +
+        targetRect.top -
+        viewportRect.top -
+        Math.max(0, (viewport.clientHeight - targetRect.height) / 2);
+      viewport.scrollTop = Math.max(0, centeredTop);
+
+      target.classList.remove("is-focus-pulse");
+      void target.offsetWidth;
+      target.classList.add("is-focus-pulse");
+      global.clearTimeout(this.focusPulseTimer);
+      this.focusPulseTimer = global.setTimeout(() => {
+        target.classList.remove("is-focus-pulse");
+      }, 1400);
+      return true;
     }
 
     openSearch() {
@@ -1037,6 +1594,11 @@
           ? nextOptions.fullRows
           : null;
       }
+      if (Object.prototype.hasOwnProperty.call(nextOptions, "focusLine")) {
+        this.options.focusLine = normalizeFocusLine(
+          nextOptions.focusLine
+        );
+      }
       if (Object.prototype.hasOwnProperty.call(nextOptions, "binary")) {
         this.options.binary = Boolean(nextOptions.binary);
       }
@@ -1058,6 +1620,7 @@
 
     destroy() {
       global.clearTimeout(this.copyResetTimer);
+      global.clearTimeout(this.focusPulseTimer);
       this.teardownSplitScrolling();
       this.searchPopover?.destroy();
       this.element.removeEventListener("click", this.handleClick);
@@ -1079,6 +1642,7 @@
 
   global.GitNestDiffPanel = {
     DiffPanelController,
-    create
+    create,
+    tokenizeSourceLines
   };
 })(window);

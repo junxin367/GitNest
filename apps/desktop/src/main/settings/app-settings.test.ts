@@ -47,6 +47,9 @@ describe("AppSettingsService", () => {
       DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
     );
     expect(initial.settings.ai.apiKeyConfigured).toBe(false);
+    expect(initial.settings.codeAnalysis.defaultScope).toBe(
+      "changed"
+    );
 
     const updated = await service.update({
       appearance: { theme: "light" },
@@ -134,7 +137,7 @@ describe("AppSettingsService", () => {
     await writeFile(
       filePath,
       JSON.stringify({
-        schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
+        schemaVersion: 1,
         general: {
           restoreLastView: true,
           defaultTerminalKind: null
@@ -169,6 +172,7 @@ describe("AppSettingsService", () => {
     expect(loaded.settings.diff.commitPanelHeight).toBe(
       DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
     );
+    expect(loaded.settings.codeAnalysis.enabled).toBe(true);
 
     await service.update({ diff: { wrap: true } });
     const persisted = JSON.parse(
@@ -179,6 +183,10 @@ describe("AppSettingsService", () => {
     expect(persisted.diff.commitPanelHeight).toBe(
       DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
     );
+    expect(
+      JSON.parse(await readFile(filePath, "utf8"))
+        .schemaVersion
+    ).toBe(APP_SETTINGS_SCHEMA_VERSION);
   });
 
   async function createSettingsPath(): Promise<string> {

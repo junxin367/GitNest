@@ -5,6 +5,7 @@ export interface ReadCommitDiffOptions extends GitReadOptions {
   commitHash: string;
   path: string;
   contextLines?: number;
+  includeMedia?: boolean;
 }
 
 export interface GitCommitDiffClient {

@@ -319,7 +319,7 @@ export function DiffWorkspace({
         .join(" ")}
     >
       <aside
-        aria-label="文件变更"
+        aria-label="变更文件"
         className={[
           "diff-workspace-sidebar",
           showCommit ? "with-commit" : "",

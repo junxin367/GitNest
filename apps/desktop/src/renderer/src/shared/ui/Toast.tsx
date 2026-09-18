@@ -1,5 +1,5 @@
 import { Button } from "./Button";
-import React, {
+import {
   Children,
   useEffect,
   type ReactNode

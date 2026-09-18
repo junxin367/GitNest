@@ -12,11 +12,13 @@ import {
   validateCancelRepositoryOperationRequest,
   validateClearAiApiKeyRequest,
   validateGenerateAiCommitMessageRequest,
+  validateInstallLanguageServerRequest,
   validateOpenDirectoryRequest,
   validateOpenDiffViewerRequest,
   validateOpenExternalApplicationRequest,
   validateOpenExternalTerminalRequest,
   validateOpenFileLocationRequest,
+  validateReadCodeAnalysisFileRequest,
   validateRemoveAccountRequest,
   validateRepositoryCommandExecuteRequest,
   validateRepositoryCommandPreflightRequest,
@@ -346,6 +348,51 @@ describe("repository command IPC validation", () => {
       validateTestAccountRequest({
         accountId: "account_1",
         repositoryUrl: "https://git.example.test/repo\nnext"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+});
+
+describe("Language Server installation IPC validation", () => {
+  it("accepts only the fixed installable languages", () => {
+    expect(
+      validateInstallLanguageServerRequest({
+        language: "typescript"
+      })
+    ).toEqual({ language: "typescript" });
+    expect(
+      validateInstallLanguageServerRequest({
+        language: "java"
+      })
+    ).toEqual({ language: "java" });
+    expect(() =>
+      validateInstallLanguageServerRequest({
+        language: "python",
+        command: "powershell.exe"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+});
+
+describe("code analysis file IPC validation", () => {
+  it("accepts only a bounded non-empty node id", () => {
+    expect(
+      validateReadCodeAnalysisFileRequest({
+        nodeId: " function_123 "
+      })
+    ).toEqual({ nodeId: "function_123" });
+    expect(() =>
+      validateReadCodeAnalysisFileRequest({ nodeId: "" })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+    expect(() =>
+      validateReadCodeAnalysisFileRequest({
+        nodeId: "x".repeat(513)
       })
     ).toThrowError(
       expect.objectContaining({ code: "INVALID_REQUEST" })

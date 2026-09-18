@@ -211,7 +211,7 @@ export function DetailInspector({
             采集范围
           </div>
           <p className="selected-commit-body">
-            当前页面展示提交的哈希、主题、作者、时间和文件变更统计。
+            当前页面展示提交的哈希、主题、作者、时间和变更文件统计。
           </p>
         </section>
 

@@ -307,6 +307,50 @@ html[data-theme="light"] .gn-diff-panel {
   min-width: 1040px;
 }
 
+.gn-diff-panel__row.is-focus-target,
+.gn-diff-panel__split-pane-row.is-focus-target {
+  position: relative;
+  box-shadow:
+    inset 3px 0 0 var(--accent),
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 42%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--accent) 42%, transparent);
+}
+
+.gn-diff-panel__row.is-focus-target .gn-diff-panel__line-number,
+.gn-diff-panel__row.is-focus-target .gn-diff-panel__change-marker,
+.gn-diff-panel__row.is-focus-target .gn-diff-panel__code-cell,
+.gn-diff-panel__split-pane-row.is-focus-target .gn-diff-panel__line-number,
+.gn-diff-panel__split-pane-row.is-focus-target .gn-diff-panel__change-marker,
+.gn-diff-panel__split-pane-row.is-focus-target .gn-diff-panel__code-cell {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--accent) 13%, transparent),
+    color-mix(in srgb, var(--accent) 13%, transparent)
+  );
+}
+
+.gn-diff-panel__row.is-focus-pulse,
+.gn-diff-panel__split-pane-row.is-focus-pulse {
+  animation: gn-diff-focus-pulse 900ms ease-out;
+}
+
+@keyframes gn-diff-focus-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+
+  42% {
+    filter: brightness(1.24);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gn-diff-panel__row.is-focus-pulse,
+  .gn-diff-panel__split-pane-row.is-focus-pulse {
+    animation: none;
+  }
+}
+
 .gn-diff-panel__split-pane-row:hover .gn-diff-panel__code-cell,
 .gn-diff-panel__row:hover .gn-diff-panel__code-cell {
   filter: brightness(1.08);

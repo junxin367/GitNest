@@ -365,6 +365,7 @@ describe("JsonWorkspaceStore", () => {
         unstaged: 2,
         untracked: 3,
         conflicted: 0,
+        contentVersion: 7,
         refreshPending: false,
         stale: false,
         refreshedAt: "2026-09-04T11:59:00.000Z"

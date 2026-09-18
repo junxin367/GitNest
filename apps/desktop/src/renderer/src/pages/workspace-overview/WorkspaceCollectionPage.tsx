@@ -9,6 +9,7 @@ import type {
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState
 } from "react";
@@ -16,7 +17,6 @@ import {
 import type { WorkspaceTab } from "../../app/navigation";
 import {
   filterSnapshotsToTargets,
-  findTargetSnapshot,
   getSnapshotChangeCount,
   listActiveWorkspaceTargets
 } from "../../entities/workspace/model";
@@ -129,12 +129,27 @@ export function WorkspaceCollectionPage({
     snapshots,
     activeTargets
   );
+  const worktreeById = new Map(
+    activeWorktrees.map((worktree) => [
+      worktree.id,
+      worktree
+    ])
+  );
+  const snapshotByTarget = new Map(
+    activeSnapshots.map((snapshot) => [
+      workspaceTargetKey(
+        snapshot.repositoryId,
+        snapshot.worktreeId
+      ),
+      snapshot
+    ])
+  );
   const repositoryRows = activeRepositories
     .map((repository) =>
       createRepositoryRow(
         repository,
-        activeWorktrees,
-        activeSnapshots
+        worktreeById,
+        snapshotByTarget
       )
     )
     .sort(compareRepositoryRows);
@@ -266,17 +281,29 @@ function WorkspaceWorktreesPanel({
     createWorktreeFilterState
   );
   const [repoMenuOpen, setRepoMenuOpen] = useState(false);
+  const filterInputRef = useRef<HTMLInputElement>(null);
   const repoMenuRootRef = useRef<HTMLDivElement>(null);
   const repoMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const repoMenuRef = useRef<HTMLDivElement>(null);
   const setRepoMenuRef = useCallback((node: HTMLDivElement | null) => {
     repoMenuRef.current = node;
   }, []);
+  const snapshotByTarget = useMemo(
+    () =>
+      new Map(
+        snapshots.map((snapshot) => [
+          workspaceTargetKey(
+            snapshot.repositoryId,
+            snapshot.worktreeId
+          ),
+          snapshot
+        ])
+      ),
+    [snapshots]
+  );
   const snapshotFor = (worktree: WorkspaceWorktreeDto) =>
-    snapshots.find(
-      (snapshot) =>
-        snapshot.repositoryId === worktree.repositoryId &&
-        snapshot.worktreeId === worktree.id
+    snapshotByTarget.get(
+      workspaceTargetKey(worktree.repositoryId, worktree.id)
     );
   const visibleWorktrees = worktrees.filter((worktree) =>
     matchesWorktreeFilters(worktree, snapshotFor(worktree), filters)
@@ -296,18 +323,33 @@ function WorkspaceWorktreesPanel({
   const dirtyCount = worktrees.filter((worktree) =>
     isWorktreeSnapshotDirty(snapshotFor(worktree))
   ).length;
-  const repositoryOptions = repositories
-    .filter((repository) =>
-      worktrees.some(
-        (worktree) => worktree.repositoryId === repository.id
-      )
-    )
-    .sort((left, right) => left.name.localeCompare(right.name));
-  const repositoryNames = new Map(
-    repositories.map((repository) => [
-      repository.id,
-      repository.name
-    ])
+  const repositoryIdsWithWorktrees = useMemo(
+    () =>
+      new Set(
+        worktrees.map((worktree) => worktree.repositoryId)
+      ),
+    [worktrees]
+  );
+  const repositoryOptions = useMemo(
+    () =>
+      repositories
+        .filter((repository) =>
+          repositoryIdsWithWorktrees.has(repository.id)
+        )
+        .sort((left, right) =>
+          left.name.localeCompare(right.name)
+        ),
+    [repositories, repositoryIdsWithWorktrees]
+  );
+  const repositoryNames = useMemo(
+    () =>
+      new Map(
+        repositories.map((repository) => [
+          repository.id,
+          repository.name
+        ])
+      ),
+    [repositories]
   );
   const selectedRepositoryName =
     repositoryNames.get(filters.repositoryId) ?? "全部仓库";
@@ -398,16 +440,32 @@ function WorkspaceWorktreesPanel({
         </span>
         {filterOpen && (
           <Input
-            appearance="unstyled"
             aria-label="筛选跨仓 Worktree"
             autoFocus
-            className="worktree-filter-input"
+            clearLabel="清除跨仓 Worktree 筛选"
+            fieldClassName="worktree-filter-field"
+            fullWidth
+            inputClassName="worktree-filter-input"
+            leading={<Icon name="search" size={13} />}
             onChange={(event) =>
               setFilters((current) => ({
                 ...current,
                 query: event.target.value
               }))
             }
+            {...(filters.query
+              ? {
+                  onClear: () => {
+                    setFilters((current) => ({
+                      ...current,
+                      query: ""
+                    }));
+                    filterInputRef.current?.focus({
+                      preventScroll: true
+                    });
+                  }
+                }
+              : {})}
             onKeyDown={(event) => {
               if (event.key !== "Escape") {
                 return;
@@ -420,6 +478,8 @@ function WorkspaceWorktreesPanel({
               }));
             }}
             placeholder="筛选分支、路径或状态"
+            ref={filterInputRef}
+            size="small"
             value={filters.query}
           />
         )}
@@ -504,13 +564,13 @@ function WorkspaceWorktreesPanel({
         )}
       </div>
       <div
-        aria-label="按状态筛选 Worktree"
+        aria-label="按类型筛选 Worktree"
         className="worktree-filter-bar"
         role="group"
       >
-        <span className="worktree-filter-bar-label">状态</span>
+        <span className="worktree-filter-bar-label">类型</span>
         {WORKTREE_FACET_OPTIONS.map((option) => {
-          const selected = filters.facets.includes(option.id);
+          const selected = filters.facet === option.id;
           return (
             <Button variant="unstyled"
               aria-pressed={selected}
@@ -522,8 +582,8 @@ function WorkspaceWorktreesPanel({
               onClick={() =>
                 setFilters((current) => ({
                   ...current,
-                  facets: toggleWorktreeFacet(
-                    current.facets,
+                  facet: toggleWorktreeFacet(
+                    current.facet,
                     option.id
                   )
                 }))
@@ -974,23 +1034,18 @@ function WorkspaceEmptyState({
 
 function createRepositoryRow(
   repository: WorkspaceRepositoryDto,
-  worktrees: WorkspaceWorktreeDto[],
-  snapshots: RepositoryStatusSnapshotDto[]
+  worktreeById: Map<string, WorkspaceWorktreeDto>,
+  snapshotByTarget: Map<
+    string,
+    RepositoryStatusSnapshotDto
+  >
 ): WorkspaceRepositoryRow {
   const worktree =
     repository.worktreeIds
-      .map((worktreeId) =>
-        worktrees.find(
-          (candidate) => candidate.id === worktreeId
-        )
-      )
+      .map((worktreeId) => worktreeById.get(worktreeId))
       .find((candidate) => candidate?.isPrimary) ??
     repository.worktreeIds
-      .map((worktreeId) =>
-        worktrees.find(
-          (candidate) => candidate.id === worktreeId
-        )
-      )
+      .map((worktreeId) => worktreeById.get(worktreeId))
       .find(Boolean);
   const target = worktree
     ? {
@@ -1003,8 +1058,22 @@ function createRepositoryRow(
     repository,
     target,
     worktree,
-    snapshot: findTargetSnapshot(snapshots, target)
+    snapshot: target
+      ? snapshotByTarget.get(
+          workspaceTargetKey(
+            target.repositoryId,
+            target.worktreeId
+          )
+        )
+      : undefined
   };
+}
+
+function workspaceTargetKey(
+  repositoryId: string,
+  worktreeId: string
+): string {
+  return `${repositoryId}\u0000${worktreeId}`;
 }
 
 function compareRepositoryRows(

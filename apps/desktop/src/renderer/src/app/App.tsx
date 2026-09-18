@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -36,7 +38,10 @@ import { useExternalTerminals } from "../features/external-terminal/useExternalT
 import { GlobalSearchDialog } from "../features/global-search/GlobalSearchDialog";
 import { useWorkspaceChangedFiles } from "../features/global-search/useWorkspaceChangedFiles";
 import { RepositoryCommandDialog } from "../features/repository-command/RepositoryCommandDialog";
-import { useRepositoryCommands } from "../features/repository-command/useRepositoryCommands";
+import {
+  isRepositoryCommandOperation,
+  useRepositoryCommands
+} from "../features/repository-command/useRepositoryCommands";
 import { useAppSettings } from "../features/settings/useAppSettings";
 import {
   chunkRepositoryTargets,
@@ -44,17 +49,35 @@ import {
   resolveStartupNavigation
 } from "../features/settings/settingsRuntime";
 import { RepositoryPage } from "../pages/repository/RepositoryPage";
-import { OperationCenterPage } from "../pages/operations/OperationCenterPage";
-import { ApplicationSettingsPage } from "../pages/settings/ApplicationSettingsPage";
+import type {
+  ApplicationSettingsSection
+} from "../pages/settings/ApplicationSettingsPage";
 import { WorkspaceCollectionPage } from "../pages/workspace-overview/WorkspaceCollectionPage";
 import { WorkspaceOverviewPage } from "../pages/workspace-overview/WorkspaceOverviewPage";
 import { Icon } from "../shared/ui/Icon";
+import { Skeleton } from "../shared/ui/Skeleton";
 import { ActivityRail } from "../widgets/activity-rail/ActivityRail";
 import { AppTitlebar } from "../widgets/app-titlebar/AppTitlebar";
 import { DetailInspector } from "../widgets/detail-inspector/DetailInspector";
 import { RepositoryHeader } from "../widgets/repository-header/RepositoryHeader";
 import { StatusBar } from "../widgets/status-bar/StatusBar";
 import { WorkspaceSidebar } from "../widgets/workspace-sidebar/WorkspaceSidebar";
+
+const CodeAnalysisPage = lazy(() =>
+  import("../pages/code-analysis/CodeAnalysisPage").then(
+    (module) => ({ default: module.CodeAnalysisPage })
+  )
+);
+const OperationCenterPage = lazy(() =>
+  import("../pages/operations/OperationCenterPage").then(
+    (module) => ({ default: module.OperationCenterPage })
+  )
+);
+const ApplicationSettingsPage = lazy(() =>
+  import("../pages/settings/ApplicationSettingsPage").then(
+    (module) => ({ default: module.ApplicationSettingsPage })
+  )
+);
 
 export function App() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -75,6 +98,8 @@ export function App() {
     useState(false);
   const [repositoryTab, setRepositoryTab] =
     useState<RepositoryTab>("overview");
+  const [settingsSection, setSettingsSection] =
+    useState<ApplicationSettingsSection>("general");
   const [selectedCommit, setSelectedCommit] = useState<
     RepositoryCommitDto["commit"] | null
   >(null);
@@ -159,7 +184,9 @@ export function App() {
       appSettings.settings.general.defaultTerminalKind
     );
   const fullPageView =
-    view === "operations" || view === "settings";
+    view === "analysis" ||
+    view === "operations" ||
+    view === "settings";
   const inspectorVisible =
     inspectorOpen && !fullPageView;
   const directoryPanelHidden =
@@ -388,7 +415,11 @@ export function App() {
       { silent: true }
     );
   };
-  const navigate = (nextView: AppView) => {
+  const navigate = (
+    nextView: AppView,
+    nextSettingsSection: ApplicationSettingsSection =
+      "general"
+  ) => {
     changeNavigationSequence.current += 1;
     setPendingChangeNavigation(null);
     if (nextView === "workspace") {
@@ -404,10 +435,14 @@ export function App() {
       );
     }
     if (
+      nextView === "analysis" ||
       nextView === "operations" ||
       nextView === "settings"
     ) {
       setInspectorOpen(false);
+    }
+    if (nextView === "settings") {
+      setSettingsSection(nextSettingsSection);
     }
     setView(nextView);
   };
@@ -653,79 +688,92 @@ export function App() {
               id="main-content"
               tabIndex={-1}
             >
-              {view === "workspace" && workspaceTab === "overview" ? (
-                <WorkspaceOverviewPage
-                  busy={workspace.busy}
-                  error={workspace.error}
-                  notice={workspace.notice}
-                  operation={workspace.operation}
-                  snapshots={workspace.snapshots}
-                  workspace={workspace.workspace}
-                  onAddDirectory={() =>
-                    void workspace.chooseDirectory()
-                  }
-                  onAddManualPath={workspace.addManualPath}
-                  onClearFeedback={workspace.clearFeedback}
-                  onSelectTarget={openRepositoryTarget}
-                />
-              ) : view === "workspace" ? (
-                <WorkspaceCollectionPage
-                  busy={workspace.busy}
-                  loading={workspace.operation === "loading"}
-                  onAddDirectory={() =>
-                    void workspace.chooseDirectory()
-                  }
-                  onSelectTarget={openRepositoryTarget}
-                  snapshots={workspace.snapshots}
-                  tab={
-                    workspaceTab === "overview"
-                      ? "repositories"
-                      : workspaceTab
-                  }
-                  workspace={workspace.workspace}
-                />
-              ) : view === "repository" ? (
-                <RepositoryPage
-                  appSettings={appSettings}
-                  changeSelectionRequest={
-                    pendingChangeNavigation
-                  }
-                  externalApplications={externalApplications}
-                  operations={workspace.operations}
-                  snapshots={workspace.snapshots}
-                  tab={repositoryTab}
-                  target={workspace.workspace?.selectedTarget}
-                  workspace={workspace.workspace}
-                  commands={repositoryCommands}
-                  terminals={externalTerminals}
-                  onOpenTab={openRepositoryTab}
-                  onCommitSelectionChange={setSelectedCommit}
-                  onChangeSelectionHandled={(requestId) =>
-                    setPendingChangeNavigation((current) =>
-                      current?.id === requestId
-                        ? null
-                        : current
-                    )
-                  }
-                />
-              ) : view === "operations" ? (
-                <OperationCenterPage
-                  commands={repositoryCommands}
-                  loading={workspace.operation === "loading"}
-                  onOpenTarget={openRepositoryTarget}
-                  operations={workspace.operations}
-                  snapshots={workspace.snapshots}
-                  workspace={workspace.workspace}
-                />
-              ) : (
-                <ApplicationSettingsPage
-                  accounts={accounts}
-                  appSettings={appSettings}
-                  gitEnvironment={gitEnvironment}
-                  terminalProfiles={externalTerminals.profiles}
-                  workspace={workspace.workspace}
-                />
-              )}
+              <Suspense fallback={<AppPageLoadingFallback />}>
+                {view === "workspace" &&
+                workspaceTab === "overview" ? (
+                  <WorkspaceOverviewPage
+                    busy={workspace.busy}
+                    error={workspace.error}
+                    notice={workspace.notice}
+                    operation={workspace.operation}
+                    snapshots={workspace.snapshots}
+                    workspace={workspace.workspace}
+                    onAddDirectory={() =>
+                      void workspace.chooseDirectory()
+                    }
+                    onAddManualPath={workspace.addManualPath}
+                    onClearFeedback={workspace.clearFeedback}
+                    onSelectTarget={openRepositoryTarget}
+                  />
+                ) : view === "workspace" ? (
+                  <WorkspaceCollectionPage
+                    busy={workspace.busy}
+                    loading={workspace.operation === "loading"}
+                    onAddDirectory={() =>
+                      void workspace.chooseDirectory()
+                    }
+                    onSelectTarget={openRepositoryTarget}
+                    snapshots={workspace.snapshots}
+                    tab={
+                      workspaceTab === "overview"
+                        ? "repositories"
+                        : workspaceTab
+                    }
+                    workspace={workspace.workspace}
+                  />
+                ) : view === "repository" ? (
+                  <RepositoryPage
+                    appSettings={appSettings}
+                    changeSelectionRequest={
+                      pendingChangeNavigation
+                    }
+                    externalApplications={externalApplications}
+                    operations={workspace.operations}
+                    snapshots={workspace.snapshots}
+                    tab={repositoryTab}
+                    target={workspace.workspace?.selectedTarget}
+                    workspace={workspace.workspace}
+                    commands={repositoryCommands}
+                    terminals={externalTerminals}
+                    onOpenTab={openRepositoryTab}
+                    onCommitSelectionChange={setSelectedCommit}
+                    onChangeSelectionHandled={(requestId) =>
+                      setPendingChangeNavigation((current) =>
+                        current?.id === requestId
+                          ? null
+                          : current
+                      )
+                    }
+                  />
+                ) : view === "analysis" ? (
+                  <CodeAnalysisPage
+                    onOpenSettings={() =>
+                      navigate("settings", "analysis")
+                    }
+                    onReloadSettings={appSettings.reload}
+                    settings={appSettings.settings}
+                    workspace={workspace.workspace}
+                  />
+                ) : view === "operations" ? (
+                  <OperationCenterPage
+                    commands={repositoryCommands}
+                    loading={workspace.operation === "loading"}
+                    onOpenTarget={openRepositoryTarget}
+                    operations={workspace.operations}
+                    snapshots={workspace.snapshots}
+                    workspace={workspace.workspace}
+                  />
+                ) : (
+                  <ApplicationSettingsPage
+                    accounts={accounts}
+                    appSettings={appSettings}
+                    gitEnvironment={gitEnvironment}
+                    initialSection={settingsSection}
+                    terminalProfiles={externalTerminals.profiles}
+                    workspace={workspace.workspace}
+                  />
+                )}
+              </Suspense>
             </main>
             {inspectorVisible && (
               <DetailInspector
@@ -808,23 +856,38 @@ export function App() {
   );
 }
 
-function isRepositoryCommandOperation(kind: string): boolean {
-  return [
-    "fetch",
-    "pull",
-    "push",
-    "switch-branch",
-    "create-branch",
-    "rename-branch",
-    "delete-branch",
-    "worktree-create",
-    "worktree-lock",
-    "worktree-unlock",
-    "worktree-move",
-    "worktree-repair",
-    "worktree-prune",
-    "worktree-remove"
-  ].includes(kind);
+function AppPageLoadingFallback() {
+  return (
+    <div
+      aria-busy="true"
+      aria-label="正在加载页面"
+      className="page-scroll gn-page-skeleton"
+      role="status"
+    >
+      <div className="gn-skeleton-heading">
+        <Skeleton height={12} variant="text" width="18%" />
+        <Skeleton height={28} width="38%" />
+        <Skeleton height={10} variant="text" width="62%" />
+      </div>
+      <div className="gn-skeleton-panel">
+        <div className="gn-skeleton-panel-header">
+          <Skeleton height={14} width="32%" />
+          <Skeleton height={10} variant="text" width="20%" />
+        </div>
+        <div className="gn-skeleton-list">
+          {Array.from({ length: 5 }, (_, index) => (
+            <div className="gn-skeleton-row" key={index}>
+              <div className="gn-skeleton-row-copy">
+                <Skeleton height={11} />
+                <Skeleton height={9} variant="text" />
+              </div>
+              <Skeleton height={18} width="100%" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function handleDragEnter(

@@ -3,14 +3,29 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-const css = readFileSync(
-  fileURLToPath(
-    new URL(
-      "../renderer/src/app/styles/global.css",
-      import.meta.url
-    )
-  ),
-  "utf8"
+function readCssBundle(
+  sourceUrl: URL,
+  visited = new Set<string>()
+): string {
+  const sourcePath = fileURLToPath(sourceUrl);
+  if (visited.has(sourcePath)) {
+    return "";
+  }
+  visited.add(sourcePath);
+
+  const source = readFileSync(sourcePath, "utf8");
+  return source.replace(
+    /@import\s+["']([^"']+)["'];/g,
+    (_, importPath: string) =>
+      readCssBundle(new URL(importPath, sourceUrl), visited)
+  );
+}
+
+const css = readCssBundle(
+  new URL(
+    "../renderer/src/app/styles/global.css",
+    import.meta.url
+  )
 );
 const sharedButtonCss = readFileSync(
   fileURLToPath(
@@ -39,6 +54,51 @@ const diffWorkspaceCss = readFileSync(
   ),
   "utf8"
 );
+const codeRelationGraphSource = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../renderer/src/pages/code-analysis/CodeRelationGraph.tsx",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+const codeAnalysisPageSource = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../renderer/src/pages/code-analysis/CodeAnalysisPage.tsx",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+const applicationSettingsPageSource = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../renderer/src/pages/settings/ApplicationSettingsPage.tsx",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+const repositoryHistorySource = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../renderer/src/pages/repository/RepositoryHistory.tsx",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+const repositoryCommitDetailSource = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../renderer/src/pages/repository/RepositoryCommitDetail.tsx",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
 const prototypeShellHtml = readFileSync(
   fileURLToPath(
     new URL(
@@ -57,15 +117,32 @@ const prototypeDiffWorkspaceCss = readFileSync(
   ),
   "utf8"
 );
+const prototypeDiffPanelSource = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../prototypes/workspace-shell/diff-panel.js",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
 const loadingUiSources = [
+  "../renderer/src/pages/code-analysis/CodeAnalysisPage.tsx",
   "../renderer/src/pages/diff-viewer/DiffViewerApp.tsx",
   "../renderer/src/pages/operations/OperationCenterPage.tsx",
+  "../renderer/src/pages/repository/RepositoryBranches.tsx",
+  "../renderer/src/pages/repository/RepositoryChanges.tsx",
+  "../renderer/src/pages/repository/RepositoryCommitDetail.tsx",
+  "../renderer/src/pages/repository/RepositoryHistory.tsx",
+  "../renderer/src/pages/repository/RepositoryOverview.tsx",
   "../renderer/src/pages/repository/RepositoryPage.tsx",
+  "../renderer/src/pages/repository/RepositoryWorktrees.tsx",
   "../renderer/src/pages/settings/ApplicationSettingsPage.tsx",
   "../renderer/src/pages/settings/SettingsPage.tsx",
   "../renderer/src/pages/workspace-overview/WorkspaceCollectionPage.tsx",
   "../renderer/src/pages/workspace-overview/WorkspaceOverviewPage.tsx",
   "../renderer/src/widgets/diff-workspace/DiffPanel.tsx",
+  "../renderer/src/widgets/diff-workspace/DiffPanelContent.tsx",
   "../renderer/src/widgets/diff-workspace/DiffWorkspace.tsx",
   "../renderer/src/widgets/repository-header/BranchSwitchDialog.tsx",
   "../renderer/src/widgets/workspace-sidebar/WorkspaceSidebar.tsx"
@@ -101,6 +178,517 @@ describe("renderer design-system guardrails", () => {
     );
     expect(css).toMatch(
       /\.diff-open-viewer-button\s*\{[\s\S]*?height:\s*var\(--control-compact\)/
+    );
+  });
+
+  it("lets settings pages and their skeletons fill the available content width", () => {
+    const applicationSettingsRule =
+      css.match(/\.application-settings-page\s*\{([^}]*)\}/)?.[1] ??
+      "";
+    const prototypeSettingsRule =
+      prototypeShellHtml.match(/\.settings-page\s*\{([^}]*)\}/)?.[1] ??
+      "";
+
+    for (const rule of [
+      applicationSettingsRule,
+      prototypeSettingsRule
+    ]) {
+      expect(rule).toContain("width: 100%");
+      expect(rule).toContain("min-width: 0");
+      expect(rule).not.toContain("max-width");
+      expect(rule).not.toContain("margin-left: auto");
+      expect(rule).not.toContain("margin-right: auto");
+    }
+  });
+
+  it("auto-fits compact settings preference groups to the available width", () => {
+    for (const source of [css, prototypeShellHtml]) {
+      const preferenceGridRules = [
+        ...source.matchAll(
+          /\.settings-preference-groups\s*\{([^}]*)\}/g
+        )
+      ].map((match) => match[1] ?? "");
+
+      expect(preferenceGridRules).toHaveLength(1);
+      expect(preferenceGridRules[0]).toContain(
+        "repeat(auto-fit, minmax(min(220px, 100%), 1fr))"
+      );
+    }
+  });
+
+  it("uses clearable shared inputs for Worktree text filters", () => {
+    expect(loadingUiSources).toContain(
+      'clearLabel="清除 Worktree 筛选"'
+    );
+    expect(loadingUiSources).toContain(
+      'clearLabel="清除跨仓 Worktree 筛选"'
+    );
+    expect(prototypeShellHtml).toContain(
+      'ariaLabel: "清除 Worktree 筛选"'
+    );
+    expect(prototypeShellHtml).toContain(
+      'ariaLabel: "清除跨仓 Worktree 筛选"'
+    );
+  });
+
+  it("uses shared dropdown components for the default terminal selector", () => {
+    const settingsCardStart =
+      applicationSettingsPageSource.indexOf(
+        'title="默认终端"'
+      );
+    const settingsCardSource =
+      applicationSettingsPageSource.slice(
+        settingsCardStart,
+        settingsCardStart + 1_800
+      );
+    const prototypeCardStart =
+      prototypeShellHtml.indexOf(
+        '<div class="settings-card-title">默认终端</div>'
+      );
+    const prototypeCardSource = prototypeShellHtml.slice(
+      prototypeCardStart,
+      prototypeCardStart + 2_500
+    );
+
+    expect(settingsCardStart).toBeGreaterThan(-1);
+    expect(settingsCardSource).toContain(
+      "<TerminalProfileDropdown"
+    );
+    expect(applicationSettingsPageSource).toContain(
+      "<MenuPopover"
+    );
+    expect(settingsCardSource).not.toContain("<select");
+
+    expect(prototypeCardStart).toBeGreaterThan(-1);
+    expect(prototypeCardSource).toContain(
+      'id="settingsTerminalTrigger"'
+    );
+    expect(prototypeCardSource).toContain(
+      'id="settingsTerminalMenu"'
+    );
+    expect(prototypeCardSource).not.toContain("<details");
+    expect(prototypeCardSource).not.toContain("<select");
+    expect(prototypeShellHtml).toContain(
+      'dropdownManager.register({\n        id: "settings-terminal"'
+    );
+  });
+
+  it("keeps the current AI API Key visible on request and after saving", () => {
+    const saveAiSettingsStart =
+      applicationSettingsPageSource.indexOf(
+        "const saveAiSettings = async () =>"
+      );
+    const saveAiSettingsSource =
+      applicationSettingsPageSource.slice(
+        saveAiSettingsStart,
+        applicationSettingsPageSource.indexOf(
+          "const testAiConnection",
+          saveAiSettingsStart
+        )
+      );
+    const prototypeApiKeyStart = prototypeShellHtml.indexOf(
+      'id: "aiCommitApiKey"'
+    );
+    const prototypeApiKeySource = prototypeShellHtml.slice(
+      prototypeApiKeyStart,
+      prototypeApiKeyStart + 1_200
+    );
+
+    expect(saveAiSettingsStart).toBeGreaterThan(-1);
+    expect(saveAiSettingsSource).not.toContain('setAiKey("")');
+    expect(applicationSettingsPageSource).toContain(
+      'type={aiKeyVisible ? "text" : "password"}'
+    );
+    expect(applicationSettingsPageSource).toContain(
+      'aria-label={\n                          aiKeyVisible'
+    );
+
+    expect(prototypeShellHtml).toContain(
+      "function toggleAiApiKeyVisibility()"
+    );
+    expect(prototypeApiKeyStart).toBeGreaterThan(-1);
+    expect(prototypeApiKeySource).toContain(
+      'type: state.aiKeyVisible ? "text" : "password"'
+    );
+    expect(prototypeApiKeySource).toContain(
+      'onclick="toggleAiApiKeyVisibility()"'
+    );
+  });
+
+  it("keeps code-analysis cards level and its diff drawer aligned to the graph", () => {
+    expect(css).toMatch(
+      /\.analysis-summary-grid\s*>\s*\.analysis-summary-card\s*\{[^}]*margin-top:\s*0;/
+    );
+    expect(css).toMatch(
+      /\.analysis-node-diff-drawer\s*\{[^}]*inset:\s*0 auto 0 0;/
+    );
+    expect(css).toMatch(
+      /\.analysis-graph-workspace\.is-fullscreen\s+\.analysis-node-diff-drawer\s*\{[\s\S]*?inset:\s*var\(--space-3\)\s+auto\s+var\(--space-3\)\s+var\(--space-3\);/
+    );
+  });
+
+  it("keeps the analysis graph height independent from node-detail content", () => {
+    expect(css).toMatch(
+      /\.code-analysis-page\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/
+    );
+    expect(prototypeShellHtml).toMatch(
+      /\.analysis-page-scroll\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/
+    );
+    for (const source of [css, prototypeShellHtml]) {
+      expect(source).toMatch(
+        /\.analysis-workbench\s*\{[^}]*flex:\s*1 0 590px;/
+      );
+    }
+  });
+
+  it("keeps code-analysis progress information on one line", () => {
+    for (const source of [css, prototypeShellHtml]) {
+      expect(source).toMatch(
+        /\.analysis-progress-copy\s*\{[^}]*min-width:\s*0;[^}]*white-space:\s*nowrap;/
+      );
+      expect(source).toMatch(
+        /\.analysis-progress-copy\s*>\s*span:first-child\s*\{[^}]*flex:\s*1 1 auto;[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*white-space:\s*nowrap;/
+      );
+      expect(source).toMatch(
+        /\.analysis-progress-copy\s*>\s*span:last-child\s*\{[^}]*flex:\s*0 0 auto;[^}]*white-space:\s*nowrap;/
+      );
+    }
+  });
+
+  it("fills and centers the code-analysis empty state in the remaining page space", () => {
+    const emptyStateRule =
+      css.match(/\.analysis-empty-state\s*\{([^}]*)\}/)?.[1] ??
+      "";
+
+    expect(emptyStateRule).toContain("flex: 1 1 0");
+    expect(emptyStateRule).toContain(
+      "flex-direction: column"
+    );
+    expect(emptyStateRule).toContain(
+      "justify-content: center"
+    );
+    expect(emptyStateRule).toContain("min-height: 0");
+    expect(emptyStateRule).toContain("text-align: center");
+  });
+
+  it("wraps graph-node paths with compact node insets", () => {
+    for (const source of [
+      codeRelationGraphSource,
+      prototypeShellHtml
+    ]) {
+      expect(source).toContain("analysis-node-copy");
+      expect(source).toContain("analysis-node-copy-inner");
+      expect(source).toContain("foreignObject");
+      expect(source).not.toMatch(
+        /truncate(?:AnalysisText)?\(node\.(?:name|location\.path)/
+      );
+    }
+    expect(codeRelationGraphSource).toContain(
+      "const NODE_HEIGHT = 88"
+    );
+    expect(codeRelationGraphSource).toContain(
+      "const NODE_TEXT_INSET = 8"
+    );
+    expect(codeRelationGraphSource).toContain(
+      "const NODE_TEXT_TOP = 24"
+    );
+    expect(prototypeShellHtml).toContain(
+      "const nodeHeight = 88"
+    );
+    expect(prototypeShellHtml).toContain(
+      "const nodeTextInset = 8"
+    );
+    expect(prototypeShellHtml).toContain(
+      "const nodeTextTop = 24"
+    );
+    for (const source of [css, prototypeShellHtml]) {
+      expect(source).toMatch(
+        /\.analysis-node-copy-inner\s*\{[^}]*padding:\s*0;[^}]*overflow:\s*hidden;/
+      );
+      expect(source).toMatch(
+        /\.analysis-node-copy-inner\s*>\s*\*\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/
+      );
+      expect(source).toMatch(
+        /\.analysis-node-path\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*text-overflow:\s*clip;[^}]*white-space:\s*normal;/
+      );
+    }
+  });
+
+  it("uses distinct colors for graph-node names, documentation, and paths", () => {
+    for (const source of [css, prototypeShellHtml]) {
+      expect(source).toMatch(
+        /\.analysis-node-name\s*\{[^}]*color:\s*var\(--text\);[^}]*fill:\s*var\(--text\);/
+      );
+      expect(source).toMatch(
+        /\.analysis-node-path\s*\{[^}]*color:\s*var\(--muted\);[^}]*fill:\s*var\(--muted\);/
+      );
+    }
+    expect(css).toMatch(
+      /\.analysis-node-documentation-summary\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--green\) 62%,\s*var\(--muted\)\);[^}]*fill:\s*color-mix\(in srgb,\s*var\(--green\) 62%,\s*var\(--muted\)\);/
+    );
+    expect(prototypeShellHtml).toMatch(
+      /\.analysis-node-description\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--green\) 62%,\s*var\(--muted\)\);[^}]*fill:\s*color-mix\(in srgb,\s*var\(--green\) 62%,\s*var\(--muted\)\);/
+    );
+  });
+
+  it("keeps the prototype request-chain focus mirrored in the graph", () => {
+    expect(prototypeShellHtml).toContain(
+      "const graphSelected = selected || chain?.nodes[0] || null;"
+    );
+    expect(prototypeShellHtml).toContain(
+      "renderAnalysisFlow(chain, graphSelected)"
+    );
+    expect(prototypeShellHtml).toContain(
+      'element.getAttribute("data-analysis-node-id") === graphSelected?.id'
+    );
+  });
+
+  it("uses a 300px breadcrumb-switched commit detail surface", () => {
+    for (const source of [css, prototypeShellHtml]) {
+      expect(source).toMatch(
+        /\.history-layout\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\) 300px;/
+      );
+      expect(source).toMatch(
+        /\.history-commit-detail\s*\{[^}]*height:\s*300px;[^}]*min-height:\s*300px;[^}]*max-height:\s*300px;/
+      );
+      expect(source).toMatch(
+        /\.history-commit-breadcrumb button\[aria-current="page"\]\s*\{/
+      );
+      expect(source).toMatch(
+        /\.history-commit-file-browser\s*\{[^}]*grid-template-columns:\s*minmax\(220px,\s*300px\) minmax\(0,\s*1fr\);[^}]*height:\s*100%;/
+      );
+      expect(source).not.toMatch(
+        /\.history-commit-files\[open\]\s*\{/
+      );
+    }
+    expect(css).toMatch(
+      /\.history-commit-detail\s+\.commit-file-list\s*\{[^}]*align-content:\s*start;[^}]*grid-auto-rows:\s*max-content;[^}]*overflow:\s*auto;/
+    );
+    expect(prototypeShellHtml).toMatch(
+      /\.history-commit-file-list\s*\{[^}]*align-content:\s*start;[^}]*grid-auto-rows:\s*max-content;[^}]*overflow:\s*auto;/
+    );
+
+    expect(repositoryHistorySource).toContain(
+      'aria-label="提交详情导航"'
+    );
+    expect(repositoryHistorySource).toContain(
+      'data-history-commit-view="details"'
+    );
+    expect(repositoryHistorySource).toContain(
+      'data-history-commit-view="files"'
+    );
+    expect(repositoryHistorySource).toContain(
+      "view={commitDetailView}"
+    );
+    expect(repositoryCommitDetailSource).toContain(
+      'view === "details"'
+    );
+    expect(repositoryCommitDetailSource).toContain(
+      'className="history-commit-files"'
+    );
+    expect(repositoryCommitDetailSource).not.toContain(
+      'className="history-commit-files-header"'
+    );
+
+    expect(prototypeShellHtml).toContain(
+      'historyCommitView: "details"'
+    );
+    expect(prototypeShellHtml).toContain(
+      "function setHistoryCommitView(view)"
+    );
+    expect(prototypeShellHtml).toContain(
+      'historyCommitView === "files"'
+    );
+    expect(prototypeShellHtml).toContain(
+      "onclick=\"setHistoryCommitView('details')\""
+    );
+    expect(prototypeShellHtml).toContain(
+      "onclick=\"setHistoryCommitView('files')\""
+    );
+    expect(prototypeShellHtml).toContain(
+      'data-history-commit-view="${historyCommitView}"'
+    );
+    expect(prototypeShellHtml).not.toContain(
+      "historyCommitFilesOpen"
+    );
+    expect(prototypeShellHtml).not.toContain(
+      '<details class="history-commit-files"'
+    );
+  });
+
+  it("keeps the prototype analysis time first and updates it only after a successful run", () => {
+    const runtimeStripStart = prototypeShellHtml.indexOf(
+      '<div class="analysis-runtime-strip">'
+    );
+    const runtimeStrip = prototypeShellHtml.slice(
+      runtimeStripStart,
+      runtimeStripStart + 500
+    );
+    expect(runtimeStrip.indexOf("分析时间")).toBeGreaterThan(
+      -1
+    );
+    expect(runtimeStrip.indexOf("分析时间")).toBeLessThan(
+      runtimeStrip.indexOf('workspaceScope ? "全部代码"')
+    );
+    expect(prototypeShellHtml).toContain(
+      "state.analysisGeneratedAt = new Date().toISOString();"
+    );
+  });
+
+  it("keeps prototype analysis scopes isolated and switches between Diff and source", () => {
+    expect(prototypeShellHtml).not.toContain(
+      "Workspace 代码智能"
+    );
+    expect(prototypeShellHtml).not.toContain(
+      "可观察后台任务"
+    );
+    expect(prototypeShellHtml).toContain(
+      "for (const chain of analysisChainsInCurrentScope())"
+    );
+    expect(prototypeShellHtml).toContain(
+      "analysisChainsInCurrentScope().find((candidate) => candidate.id === chainId)"
+    );
+    expect(prototypeShellHtml).toContain(
+      'selectedNode.changed ? "查看文件 Diff" : "查看代码"'
+    );
+    expect(prototypeShellHtml).toContain(
+      "function analysisNodeCodeRows(node)"
+    );
+    expect(prototypeShellHtml).toContain(
+      "if (selected && state.analysisDiffExpanded)"
+    );
+    expect(prototypeShellHtml).not.toContain(
+      "if (!selected?.changed)"
+    );
+  });
+
+  it("keeps the analysis node action area fixed below the scrollable details", () => {
+    expect(css).toMatch(
+      /\.analysis-chain-panel\.is-node-detail\s*\{\s*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto;/
+    );
+    expect(css).toMatch(
+      /\.analysis-node-details\s*\{[^}]*overflow:\s*auto;/
+    );
+    expect(codeAnalysisPageSource).toMatch(
+      /<\/div>\s*<section className="analysis-node-diff-trigger">/
+    );
+    expect(prototypeShellHtml).toContain(
+      ".analysis-chain-panel.is-node-detail"
+    );
+    expect(prototypeShellHtml).toMatch(
+      /<\/div>\s*<section class="analysis-node-diff-trigger">/
+    );
+  });
+
+  it("keeps prototype node details aligned with the application layout", () => {
+    expect(prototypeShellHtml).toMatch(
+      /\.analysis-node-details \.detail-list\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/
+    );
+    expect(prototypeShellHtml).toMatch(
+      /\.analysis-node-details \.detail-row\s*\{[^}]*padding:\s*var\(--space-2\);[^}]*background:\s*var\(--surface-2\);[^}]*border:\s*1px solid var\(--border-soft\);/
+    );
+    expect(prototypeShellHtml).toContain(
+      'class="detail-row analysis-detail-wide"'
+    );
+    expect(prototypeShellHtml).toContain(
+      '<section class="analysis-node-documentation">'
+    );
+    expect(prototypeShellHtml).toContain("<h3>代码注释</h3>");
+  });
+
+  it("uses scoped editor colors for code-analysis source without changing ordinary Diff rows", () => {
+    expect(css).toContain(
+      ".analysis-node-source-line .analysis-source-token.is-keyword"
+    );
+    expect(css).toContain(
+      ".diff-viewer-search-hit.current"
+    );
+    expect(prototypeShellHtml).toContain(
+      ".analysis-node-diff-panel.is-code-view .gn-diff-panel__syntax-token.is-keyword"
+    );
+    expect(prototypeShellHtml).toContain(
+      "syntaxTokens: syntaxLines[index] || []"
+    );
+    expect(prototypeDiffPanelSource).toContain(
+      "function tokenizeSourceLines("
+    );
+    expect(prototypeDiffPanelSource).toContain(
+      "row.syntaxTokens"
+    );
+    expect(prototypeDiffPanelSource).toMatch(
+      /syntaxMarkup\(\s*text,\s*hit\.start,\s*hit\.end,\s*tokens\s*\)/
+    );
+  });
+
+  it("uses a layout-matched skeleton for the initial code-analysis load", () => {
+    expect(codeAnalysisPageSource).toContain(
+      "fallback={<CodeAnalysisSkeleton />}"
+    );
+    expect(codeAnalysisPageSource).toContain(
+      "hasContent={Boolean(availableSnapshot)}"
+    );
+    expect(codeAnalysisPageSource).toContain(
+      'label="正在读取代码分析"'
+    );
+    expect(css).toMatch(
+      /\.analysis-skeleton-workbench\s*\{[^}]*flex:\s*1 0 590px;/
+    );
+    expect(prototypeShellHtml).toContain(
+      "function renderCodeAnalysisSkeleton()"
+    );
+    expect(prototypeShellHtml).toContain(
+      'aria-label="正在读取代码分析"'
+    );
+    expect(prototypeShellHtml).toContain(
+      "if (state.analysisLoading)"
+    );
+    expect(prototypeButtonCss).toContain(
+      "@keyframes gn-skeleton-shimmer"
+    );
+  });
+
+  it("keeps analysis warnings beside Java LSP at the runtime row height", () => {
+    const runtimeStripStart = prototypeShellHtml.indexOf(
+      '<div class="analysis-runtime-strip">'
+    );
+    const runtimeStrip = prototypeShellHtml.slice(
+      runtimeStripStart,
+      runtimeStripStart + 900
+    );
+    const javaStateIndex = runtimeStrip.indexOf(
+      'renderAnalysisLanguageServerState("java", "Java LSP")'
+    );
+    const warningIndex = runtimeStrip.indexOf(
+      'class="analysis-warning-panel"'
+    );
+
+    expect(javaStateIndex).toBeGreaterThan(-1);
+    expect(warningIndex).toBeGreaterThan(javaStateIndex);
+    for (const source of [css, prototypeShellHtml]) {
+      expect(source).toMatch(
+        /\.analysis-runtime-strip\s*>\s*span,\s*\.analysis-warning-panel\s*>\s*summary\s*\{[\s\S]*?height:\s*28px;/
+      );
+      expect(source).toMatch(
+        /\.analysis-warning-panel\s*>\s*\.analysis-warning-menu\s*\{[\s\S]*?position:\s*absolute;/
+      );
+    }
+  });
+
+  it("uses clearable code-analysis filters and the shared dropdown component", () => {
+    expect(prototypeShellHtml).toContain(
+      'ariaLabel: "清空请求链筛选"'
+    );
+    expect(prototypeShellHtml).toContain(
+      'class="analysis-method-menu"'
+    );
+    expect(prototypeShellHtml).toContain(
+      'data-dropdown-id="analysis-method-filter"'
+    );
+    expect(prototypeShellHtml).toContain(
+      'role: "menuitemradio"'
+    );
+    expect(prototypeShellHtml).not.toContain(
+      '<select aria-label="按 HTTP 方法筛选"'
     );
   });
 

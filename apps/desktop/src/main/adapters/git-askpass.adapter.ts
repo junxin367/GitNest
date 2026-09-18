@@ -221,7 +221,9 @@ function promptMatchesHost(
       ) {
         return true;
       }
-    } catch {}
+    } catch {
+      // Ignore malformed URL fragments and continue with host matching.
+    }
   }
   const escapedHost = normalizedHost.replace(
     /[.*+?^${}()|[\]\\]/g,
@@ -337,7 +339,9 @@ async function writeIfChanged(
     if ((await readFile(path, "utf8")) === content) {
       return;
     }
-  } catch {}
+  } catch {
+    // Missing or unreadable helpers are replaced atomically below.
+  }
 
   const temporaryPath = join(
     dirname(path),

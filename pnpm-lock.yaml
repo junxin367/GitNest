@@ -29,6 +29,9 @@ importers:
       '@gitnest/application':
         specifier: workspace:*
         version: link:../../packages/application
+      '@gitnest/code-analysis':
+        specifier: workspace:*
+        version: link:../../packages/code-analysis
       '@gitnest/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -80,12 +83,17 @@ importers:
 
   packages/application:
     dependencies:
+      '@gitnest/code-analysis':
+        specifier: workspace:*
+        version: link:../code-analysis
       '@gitnest/git-core':
         specifier: workspace:*
         version: link:../git-core
       '@gitnest/workspace-core':
         specifier: workspace:*
         version: link:../workspace-core
+
+  packages/code-analysis: {}
 
   packages/contracts: {}
 

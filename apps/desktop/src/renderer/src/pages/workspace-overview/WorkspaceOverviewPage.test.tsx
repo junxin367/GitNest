@@ -307,6 +307,59 @@ describe("Workspace overview interactions", () => {
     ).toBeNull();
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
   });
+
+  it("clears the cross-repository Worktree query and restores input focus", () => {
+    act(() => {
+      root.render(
+        <WorkspaceCollectionPage
+          busy={false}
+          loading={false}
+          onAddDirectory={() => undefined}
+          onSelectTarget={() => undefined}
+          snapshots={[]}
+          tab="worktrees"
+          workspace={createMultiRepositoryEntryWorkspace()}
+        />
+      );
+    });
+
+    const filterButton = [
+      ...container.querySelectorAll("button")
+    ].find((button) => button.textContent?.trim() === "筛选");
+    act(() => filterButton?.click());
+
+    const input = container.querySelector<HTMLInputElement>(
+      '[aria-label="筛选跨仓 Worktree"]'
+    );
+    expect(input).not.toBeNull();
+
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value"
+      )?.set;
+      setter?.call(input, "Repository A");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    expect(
+      container.querySelectorAll(".worktree-summary-card")
+    ).toHaveLength(1);
+
+    const clearButton =
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="清除跨仓 Worktree 筛选"]'
+      );
+    expect(clearButton).not.toBeNull();
+
+    act(() => clearButton?.click());
+
+    expect(input?.value).toBe("");
+    expect(document.activeElement).toBe(input);
+    expect(
+      container.querySelectorAll(".worktree-summary-card")
+    ).toHaveLength(2);
+  });
 });
 
 function createWorkspace(): WorkspaceDetailsDto {

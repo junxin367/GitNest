@@ -105,6 +105,7 @@ export interface CommitDiff {
   truncated: boolean;
   additions: number;
   deletions: number;
+  media?: RepositoryMediaPreview;
 }
 
 export interface StashFileStat {
@@ -145,6 +146,7 @@ export interface StashDiff {
   truncated: boolean;
   additions: number;
   deletions: number;
+  media?: RepositoryMediaPreview;
 }
 
 export interface RepositoryChanges {

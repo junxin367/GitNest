@@ -122,6 +122,9 @@ function rebuildSnapshot(
     ...(value.operationState
       ? { operationState: value.operationState }
       : {}),
+    ...(value.contentVersion !== undefined
+      ? { contentVersion: value.contentVersion }
+      : {}),
     refreshPending: value.refreshPending,
     stale: value.stale,
     refreshedAt: value.refreshedAt,
@@ -176,6 +179,10 @@ function isSnapshot(value: unknown): boolean {
         "revert",
         "bisect"
       ].includes(String(value.operationState))) &&
+    (value.contentVersion === undefined ||
+      (typeof value.contentVersion === "number" &&
+        Number.isSafeInteger(value.contentVersion) &&
+        value.contentVersion >= 0)) &&
     (value.error === undefined ||
       (isRecord(value.error) &&
         typeof value.error.code === "string" &&

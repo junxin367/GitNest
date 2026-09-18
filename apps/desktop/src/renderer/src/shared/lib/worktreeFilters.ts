@@ -11,7 +11,7 @@ export type WorktreeFacet =
   | "prunable";
 
 export interface WorktreeFilterState {
-  facets: WorktreeFacet[];
+  facet: WorktreeFacet | null;
   onlyDirty: boolean;
   query: string;
   repositoryId: string;
@@ -30,14 +30,14 @@ export const WORKTREE_FACET_OPTIONS: ReadonlyArray<{
 
 export function createWorktreeFilterState(): WorktreeFilterState {
   return {
-    facets: [],
+    facet: null,
     onlyDirty: false,
     query: "",
     repositoryId: ""
   };
 }
 
-export function worktreeKindLabel(
+function worktreeKindLabel(
   worktree: WorkspaceWorktreeDto
 ): string {
   if (worktree.isPrunable) {
@@ -90,7 +90,7 @@ export function isWorktreeSnapshotDirty(
   );
 }
 
-export function worktreeSearchValues(
+function worktreeSearchValues(
   worktree: WorkspaceWorktreeDto
 ): string[] {
   return [
@@ -117,11 +117,11 @@ export function matchesWorktreeFilters(
     return false;
   }
 
-  if (filters.facets.length > 0) {
-    const facets = worktreeFacetIds(worktree);
-    if (!facets.some((facet) => filters.facets.includes(facet))) {
-      return false;
-    }
+  if (
+    filters.facet &&
+    !worktreeFacetIds(worktree).includes(filters.facet)
+  ) {
+    return false;
   }
 
   if (filters.onlyDirty && !isWorktreeSnapshotDirty(snapshot)) {
@@ -142,7 +142,7 @@ export function activeWorktreeFilterCount(
   filters: WorktreeFilterState
 ): number {
   return (
-    filters.facets.length +
+    (filters.facet ? 1 : 0) +
     (filters.onlyDirty ? 1 : 0) +
     (filters.repositoryId ? 1 : 0) +
     (filters.query.trim() ? 1 : 0)
@@ -150,10 +150,8 @@ export function activeWorktreeFilterCount(
 }
 
 export function toggleWorktreeFacet(
-  facets: WorktreeFacet[],
+  selectedFacet: WorktreeFacet | null,
   facet: WorktreeFacet
-): WorktreeFacet[] {
-  return facets.includes(facet)
-    ? facets.filter((candidate) => candidate !== facet)
-    : [...facets, facet];
+): WorktreeFacet | null {
+  return selectedFacet === facet ? null : facet;
 }

@@ -12,6 +12,7 @@ import {
 
 import {
   AccountService,
+  CodeAnalysisService,
   ExternalApplicationService,
   ExternalTerminalService,
   GitInspectionService,
@@ -22,6 +23,7 @@ import {
   WorkspaceRuntimeService,
   WorkspaceService
 } from "@gitnest/application";
+import { AnalysisSnapshotCache } from "@gitnest/code-analysis";
 import { IPC_EVENTS } from "@gitnest/contracts";
 import {
   GitCliClient,
@@ -45,16 +47,19 @@ import { WindowsGitAskPassBroker } from "../adapters/git-askpass.adapter";
 import { NodeWorkspaceWatcher } from "../adapters/watcher.adapter";
 import { RotatingDiagnosticLogger } from "../adapters/diagnostic-logger.adapter";
 import { AiCommitMessageService } from "../ai/ai-commit-message-service";
+import { LanguageServerInstaller } from "../code-analysis/language-server-installer";
 import { AppSettingsService } from "../settings/app-settings";
 import { JsonWindowStateStore } from "../windows/window-state";
 
 export interface ApplicationServices {
   accounts: AccountService;
   aiCommitMessages: AiCommitMessageService;
+  codeAnalysis: CodeAnalysisService;
   diagnostics: RotatingDiagnosticLogger;
   externalApplication: ExternalApplicationService;
   externalTerminal: ExternalTerminalService;
   gitInspection: GitInspectionService;
+  languageServerInstaller: LanguageServerInstaller;
   repositoryCommands: RepositoryCommandService;
   repositoryMutations: RepositoryMutationService;
   repositoryQueries: RepositoryQueryService;
@@ -125,6 +130,94 @@ export function registerServices(): ApplicationServices {
     { operationStore }
   );
   const worktreePaths = new NodeWorktreePathPolicy();
+  const codeAnalysisCacheDirectory = join(
+    userDataPath,
+    "cache",
+    "code-analysis"
+  );
+  const codeAnalysis = new CodeAnalysisService(
+    workspace,
+    gitClient,
+    {
+      cacheDirectory: codeAnalysisCacheDirectory,
+      snapshotStore: new AnalysisSnapshotCache(
+        join(
+          userDataPath,
+          "gitnest-state",
+          "code-analysis"
+        ),
+        {
+          fallbackDirectories: [
+            codeAnalysisCacheDirectory
+          ]
+        }
+      ),
+      lspDataDirectory: join(
+        userDataPath,
+        "runtime",
+        "lsp"
+      ),
+      settingsProvider: async () => {
+        const preferences = (await settings.get()).settings
+          .codeAnalysis;
+        return {
+          enabled: preferences.enabled,
+          staticFallback: preferences.staticFallback,
+          maxFiles: preferences.maxFiles,
+          maxFileSizeBytes:
+            preferences.maxFileSizeKb * 1_024,
+          readConcurrency: preferences.readConcurrency,
+          graphDepth: preferences.graphDepth,
+          lspTimeoutMs: preferences.lspTimeoutMs,
+          ignoreDirectories: [
+            ...preferences.ignoreDirectories
+          ],
+          typescript: {
+            ...preferences.typescript,
+            args: [...preferences.typescript.args]
+          },
+          java: {
+            ...preferences.java,
+            args: [...preferences.java.args]
+          }
+        };
+      },
+      idFactory: randomUUID
+    }
+  );
+  const languageServerInstaller =
+    new LanguageServerInstaller({
+      runtimeDirectory: join(
+        userDataPath,
+        "runtime",
+        "lsp",
+        "servers"
+      ),
+      updateLanguageServerSettings: async (
+        language,
+        command,
+        args
+      ) => {
+        await settings.update({
+          codeAnalysis:
+            language === "typescript"
+              ? {
+                  typescript: {
+                    enabled: true,
+                    command,
+                    args
+                  }
+                }
+              : {
+                  java: {
+                    enabled: true,
+                    command,
+                    args
+                  }
+                }
+        });
+      }
+    });
   const externalTerminalAdapter =
     new WindowsExternalTerminalAdapter({
       gitExecutablePath: async () =>
@@ -171,6 +264,7 @@ export function registerServices(): ApplicationServices {
 
   const operationStates = new Map<string, string>();
   workspace.subscribe((state) => {
+    codeAnalysis.handleWorkspaceChanged(state.workspace);
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) {
         window.webContents.send(
@@ -200,7 +294,16 @@ export function registerServices(): ApplicationServices {
         .catch(() => undefined);
     }
   });
-
+  codeAnalysis.subscribe((state) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) {
+        window.webContents.send(
+          IPC_EVENTS.codeAnalysisStateChanged,
+          state
+        );
+      }
+    }
+  });
   return {
     accounts,
     aiCommitMessages: new AiCommitMessageService(
@@ -208,6 +311,7 @@ export function registerServices(): ApplicationServices {
       workspace,
       gitClient
     ),
+    codeAnalysis,
     diagnostics,
     externalApplication: new ExternalApplicationService(
       workspace,
@@ -220,6 +324,7 @@ export function registerServices(): ApplicationServices {
       externalTerminalAdapter
     ),
     gitInspection: new GitInspectionService(gitClient),
+    languageServerInstaller,
     repositoryCommands: new RepositoryCommandService(
       workspace,
       gitClient,

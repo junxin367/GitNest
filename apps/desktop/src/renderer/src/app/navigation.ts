@@ -1,6 +1,7 @@
 export type AppView =
   | "workspace"
   | "repository"
+  | "analysis"
   | "operations"
   | "settings";
 

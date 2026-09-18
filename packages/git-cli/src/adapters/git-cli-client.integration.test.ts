@@ -587,6 +587,9 @@ describe("GitCliClient integration", () => {
     const stashFixture = await createTemporaryDirectoryFixture(
       "stash-browser"
     );
+    const trackedMediaBefore = Buffer.from([0, 1, 2, 3]);
+    const trackedMediaAfter = Buffer.from([0, 4, 5, 6]);
+    const untrackedMedia = Buffer.from([0, 7, 8, 9]);
 
     try {
       await runGit(stashFixture.path, [
@@ -614,10 +617,15 @@ describe("GitCliClient integration", () => {
         "unchanged\n",
         "utf8"
       );
+      await writeFile(
+        join(stashFixture.path, "tracked.webp"),
+        trackedMediaBefore
+      );
       await runGit(stashFixture.path, [
         "add",
         "tracked.txt",
-        "untouched.txt"
+        "untouched.txt",
+        "tracked.webp"
       ]);
       await runGit(stashFixture.path, [
         "commit",
@@ -633,6 +641,14 @@ describe("GitCliClient integration", () => {
         join(stashFixture.path, "untracked.txt"),
         "new file\n",
         "utf8"
+      );
+      await writeFile(
+        join(stashFixture.path, "tracked.webp"),
+        trackedMediaAfter
+      );
+      await writeFile(
+        join(stashFixture.path, "untracked.png"),
+        untrackedMedia
       );
       await runGit(stashFixture.path, [
         "stash",
@@ -666,7 +682,9 @@ describe("GitCliClient integration", () => {
         deletions: 1,
         files: expect.arrayContaining([
           expect.objectContaining({ path: "tracked.txt" }),
-          expect.objectContaining({ path: "untracked.txt" })
+          expect.objectContaining({ path: "untracked.txt" }),
+          expect.objectContaining({ path: "tracked.webp" }),
+          expect.objectContaining({ path: "untracked.png" })
         ])
       });
 
@@ -684,6 +702,46 @@ describe("GitCliClient integration", () => {
         deletions: 0,
         binary: false
       });
+
+      const [trackedMediaDiff, untrackedMediaDiff] =
+        await Promise.all([
+          client.readStashDiff(stashFixture.path, {
+            stashRef: "stash@{0}",
+            path: "tracked.webp",
+            includeMedia: true
+          }),
+          client.readStashDiff(stashFixture.path, {
+            stashRef: "stash@{0}",
+            path: "untracked.png",
+            includeMedia: true
+          })
+        ]);
+      expect(trackedMediaDiff.media).toMatchObject({
+        status: "available",
+        kind: "image",
+        mimeType: "image/webp",
+        size: trackedMediaAfter.byteLength
+      });
+      expect(untrackedMediaDiff.media).toMatchObject({
+        status: "available",
+        kind: "image",
+        mimeType: "image/png",
+        size: untrackedMedia.byteLength
+      });
+      if (
+        trackedMediaDiff.media?.status !== "available" ||
+        untrackedMediaDiff.media?.status !== "available"
+      ) {
+        throw new Error(
+          "Expected available stash media previews."
+        );
+      }
+      expect(
+        Buffer.from(trackedMediaDiff.media.content)
+      ).toEqual(trackedMediaAfter);
+      expect(
+        Buffer.from(untrackedMediaDiff.media.content)
+      ).toEqual(untrackedMedia);
 
       await expect(
         client.readStashDiff(stashFixture.path, {
@@ -889,6 +947,7 @@ describe("GitCliClient integration", () => {
   it("reads root, normal, and merge commit file diffs against the first parent", async () => {
     const commitDiffFixture =
       await createTemporaryDirectoryFixture("commit-diff");
+    const committedMedia = Buffer.from([0, 1, 2, 3]);
 
     try {
       await runGit(commitDiffFixture.path, [
@@ -936,6 +995,26 @@ describe("GitCliClient integration", () => {
         "Normal commit"
       ]);
       const normalHash = (
+        await runGit(commitDiffFixture.path, [
+          "rev-parse",
+          "HEAD"
+        ])
+      ).trim();
+
+      await writeFile(
+        join(commitDiffFixture.path, "preview.webp"),
+        committedMedia
+      );
+      await runGit(commitDiffFixture.path, [
+        "add",
+        "preview.webp"
+      ]);
+      await runGit(commitDiffFixture.path, [
+        "commit",
+        "-m",
+        "Add media"
+      ]);
+      const mediaHash = (
         await runGit(commitDiffFixture.path, [
           "rev-parse",
           "HEAD"
@@ -992,6 +1071,21 @@ describe("GitCliClient integration", () => {
           "HEAD"
         ])
       ).trim();
+      await runGit(commitDiffFixture.path, [
+        "rm",
+        "preview.webp"
+      ]);
+      await runGit(commitDiffFixture.path, [
+        "commit",
+        "-m",
+        "Remove media"
+      ]);
+      const removedMediaHash = (
+        await runGit(commitDiffFixture.path, [
+          "rev-parse",
+          "HEAD"
+        ])
+      ).trim();
 
       await expect(
         client.readCommitDiff(commitDiffFixture.path, {
@@ -1040,6 +1134,47 @@ describe("GitCliClient integration", () => {
         content: "",
         additions: 0,
         deletions: 0
+      });
+      const mediaDiff = await client.readCommitDiff(
+        commitDiffFixture.path,
+        {
+          commitHash: mediaHash,
+          path: "preview.webp",
+          includeMedia: true
+        }
+      );
+      expect(mediaDiff.media).toMatchObject({
+        status: "available",
+        kind: "image",
+        mimeType: "image/webp",
+        size: committedMedia.byteLength
+      });
+      if (mediaDiff.media?.status !== "available") {
+        throw new Error(
+          "Expected an available commit media preview."
+        );
+      }
+      expect(Buffer.from(mediaDiff.media.content)).toEqual(
+        committedMedia
+      );
+      await expect(
+        client.readCommitDiff(commitDiffFixture.path, {
+          commitHash: mediaHash,
+          path: "preview.webp"
+        })
+      ).resolves.not.toHaveProperty("media");
+      await expect(
+        client.readCommitDiff(commitDiffFixture.path, {
+          commitHash: removedMediaHash,
+          path: "preview.webp",
+          includeMedia: true
+        })
+      ).resolves.toMatchObject({
+        media: {
+          status: "unavailable",
+          kind: "image",
+          reason: "missing"
+        }
       });
 
       await writeFile(

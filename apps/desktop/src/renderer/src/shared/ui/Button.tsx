@@ -1,4 +1,4 @@
-import React, {
+import {
   forwardRef,
   type ButtonHTMLAttributes,
   type ReactNode

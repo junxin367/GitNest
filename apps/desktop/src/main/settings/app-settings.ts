@@ -3,6 +3,7 @@ import {
   MAX_DIFF_COMMIT_PANEL_HEIGHT,
   MIN_DIFF_COMMIT_PANEL_HEIGHT,
   createDefaultAppSettings,
+  type CodeAnalysisSettingsDto,
   type AppSettingsDto,
   type AppSettingsLoadDto,
   type UpdateAppSettingsRequest
@@ -10,7 +11,7 @@ import {
 import { AtomicJsonStore } from "@gitnest/persistence-json";
 import { WorkspaceError } from "@gitnest/workspace-core";
 
-export const APP_SETTINGS_SCHEMA_VERSION = 1;
+export const APP_SETTINGS_SCHEMA_VERSION = 2;
 const MAX_AI_API_URL_LENGTH = 2_048;
 const MAX_AI_MODEL_LENGTH = 256;
 const MAX_AI_API_KEY_LENGTH = 8_192;
@@ -32,6 +33,18 @@ export interface InternalAiSettings {
 
 interface AppSettingsDocument {
   schemaVersion: typeof APP_SETTINGS_SCHEMA_VERSION;
+  general: AppSettingsDto["general"];
+  appearance: AppSettingsDto["appearance"];
+  diff: AppSettingsDiffDocument;
+  git: AppSettingsDto["git"];
+  ai: InternalAiSettings;
+  codeAnalysis: CodeAnalysisSettingsDto;
+  navigation: AppSettingsDto["navigation"];
+  updatedAt: string;
+}
+
+interface AppSettingsDocumentV1 {
+  schemaVersion: 1;
   general: AppSettingsDto["general"];
   appearance: AppSettingsDto["appearance"];
   diff: AppSettingsDiffDocument;
@@ -121,6 +134,11 @@ export class AppSettingsService {
       this.#storageState = "missing";
       return createDefaultDocument(this.#clock());
     }
+    if (isAppSettingsDocumentV1(value)) {
+      const migrated = migrateV1Document(value);
+      await this.#store.write(migrated);
+      return migrated;
+    }
     if (!isAppSettingsDocument(value)) {
       this.#store.blockWrites(
         "Application settings schema validation failed."
@@ -159,6 +177,9 @@ function createDefaultDocument(now: string): AppSettingsDocument {
       apiKey: "",
       prompt: defaults.ai.prompt
     },
+    codeAnalysis: cloneCodeAnalysisSettings(
+      defaults.codeAnalysis
+    ),
     navigation: { ...defaults.navigation },
     updatedAt: now
   };
@@ -197,6 +218,10 @@ function mergeSettings(
       ...current.ai,
       ...patch.ai
     },
+    codeAnalysis: mergeCodeAnalysisSettings(
+      current.codeAnalysis,
+      patch.codeAnalysis
+    ),
     navigation: {
       ...current.navigation,
       ...patch.navigation
@@ -225,6 +250,9 @@ function toPublicSettings(
       prompt: document.ai.prompt,
       apiKeyConfigured: Boolean(document.ai.apiKey)
     },
+    codeAnalysis: cloneCodeAnalysisSettings(
+      document.codeAnalysis
+    ),
     navigation: { ...document.navigation }
   };
 }
@@ -247,6 +275,9 @@ function cloneDocument(
       pushStrategy: document.git.pushStrategy ?? "rebase"
     },
     ai: { ...document.ai },
+    codeAnalysis: cloneCodeAnalysisSettings(
+      document.codeAnalysis
+    ),
     navigation: { ...document.navigation }
   };
 }
@@ -259,6 +290,25 @@ function isAppSettingsDocument(
   }
   return (
     value.schemaVersion === APP_SETTINGS_SCHEMA_VERSION &&
+    isGeneralSettings(value.general) &&
+    isAppearanceSettings(value.appearance) &&
+    isDiffSettings(value.diff) &&
+    isGitSettings(value.git) &&
+    isAiSettings(value.ai) &&
+    isCodeAnalysisSettings(value.codeAnalysis) &&
+    isNavigationSettings(value.navigation) &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+function isAppSettingsDocumentV1(
+  value: unknown
+): value is AppSettingsDocumentV1 {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    value.schemaVersion === 1 &&
     isGeneralSettings(value.general) &&
     isAppearanceSettings(value.appearance) &&
     isDiffSettings(value.diff) &&
@@ -348,6 +398,42 @@ function isAiSettings(value: unknown): boolean {
   );
 }
 
+function isCodeAnalysisSettings(
+  value: unknown
+): value is CodeAnalysisSettingsDto {
+  return (
+    isRecord(value) &&
+    typeof value.enabled === "boolean" &&
+    (value.defaultScope === "changed" ||
+      value.defaultScope === "workspace") &&
+    typeof value.staticFallback === "boolean" &&
+    isIntegerInRange(value.maxFiles, 100, 50_000) &&
+    isIntegerInRange(value.maxFileSizeKb, 64, 4_096) &&
+    isIntegerInRange(value.readConcurrency, 1, 4) &&
+    isIntegerInRange(value.graphDepth, 1, 12) &&
+    isIntegerInRange(value.lspTimeoutMs, 1_000, 60_000) &&
+    isStoredStringArray(
+      value.ignoreDirectories,
+      100,
+      255
+    ) &&
+    isLanguageServerSettings(value.typescript) &&
+    isLanguageServerSettings(value.java)
+  );
+}
+
+function isLanguageServerSettings(
+  value: unknown
+): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.enabled === "boolean" &&
+    isBoundedStoredString(value.command, 2_048) &&
+    Boolean(value.command.trim()) &&
+    isStoredStringArray(value.args, 64, 2_048)
+  );
+}
+
 function isNavigationSettings(value: unknown): boolean {
   return (
     isRecord(value) &&
@@ -405,4 +491,110 @@ function isBoundedStoredString(
     value.length <= maximumLength &&
     !value.includes("\0")
   );
+}
+
+function isIntegerInRange(
+  value: unknown,
+  minimum: number,
+  maximum: number
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= minimum &&
+    value <= maximum
+  );
+}
+
+function isStoredStringArray(
+  value: unknown,
+  maximumItems: number,
+  maximumItemLength: number
+): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= maximumItems &&
+    value.every(
+      (item) =>
+        isBoundedStoredString(item, maximumItemLength) &&
+        Boolean(item.trim())
+    )
+  );
+}
+
+function cloneCodeAnalysisSettings(
+  settings: CodeAnalysisSettingsDto
+): CodeAnalysisSettingsDto {
+  return {
+    ...settings,
+    ignoreDirectories: [...settings.ignoreDirectories],
+    typescript: {
+      ...settings.typescript,
+      args: [...settings.typescript.args]
+    },
+    java: {
+      ...settings.java,
+      args: [...settings.java.args]
+    }
+  };
+}
+
+function mergeCodeAnalysisSettings(
+  current: CodeAnalysisSettingsDto,
+  patch: UpdateAppSettingsRequest["codeAnalysis"]
+): CodeAnalysisSettingsDto {
+  if (!patch) {
+    return cloneCodeAnalysisSettings(current);
+  }
+  return {
+    ...current,
+    ...patch,
+    ignoreDirectories:
+      patch.ignoreDirectories === undefined
+        ? [...current.ignoreDirectories]
+        : [...patch.ignoreDirectories],
+    typescript: {
+      ...current.typescript,
+      ...patch.typescript,
+      args:
+        patch.typescript?.args === undefined
+          ? [...current.typescript.args]
+          : [...patch.typescript.args]
+    },
+    java: {
+      ...current.java,
+      ...patch.java,
+      args:
+        patch.java?.args === undefined
+          ? [...current.java.args]
+          : [...patch.java.args]
+    }
+  };
+}
+
+function migrateV1Document(
+  document: AppSettingsDocumentV1
+): AppSettingsDocument {
+  const defaults = createDefaultAppSettings();
+  return {
+    schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
+    general: { ...document.general },
+    appearance: { ...document.appearance },
+    diff: {
+      ...document.diff,
+      commitPanelHeight: normalizeDiffCommitPanelHeight(
+        document.diff.commitPanelHeight
+      )
+    },
+    git: {
+      ...document.git,
+      pushStrategy: document.git.pushStrategy ?? "rebase"
+    },
+    ai: { ...document.ai },
+    codeAnalysis: cloneCodeAnalysisSettings(
+      defaults.codeAnalysis
+    ),
+    navigation: { ...document.navigation },
+    updatedAt: document.updatedAt
+  };
 }

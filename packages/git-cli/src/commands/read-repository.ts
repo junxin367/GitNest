@@ -157,6 +157,20 @@ export function stagedFileContentArguments(path: string): string[] {
   return ["show", `:${path}`];
 }
 
+export function revisionFileSizeArguments(
+  revision: string,
+  path: string
+): string[] {
+  return ["cat-file", "-s", `${revision}:${path}`];
+}
+
+export function revisionFileContentArguments(
+  revision: string,
+  path: string
+): string[] {
+  return ["show", `${revision}:${path}`];
+}
+
 export function commitMetadataArguments(
   commitHash: string
 ): string[] {

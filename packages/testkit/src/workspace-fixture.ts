@@ -6,8 +6,7 @@ import {
 import { join } from "node:path";
 
 import {
-  createTemporaryDirectoryFixture,
-  type TemporaryDirectoryFixture
+  createTemporaryDirectoryFixture
 } from "./temporary-directory-fixture";
 
 export interface WorkspaceFixture {

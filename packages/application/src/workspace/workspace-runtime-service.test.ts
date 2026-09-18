@@ -107,6 +107,77 @@ describe("WorkspaceRuntimeService", () => {
     await runtime.dispose();
   });
 
+  it("keeps no-op heartbeat content versions stable and advances them for watcher changes", async () => {
+    const workspace = createWorkspace(1);
+    const target =
+      workspace.selectedTarget as RepositoryTarget;
+    const gitClient = new TrackingGitClient();
+    const watcher = new FakeWatcher();
+    let now = "2026-09-17T12:00:00.000Z";
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      gitClient,
+      new MemorySnapshotStore(),
+      watcher,
+      {
+        autoRefresh: false,
+        currentTargetDebounceMs: 1,
+        selectedTargetPollingIntervalMs: 40,
+        staleAfterMs: 1,
+        clock: () => now
+      }
+    );
+
+    await runtime.requestWorkspaceRefresh("manual");
+    const initial = await waitForState(
+      runtime,
+      (state) =>
+        state.monitor.mode === "watching" &&
+        state.snapshots[0]?.contentVersion === 1 &&
+        state.operations.some(
+          (operation) =>
+            operation.kind === "status" &&
+            operation.state === "succeeded"
+        )
+    );
+    const initialStatusCount = initial.operations.filter(
+      (operation) => operation.kind === "status"
+    ).length;
+
+    now = "2026-09-17T12:01:00.000Z";
+    const heartbeat = await waitForState(
+      runtime,
+      (state) =>
+        gitClient.calls.length >= 2 &&
+        state.operations.filter(
+          (operation) => operation.kind === "status"
+        ).length > initialStatusCount &&
+        !state.operations.some(
+          (operation) =>
+            operation.kind === "status" &&
+            operation.state === "running"
+        )
+    );
+
+    expect(heartbeat.snapshots[0]?.contentVersion).toBe(1);
+
+    now = "2026-09-17T12:00:00.000Z";
+    watcher.emit(target);
+    const watched = await waitForState(
+      runtime,
+      (state) =>
+        state.snapshots[0]?.contentVersion === 2 &&
+        state.operations.some(
+          (operation) =>
+            operation.kind === "status" &&
+            operation.state === "succeeded"
+        )
+    );
+
+    expect(watched.snapshots[0]?.contentVersion).toBe(2);
+    await runtime.dispose();
+  });
+
   it("deduplicates nested Git watches, routes linked metadata, and ignores transient Git locks", async () => {
     const workspace = addLinkedWorktree(createWorkspace(1));
     const gitClient = new TrackingGitClient();

@@ -15,10 +15,12 @@ import type {
   GitNestBridge,
   RepositoryCommitDiffDto,
   RepositoryCommitDto,
+  RepositoryMediaPreviewDto,
   RepositoryTargetDto
 } from "@gitnest/contracts";
 
 import { RepositoryCommitDetail } from "./RepositoryPage";
+import { RepositoryCommitDetailBreadcrumb } from "./RepositoryHistory";
 
 (globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -61,6 +63,12 @@ const COMMIT: RepositoryCommitDto["commit"] = {
 describe("RepositoryCommitDetail", () => {
   let container: HTMLDivElement;
   let root: Root;
+  let createObjectUrlDescriptor:
+    | PropertyDescriptor
+    | undefined;
+  let revokeObjectUrlDescriptor:
+    | PropertyDescriptor
+    | undefined;
 
   beforeEach(() => {
     vi.stubGlobal("React", React);
@@ -84,6 +92,22 @@ describe("RepositoryCommitDetail", () => {
         value: vi.fn()
       }
     );
+    createObjectUrlDescriptor = Object.getOwnPropertyDescriptor(
+      URL,
+      "createObjectURL"
+    );
+    revokeObjectUrlDescriptor = Object.getOwnPropertyDescriptor(
+      URL,
+      "revokeObjectURL"
+    );
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:commit-media-preview")
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn()
+    });
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -92,11 +116,58 @@ describe("RepositoryCommitDetail", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    if (createObjectUrlDescriptor) {
+      Object.defineProperty(
+        URL,
+        "createObjectURL",
+        createObjectUrlDescriptor
+      );
+    } else {
+      Reflect.deleteProperty(URL, "createObjectURL");
+    }
+    if (revokeObjectUrlDescriptor) {
+      Object.defineProperty(
+        URL,
+        "revokeObjectURL",
+        revokeObjectUrlDescriptor
+      );
+    } else {
+      Reflect.deleteProperty(URL, "revokeObjectURL");
+    }
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
-  it("lists commit files and loads the first file diff on demand", async () => {
+  it("switches the breadcrumb between commit details and changed files", () => {
+    act(() => {
+      root.render(<CommitDetailBreadcrumbHarness />);
+    });
+
+    const detailsButton = findViewButton(
+      container,
+      "details"
+    );
+    const filesButton = findViewButton(container, "files");
+    expect(detailsButton.getAttribute("aria-current")).toBe(
+      "page"
+    );
+    expect(filesButton.hasAttribute("aria-current")).toBe(false);
+
+    act(() => {
+      filesButton.click();
+    });
+
+    expect(detailsButton.hasAttribute("aria-current")).toBe(
+      false
+    );
+    expect(filesButton.getAttribute("aria-current")).toBe(
+      "page"
+    );
+    expect(container.textContent).toContain("+4");
+    expect(container.textContent).toContain("-2");
+  });
+
+  it("renders commit details and changed files as mutually exclusive views", async () => {
     const getCommitDiff = vi.fn(async () => ({
       ok: true as const,
       value: createCommitDiff(
@@ -115,6 +186,7 @@ describe("RepositoryCommitDetail", () => {
         <RepositoryCommitDetail
           commit={COMMIT}
           target={TARGET}
+          view="details"
         />
       );
     });
@@ -122,7 +194,36 @@ describe("RepositoryCommitDetail", () => {
       await flushAsyncWork();
     });
 
-    expect(container.textContent).toContain("变更文件");
+    expect(
+      container.querySelector(".history-commit-overview")
+    ).not.toBeNull();
+    expect(
+      container.querySelector(".history-commit-files")
+    ).toBeNull();
+    expect(container.textContent).toContain(COMMIT.subject);
+    expect(container.textContent).toContain(COMMIT.body);
+
+    act(() => {
+      root.render(
+        <RepositoryCommitDetail
+          commit={COMMIT}
+          target={TARGET}
+          view="files"
+        />
+      );
+    });
+
+    expect(
+      container.querySelector(".history-commit-overview")
+    ).toBeNull();
+    expect(
+      container.querySelector(".history-commit-files")
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        "details.history-commit-files"
+      )
+    ).toBeNull();
     expect(container.textContent).toContain("App.tsx");
     expect(container.textContent).toContain("src");
     expect(container.textContent).toContain("logo.png");
@@ -174,6 +275,7 @@ describe("RepositoryCommitDetail", () => {
         <RepositoryCommitDetail
           commit={COMMIT}
           target={TARGET}
+          view="files"
         />
       );
     });
@@ -210,6 +312,72 @@ describe("RepositoryCommitDetail", () => {
     ).toBe("true");
     expect(container.textContent).toContain("二进制文件");
     expect(container.textContent).not.toContain("stale");
+    expect(
+      container
+        .querySelector(".commit-detail-body")
+        ?.getAttribute("data-history-commit-view")
+    ).toBe("files");
+  });
+
+  it("previews supported media from the selected commit", async () => {
+    const getCommitDiff = vi.fn(
+      async (
+        request: Parameters<
+          GitNestBridge["repository"]["getCommitDiff"]
+        >[0]
+      ) => ({
+        ok: true as const,
+        value:
+          request.path === "assets/logo.png"
+            ? createCommitDiff(
+                request.path,
+                "Binary files differ",
+                true,
+                {
+                  status: "available",
+                  kind: "image",
+                  mimeType: "image/png",
+                  size: 4,
+                  content: Uint8Array.from([0, 1, 2, 3])
+                }
+              )
+            : createCommitDiff(
+                request.path,
+                "@@ -1 +1 @@\n-old\n+new"
+              )
+      })
+    );
+    installBridge({ getCommitDiff });
+
+    act(() => {
+      root.render(
+        <RepositoryCommitDetail
+          commit={COMMIT}
+          target={TARGET}
+          view="files"
+        />
+      );
+    });
+    await act(async () => {
+      await flushAsyncWork();
+    });
+    await act(async () => {
+      findButtonByTitle(container, "assets/logo.png").click();
+      await flushAsyncWork();
+    });
+
+    const preview = container.querySelector<HTMLImageElement>(
+      'img[alt="assets/logo.png 图片预览"]'
+    );
+    expect(preview?.src).toBe("blob:commit-media-preview");
+    expect(
+      container.querySelector(
+        '.diff-viewer-code[aria-label="文件预览"]'
+      )
+    ).not.toBeNull();
+    expect(container.textContent).not.toContain(
+      "二进制文件不在 Renderer 中加载内容"
+    );
   });
 
   it("retries a failed context expansion without hiding the existing diff", async () => {
@@ -244,6 +412,7 @@ describe("RepositoryCommitDetail", () => {
         <RepositoryCommitDetail
           commit={COMMIT}
           target={TARGET}
+          view="files"
         />
       );
     });
@@ -280,6 +449,22 @@ describe("RepositoryCommitDetail", () => {
   });
 });
 
+function CommitDetailBreadcrumbHarness() {
+  const [view, setView] = React.useState<
+    "details" | "files"
+  >("details");
+
+  return (
+    <RepositoryCommitDetailBreadcrumb
+      additions={4}
+      deletions={2}
+      fileCount={2}
+      onViewChange={setView}
+      view={view}
+    />
+  );
+}
+
 function installBridge(
   repository: Partial<GitNestBridge["repository"]>
 ): void {
@@ -300,7 +485,8 @@ function installBridge(
 function createCommitDiff(
   path: string,
   content: string,
-  binary = false
+  binary = false,
+  media?: RepositoryMediaPreviewDto
 ): RepositoryCommitDiffDto {
   return {
     target: TARGET,
@@ -313,7 +499,8 @@ function createCommitDiff(
       binary,
       truncated: false,
       additions: binary ? 0 : 1,
-      deletions: binary ? 0 : 1
+      deletions: binary ? 0 : 1,
+      ...(media ? { media } : {})
     }
   };
 }
@@ -353,6 +540,19 @@ function findButtonByText(
   );
   if (!button) {
     throw new Error(`Button not found: ${text}`);
+  }
+  return button;
+}
+
+function findViewButton(
+  rootNode: ParentNode,
+  view: "details" | "files"
+): HTMLButtonElement {
+  const button = rootNode.querySelector<HTMLButtonElement>(
+    `button[data-history-commit-view="${view}"]`
+  );
+  if (!button) {
+    throw new Error(`Commit detail view button not found: ${view}`);
   }
   return button;
 }

@@ -30,6 +30,10 @@ import {
 import { Icon, type IconName } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
+import {
+  Skeleton,
+  SkeletonBoundary
+} from "../../shared/ui/Skeleton";
 import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
 
 interface GlobalSearchDialogProps {
@@ -478,84 +482,119 @@ export function GlobalSearchDialog({
           id="global-search-results"
           role="listbox"
         >
-          {results.length === 0 ? (
-            <div className="global-search-empty">
-              {normalizedQuery
-                ? changesLoading
-                  ? "正在读取有变更仓库的文件…"
-                  : failedChangeTargetCount > 0
+          <SkeletonBoundary
+            fallback={<GlobalSearchResultsSkeleton />}
+            hasContent={results.length > 0}
+            label="正在读取有变更仓库的文件"
+            loading={Boolean(
+              normalizedQuery && changesLoading
+            )}
+            surfaceClassName="global-search-results-skeleton"
+          >
+            {results.length === 0 ? (
+              <div className="global-search-empty">
+                {normalizedQuery
+                  ? failedChangeTargetCount > 0
                     ? `已读取的仓库中没有匹配结果；${failedChangeTargetCount} 个仓库的变更文件未能读取。`
                     : "没有匹配的仓库、变更文件或命令。"
-                : "当前 Workspace 暂无可搜索内容。"}
-            </div>
-          ) : (
-            results.map((result, index) => (
-              <Fragment key={result.id}>
-                {result.kind !== results[index - 1]?.kind && (
-                  <div className="global-search-group-label">
-                    {resultGroupLabel(result)}
-                  </div>
-                )}
-                <Button variant="unstyled"
-                  aria-selected={selectedIndex === index}
-                  aria-setsize={results.length}
-                  aria-posinset={index + 1}
-                  className={`global-search-result${
-                    selectedIndex === index ? " selected" : ""
-                  }`}
-                  id={getResultElementId(index)}
-                  onClick={() => activate(result)}
-                  onFocus={() => setSelectedResultId(result.id)}
-                  onMouseEnter={() =>
-                    setSelectedResultId(result.id)
-                  }
-                  role="option"
-                  type="button"
-                >
-                  <span className="global-search-result-icon">
-                    <Icon name={result.icon} size={16} />
-                  </span>
-                  <span className="global-search-result-copy">
-                    <strong>{result.title}</strong>
-                    <span>{result.subtitle}</span>
-                  </span>
-                  <span className="global-search-result-trailing">
-                    {result.kind !== "command" && (
-                      <span className="global-search-result-status">
-                        {result.status}
-                      </span>
-                    )}
-                    {selectedIndex === index && (
-                      <kbd className="global-search-result-key">
-                        Enter
-                      </kbd>
-                    )}
-                  </span>
-                </Button>
-              </Fragment>
-            ))
-          )}
-          {normalizedQuery &&
-            results.length > 0 &&
-            (changesLoading ||
-              failedChangeTargetCount > 0) && (
-              <div
-                className={`global-search-index-status${
-                  failedChangeTargetCount > 0
-                    ? " warning"
-                    : ""
-                }`}
-                role="status"
-              >
-                {changesLoading
-                  ? "正在继续读取其他有变更仓库…"
-                  : `${failedChangeTargetCount} 个仓库的变更文件未能读取。`}
+                  : "当前 Workspace 暂无可搜索内容。"}
               </div>
+            ) : (
+              results.map((result, index) => (
+                <Fragment key={result.id}>
+                  {result.kind !== results[index - 1]?.kind && (
+                    <div className="global-search-group-label">
+                      {resultGroupLabel(result)}
+                    </div>
+                  )}
+                  <Button variant="unstyled"
+                    aria-selected={selectedIndex === index}
+                    aria-setsize={results.length}
+                    aria-posinset={index + 1}
+                    className={`global-search-result${
+                      selectedIndex === index ? " selected" : ""
+                    }`}
+                    id={getResultElementId(index)}
+                    onClick={() => activate(result)}
+                    onFocus={() => setSelectedResultId(result.id)}
+                    onMouseEnter={() =>
+                      setSelectedResultId(result.id)
+                    }
+                    role="option"
+                    type="button"
+                  >
+                    <span className="global-search-result-icon">
+                      <Icon name={result.icon} size={16} />
+                    </span>
+                    <span className="global-search-result-copy">
+                      <strong>{result.title}</strong>
+                      <span>{result.subtitle}</span>
+                    </span>
+                    <span className="global-search-result-trailing">
+                      {result.kind !== "command" && (
+                        <span className="global-search-result-status">
+                          {result.status}
+                        </span>
+                      )}
+                      {selectedIndex === index && (
+                        <kbd className="global-search-result-key">
+                          Enter
+                        </kbd>
+                      )}
+                    </span>
+                  </Button>
+                </Fragment>
+              ))
             )}
+            {normalizedQuery &&
+              results.length > 0 &&
+              (changesLoading ||
+                failedChangeTargetCount > 0) && (
+                <div
+                  className={`global-search-index-status${
+                    failedChangeTargetCount > 0
+                      ? " warning"
+                      : ""
+                  }`}
+                  role="status"
+                >
+                  {changesLoading
+                    ? "正在继续读取其他有变更仓库…"
+                    : `${failedChangeTargetCount} 个仓库的变更文件未能读取。`}
+                </div>
+              )}
+          </SkeletonBoundary>
         </div>
         </section>
       </div>
     </LayerPortal>
+  );
+}
+
+function GlobalSearchResultsSkeleton() {
+  return (
+    <div
+      aria-hidden="true"
+      className="global-search-results-skeleton-rows"
+    >
+      {[74, 58, 82, 66].map((width, index) => (
+        <div
+          className="global-search-result-skeleton"
+          key={`${width}-${index}`}
+        >
+          <Skeleton height={32} variant="circle" width={32} />
+          <span className="global-search-result-skeleton-copy">
+            <Skeleton height={10} width={`${width}%`} />
+            <Skeleton
+              height={8}
+              variant="text"
+              width={`${Math.max(46, width - 18)}%`}
+            />
+          </span>
+          <Skeleton height={10} variant="text" width={58} />
+        </div>
+      ))}
+    </div>
   );
 }
 

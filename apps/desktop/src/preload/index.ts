@@ -7,6 +7,7 @@ import {
 
 import { IPC_EVENTS } from "@gitnest/contracts";
 import type {
+  CodeAnalysisStateDto,
   IpcInvoke,
   WorkspaceRuntimeStateDto
 } from "@gitnest/contracts";
@@ -32,6 +33,24 @@ const bridge = createGitNestBridge(
     return () => {
       ipcRenderer.removeListener(
         IPC_EVENTS.workspaceStateChanged,
+        handler
+      );
+    };
+  },
+  (listener) => {
+    const handler = (
+      _event: IpcRendererEvent,
+      state: CodeAnalysisStateDto
+    ) => {
+      listener(state);
+    };
+    ipcRenderer.on(
+      IPC_EVENTS.codeAnalysisStateChanged,
+      handler
+    );
+    return () => {
+      ipcRenderer.removeListener(
+        IPC_EVENTS.codeAnalysisStateChanged,
         handler
       );
     };

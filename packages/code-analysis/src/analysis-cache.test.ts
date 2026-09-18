@@ -1,0 +1,247 @@
+import {
+  mkdtemp,
+  readdir,
+  rm,
+  writeFile
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import {
+  afterEach,
+  describe,
+  expect,
+  it
+} from "vitest";
+
+import {
+  AnalysisSnapshotCache,
+  type AnalysisRoot,
+  type CodeAnalysisSettings,
+  type CodeAnalysisSnapshot
+} from "./index";
+
+describe("AnalysisSnapshotCache", () => {
+  const temporaryPaths: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      temporaryPaths.splice(0).map((path) =>
+        rm(path, { recursive: true, force: true })
+      )
+    );
+  });
+
+  it("persists the latest complete snapshot across cache instances", async () => {
+    const directory = await createTemporaryDirectory();
+    const first = new AnalysisSnapshotCache(directory);
+    const original = createSnapshot("analysis-1");
+
+    await first.save(original, createSettings());
+    await first.save(
+      createSnapshot("analysis-2"),
+      createSettings()
+    );
+
+    const restored = await new AnalysisSnapshotCache(
+      directory
+    ).load(
+      original.workspaceId,
+      original.entryId,
+      createSettings(),
+      original.roots
+    );
+
+    expect(restored).toEqual(createSnapshot("analysis-2"));
+    expect(restored).not.toBe(original);
+  });
+
+  it("restores a legacy snapshot and migrates it into the primary directory", async () => {
+    const primaryDirectory =
+      await createTemporaryDirectory();
+    const legacyDirectory =
+      await createTemporaryDirectory();
+    const snapshot = createSnapshot("legacy-analysis");
+    await new AnalysisSnapshotCache(
+      legacyDirectory
+    ).save(snapshot, createSettings());
+
+    const restored = await new AnalysisSnapshotCache(
+      primaryDirectory,
+      {
+        fallbackDirectories: [legacyDirectory]
+      }
+    ).load(
+      snapshot.workspaceId,
+      snapshot.entryId,
+      createSettings(),
+      snapshot.roots
+    );
+
+    expect(restored).toEqual(snapshot);
+    await expect(
+      new AnalysisSnapshotCache(primaryDirectory).load(
+        snapshot.workspaceId,
+        snapshot.entryId,
+        createSettings(),
+        snapshot.roots
+      )
+    ).resolves.toEqual(snapshot);
+  });
+
+  it("treats changed analysis settings or roots as a cache miss", async () => {
+    const directory = await createTemporaryDirectory();
+    const store = new AnalysisSnapshotCache(directory);
+    const snapshot = createSnapshot("analysis");
+    await store.save(snapshot, createSettings());
+
+    expect(
+      await store.load(
+        snapshot.workspaceId,
+        snapshot.entryId,
+        {
+          ...createSettings(),
+          graphDepth: 9
+        },
+        snapshot.roots
+      )
+    ).toBeNull();
+    expect(
+      await store.load(
+        snapshot.workspaceId,
+        snapshot.entryId,
+        createSettings(),
+        [
+          {
+            ...snapshot.roots[0]!,
+            path: "C:\\workspace\\other"
+          }
+        ]
+      )
+    ).toBeNull();
+  });
+
+  it("ignores malformed snapshot JSON", async () => {
+    const directory = await createTemporaryDirectory();
+    const store = new AnalysisSnapshotCache(directory);
+    const snapshot = createSnapshot("analysis");
+    await store.save(snapshot, createSettings());
+    const [entryDirectory] = await readdir(directory);
+    expect(entryDirectory).toBeDefined();
+    await writeFile(
+      join(
+        directory,
+        entryDirectory as string,
+        "snapshot.json"
+      ),
+      "{ invalid",
+      "utf8"
+    );
+
+    await expect(
+      store.load(
+        snapshot.workspaceId,
+        snapshot.entryId,
+        createSettings(),
+        snapshot.roots
+      )
+    ).resolves.toBeNull();
+  });
+
+  async function createTemporaryDirectory(): Promise<string> {
+    const path = await mkdtemp(
+      join(tmpdir(), "gitnest-analysis-snapshot-")
+    );
+    temporaryPaths.push(path);
+    return path;
+  }
+});
+
+function createSettings(): CodeAnalysisSettings {
+  return {
+    enabled: true,
+    staticFallback: true,
+    maxFiles: 5_000,
+    maxFileSizeBytes: 768 * 1_024,
+    readConcurrency: 2,
+    graphDepth: 6,
+    lspTimeoutMs: 8_000,
+    ignoreDirectories: [".git", "node_modules"],
+    typescript: {
+      enabled: true,
+      command: "typescript-language-server",
+      args: ["--stdio"]
+    },
+    java: {
+      enabled: true,
+      command: "jdtls",
+      args: []
+    }
+  };
+}
+
+function createSnapshot(
+  analysisId: string
+): CodeAnalysisSnapshot {
+  const roots: AnalysisRoot[] = [
+    {
+      repositoryId: "repository",
+      worktreeId: "worktree",
+      name: "Repository",
+      path: "C:\\workspace\\repository"
+    }
+  ];
+  return {
+    schemaVersion: 1,
+    analysisId,
+    workspaceId: "workspace",
+    entryId: "entry",
+    entryName: "Workspace",
+    scope: "workspace",
+    generatedAt: "2026-09-17T08:42:00.000Z",
+    roots,
+    nodes: [
+      {
+        id: "node",
+        kind: "function",
+        name: "load",
+        qualifiedName: "load",
+        language: "typescript",
+        location: {
+          repositoryId: "repository",
+          worktreeId: "worktree",
+          path: "src/load.ts",
+          line: 1,
+          column: 1
+        },
+        changed: false,
+        source: "builtin",
+        confidence: "probable",
+        metadata: {}
+      }
+    ],
+    edges: [],
+    requestChains: [],
+    languageServers: [
+      {
+        language: "typescript",
+        state: "connected",
+        command: "typescript-language-server",
+        message: "Connected",
+        symbolCount: 1
+      }
+    ],
+    warnings: [],
+    stats: {
+      discoveredFiles: 1,
+      analyzedFiles: 1,
+      cachedFiles: 0,
+      skippedFiles: 0,
+      symbolCount: 1,
+      edgeCount: 0,
+      requestChainCount: 0,
+      truncated: false,
+      durationMs: 25
+    }
+  };
+}
