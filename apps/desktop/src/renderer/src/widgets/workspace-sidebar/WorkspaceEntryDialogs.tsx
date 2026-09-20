@@ -450,3 +450,215 @@ export function WorkspaceEntryRemoveDialog({
     </LayerPortal>
   );
 }
+
+interface WorkspaceNameDialogProps {
+  mode: "create" | "rename";
+  initialName?: string;
+  busy: boolean;
+  onCancel(): void;
+  onConfirm(name: string): Promise<boolean>;
+}
+
+export function WorkspaceNameDialog({
+  mode,
+  initialName = "",
+  busy,
+  onCancel,
+  onConfirm
+}: WorkspaceNameDialogProps) {
+  const [name, setName] = useState(initialName);
+  const dialogRef = useRef<HTMLElement>(null);
+  useModalFocusTrap(dialogRef);
+  const creating = mode === "create";
+  const formId = `workspace-${mode}-form`;
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const normalized = name.trim();
+    if (!normalized || busy) {
+      return;
+    }
+    if (await onConfirm(normalized)) {
+      onCancel();
+    }
+  };
+
+  return (
+    <LayerPortal>
+      <div className="command-dialog-backdrop workspace-entry-dialog-backdrop">
+        <section
+          aria-describedby="workspace-name-description"
+          aria-labelledby="workspace-name-title"
+          aria-modal="true"
+          className="command-dialog workspace-entry-dialog"
+          ref={dialogRef}
+          role="dialog"
+        >
+          <header className="command-dialog-header">
+            <span className="command-dialog-icon">
+              <Icon name="layers" size={20} />
+            </span>
+            <div>
+              <span className="eyebrow">Workspace</span>
+              <h2 id="workspace-name-title">
+                {creating
+                  ? "新建 Workspace"
+                  : "重命名 Workspace"}
+              </h2>
+              <p id="workspace-name-description">
+                {creating
+                  ? "创建一个独立的多仓库项目。"
+                  : "只修改 GitNest 中的项目显示名称。"}
+              </p>
+            </div>
+          </header>
+
+          <div className="command-dialog-body">
+            <form id={formId} onSubmit={submit}>
+              <div className="workspace-entry-dialog-field">
+                <label htmlFor="workspace-name">
+                  Workspace 名称
+                </label>
+                <Input
+                  autoComplete="off"
+                  data-modal-initial-focus="true"
+                  fullWidth
+                  id="workspace-name"
+                  maxLength={120}
+                  onChange={(event) =>
+                    setName(event.target.value)
+                  }
+                  placeholder="例如：GitNest 桌面端"
+                  spellCheck={false}
+                  value={name}
+                />
+                <small>
+                  每个 Workspace 独立保存目录、选择、快照和操作历史。
+                </small>
+              </div>
+            </form>
+          </div>
+
+          <footer className="command-dialog-footer">
+            <p>
+              {creating
+                ? "创建后可单独添加一个或多个仓库根目录。"
+                : "不会修改任何磁盘目录或 Git 仓库。"}
+            </p>
+            <div>
+              <Button
+                size="small"
+                disabled={busy}
+                onClick={onCancel}
+                type="button"
+              >
+                取消
+              </Button>
+              <Button
+                size="small"
+                variant="primary"
+                disabled={busy || !name.trim()}
+                form={formId}
+                type="submit"
+              >
+                <Icon name={busy ? "refresh" : "check"} />
+                {busy
+                  ? "保存中…"
+                  : creating
+                    ? "创建 Workspace"
+                    : "保存名称"}
+              </Button>
+            </div>
+          </footer>
+        </section>
+      </div>
+    </LayerPortal>
+  );
+}
+
+interface WorkspaceDeleteDialogProps {
+  name: string;
+  busy: boolean;
+  onCancel(): void;
+  onConfirm(): Promise<boolean>;
+}
+
+export function WorkspaceDeleteDialog({
+  name,
+  busy,
+  onCancel,
+  onConfirm
+}: WorkspaceDeleteDialogProps) {
+  const dialogRef = useRef<HTMLElement>(null);
+  useModalFocusTrap(dialogRef);
+
+  const confirm = async () => {
+    if (!busy && (await onConfirm())) {
+      onCancel();
+    }
+  };
+
+  return (
+    <LayerPortal>
+      <div className="command-dialog-backdrop workspace-entry-dialog-backdrop">
+        <section
+          aria-describedby="workspace-delete-description"
+          aria-labelledby="workspace-delete-title"
+          aria-modal="true"
+          className="command-dialog workspace-entry-dialog danger"
+          ref={dialogRef}
+          role="alertdialog"
+        >
+          <header className="command-dialog-header">
+            <span className="command-dialog-icon danger">
+              <Icon name="warning" size={20} />
+            </span>
+            <div>
+              <span className="eyebrow">危险操作</span>
+              <h2 id="workspace-delete-title">
+                删除 Workspace？
+              </h2>
+              <p id="workspace-delete-description">{name}</p>
+            </div>
+          </header>
+
+          <div className="command-dialog-body">
+            <div className="command-warning danger">
+              <Icon name="warning" size={15} />
+              <span>
+                将删除此 Workspace 的 GitNest 配置、快照缓存与操作历史，但不会删除磁盘上的目录、仓库或提交。
+              </span>
+            </div>
+          </div>
+
+          <footer className="command-dialog-footer">
+            <p>必须至少保留一个 Workspace。</p>
+            <div>
+              <Button
+                size="small"
+                data-modal-initial-focus="true"
+                disabled={busy}
+                onClick={onCancel}
+                type="button"
+              >
+                取消
+              </Button>
+              <Button
+                size="small"
+                emphasis="strong"
+                variant="danger"
+                aria-busy={busy}
+                disabled={busy}
+                onClick={() => void confirm()}
+                type="button"
+              >
+                <Icon name={busy ? "refresh" : "warning"} />
+                {busy ? "删除中…" : "确认删除"}
+              </Button>
+            </div>
+          </footer>
+        </section>
+      </div>
+    </LayerPortal>
+  );
+}

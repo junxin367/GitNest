@@ -35,6 +35,10 @@ export const IPC_CHANNELS = {
   gitInspectRepository: "git:inspect-repository",
   workspaceGetCurrent: "workspace:get-current",
   workspaceGetState: "workspace:get-state",
+  workspaceCreate: "workspace:create",
+  workspaceSwitch: "workspace:switch",
+  workspaceRename: "workspace:rename",
+  workspaceDelete: "workspace:delete",
   workspaceSelectDirectory: "workspace:select-directory",
   workspaceAddEntry: "workspace:add-entry",
   workspaceRescan: "workspace:rescan",
@@ -68,6 +72,7 @@ export const IPC_CHANNELS = {
 } as const;
 
 export const IPC_EVENTS = {
+  settingsChanged: "settings:changed",
   workspaceStateChanged: "workspace:state-changed",
   codeAnalysisStateChanged: "code-analysis:state-changed"
 } as const;

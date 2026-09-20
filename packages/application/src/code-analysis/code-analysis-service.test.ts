@@ -172,7 +172,7 @@ describe("CodeAnalysisService snapshot persistence", () => {
         lspDataDirectory: "C:\\lsp",
         settingsProvider: async () => createSettings(),
         snapshotStore: store,
-        engine
+        runner: engine
       }
     );
 
@@ -273,6 +273,49 @@ describe("CodeAnalysisService node source", () => {
   });
 });
 
+describe("CodeAnalysisService lifecycle", () => {
+  it("rejects a new analysis after disposal", async () => {
+    const service = createService(
+      createWorkspace(),
+      createSnapshotStore(null),
+      createEngine()
+    );
+
+    await service.dispose();
+
+    await expect(service.start("workspace")).rejects.toThrow(
+      "disposed"
+    );
+  });
+
+  it("does not accept an analysis that was preparing while disposal completed", async () => {
+    const settings = deferred<CodeAnalysisSettings>();
+    const engine = createEngine();
+    const service = new CodeAnalysisService(
+      {
+        getCurrent: async () =>
+          structuredClone(createWorkspace())
+      },
+      createGitClient(),
+      {
+        cacheDirectory: "C:\\cache",
+        lspDataDirectory: "C:\\lsp",
+        settingsProvider: () => settings.promise,
+        snapshotStore: createSnapshotStore(null),
+        runner: engine
+      }
+    );
+
+    const start = service.start("workspace");
+    await Promise.resolve();
+    await service.dispose();
+    settings.resolve(createSettings());
+
+    await expect(start).rejects.toThrow("disposed");
+    expect(engine.analyze).not.toHaveBeenCalled();
+  });
+});
+
 type TestSnapshotStore = CodeAnalysisSnapshotStore & {
   load: ReturnType<typeof vi.fn>;
   save: ReturnType<typeof vi.fn>;
@@ -293,7 +336,7 @@ function createService(
       lspDataDirectory: "C:\\lsp",
       settingsProvider: async () => createSettings(),
       snapshotStore,
-      engine,
+      runner: engine,
       idFactory: () => "fresh"
     }
   );

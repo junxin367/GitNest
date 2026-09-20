@@ -383,7 +383,7 @@
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: var(--space-5);
+  padding: var(--page-safe-margin);
 }
 
 .page-scroll > :not(.command-dialog-backdrop) {

@@ -11,46 +11,82 @@ const SEARCHABLE_NODE_KINDS = new Set([
   "rpc-client",
   "rpc-handler"
 ]);
+export const MAX_VISIBLE_REQUEST_CHAINS = 250;
+const MAX_CHAIN_FILTER_SCAN = 5_000;
+const MAX_CHAIN_SEARCH_NODES = 20_000;
+const MAX_CHAIN_NODE_IDS = 64;
+const MAX_CHAIN_QUERY_LENGTH = 256;
+
+export interface FilteredCodeChains {
+  chains: CodeRequestChainDto[];
+  truncated: boolean;
+}
 
 export function filterChains(
   chains: CodeRequestChainDto[],
   nodes: CodeGraphNodeDto[],
   query: string,
-  method: string
+  method: string,
+  limit = MAX_VISIBLE_REQUEST_CHAINS
 ): CodeRequestChainDto[] {
-  const normalized = normalizeSearchText(query);
-  const nodeById = new Map(
-    nodes.map((node) => [node.id, node])
+  return filterChainsWithMetadata(
+    chains,
+    nodes,
+    query,
+    method,
+    limit
+  ).chains;
+}
+
+export function filterChainsWithMetadata(
+  chains: CodeRequestChainDto[],
+  nodes: CodeGraphNodeDto[],
+  query: string,
+  method: string,
+  limit = MAX_VISIBLE_REQUEST_CHAINS
+): FilteredCodeChains {
+  const normalized = normalizeSearchText(query).slice(
+    0,
+    MAX_CHAIN_QUERY_LENGTH
   );
-  return chains.filter((chain) => {
+  const safeLimit = Math.max(0, limit);
+  const nodeById = new Map(
+    nodes
+      .slice(0, MAX_CHAIN_SEARCH_NODES)
+      .map((node) => [node.id, node])
+  );
+  const filtered: CodeRequestChainDto[] = [];
+  const scanCount = Math.min(
+    chains.length,
+    MAX_CHAIN_FILTER_SCAN
+  );
+  let truncated = chains.length > scanCount;
+
+  for (let index = 0; index < scanCount; index += 1) {
+    const chain = chains[index];
+    if (!chain) {
+      continue;
+    }
     if (method !== "all" && chain.method !== method) {
-      return false;
+      continue;
     }
-    if (!normalized) {
-      return true;
+    if (
+      normalized &&
+      !chainSearchText(chain, nodeById).includes(normalized)
+    ) {
+      continue;
     }
-    const searchable = [
-      chain.profileId,
-      chain.transport,
-      chain.operationKey,
-      chain.method,
-      chain.route,
-      chain.title,
-      ...chain.nodeIds.flatMap((nodeId) => {
-        const node = nodeById.get(nodeId);
-        return node
-          ? [
-              node.name,
-              node.qualifiedName,
-              node.location.path
-            ]
-          : [];
-      })
-    ]
-      .join("\0")
-      .toLocaleLowerCase("zh-CN");
-    return searchable.includes(normalized);
-  });
+    if (filtered.length >= safeLimit) {
+      truncated = true;
+      break;
+    }
+    filtered.push(chain);
+  }
+
+  return {
+    chains: filtered,
+    truncated
+  };
 }
 
 export function searchCodeNodes(
@@ -144,4 +180,32 @@ function nodeKindRank(node: CodeGraphNodeDto): number {
 
 function normalizeSearchText(value: string): string {
   return value.trim().toLocaleLowerCase("zh-CN");
+}
+
+function chainSearchText(
+  chain: CodeRequestChainDto,
+  nodeById: ReadonlyMap<string, CodeGraphNodeDto>
+): string {
+  return [
+    chain.profileId,
+    chain.transport,
+    chain.operationKey,
+    chain.method,
+    chain.route,
+    chain.title,
+    ...chain.nodeIds
+      .slice(0, MAX_CHAIN_NODE_IDS)
+      .flatMap((nodeId) => {
+        const node = nodeById.get(nodeId);
+        return node
+          ? [
+              node.name,
+              node.qualifiedName,
+              node.location.path
+            ]
+          : [];
+      })
+  ]
+    .join("\0")
+    .toLocaleLowerCase("zh-CN");
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   IPC_CHANNELS,
+  type AppSettingsDto,
   type CodeAnalysisStateDto,
   type IpcInvoke,
   type WorkspaceRuntimeStateDto
@@ -62,6 +63,9 @@ describe("createGitNestBridge", () => {
     let analysisStateListener:
       | ((state: CodeAnalysisStateDto) => void)
       | undefined;
+    let settingsListener:
+      | ((settings: AppSettingsDto) => void)
+      | undefined;
     const bridge = createGitNestBridge(
       invoke,
       () => "C:\\workspace",
@@ -75,6 +79,12 @@ describe("createGitNestBridge", () => {
         analysisStateListener = listener;
         return () => {
           analysisStateListener = undefined;
+        };
+      },
+      (listener) => {
+        settingsListener = listener;
+        return () => {
+          settingsListener = undefined;
         };
       }
     );
@@ -111,6 +121,11 @@ describe("createGitNestBridge", () => {
     await bridge.settings.clearAiApiKey({
       confirmed: true
     });
+    const unsubscribeSettings =
+      bridge.settings.onChanged(() => undefined);
+    expect(settingsListener).toBeDefined();
+    unsubscribeSettings();
+    expect(settingsListener).toBeUndefined();
     await bridge.ai.testConnection({
       apiUrl: "https://api.example.test/v1",
       model: "test-model",
@@ -342,6 +357,19 @@ describe("createGitNestBridge", () => {
     });
     await bridge.workspace.getCurrent();
     await bridge.workspace.getState();
+    await bridge.workspace.create({
+      name: "Second Workspace"
+    });
+    await bridge.workspace.switch({
+      workspaceId: "workspace_2"
+    });
+    await bridge.workspace.rename({
+      workspaceId: "workspace_2",
+      name: "Renamed Workspace"
+    });
+    await bridge.workspace.delete({
+      workspaceId: "workspace_2"
+    });
     await bridge.workspace.selectDirectory();
     await bridge.workspace.addEntry({
       path: "C:\\workspace",
@@ -847,6 +875,27 @@ describe("createGitNestBridge", () => {
       {
         channel: IPC_CHANNELS.workspaceGetState,
         args: []
+      },
+      {
+        channel: IPC_CHANNELS.workspaceCreate,
+        args: [{ name: "Second Workspace" }]
+      },
+      {
+        channel: IPC_CHANNELS.workspaceSwitch,
+        args: [{ workspaceId: "workspace_2" }]
+      },
+      {
+        channel: IPC_CHANNELS.workspaceRename,
+        args: [
+          {
+            workspaceId: "workspace_2",
+            name: "Renamed Workspace"
+          }
+        ]
+      },
+      {
+        channel: IPC_CHANNELS.workspaceDelete,
+        args: [{ workspaceId: "workspace_2" }]
       },
       {
         channel: IPC_CHANNELS.workspaceSelectDirectory,

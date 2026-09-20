@@ -13,8 +13,13 @@ import type {
   OpenExternalApplicationContextDto
 } from "@gitnest/contracts";
 
-const PREFERRED_APPLICATION_KEY =
-  "gitnest.open-in.preferred-application";
+import {
+  getRendererPreferenceStorage,
+  readRendererPreference,
+  rendererPreferenceKeys,
+  writeRendererPreference
+} from "../../shared/lib/renderer-preferences";
+
 const APPLICATION_PRIORITY: ExternalApplicationKindDto[] = [
   "vscode",
   "cursor",
@@ -246,28 +251,25 @@ export function selectPreferredExternalApplication(
 function readPreferredApplication():
   | ExternalApplicationKindDto
   | undefined {
-  try {
-    const value = localStorage.getItem(
-      PREFERRED_APPLICATION_KEY
-    );
-    return APPLICATION_PRIORITY.includes(
-      value as ExternalApplicationKindDto
-    )
-      ? (value as ExternalApplicationKindDto)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const value = readRendererPreference(
+    getRendererPreferenceStorage(),
+    rendererPreferenceKeys.preferredExternalApplication
+  );
+  return APPLICATION_PRIORITY.includes(
+    value as ExternalApplicationKindDto
+  )
+    ? (value as ExternalApplicationKindDto)
+    : undefined;
 }
 
 function persistPreferredApplication(
   kind: ExternalApplicationKindDto
 ): void {
-  try {
-    localStorage.setItem(PREFERRED_APPLICATION_KEY, kind);
-  } catch {
-    // Preference persistence is best-effort.
-  }
+  writeRendererPreference(
+    getRendererPreferenceStorage(),
+    rendererPreferenceKeys.preferredExternalApplication,
+    kind
+  );
 }
 
 function unexpectedExternalApplicationError(

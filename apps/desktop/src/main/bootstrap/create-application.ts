@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from "electron";
 
 import { registerIpcHandlers } from "../ipc/register-ipc";
+import { runCodeAnalysisCacheMaintenance } from "../storage/cache-maintenance";
 import { createMainWindow } from "../windows/main-window";
 import { registerServices } from "./register-services";
 
@@ -13,6 +14,33 @@ export async function createApplication(): Promise<void> {
     services.windowState,
     services.diagnostics
   );
+  void services.workspace
+    .getCurrent()
+    .then((workspace) =>
+      runCodeAnalysisCacheMaintenance({
+        registry: services.dataRegistry,
+        workspaceId: workspace.id,
+        activeEntryIds: [
+          workspace.selectedEntryId ??
+            workspace.entries[0]?.id
+        ].filter((entryId): entryId is string =>
+          Boolean(entryId)
+        )
+      })
+    )
+    .then((result) =>
+      services.diagnostics.info(
+        "code-analysis.cache-maintenance",
+        result
+      )
+    )
+    .catch((error) =>
+      services.diagnostics.warning(
+        "code-analysis.cache-maintenance-failed",
+        { error }
+      )
+    )
+    .catch(() => undefined);
   void services.diagnostics
     .info("application.ready", {
       appVersion: app.getVersion(),
@@ -23,14 +51,29 @@ export async function createApplication(): Promise<void> {
 
   app.on("browser-window-focus", () => {
     void services.workspace
-      .refreshStaleOnFocus()
+      .setForeground(true)
       .catch((error) =>
         services.diagnostics.warning(
-          "workspace.focus-refresh-failed",
+          "workspace.foreground-update-failed",
           { error }
         )
       )
       .catch(() => undefined);
+  });
+  app.on("browser-window-blur", () => {
+    setTimeout(() => {
+      void services.workspace
+        .setForeground(
+          Boolean(BrowserWindow.getFocusedWindow())
+        )
+        .catch((error) =>
+          services.diagnostics.warning(
+            "workspace.foreground-update-failed",
+            { error }
+          )
+        )
+        .catch(() => undefined);
+    }, 0);
   });
 
   let shutdownStarted = false;

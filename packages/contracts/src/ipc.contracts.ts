@@ -75,10 +75,14 @@ import type {
 } from "./repository.contracts";
 import type {
   AddWorkspaceEntryRequest,
+  CreateWorkspaceRequest,
+  DeleteWorkspaceRequest,
   RemoveWorkspaceEntryRequest,
+  RenameWorkspaceRequest,
   SelectRepositoryTargetRequest,
   SelectWorkspaceEntryRequest,
   SetWorkspaceGroupCollapsedRequest,
+  SwitchWorkspaceRequest,
   UpdateWorkspaceEntryRequest,
   WorkspaceDetailsDto,
   WorkspaceDirectorySelectionDto,
@@ -231,6 +235,22 @@ export interface IpcContractMap {
   >;
   [IPC_CHANNELS.workspaceGetState]: IpcContract<
     [],
+    WorkspaceResult<WorkspaceRuntimeStateDto>
+  >;
+  [IPC_CHANNELS.workspaceCreate]: IpcContract<
+    [request: CreateWorkspaceRequest],
+    WorkspaceResult<WorkspaceRuntimeStateDto>
+  >;
+  [IPC_CHANNELS.workspaceSwitch]: IpcContract<
+    [request: SwitchWorkspaceRequest],
+    WorkspaceResult<WorkspaceRuntimeStateDto>
+  >;
+  [IPC_CHANNELS.workspaceRename]: IpcContract<
+    [request: RenameWorkspaceRequest],
+    WorkspaceResult<WorkspaceRuntimeStateDto>
+  >;
+  [IPC_CHANNELS.workspaceDelete]: IpcContract<
+    [request: DeleteWorkspaceRequest],
     WorkspaceResult<WorkspaceRuntimeStateDto>
   >;
   [IPC_CHANNELS.workspaceSelectDirectory]: IpcContract<

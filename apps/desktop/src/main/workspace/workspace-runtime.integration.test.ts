@@ -106,9 +106,7 @@ describe("WorkspaceRuntimeService integration", () => {
               snapshot.unstaged > 0 &&
               !snapshot.refreshPending
           )
-        ) &&
-        state.operations[0]?.kind === "status" &&
-        state.operations[0].state === "succeeded"
+        )
     );
     expect(
       changed.snapshots.find(
@@ -120,6 +118,7 @@ describe("WorkspaceRuntimeService integration", () => {
       unstaged: 1,
       stale: false
     });
+    expect(changed.operations).toHaveLength(0);
     await runtime.dispose();
 
     const restoredRuntime = createRuntime(
@@ -162,7 +161,9 @@ function createRuntime(
     {
       autoRefresh: false,
       currentTargetDebounceMs: 10,
-      backgroundTargetDebounceMs: 20
+      backgroundTargetDebounceMs: 20,
+      currentTargetMinIntervalMs: 10,
+      backgroundTargetMinIntervalMs: 20
     }
   );
 }

@@ -14,6 +14,7 @@ import type {
 import type { ExternalApplicationController } from "../../features/external-application/useExternalApplications";
 import { Icon } from "../../shared/ui/Icon";
 import {
+  isEventInsideMenu,
   MenuHeading,
   MenuItem,
   MenuPopover
@@ -58,6 +59,12 @@ export function OpenInControl({
     }
 
     const close = () => setMenuOpen(false);
+    const handleScroll = (event: Event) => {
+      if (isEventInsideMenu(event, menuRef.current)) {
+        return;
+      }
+      close();
+    };
     const handlePointerDown = (event: PointerEvent) => {
       if (
         event.target instanceof Node &&
@@ -78,7 +85,7 @@ export function OpenInControl({
     document.addEventListener("keydown", handleKeyDown);
     window.addEventListener("blur", close);
     window.addEventListener("resize", close);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", handleScroll, true);
     menuRef.current
       ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
       ?.focus();
@@ -91,7 +98,7 @@ export function OpenInControl({
       document.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("blur", close);
       window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", handleScroll, true);
     };
   }, [menuOpen]);
 

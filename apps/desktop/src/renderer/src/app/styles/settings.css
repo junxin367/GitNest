@@ -196,10 +196,12 @@
   align-items: center;
   width: 42px;
   height: 24px;
+  max-height: 24px;
   padding: 2px;
   background: var(--surface-3);
   border: 1px solid var(--border);
   border-radius: 999px;
+  cursor: pointer;
 }
 
 .settings-switch.active {
@@ -215,6 +217,11 @@
   background: var(--text-soft);
   border-radius: 50%;
   box-shadow: 0 1px 2px rgb(0 0 0 / 24%);
+}
+
+.settings-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
 }
 
 .settings-switch.active .settings-switch-thumb {
@@ -257,67 +264,9 @@ html[data-theme="light"] .settings-switch.active .settings-switch-thumb {
   color: var(--yellow);
 }
 
-.settings-tool-select {
-  display: grid;
-  gap: var(--space-1);
+.settings-terminal-select {
   width: min(100%, 360px);
   padding: var(--space-4) 0;
-  color: var(--text-soft);
-  font-size: var(--font-size-caption);
-  font-weight: var(--font-weight-medium);
-}
-
-.settings-tool-menu {
-  position: relative;
-  width: 100%;
-}
-
-.settings-tool-menu-trigger.gn-button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  width: 100%;
-  min-height: var(--control-default);
-  padding: 0 var(--space-3);
-  color: var(--text);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-regular);
-  font: inherit;
-  text-align: left;
-}
-
-.settings-tool-menu-trigger.gn-button:hover:not(:disabled),
-.settings-tool-menu-trigger.gn-button[aria-expanded="true"] {
-  color: var(--text);
-  background: var(--surface-hover);
-  border-color: var(--accent);
-}
-
-.settings-tool-menu-trigger-value {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.settings-tool-menu-trigger-value > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-tool-menu-surface {
-  width: min(360px, calc(100vw - var(--space-6)));
-  max-width: 360px;
-  max-height: 260px;
-  overflow: auto;
-}
-
-.settings-tool-menu-surface .menu-item.is-selected {
-  color: var(--text);
-  background: var(--accent-soft);
 }
 
 .settings-preference-list {

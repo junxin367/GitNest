@@ -569,6 +569,14 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       '[aria-label="请求类型筛选选项"]'
     );
     expect(menu).not.toBeNull();
+    act(() => {
+      menu?.dispatchEvent(new Event("scroll"));
+    });
+    expect(
+      document.body.querySelector(
+        '[aria-label="请求类型筛选选项"]'
+      )
+    ).toBe(menu);
     const getOption = Array.from(
       menu?.querySelectorAll<HTMLButtonElement>(
         '[role="menuitemradio"]'
@@ -896,6 +904,14 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     const graphWorkspace = container.querySelector(
       ".analysis-graph-workspace"
     );
+    const analysisWorkbench = container.querySelector(
+      ".analysis-workbench"
+    );
+    const nodeDetailPanel = container.querySelector(
+      ".analysis-chain-panel.is-node-detail"
+    );
+    expect(analysisWorkbench?.contains(nodeDetailPanel)).toBe(true);
+    expect(analysisWorkbench?.contains(graphWorkspace)).toBe(true);
     expect(
       graphWorkspace?.children[0]?.classList.contains(
         "analysis-node-diff-drawer"
@@ -926,12 +942,15 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     act(() => {
       container
         .querySelector<HTMLButtonElement>(
-          '[aria-label="全屏显示关系图"]'
+          '[aria-label="全屏显示代码分析工作区"]'
         )
         ?.click();
     });
-    expect(graphWorkspace?.classList.contains("is-fullscreen")).toBe(
+    expect(analysisWorkbench?.classList.contains("is-fullscreen")).toBe(
       true
+    );
+    expect(graphWorkspace?.classList.contains("is-fullscreen")).toBe(
+      false
     );
     act(() => {
       document.dispatchEvent(
@@ -941,7 +960,7 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
         })
       );
     });
-    expect(graphWorkspace?.classList.contains("is-fullscreen")).toBe(
+    expect(analysisWorkbench?.classList.contains("is-fullscreen")).toBe(
       false
     );
     expect(

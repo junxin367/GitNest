@@ -1,7 +1,6 @@
 import {
   mkdir,
   open,
-  readFile,
   readdir,
   rename,
   stat,
@@ -12,13 +11,32 @@ import { randomUUID } from "node:crypto";
 
 import { WorkspaceError } from "@gitnest/workspace-core";
 
+const DEFAULT_MAX_JSON_BYTES = 16 * 1_024 * 1_024;
+const READ_CHUNK_BYTES = 64 * 1_024;
+
+export interface AtomicJsonStoreOptions {
+  maxBytes?: number;
+}
+
 export class AtomicJsonStore {
   readonly #filePath: string;
+  readonly #maxBytes: number;
   #recovery: Promise<void> | undefined;
   #writeBlockedReason: string | undefined;
 
-  constructor(filePath: string) {
+  constructor(
+    filePath: string,
+    options: AtomicJsonStoreOptions = {}
+  ) {
+    const maxBytes =
+      options.maxBytes ?? DEFAULT_MAX_JSON_BYTES;
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+      throw new TypeError(
+        "Atomic JSON store maxBytes must be a positive safe integer."
+      );
+    }
     this.#filePath = filePath;
+    this.#maxBytes = maxBytes;
   }
 
   async read(): Promise<unknown | null> {
@@ -26,10 +44,23 @@ export class AtomicJsonStore {
     let contents: string;
 
     try {
-      contents = await readFile(this.#filePath, "utf8");
+      contents = await readBoundedUtf8File(
+        this.#filePath,
+        this.#maxBytes
+      );
     } catch (error) {
       if (getErrorCode(error) === "ENOENT") {
         return null;
+      }
+      if (error instanceof JsonFileTooLargeError) {
+        const reason =
+          `The persisted JSON document exceeds the supported limit of ${this.#maxBytes} bytes.`;
+        this.blockWrites(reason);
+        throw new WorkspaceError(
+          "INVALID_PERSISTED_DATA",
+          reason,
+          { cause: error.message }
+        );
       }
 
       throw new WorkspaceError(
@@ -62,6 +93,20 @@ export class AtomicJsonStore {
         { cause: this.#writeBlockedReason }
       );
     }
+    const serialized = `${JSON.stringify(value, null, 2)}\n`;
+    const serializedBytes = Buffer.byteLength(
+      serialized,
+      "utf8"
+    );
+    if (serializedBytes > this.#maxBytes) {
+      throw new WorkspaceError(
+        "PERSISTENCE_FAILED",
+        `Refusing to save a JSON document larger than ${this.#maxBytes} bytes.`,
+        {
+          cause: `Serialized JSON requires ${serializedBytes} bytes.`
+        }
+      );
+    }
     const directory = dirname(this.#filePath);
     const temporaryPath = join(
       directory,
@@ -72,10 +117,7 @@ export class AtomicJsonStore {
     try {
       await mkdir(directory, { recursive: true });
       handle = await open(temporaryPath, "wx");
-      await handle.writeFile(
-        `${JSON.stringify(value, null, 2)}\n`,
-        "utf8"
-      );
+      await handle.writeFile(serialized, "utf8");
       await handle.sync();
       await handle.close();
       handle = undefined;
@@ -142,7 +184,8 @@ export class AtomicJsonStore {
     }
 
     const finalState = await inspectJsonFile(
-      this.#filePath
+      this.#filePath,
+      this.#maxBytes
     );
     if (finalState === "valid") {
       await removePendingFiles(pendingPaths);
@@ -151,6 +194,12 @@ export class AtomicJsonStore {
     if (finalState === "invalid") {
       this.blockWrites(
         "The primary persisted JSON document is malformed; pending writes were preserved."
+      );
+      return;
+    }
+    if (finalState === "oversized") {
+      this.blockWrites(
+        `The primary persisted JSON document exceeds the supported limit of ${this.#maxBytes} bytes; pending writes were preserved.`
       );
       return;
     }
@@ -170,7 +219,10 @@ export class AtomicJsonStore {
     let recoveredPath: string | undefined;
     for (const candidate of candidates) {
       if (
-        (await inspectJsonFile(candidate.path)) ===
+        (await inspectJsonFile(
+          candidate.path,
+          this.#maxBytes
+        )) ===
         "valid"
       ) {
         recoveredPath = candidate.path;
@@ -184,7 +236,7 @@ export class AtomicJsonStore {
       );
       throw new WorkspaceError(
         "INVALID_PERSISTED_DATA",
-        "Interrupted JSON writes were found, but none contains valid JSON."
+        "Interrupted JSON writes were found, but none contains valid JSON within the supported size limit."
       );
     }
 
@@ -205,17 +257,25 @@ export class AtomicJsonStore {
   }
 }
 
-type JsonFileState = "missing" | "valid" | "invalid";
+type JsonFileState =
+  | "missing"
+  | "valid"
+  | "invalid"
+  | "oversized";
 
 async function inspectJsonFile(
-  path: string
+  path: string,
+  maxBytes: number
 ): Promise<JsonFileState> {
   let contents: string;
   try {
-    contents = await readFile(path, "utf8");
+    contents = await readBoundedUtf8File(path, maxBytes);
   } catch (error) {
     if (getErrorCode(error) === "ENOENT") {
       return "missing";
+    }
+    if (error instanceof JsonFileTooLargeError) {
+      return "oversized";
     }
     throw error;
   }
@@ -224,6 +284,61 @@ async function inspectJsonFile(
     return "valid";
   } catch {
     return "invalid";
+  }
+}
+
+async function readBoundedUtf8File(
+  path: string,
+  maxBytes: number
+): Promise<string> {
+  const handle = await open(path, "r");
+  try {
+    const info = await handle.stat();
+    if (info.size > maxBytes) {
+      throw new JsonFileTooLargeError(
+        maxBytes,
+        info.size
+      );
+    }
+    const chunk = Buffer.allocUnsafe(
+      Math.min(READ_CHUNK_BYTES, maxBytes + 1)
+    );
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    while (true) {
+      const remainingBytes = maxBytes - totalBytes;
+      const { bytesRead } = await handle.read(
+        chunk,
+        0,
+        Math.min(chunk.length, remainingBytes + 1),
+        null
+      );
+      if (bytesRead === 0) {
+        break;
+      }
+      totalBytes += bytesRead;
+      if (totalBytes > maxBytes) {
+        throw new JsonFileTooLargeError(
+          maxBytes,
+          totalBytes
+        );
+      }
+      chunks.push(
+        Buffer.from(chunk.subarray(0, bytesRead))
+      );
+    }
+    return Buffer.concat(chunks, totalBytes).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+class JsonFileTooLargeError extends Error {
+  constructor(maxBytes: number, actualBytes: number) {
+    super(
+      `JSON document requires at least ${actualBytes} bytes; maximum is ${maxBytes} bytes.`
+    );
+    this.name = "JsonFileTooLargeError";
   }
 }
 

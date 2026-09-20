@@ -6,11 +6,15 @@ import type {
 import { AtomicJsonStore } from "./atomic-json-store";
 import { migrateWorkspaceDocument } from "./migrations/workspace-document";
 
+const MAX_WORKSPACE_DOCUMENT_BYTES = 16 * 1_024 * 1_024;
+
 export class JsonWorkspaceStore implements WorkspaceStore {
   readonly #store: AtomicJsonStore;
 
   constructor(filePath: string) {
-    this.#store = new AtomicJsonStore(filePath);
+    this.#store = new AtomicJsonStore(filePath, {
+      maxBytes: MAX_WORKSPACE_DOCUMENT_BYTES
+    });
   }
 
   async load(): Promise<Workspace | null> {

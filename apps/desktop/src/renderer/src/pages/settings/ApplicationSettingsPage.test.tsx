@@ -54,7 +54,9 @@ describe("ApplicationSettingsPage", () => {
       ]);
       expect(html).not.toContain("快捷键");
       expect(html).not.toContain("危险操作前确认");
-      expect(html).toContain("危险操作始终确认");
+      expect(html).not.toContain("危险操作始终确认");
+      expect(html).not.toContain("无法在设置中关闭");
+      expect(html).not.toContain("重新读取");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -167,6 +169,11 @@ describe("ApplicationSettingsPage", () => {
         '[aria-label="选择默认终端"]'
       );
       expect(trigger).not.toBeNull();
+      expect(trigger?.classList).toContain("gn-button");
+      expect(trigger?.classList).toContain(
+        "gn-select__trigger"
+      );
+      expect(trigger?.dataset.size).toBe("medium");
       expect(trigger?.textContent).toContain("Windows Terminal");
       expect(container.querySelector("select")).toBeNull();
 
@@ -197,7 +204,7 @@ describe("ApplicationSettingsPage", () => {
     }
   });
 
-  it("shows, hides, and preserves the current AI API Key after saving", async () => {
+  it("keeps the AI API Key hidden by default and clears it after saving", async () => {
     vi.stubGlobal("React", React);
     const container = document.createElement("div");
     document.body.append(container);
@@ -221,7 +228,7 @@ describe("ApplicationSettingsPage", () => {
       const getKeyInput = () =>
         container.querySelector<HTMLInputElement>("#ai-api-key");
       const keyInput = getKeyInput();
-      expect(keyInput?.type).toBe("text");
+      expect(keyInput?.type).toBe("password");
 
       act(() => {
         setNativeInputValue(keyInput, "sk-current-draft");
@@ -230,18 +237,12 @@ describe("ApplicationSettingsPage", () => {
         );
       });
 
-      const hideKey = container.querySelector<HTMLButtonElement>(
-        '[aria-label="隐藏 API Key"]'
-      );
-      act(() => hideKey?.click());
-      expect(getKeyInput()?.type).toBe("password");
-      expect(getKeyInput()?.value).toBe("sk-current-draft");
-
       const showKey = container.querySelector<HTMLButtonElement>(
         '[aria-label="显示 API Key"]'
       );
       act(() => showKey?.click());
       expect(getKeyInput()?.type).toBe("text");
+      expect(getKeyInput()?.value).toBe("sk-current-draft");
 
       const save = Array.from(
         container.querySelectorAll<HTMLButtonElement>("button")
@@ -253,7 +254,8 @@ describe("ApplicationSettingsPage", () => {
         await Promise.resolve();
       });
 
-      expect(getKeyInput()?.value).toBe("sk-current-draft");
+      expect(getKeyInput()?.value).toBe("");
+      expect(getKeyInput()?.type).toBe("password");
       expect(appSettings.update).toHaveBeenCalledWith(
         {
           ai: expect.objectContaining({
@@ -264,6 +266,264 @@ describe("ApplicationSettingsPage", () => {
           notice: "AI 提交信息设置已保存。"
         }
       );
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("preserves unsaved AI fields across unrelated settings updates", () => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const appSettings = settingsController();
+    const render = (controller: AppSettingsController) => {
+      root.render(
+        <ApplicationSettingsPage
+          accounts={emptyAccounts()}
+          appSettings={controller}
+          gitEnvironment={null}
+          initialSection="ai"
+          terminalProfiles={[]}
+          workspace={null}
+        />
+      );
+    };
+
+    try {
+      act(() => render(appSettings));
+      const input =
+        container.querySelector<HTMLInputElement>("#ai-api-url");
+      act(() => {
+        setNativeInputValue(input, "https://draft.example/v1");
+        input?.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+
+      act(() =>
+        render({
+          ...appSettings,
+          settings: {
+            ...appSettings.settings,
+            appearance: { theme: "light" },
+            ai: {
+              ...appSettings.settings.ai,
+              apiUrl: "https://persisted.example/v1"
+            }
+          }
+        })
+      );
+
+      expect(
+        container.querySelector<HTMLInputElement>("#ai-api-url")
+          ?.value
+      ).toBe("https://draft.example/v1");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("preserves an unsaved LSP draft across unrelated settings updates", () => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const appSettings = settingsController();
+    const render = (controller: AppSettingsController) => {
+      root.render(
+        <ApplicationSettingsPage
+          accounts={emptyAccounts()}
+          appSettings={controller}
+          gitEnvironment={null}
+          initialSection="analysis"
+          terminalProfiles={[]}
+          workspace={null}
+        />
+      );
+    };
+
+    try {
+      act(() => render(appSettings));
+      const input = container.querySelector<HTMLInputElement>(
+        "#lsp-command-typescript-language-server"
+      );
+      act(() => {
+        setNativeInputValue(input, "draft-language-server");
+        input?.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+
+      act(() =>
+        render({
+          ...appSettings,
+          settings: {
+            ...appSettings.settings,
+            git: {
+              ...appSettings.settings.git,
+              fetchMode: "startup"
+            },
+            codeAnalysis: {
+              ...appSettings.settings.codeAnalysis,
+              typescript: {
+                ...appSettings.settings.codeAnalysis.typescript,
+                command: "persisted-language-server"
+              }
+            }
+          }
+        })
+      );
+
+      expect(
+        container.querySelector<HTMLInputElement>(
+          "#lsp-command-typescript-language-server"
+        )?.value
+      ).toBe("draft-language-server");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not replace a newer AI draft when an earlier save finishes", async () => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const pendingSave = deferred<boolean>();
+    const appSettings = settingsController({
+      update: vi.fn(() => pendingSave.promise)
+    });
+
+    try {
+      act(() => {
+        root.render(
+          <ApplicationSettingsPage
+            accounts={emptyAccounts()}
+            appSettings={appSettings}
+            gitEnvironment={null}
+            initialSection="ai"
+            terminalProfiles={[]}
+            workspace={null}
+          />
+        );
+      });
+      const input =
+        container.querySelector<HTMLInputElement>("#ai-api-url");
+      act(() => {
+        setNativeInputValue(
+          input,
+          "https://submitted.example/v1"
+        );
+        input?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+      });
+      const save = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button")
+      ).find((button) =>
+        button.textContent?.includes("保存 AI 设置")
+      );
+      act(() => save?.click());
+      act(() => {
+        setNativeInputValue(input, "https://newer.example/v1");
+        input?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+      });
+
+      await act(async () => {
+        pendingSave.resolve(true);
+        await pendingSave.promise;
+      });
+
+      expect(
+        container.querySelector<HTMLInputElement>("#ai-api-url")
+          ?.value
+      ).toBe("https://newer.example/v1");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a newer LSP draft dirty when an earlier save finishes", async () => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const pendingSave = deferred<boolean>();
+    const appSettings = settingsController({
+      update: vi.fn(() => pendingSave.promise)
+    });
+    const render = (controller: AppSettingsController) => {
+      root.render(
+        <ApplicationSettingsPage
+          accounts={emptyAccounts()}
+          appSettings={controller}
+          gitEnvironment={null}
+          initialSection="analysis"
+          terminalProfiles={[]}
+          workspace={null}
+        />
+      );
+    };
+
+    try {
+      act(() => render(appSettings));
+      const input = container.querySelector<HTMLInputElement>(
+        "#lsp-command-typescript-language-server"
+      );
+      act(() => {
+        setNativeInputValue(input, "submitted-language-server");
+        input?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+      });
+      const save = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button")
+      ).find((button) =>
+        button.textContent?.includes(
+          "保存代码分析设置"
+        )
+      );
+      act(() => save?.click());
+      act(() => {
+        setNativeInputValue(input, "newer-language-server");
+        input?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+      });
+
+      await act(async () => {
+        pendingSave.resolve(true);
+        await pendingSave.promise;
+      });
+      act(() =>
+        render({
+          ...appSettings,
+          settings: {
+            ...appSettings.settings,
+            appearance: { theme: "light" },
+            codeAnalysis: {
+              ...appSettings.settings.codeAnalysis,
+              typescript: {
+                ...appSettings.settings.codeAnalysis.typescript,
+                command: "submitted-language-server"
+              }
+            }
+          }
+        })
+      );
+
+      expect(
+        container.querySelector<HTMLInputElement>(
+          "#lsp-command-typescript-language-server"
+        )?.value
+      ).toBe("newer-language-server");
     } finally {
       act(() => root.unmount());
       container.remove();
@@ -300,6 +560,14 @@ function settingsController(
     clearFeedback: vi.fn(),
     ...overrides
   };
+}
+
+function deferred<Value>() {
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function emptyAccounts(): AccountController {

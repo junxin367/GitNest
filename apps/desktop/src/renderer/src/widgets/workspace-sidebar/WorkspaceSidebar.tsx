@@ -1,5 +1,6 @@
 import { Button } from "../../shared/ui/Button";
 import {
+  memo,
   useEffect,
   useMemo,
   useRef,
@@ -14,7 +15,8 @@ import type {
   RepositoryTargetDto,
   UpdateWorkspaceEntryRequest,
   WorkspaceDetailsDto,
-  WorkspaceEntryDto
+  WorkspaceEntryDto,
+  WorkspaceSummaryDto
 } from "@gitnest/contracts";
 
 import {
@@ -41,9 +43,11 @@ import {
 } from "../../shared/ui/Menu";
 import {
   WorkspaceGroupRenameDialog,
+  WorkspaceDeleteDialog,
   WorkspaceEntryTapdKeywordDialog,
   WorkspaceEntryRemoveDialog,
-  WorkspaceEntryRenameDialog
+  WorkspaceEntryRenameDialog,
+  WorkspaceNameDialog
 } from "./WorkspaceEntryDialogs";
 import {
   changedRepositoriesOnlyPreferenceKey,
@@ -60,8 +64,12 @@ interface WorkspaceSidebarProps {
   activeView: AppView;
   sidebarHidden: boolean;
   workspace: WorkspaceDetailsDto | null;
+  workspaces: WorkspaceSummaryDto[];
   snapshots: RepositoryStatusSnapshotDto[];
   busy: boolean;
+  onCreateWorkspace(name: string): Promise<boolean>;
+  onSwitchWorkspace(workspaceId: string): Promise<boolean>;
+  onDeleteWorkspace(workspaceId: string): Promise<boolean>;
   onAddDirectory(): void;
   onRemoveEntry(
     entryId: string,
@@ -138,8 +146,12 @@ export function WorkspaceSidebar({
   activeView,
   sidebarHidden,
   workspace,
+  workspaces,
   snapshots,
   busy,
+  onCreateWorkspace,
+  onSwitchWorkspace,
+  onDeleteWorkspace,
   onAddDirectory,
   onRemoveEntry,
   onRescan,
@@ -171,8 +183,6 @@ export function WorkspaceSidebar({
     useState<GroupRenameState | null>(null);
   const [tapdKeyword, setTapdKeyword] =
     useState<TapdKeywordState | null>(null);
-  const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] =
-    useState(false);
   const [repositoryMenuOpen, setRepositoryMenuOpen] =
     useState(false);
   const [
@@ -195,11 +205,6 @@ export function WorkspaceSidebar({
   const [tapdKeywordSubmitting, setTapdKeywordSubmitting] =
     useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
-  const workspaceSwitcherRef = useRef<HTMLDivElement>(null);
-  const workspaceSwitcherTriggerRef =
-    useRef<HTMLButtonElement>(null);
-  const workspaceSwitcherMenuRef =
-    useRef<HTMLDivElement>(null);
   const repositoryMenuRef = useRef<HTMLDivElement>(null);
   const repositoryMenuTriggerRef =
     useRef<HTMLButtonElement>(null);
@@ -481,6 +486,21 @@ export function WorkspaceSidebar({
   ]);
 
   useEffect(() => {
+    setQuery("");
+    setGroupOrderByEntry({});
+    setCollapsedEntryIds(new Set());
+    setContextMenu(null);
+    setGroupNameOverrides({});
+    setRemovedEmptyGroupKeys(new Set());
+    setRenameGroup(null);
+    setTapdKeyword(null);
+    setRenameEntryId(null);
+    setRemoveEntryId(null);
+    setRemoveTarget(null);
+    setRepositoryMenuOpen(false);
+  }, [workspaceId]);
+
+  useEffect(() => {
     if (
       contextMenu &&
       (!workspace?.entries.some(
@@ -532,46 +552,6 @@ export function WorkspaceSidebar({
   }, [contextMenu]);
 
   useEffect(() => {
-    if (!workspaceSwitcherOpen) {
-      return;
-    }
-
-    const closeFromOutside = (event: globalThis.PointerEvent) => {
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        (workspaceSwitcherRef.current?.contains(target) ||
-          workspaceSwitcherMenuRef.current?.contains(target))
-      ) {
-        return;
-      }
-      setWorkspaceSwitcherOpen(false);
-    };
-    const closeFromKeyboard = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setWorkspaceSwitcherOpen(false);
-      }
-    };
-
-    document.addEventListener(
-      "pointerdown",
-      closeFromOutside
-    );
-    document.addEventListener("keydown", closeFromKeyboard);
-    return () => {
-      document.removeEventListener(
-        "pointerdown",
-        closeFromOutside
-      );
-      document.removeEventListener(
-        "keydown",
-        closeFromKeyboard
-      );
-    };
-  }, [workspaceSwitcherOpen]);
-
-  useEffect(() => {
     if (!repositoryMenuOpen) {
       return;
     }
@@ -613,7 +593,6 @@ export function WorkspaceSidebar({
 
   useEffect(() => {
     if (sidebarHidden) {
-      setWorkspaceSwitcherOpen(false);
       setRepositoryMenuOpen(false);
     }
   }, [sidebarHidden]);
@@ -851,88 +830,15 @@ export function WorkspaceSidebar({
 
   return (
     <aside className="workspace-sidebar">
-      <div
-        className="workspace-switcher-wrap"
-        ref={workspaceSwitcherRef}
-      >
-        <Button variant="unstyled"
-          aria-expanded={workspaceSwitcherOpen}
-          aria-haspopup="menu"
-          aria-label="切换 Workspace"
-          className="workspace-switcher"
-          onClick={() =>
-            setWorkspaceSwitcherOpen((current) => !current)
-          }
-          ref={workspaceSwitcherTriggerRef}
-          title="切换 Workspace"
-          type="button"
-        >
-          <span className="workspace-avatar">
-            <Icon name="layers" size={18} />
-          </span>
-          <span className="workspace-meta">
-            <span className="workspace-name">
-              {workspace?.name ?? "GitNest Workspace"}
-            </span>
-            <span className="workspace-caption">
-              {workspace ? (
-                "1 个 Workspace · 本地持久化"
-              ) : (
-                <Skeleton variant="text" width="72%" />
-              )}
-            </span>
-          </span>
-          <span
-            aria-hidden="true"
-            className="workspace-switcher-chevron"
-          >
-            <Icon name="chevron" size={16} />
-          </span>
-        </Button>
-        {workspaceSwitcherOpen && (
-          <MenuPopover
-            align="start"
-            anchor={workspaceSwitcherTriggerRef.current}
-            aria-label="切换 Workspace"
-            className="workspace-switcher-menu"
-            ref={workspaceSwitcherMenuRef}
-            side="bottom"
-          >
-            <MenuHeading>Workspace</MenuHeading>
-            {workspace?.entries.map((entry) => (
-              <MenuItem
-                key={entry.id}
-                leading={
-                  <Icon
-                    name={
-                      entry.kind === "standalone-repository"
-                        ? "repository"
-                        : "folder"
-                    }
-                    size={15}
-                  />
-                }
-                onClick={() => {
-                  setWorkspaceSwitcherOpen(false);
-                  void onSelectEntry(entry.id);
-                }}
-              >
-                {entry.displayName}
-              </MenuItem>
-            ))}
-            <MenuSeparator />
-            <MenuItem
-              leading={<Icon name="plus" size={15} />}
-              onClick={() => {
-                setWorkspaceSwitcherOpen(false);
-                onAddDirectory();
-              }}
-            >
-              新建 Workspace
-            </MenuItem>
-          </MenuPopover>
-        )}
-      </div>
+      <WorkspaceSwitcher
+        busy={busy}
+        hidden={sidebarHidden}
+        workspace={workspace}
+        workspaces={workspaces}
+        onCreateWorkspace={onCreateWorkspace}
+        onDeleteWorkspace={onDeleteWorkspace}
+        onSwitchWorkspace={onSwitchWorkspace}
+      />
 
       <div className="sidebar-search-wrap">
         <div className="sidebar-search-field">
@@ -1465,6 +1371,262 @@ export function WorkspaceSidebar({
         />
       )}
     </aside>
+  );
+}
+
+interface WorkspaceSwitcherProps {
+  busy: boolean;
+  hidden: boolean;
+  workspace: WorkspaceDetailsDto | null;
+  workspaces: WorkspaceSummaryDto[];
+  onCreateWorkspace(name: string): Promise<boolean>;
+  onSwitchWorkspace(workspaceId: string): Promise<boolean>;
+  onDeleteWorkspace(workspaceId: string): Promise<boolean>;
+}
+
+const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
+  busy,
+  hidden,
+  workspace,
+  workspaces,
+  onCreateWorkspace,
+  onSwitchWorkspace,
+  onDeleteWorkspace
+}: WorkspaceSwitcherProps) {
+  const [open, setOpen] = useState(false);
+  const [dialog, setDialog] = useState<
+    "create" | "delete" | null
+  >(null);
+  const [dialogBusy, setDialogBusy] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setOpen(false);
+    setDialog(null);
+    setDialogBusy(false);
+  }, [hidden, workspace?.id]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const closeFromOutside = (
+      event: globalThis.PointerEvent
+    ) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (wrapRef.current?.contains(target) ||
+          menuRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    const closeFromKeyboard = (
+      event: globalThis.KeyboardEvent
+    ) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener(
+      "pointerdown",
+      closeFromOutside
+    );
+    document.addEventListener("keydown", closeFromKeyboard);
+    return () => {
+      document.removeEventListener(
+        "pointerdown",
+        closeFromOutside
+      );
+      document.removeEventListener(
+        "keydown",
+        closeFromKeyboard
+      );
+    };
+  }, [open]);
+
+  const confirmName = async (
+    name: string
+  ): Promise<boolean> => {
+    if (dialogBusy) {
+      return false;
+    }
+    setDialogBusy(true);
+    try {
+      return await onCreateWorkspace(name);
+    } finally {
+      setDialogBusy(false);
+    }
+  };
+
+  const confirmDelete = async (): Promise<boolean> => {
+    if (
+      !workspace ||
+      workspaces.length <= 1 ||
+      dialogBusy
+    ) {
+      return false;
+    }
+    setDialogBusy(true);
+    try {
+      return await onDeleteWorkspace(workspace.id);
+    } finally {
+      setDialogBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="workspace-switcher-wrap" ref={wrapRef}>
+        <Button variant="unstyled"
+          aria-expanded={open}
+          aria-haspopup="menu"
+          aria-label="切换 Workspace"
+          className="workspace-switcher"
+          onClick={() => setOpen((current) => !current)}
+          ref={triggerRef}
+          title="切换 Workspace"
+          type="button"
+        >
+          <span className="workspace-avatar">
+            <Icon name="layers" size={18} />
+          </span>
+          <span className="workspace-meta">
+            <span className="workspace-name">
+              {workspace?.name ?? "GitNest Workspace"}
+            </span>
+            <span className="workspace-caption">
+              {workspace ? (
+                `${workspaces.length} 个 Workspace · 本地持久化`
+              ) : (
+                <Skeleton variant="text" width="72%" />
+              )}
+            </span>
+          </span>
+          <span
+            aria-hidden="true"
+            className="workspace-switcher-chevron"
+          >
+            <Icon name="chevron" size={16} />
+          </span>
+        </Button>
+        {open && (
+          <MenuPopover
+            align="start"
+            anchor={triggerRef.current}
+            aria-label="切换 Workspace"
+            className="workspace-switcher-menu"
+            ref={menuRef}
+            side="bottom"
+          >
+            <MenuHeading>Workspace</MenuHeading>
+            {workspaces.map((candidate) => (
+              <MenuItem
+                disabled={busy}
+                key={candidate.id}
+                leading={<Icon name="layers" size={15} />}
+                onClick={() => {
+                  setOpen(false);
+                  void onSwitchWorkspace(candidate.id);
+                }}
+                trailing={
+                  candidate.id === workspace?.id ? (
+                    <Icon name="check" size={14} />
+                  ) : undefined
+                }
+              >
+                {candidate.name}
+              </MenuItem>
+            ))}
+            <MenuSeparator />
+            <MenuItem
+              disabled={busy}
+              leading={<Icon name="plus" size={15} />}
+              onClick={() => {
+                setOpen(false);
+                setDialogBusy(false);
+                setDialog("create");
+              }}
+            >
+              新建 Workspace
+            </MenuItem>
+            <MenuItem
+              disabled={
+                busy || !workspace || workspaces.length <= 1
+              }
+              leading={<Icon name="warning" size={15} />}
+              onClick={() => {
+                setOpen(false);
+                setDialogBusy(false);
+                setDialog("delete");
+              }}
+              tone="danger"
+            >
+              删除当前 Workspace
+            </MenuItem>
+          </MenuPopover>
+        )}
+      </div>
+      {dialog === "create" && (
+        <WorkspaceNameDialog
+          busy={dialogBusy || busy}
+          mode="create"
+          onCancel={() => setDialog(null)}
+          onConfirm={confirmName}
+        />
+      )}
+      {dialog === "delete" && workspace && (
+        <WorkspaceDeleteDialog
+          busy={dialogBusy || busy}
+          name={workspace.name}
+          onCancel={() => setDialog(null)}
+          onConfirm={confirmDelete}
+        />
+      )}
+    </>
+  );
+}, workspaceSwitcherPropsEqual);
+
+function workspaceSwitcherPropsEqual(
+  previous: WorkspaceSwitcherProps,
+  next: WorkspaceSwitcherProps
+): boolean {
+  return (
+    previous.busy === next.busy &&
+    previous.hidden === next.hidden &&
+    previous.workspace?.id === next.workspace?.id &&
+    previous.workspace?.name === next.workspace?.name &&
+    workspaceSummariesEqual(
+      previous.workspaces,
+      next.workspaces
+    ) &&
+    previous.onCreateWorkspace === next.onCreateWorkspace &&
+    previous.onSwitchWorkspace === next.onSwitchWorkspace &&
+    previous.onDeleteWorkspace === next.onDeleteWorkspace
+  );
+}
+
+function workspaceSummariesEqual(
+  previous: WorkspaceSummaryDto[],
+  next: WorkspaceSummaryDto[]
+): boolean {
+  return (
+    previous.length === next.length &&
+    previous.every((workspace, index) => {
+      const candidate = next[index];
+      return (
+        candidate?.id === workspace.id &&
+        candidate.name === workspace.name &&
+        candidate.updatedAt === workspace.updatedAt
+      );
+    })
   );
 }
 

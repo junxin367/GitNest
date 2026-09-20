@@ -1,4 +1,5 @@
 export const WORKSPACE_SCHEMA_VERSION = 1;
+export const WORKSPACE_CATALOG_SCHEMA_VERSION = 2;
 
 export type WorkspaceEntryKind =
   | "workspace-meta-repository"
@@ -103,6 +104,19 @@ export interface Workspace {
   updatedAt: string;
 }
 
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceCatalog {
+  schemaVersion: typeof WORKSPACE_CATALOG_SCHEMA_VERSION;
+  activeWorkspaceId: string;
+  workspaces: WorkspaceSummary[];
+  updatedAt: string;
+}
+
 export interface WorkspaceRootDefinition {
   id: string;
   displayName: string;
@@ -123,5 +137,15 @@ export function createEmptyWorkspace(
     repositories: [],
     worktrees: [],
     updatedAt: now
+  };
+}
+
+export function summarizeWorkspace(
+  workspace: Workspace
+): WorkspaceSummary {
+  return {
+    id: workspace.id,
+    name: workspace.name,
+    updatedAt: workspace.updatedAt
   };
 }

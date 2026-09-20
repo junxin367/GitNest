@@ -1,18 +1,22 @@
 export {
+  WORKSPACE_CATALOG_SCHEMA_VERSION,
   WORKSPACE_SCHEMA_VERSION,
   createEmptyWorkspace,
+  summarizeWorkspace,
   type AggregateWorkspaceEntry,
   type DirectoryWorkspaceEntry,
   type RepositoryGroup,
   type RepositoryTarget,
   type StandaloneRepositoryEntry,
   type Workspace,
+  type WorkspaceCatalog,
   type WorkspaceEntry,
   type WorkspaceEntryKind,
   type WorkspaceRepository,
   type WorkspaceRootDefinition,
   type WorkspaceScanIssue,
   type WorkspaceScanIssueCode,
+  type WorkspaceSummary,
   type WorkspaceWorktree
 } from "./domain/workspace";
 export type {
@@ -44,6 +48,9 @@ export type {
   WorkspaceDirectoryEntryKind,
   WorkspaceFileSystem
 } from "./ports/workspace-filesystem";
+export type {
+  WorkspaceCollectionStore
+} from "./ports/workspace-collection-store";
 export type { WorkspaceStore } from "./ports/workspace-store";
 export type {
   WorkspaceWatchEvent,

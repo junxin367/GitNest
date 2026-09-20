@@ -550,6 +550,10 @@ export function App() {
           busy={workspace.busy}
           sidebarHidden={directoryPanelHidden}
           snapshots={workspace.snapshots}
+          workspaces={workspace.workspaces}
+          onCreateWorkspace={workspace.createWorkspace}
+          onSwitchWorkspace={workspace.switchWorkspace}
+          onDeleteWorkspace={workspace.deleteWorkspace}
           onAddDirectory={() => void workspace.chooseDirectory()}
           onRemoveEntry={workspace.removeEntry}
           onRescan={workspace.rescan}

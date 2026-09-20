@@ -1,5 +1,6 @@
 import {
   IPC_CHANNELS,
+  type AppSettingsDto,
   type CodeAnalysisStateDto,
   type GitNestBridge,
   type IpcInvoke,
@@ -14,6 +15,9 @@ export function createGitNestBridge(
   ) => () => void = () => () => undefined,
   subscribeCodeAnalysisState: (
     listener: (state: CodeAnalysisStateDto) => void
+  ) => () => void = () => () => undefined,
+  subscribeAppSettings: (
+    listener: (settings: AppSettingsDto) => void
   ) => () => void = () => () => undefined
 ): GitNestBridge {
   return {
@@ -40,7 +44,8 @@ export function createGitNestBridge(
       update: (request) =>
         invoke(IPC_CHANNELS.settingsUpdate, request),
       clearAiApiKey: (request) =>
-        invoke(IPC_CHANNELS.settingsClearAiApiKey, request)
+        invoke(IPC_CHANNELS.settingsClearAiApiKey, request),
+      onChanged: subscribeAppSettings
     },
     ai: {
       testConnection: (request) =>
@@ -174,6 +179,14 @@ export function createGitNestBridge(
         invoke(IPC_CHANNELS.workspaceGetCurrent),
       getState: () =>
         invoke(IPC_CHANNELS.workspaceGetState),
+      create: (request) =>
+        invoke(IPC_CHANNELS.workspaceCreate, request),
+      switch: (request) =>
+        invoke(IPC_CHANNELS.workspaceSwitch, request),
+      rename: (request) =>
+        invoke(IPC_CHANNELS.workspaceRename, request),
+      delete: (request) =>
+        invoke(IPC_CHANNELS.workspaceDelete, request),
       selectDirectory: () =>
         invoke(IPC_CHANNELS.workspaceSelectDirectory),
       addEntry: (request) =>

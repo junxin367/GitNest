@@ -20,6 +20,7 @@ interface StatusBarProps {
     | "loading"
     | "selecting"
     | "scanning"
+    | "switching"
     | "saving"
     | null;
 }
@@ -70,8 +71,10 @@ export function StatusBar({
           name={operation === "scanning" ? "refresh" : "layers"}
           size={12}
         />
-        {operation === "scanning"
-          ? "正在扫描 Workspace…"
+        {operation === "switching"
+          ? "正在切换 Workspace…"
+          : operation === "scanning"
+            ? "正在扫描 Workspace…"
           : workspace
             ? `${workspace.entries.length} 个顶层条目 · ${workspace.repositories.length} 个仓库 · ${changedRepositories} 个有变更`
             : "正在恢复 Workspace…"}

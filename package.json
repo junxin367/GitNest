@@ -12,6 +12,7 @@
     "dev": "pnpm --filter @gitnest/desktop dev",
     "build": "pnpm --filter @gitnest/desktop build",
     "preview": "pnpm --filter @gitnest/desktop preview",
+    "check:architecture": "node scripts/check-architecture.mjs",
     "typecheck": "tsc -p packages/contracts/tsconfig.json --noEmit && tsc -p packages/git-core/tsconfig.json --noEmit && tsc -p packages/git-cli/tsconfig.json --noEmit && tsc -p packages/workspace-core/tsconfig.json --noEmit && tsc -p packages/persistence-json/tsconfig.json --noEmit && tsc -p packages/code-analysis/tsconfig.json --noEmit && tsc -p packages/application/tsconfig.json --noEmit && tsc -p packages/testkit/tsconfig.json --noEmit && tsc -p packages/design-system/tsconfig.json --noEmit && pnpm --filter @gitnest/desktop typecheck",
     "test": "vitest run",
     "test:watch": "vitest",

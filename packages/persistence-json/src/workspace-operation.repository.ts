@@ -7,6 +7,8 @@ import { WorkspaceError } from "@gitnest/workspace-core";
 import { AtomicJsonStore } from "./atomic-json-store";
 
 export const WORKSPACE_OPERATION_SCHEMA_VERSION = 1;
+const MAX_WORKSPACE_OPERATION_DOCUMENT_BYTES =
+  16 * 1_024 * 1_024;
 
 interface WorkspaceOperationDocument {
   schemaVersion: typeof WORKSPACE_OPERATION_SCHEMA_VERSION;
@@ -22,7 +24,11 @@ const OPERATION_KINDS = new Set<
   "status",
   "stage",
   "unstage",
+  "discard",
   "commit",
+  "stash-apply",
+  "stash-drop",
+  "stash-pop",
   "fetch",
   "pull",
   "push",
@@ -63,7 +69,9 @@ export class JsonWorkspaceOperationStore
     filePath: string,
     clock: () => string = () => new Date().toISOString()
   ) {
-    this.#store = new AtomicJsonStore(filePath);
+    this.#store = new AtomicJsonStore(filePath, {
+      maxBytes: MAX_WORKSPACE_OPERATION_DOCUMENT_BYTES
+    });
     this.#clock = clock;
   }
 

@@ -1,11 +1,11 @@
 import {
   app,
   BrowserWindow,
-  safeStorage
+  safeStorage,
+  utilityProcess
 } from "electron";
 import { randomUUID } from "node:crypto";
 import {
-  join,
   normalize,
   resolve
 } from "node:path";
@@ -20,8 +20,8 @@ import {
   RepositoryMutationService,
   RepositoryQueryService,
   WorktreeCommandService,
+  WorkspaceCollectionService,
   WorkspaceRuntimeService,
-  WorkspaceService
 } from "@gitnest/application";
 import { AnalysisSnapshotCache } from "@gitnest/code-analysis";
 import { IPC_EVENTS } from "@gitnest/contracts";
@@ -31,9 +31,9 @@ import {
 } from "@gitnest/git-cli";
 import {
   JsonAccountMetadataStore,
-  JsonRepositorySnapshotStore,
-  JsonWorkspaceOperationStore,
-  JsonWorkspaceStore
+  JsonWorkspaceCollectionStore,
+  JsonWorkspaceOperationCollectionStore,
+  JsonWorkspaceSnapshotCollectionStore
 } from "@gitnest/persistence-json";
 
 import {
@@ -47,14 +47,21 @@ import { WindowsGitAskPassBroker } from "../adapters/git-askpass.adapter";
 import { NodeWorkspaceWatcher } from "../adapters/watcher.adapter";
 import { RotatingDiagnosticLogger } from "../adapters/diagnostic-logger.adapter";
 import { AiCommitMessageService } from "../ai/ai-commit-message-service";
+import codeAnalysisProcessPath from "../code-analysis/code-analysis-process-entry?modulePath";
 import { LanguageServerInstaller } from "../code-analysis/language-server-installer";
+import { UtilityProcessCodeAnalysisRunner } from "../code-analysis/utility-process-code-analysis-runner";
 import { AppSettingsService } from "../settings/app-settings";
+import {
+  createDataRegistry,
+  type GitNestDataRegistry
+} from "../storage/data-registry";
 import { JsonWindowStateStore } from "../windows/window-state";
 
 export interface ApplicationServices {
   accounts: AccountService;
   aiCommitMessages: AiCommitMessageService;
   codeAnalysis: CodeAnalysisService;
+  dataRegistry: GitNestDataRegistry;
   diagnostics: RotatingDiagnosticLogger;
   externalApplication: ExternalApplicationService;
   externalTerminal: ExternalTerminalService;
@@ -80,8 +87,9 @@ export function registerServices(): ApplicationServices {
       Promise.resolve(undefined)
   });
   const userDataPath = app.getPath("userData");
+  const dataRegistry = createDataRegistry(userDataPath);
   const diagnostics = new RotatingDiagnosticLogger(
-    join(userDataPath, "logs", "gitnest.log"),
+    dataRegistry.paths.diagnosticLog,
     {
       redactedPaths: [
         app.getPath("home"),
@@ -91,35 +99,36 @@ export function registerServices(): ApplicationServices {
     }
   );
   const windowState = new JsonWindowStateStore(
-    join(userDataPath, "settings", "window-state.json")
+    dataRegistry.paths.windowState
+  );
+  const credentialVault = new SafeStorageCredentialVault(
+    dataRegistry.paths.credentialVault,
+    safeStorage
   );
   const settings = new AppSettingsService(
-    join(userDataPath, "settings", "app-settings.json")
+    dataRegistry.paths.appSettings,
+    credentialVault
   );
-  const workspaceStore = new JsonWorkspaceStore(
-    join(
-      userDataPath,
-      "workspaces",
-      "default.workspace.json"
-    )
-  );
-  const snapshotStore = new JsonRepositorySnapshotStore(
-    join(
-      userDataPath,
-      "cache",
-      "repository-snapshots",
-      "default.snapshots.json"
-    )
-  );
-  const operationStore = new JsonWorkspaceOperationStore(
-    join(
-      userDataPath,
-      "operations",
-      "default.operations.json"
-    )
-  );
+  const workspaceStore = new JsonWorkspaceCollectionStore({
+    catalogFilePath: dataRegistry.paths.workspaceCatalog,
+    workspaceDirectory: dataRegistry.paths.workspaceDocuments,
+    legacyWorkspaceFilePath:
+      dataRegistry.paths.defaultWorkspace
+  });
+  const snapshotStore =
+    new JsonWorkspaceSnapshotCollectionStore({
+      directoryPath: dataRegistry.paths.repositorySnapshots,
+      legacyFilePath:
+        dataRegistry.paths.defaultRepositorySnapshots
+    });
+  const operationStore =
+    new JsonWorkspaceOperationCollectionStore({
+      directoryPath: dataRegistry.paths.workspaceOperations,
+      legacyFilePath:
+        dataRegistry.paths.defaultWorkspaceOperations
+    });
   const workspace = new WorkspaceRuntimeService(
-    new WorkspaceService(
+    new WorkspaceCollectionService(
       gitClient,
       new NodeWorkspaceFileSystem(),
       workspaceStore
@@ -127,36 +136,51 @@ export function registerServices(): ApplicationServices {
     gitClient,
     snapshotStore,
     new NodeWorkspaceWatcher(),
-    { operationStore }
+    {
+      operationStore,
+      onDiagnostic: ({ level, name, context }) => {
+        void (
+          level === "warning"
+            ? diagnostics.warning(name, context)
+            : diagnostics.info(name, context)
+        ).catch(() => undefined);
+      }
+    }
   );
   const worktreePaths = new NodeWorktreePathPolicy();
-  const codeAnalysisCacheDirectory = join(
-    userDataPath,
-    "cache",
-    "code-analysis"
-  );
+  const codeAnalysisRunner =
+    new UtilityProcessCodeAnalysisRunner({
+      spawn: () =>
+        utilityProcess.fork(codeAnalysisProcessPath, [], {
+          execArgv: ["--max-old-space-size=512"],
+          serviceName: "GitNest Code Analysis",
+          stdio: ["ignore", "pipe", "pipe"]
+      }),
+      onDiagnostic: ({ name, context }) => {
+        void (
+          name === "code-analysis.process-spawned"
+            ? diagnostics.info(name, context)
+            : diagnostics.warning(name, context)
+        ).catch(() => undefined);
+      }
+    });
+  const codeAnalysisCacheDirectory =
+    dataRegistry.paths.codeAnalysisIndex;
   const codeAnalysis = new CodeAnalysisService(
     workspace,
     gitClient,
     {
       cacheDirectory: codeAnalysisCacheDirectory,
       snapshotStore: new AnalysisSnapshotCache(
-        join(
-          userDataPath,
-          "gitnest-state",
-          "code-analysis"
-        ),
+        dataRegistry.paths.codeAnalysisSnapshots,
         {
           fallbackDirectories: [
             codeAnalysisCacheDirectory
           ]
         }
       ),
-      lspDataDirectory: join(
-        userDataPath,
-        "runtime",
-        "lsp"
-      ),
+      lspDataDirectory: dataRegistry.paths.lspRuntime,
+      runner: codeAnalysisRunner,
       settingsProvider: async () => {
         const preferences = (await settings.get()).settings
           .codeAnalysis;
@@ -187,12 +211,7 @@ export function registerServices(): ApplicationServices {
   );
   const languageServerInstaller =
     new LanguageServerInstaller({
-      runtimeDirectory: join(
-        userDataPath,
-        "runtime",
-        "lsp",
-        "servers"
-      ),
+      runtimeDirectory: dataRegistry.paths.languageServers,
       updateLanguageServerSettings: async (
         language,
         command,
@@ -225,14 +244,11 @@ export function registerServices(): ApplicationServices {
     });
   const accounts = new AccountService(
     new JsonAccountMetadataStore(
-      join(userDataPath, "accounts", "metadata.json")
+      dataRegistry.paths.accountMetadata
     ),
-    new SafeStorageCredentialVault(
-      join(userDataPath, "accounts", "credentials"),
-      safeStorage
-    ),
+    credentialVault,
     new WindowsGitAskPassBroker(
-      join(userDataPath, "runtime", "askpass")
+      dataRegistry.paths.askpassRuntime
     ),
     {
       test: (input) =>
@@ -312,6 +328,7 @@ export function registerServices(): ApplicationServices {
       gitClient
     ),
     codeAnalysis,
+    dataRegistry,
     diagnostics,
     externalApplication: new ExternalApplicationService(
       workspace,

@@ -38,6 +38,7 @@ export {
   type CodeAnalysisServiceOptions,
   type CodeAnalysisState
 } from "./code-analysis/code-analysis-service";
+export type { CodeAnalysisRunnerPort } from "./code-analysis/code-analysis-runner";
 export {
   RepositoryCommandService,
   type CommandImpact,
@@ -101,12 +102,19 @@ export {
   type WorkspaceMutationResult
 } from "./workspace/workspace-service";
 export {
+  WorkspaceCollectionService,
+  type CreateWorkspaceInput,
+  type RenameWorkspaceInput,
+  type WorkspaceCollectionServiceOptions
+} from "./workspace/workspace-collection-service";
+export {
   WorkspaceRuntimeService,
   type WorkspaceConfigurationService,
   type WorkspaceMonitorState,
   type WorkspaceOperation,
   type WorkspaceOperationStore,
   type WorkspaceOperationState,
+  type WorkspaceRefreshDiagnostic,
   type WorkspaceRefreshAccepted,
   type RepositoryOperationAccepted,
   type RepositoryOperationKind,

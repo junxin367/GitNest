@@ -18,10 +18,7 @@ import { Button } from "../../shared/ui/Button";
 import { Icon, type IconName } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
-import {
-  MenuItem,
-  MenuPopover
-} from "../../shared/ui/Menu";
+import { Select } from "../../shared/ui/Select";
 import {
   Skeleton,
   SkeletonBoundary
@@ -108,7 +105,7 @@ export function ApplicationSettingsPage({
     appSettings.settings.ai.enabled
   );
   const [aiKey, setAiKey] = useState("");
-  const [aiKeyVisible, setAiKeyVisible] = useState(true);
+  const [aiKeyVisible, setAiKeyVisible] = useState(false);
   const [aiTesting, setAiTesting] = useState(false);
   const [aiFeedback, setAiFeedback] = useState<{
     title: string;
@@ -123,12 +120,19 @@ export function ApplicationSettingsPage({
         appSettings.settings.codeAnalysis
       )
     );
+  const aiDraftDirtyRef = useRef(false);
+  const analysisDraftDirtyRef = useRef(false);
+  const aiDraftVersionRef = useRef(0);
+  const analysisDraftVersionRef = useRef(0);
 
   useEffect(() => {
     setSection(initialSection);
   }, [initialSection]);
 
   useEffect(() => {
+    if (aiDraftDirtyRef.current) {
+      return;
+    }
     setAiUrl(appSettings.settings.ai.apiUrl);
     setAiModel(appSettings.settings.ai.model);
     setAiPrompt(appSettings.settings.ai.prompt);
@@ -136,6 +140,9 @@ export function ApplicationSettingsPage({
   }, [appSettings.settings.ai]);
 
   useEffect(() => {
+    if (analysisDraftDirtyRef.current) {
+      return;
+    }
     setAnalysisDraft(
       cloneCodeAnalysisSettings(
         appSettings.settings.codeAnalysis
@@ -143,7 +150,23 @@ export function ApplicationSettingsPage({
     );
   }, [appSettings.settings.codeAnalysis]);
 
+  const updateAnalysisDraft = (
+    update: (
+      current: CodeAnalysisSettingsDto
+    ) => CodeAnalysisSettingsDto
+  ) => {
+    analysisDraftDirtyRef.current = true;
+    analysisDraftVersionRef.current += 1;
+    setAnalysisDraft(update);
+  };
+
+  const markAiDraftDirty = () => {
+    aiDraftDirtyRef.current = true;
+    aiDraftVersionRef.current += 1;
+  };
+
   const saveAiSettings = async () => {
+    const draftVersion = aiDraftVersionRef.current;
     const url = aiUrl.trim();
     const model = aiModel.trim();
     const prompt = aiPrompt.trim();
@@ -172,6 +195,14 @@ export function ApplicationSettingsPage({
       }
     );
     if (saved) {
+      if (draftVersion === aiDraftVersionRef.current) {
+        aiDraftDirtyRef.current = false;
+        setAiUrl(url);
+        setAiModel(model);
+        setAiPrompt(prompt);
+        setAiKey("");
+        setAiKeyVisible(false);
+      }
       setAiFeedback(null);
     }
   };
@@ -236,7 +267,9 @@ export function ApplicationSettingsPage({
   };
 
   const saveAnalysisSettings = async () => {
-    await appSettings.update(
+    const draftVersion =
+      analysisDraftVersionRef.current;
+    const saved = await appSettings.update(
       {
         codeAnalysis: cloneCodeAnalysisSettings(
           analysisDraft
@@ -247,6 +280,12 @@ export function ApplicationSettingsPage({
           "LSP 与代码分析设置已保存；已有分析结果会在下次运行时按新设置重建。"
       }
     );
+    if (
+      saved &&
+      draftVersion === analysisDraftVersionRef.current
+    ) {
+      analysisDraftDirtyRef.current = false;
+    }
   };
 
   const selectedTerminal =
@@ -278,18 +317,6 @@ export function ApplicationSettingsPage({
             <p>
               管理应用行为、AI、LSP 代码分析、Git 同步策略以及账号认证。
             </p>
-          </div>
-          <div className="page-actions">
-            <Button
-              aria-busy={appSettings.loading}
-              disabled={appSettings.loading}
-              onClick={() => void appSettings.reload()}
-              size="small"
-              type="button"
-            >
-              <Icon name="refresh" />
-              重新读取
-            </Button>
           </div>
         </section>
 
@@ -384,15 +411,6 @@ export function ApplicationSettingsPage({
                       })
                     }
                   />
-                  <div className="settings-safety-note">
-                    <Icon name="warning" size={15} />
-                    <div>
-                      <strong>危险操作始终确认</strong>
-                      <p>
-                        删除分支、清理或移除 Worktree、删除账号等操作始终经过保护性确认，无法在设置中关闭。
-                      </p>
-                    </div>
-                  </div>
                 </SettingsCard>
 
                 <SettingsCard
@@ -400,17 +418,28 @@ export function ApplicationSettingsPage({
                   description="左侧活动栏的终端入口会使用这里解析出的默认终端。"
                   title="默认终端"
                 >
-                  <TerminalProfileDropdown
+                  <Select<ExternalTerminalProfileDto["kind"]>
+                    ariaLabel="选择默认终端"
+                    className="settings-terminal-select"
                     disabled={
                       appSettings.saving ||
                       terminalProfiles.length === 0
                     }
+                    fullWidth
+                    label="默认终端"
+                    menuAriaLabel="默认终端选项"
                     onChange={(defaultTerminalKind) =>
                       void appSettings.update({
                         general: { defaultTerminalKind }
                       })
                     }
-                    profiles={terminalProfiles}
+                    options={terminalProfiles.map((profile) => ({
+                      label: profile.label,
+                      leading: <Icon name="terminal" size={14} />,
+                      value: profile.kind
+                    }))}
+                    placeholder="没有可用终端"
+                    size="medium"
                     value={selectedTerminal?.kind}
                   />
                   {appSettings.settings.general
@@ -533,9 +562,10 @@ export function ApplicationSettingsPage({
                       className={`settings-switch${
                         aiEnabled ? " active" : ""
                       }`}
-                      onClick={() =>
-                        setAiEnabled((enabled) => !enabled)
-                      }
+                      onClick={() => {
+                        markAiDraftDirty();
+                        setAiEnabled((enabled) => !enabled);
+                      }}
                       type="button"
                     >
                       <span className="settings-switch-thumb" />
@@ -551,9 +581,10 @@ export function ApplicationSettingsPage({
                       id="ai-api-url"
                       label="API URL"
                       maxLength={2048}
-                      onChange={(event) =>
-                        setAiUrl(event.target.value)
-                      }
+                      onChange={(event) => {
+                        markAiDraftDirty();
+                        setAiUrl(event.target.value);
+                      }}
                       placeholder="https://api.example.com/v1"
                       spellCheck={false}
                       value={aiUrl}
@@ -564,9 +595,10 @@ export function ApplicationSettingsPage({
                       id="ai-model"
                       label="模型"
                       maxLength={256}
-                      onChange={(event) =>
-                        setAiModel(event.target.value)
-                      }
+                      onChange={(event) => {
+                        markAiDraftDirty();
+                        setAiModel(event.target.value);
+                      }}
                       placeholder="gpt-4.1-mini"
                       spellCheck={false}
                       value={aiModel}
@@ -577,15 +609,16 @@ export function ApplicationSettingsPage({
                     fullWidth
                     helpText={
                       appSettings.settings.ai.apiKeyConfigured
-                        ? "已有 Key 保存在 app-settings.json；留空会保留原值。"
-                        : "Key 将按要求以明文写入 app-settings.json。"
+                        ? "已有 Key 保存在 Windows 安全存储；留空会保留原值。"
+                        : "Key 将通过 Windows 安全存储加密保存，不会写入 app-settings.json。"
                     }
                     id="ai-api-key"
                     label="API Key"
                     maxLength={8192}
-                    onChange={(event) =>
-                      setAiKey(event.target.value)
-                    }
+                    onChange={(event) => {
+                      markAiDraftDirty();
+                      setAiKey(event.target.value);
+                    }}
                     placeholder={
                       appSettings.settings.ai.apiKeyConfigured
                         ? "已保存；输入新值可替换"
@@ -623,9 +656,10 @@ export function ApplicationSettingsPage({
                     id="ai-commit-prompt"
                     label="提交信息提示词"
                     maxLength={12000}
-                    onChange={(event) =>
-                      setAiPrompt(event.target.value)
-                    }
+                    onChange={(event) => {
+                      markAiDraftDirty();
+                      setAiPrompt(event.target.value);
+                    }}
                     placeholder="告诉 AI 如何根据变更生成提交信息。"
                     rows={7}
                     value={aiPrompt}
@@ -798,7 +832,7 @@ export function ApplicationSettingsPage({
                       }`}
                       disabled={appSettings.saving}
                       onClick={() =>
-                        setAnalysisDraft((current) => ({
+                        updateAnalysisDraft((current) => ({
                           ...current,
                           enabled: !current.enabled
                         }))
@@ -819,7 +853,7 @@ export function ApplicationSettingsPage({
                       description="只读取 Git 变动文件，并从现有索引补充直接相关关系。"
                       icon="diff"
                       onClick={() =>
-                        setAnalysisDraft((current) => ({
+                        updateAnalysisDraft((current) => ({
                           ...current,
                           defaultScope: "changed"
                         }))
@@ -834,7 +868,7 @@ export function ApplicationSettingsPage({
                       description="默认选中全部代码；仍需在代码分析页手动启动。"
                       icon="files"
                       onClick={() =>
-                        setAnalysisDraft((current) => ({
+                        updateAnalysisDraft((current) => ({
                           ...current,
                           defaultScope: "workspace"
                         }))
@@ -848,7 +882,7 @@ export function ApplicationSettingsPage({
                     disabled={appSettings.saving}
                     label="允许内置分析降级"
                     onChange={(staticFallback) =>
-                      setAnalysisDraft((current) => ({
+                      updateAnalysisDraft((current) => ({
                         ...current,
                         staticFallback
                       }))
@@ -872,7 +906,7 @@ export function ApplicationSettingsPage({
                   label="TypeScript Language Server"
                   settings={analysisDraft.typescript}
                   onChange={(typescript) =>
-                    setAnalysisDraft((current) => ({
+                    updateAnalysisDraft((current) => ({
                       ...current,
                       typescript
                     }))
@@ -885,7 +919,7 @@ export function ApplicationSettingsPage({
                   label="Java Language Server"
                   settings={analysisDraft.java}
                   onChange={(java) =>
-                    setAnalysisDraft((current) => ({
+                    updateAnalysisDraft((current) => ({
                       ...current,
                       java
                     }))
@@ -904,7 +938,7 @@ export function ApplicationSettingsPage({
                       max={50000}
                       min={100}
                       onChange={(event) =>
-                        setAnalysisDraft((current) => ({
+                        updateAnalysisDraft((current) => ({
                           ...current,
                           maxFiles: Number(event.target.value)
                         }))
@@ -919,7 +953,7 @@ export function ApplicationSettingsPage({
                       max={4096}
                       min={64}
                       onChange={(event) =>
-                        setAnalysisDraft((current) => ({
+                        updateAnalysisDraft((current) => ({
                           ...current,
                           maxFileSizeKb: Number(
                             event.target.value
@@ -936,7 +970,7 @@ export function ApplicationSettingsPage({
                       max={4}
                       min={1}
                       onChange={(event) =>
-                        setAnalysisDraft((current) => ({
+                        updateAnalysisDraft((current) => ({
                           ...current,
                           readConcurrency: Number(
                             event.target.value
@@ -953,7 +987,7 @@ export function ApplicationSettingsPage({
                       max={12}
                       min={1}
                       onChange={(event) =>
-                        setAnalysisDraft((current) => ({
+                        updateAnalysisDraft((current) => ({
                           ...current,
                           graphDepth: Number(
                             event.target.value
@@ -970,7 +1004,7 @@ export function ApplicationSettingsPage({
                       max={60000}
                       min={1000}
                       onChange={(event) =>
-                        setAnalysisDraft((current) => ({
+                        updateAnalysisDraft((current) => ({
                           ...current,
                           lspTimeoutMs: Number(
                             event.target.value
@@ -987,7 +1021,7 @@ export function ApplicationSettingsPage({
                     id="analysis-ignore-directories"
                     label="忽略目录"
                     onChange={(event) =>
-                      setAnalysisDraft((current) => ({
+                      updateAnalysisDraft((current) => ({
                         ...current,
                         ignoreDirectories: splitLines(
                           event.target.value
@@ -1042,7 +1076,7 @@ export function ApplicationSettingsPage({
               const cleared = await appSettings.clearAiApiKey();
               if (cleared) {
                 setAiKey("");
-                setAiKeyVisible(true);
+                setAiKeyVisible(false);
                 setClearKeyConfirmOpen(false);
               }
             }}
@@ -1050,147 +1084,6 @@ export function ApplicationSettingsPage({
         )}
       </div>
     </SkeletonBoundary>
-  );
-}
-
-function TerminalProfileDropdown({
-  disabled,
-  onChange,
-  profiles,
-  value
-}: {
-  disabled: boolean;
-  onChange(
-    value: ExternalTerminalProfileDto["kind"]
-  ): void;
-  profiles: ExternalTerminalProfileDto[];
-  value: ExternalTerminalProfileDto["kind"] | undefined;
-}) {
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const selected =
-    profiles.find((profile) => profile.kind === value) ??
-    profiles[0];
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    const close = () => setOpen(false);
-    const handlePointerDown = (event: PointerEvent) => {
-      if (
-        event.target instanceof Node &&
-        !triggerRef.current?.contains(event.target) &&
-        !menuRef.current?.contains(event.target)
-      ) {
-        close();
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") {
-        return;
-      }
-      event.preventDefault();
-      close();
-      triggerRef.current?.focus();
-    };
-    const focusFrame = window.requestAnimationFrame(() => {
-      const items =
-        menuRef.current?.querySelectorAll<HTMLButtonElement>(
-          '[role="menuitemradio"]'
-        ) ?? [];
-      const current = [...items].find(
-        (item) => item.getAttribute("aria-checked") === "true"
-      );
-      (current ?? items[0])?.focus();
-    });
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("blur", close);
-    window.addEventListener("resize", close);
-    window.addEventListener("scroll", close, true);
-
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      document.removeEventListener(
-        "pointerdown",
-        handlePointerDown
-      );
-      document.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("blur", close);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", close, true);
-    };
-  }, [open]);
-
-  return (
-    <div className="settings-tool-select">
-      <span className="settings-tool-select-label">
-        默认终端
-      </span>
-      <div className="settings-tool-menu">
-        <Button
-          aria-expanded={open}
-          aria-haspopup="menu"
-          aria-label="选择默认终端"
-          className="settings-tool-menu-trigger"
-          disabled={disabled}
-          onClick={() => setOpen((current) => !current)}
-          onKeyDown={(event) => {
-            if (
-              event.key === "ArrowDown" ||
-              event.key === "ArrowUp"
-            ) {
-              event.preventDefault();
-              setOpen(true);
-            }
-          }}
-          ref={triggerRef}
-          type="button"
-          variant="unstyled"
-        >
-          <span className="settings-tool-menu-trigger-value">
-            <Icon name="terminal" size={15} />
-            <span>{selected?.label ?? "没有可用终端"}</span>
-          </span>
-          <Icon name="chevron" size={14} />
-        </Button>
-        {open && selected && (
-          <MenuPopover
-            align="start"
-            anchor={triggerRef.current}
-            aria-label="默认终端选项"
-            className="settings-tool-menu-surface"
-            ref={menuRef}
-            side="bottom"
-          >
-            {profiles.map((profile) => (
-              <MenuItem
-                aria-checked={profile.kind === selected.kind}
-                className={
-                  profile.kind === selected.kind
-                    ? "is-selected"
-                    : undefined
-                }
-                key={profile.kind}
-                leading={<Icon name="terminal" size={14} />}
-                onClick={() => {
-                  onChange(profile.kind);
-                  setOpen(false);
-                  triggerRef.current?.focus();
-                }}
-                role="menuitemradio"
-              >
-                {profile.label}
-              </MenuItem>
-            ))}
-          </MenuPopover>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -1234,7 +1127,7 @@ function ApplicationSettingsSkeleton() {
                       <Skeleton height={10} />
                       <Skeleton height={8} variant="text" />
                     </div>
-                    <Skeleton height={28} width={96} />
+                    <Skeleton height={32} width={96} />
                   </div>
                 ))}
               </div>

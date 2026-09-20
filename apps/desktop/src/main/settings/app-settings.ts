@@ -10,12 +10,17 @@ import {
 } from "@gitnest/contracts";
 import { AtomicJsonStore } from "@gitnest/persistence-json";
 import { WorkspaceError } from "@gitnest/workspace-core";
+import { randomUUID } from "node:crypto";
 
-export const APP_SETTINGS_SCHEMA_VERSION = 2;
+export const APP_SETTINGS_SCHEMA_VERSION = 3;
 const MAX_AI_API_URL_LENGTH = 2_048;
 const MAX_AI_MODEL_LENGTH = 256;
 const MAX_AI_API_KEY_LENGTH = 8_192;
 const MAX_AI_PROMPT_LENGTH = 12_000;
+const MAX_APP_SETTINGS_DOCUMENT_BYTES = 2 * 1_024 * 1_024;
+const AI_API_KEY_CREDENTIAL_PREFIX = "settings_ai_api_key_";
+const LEGACY_AI_API_KEY_CREDENTIAL_REF =
+  "settings_ai_api_key_legacy";
 type AppSettingsDiffDocument = Omit<
   AppSettingsDto["diff"],
   "commitPanelHeight"
@@ -31,13 +36,54 @@ export interface InternalAiSettings {
   prompt: string;
 }
 
+export interface SettingsSecretVault {
+  save(credentialRef: string, secret: string): Promise<void>;
+  read(credentialRef: string): Promise<string>;
+  delete(credentialRef: string): Promise<void>;
+}
+
+interface StoredAiSettings {
+  enabled: boolean;
+  apiUrl: string;
+  model: string;
+  apiKeyCredentialRef?: string;
+  prompt: string;
+}
+
+interface LegacyAiSettings {
+  enabled: boolean;
+  apiUrl: string;
+  model: string;
+  apiKey: string;
+  prompt: string;
+}
+
 interface AppSettingsDocument {
   schemaVersion: typeof APP_SETTINGS_SCHEMA_VERSION;
   general: AppSettingsDto["general"];
   appearance: AppSettingsDto["appearance"];
   diff: AppSettingsDiffDocument;
   git: AppSettingsDto["git"];
-  ai: InternalAiSettings;
+  ai: StoredAiSettings;
+  codeAnalysis: CodeAnalysisSettingsDto;
+  navigation: AppSettingsDto["navigation"];
+  updatedAt: string;
+}
+
+interface AppSettingsDocumentV3Input
+  extends Omit<AppSettingsDocument, "ai"> {
+  ai: StoredAiSettings & {
+    apiKey?: string;
+  };
+}
+
+interface AppSettingsDocumentV2 {
+  schemaVersion: 2;
+  general: AppSettingsDto["general"];
+  appearance: AppSettingsDto["appearance"];
+  diff: AppSettingsDiffDocument;
+  git: AppSettingsDto["git"];
+  ai: LegacyAiSettings;
   codeAnalysis: CodeAnalysisSettingsDto;
   navigation: AppSettingsDto["navigation"];
   updatedAt: string;
@@ -49,24 +95,37 @@ interface AppSettingsDocumentV1 {
   appearance: AppSettingsDto["appearance"];
   diff: AppSettingsDiffDocument;
   git: AppSettingsDto["git"];
-  ai: InternalAiSettings;
+  ai: LegacyAiSettings;
   navigation: AppSettingsDto["navigation"];
   updatedAt: string;
 }
 
 export class AppSettingsService {
   readonly #store: AtomicJsonStore;
+  readonly #secretVault: SettingsSecretVault;
   readonly #clock: () => string;
+  readonly #credentialRefFactory: () => string;
   #loadPromise: Promise<AppSettingsDocument> | undefined;
   #storageState: AppSettingsLoadDto["storageState"] = "missing";
   #writeQueue: Promise<void> = Promise.resolve();
 
   constructor(
     filePath: string,
-    clock: () => string = () => new Date().toISOString()
+    secretVault: SettingsSecretVault,
+    options: {
+      clock?: () => string;
+      credentialRefFactory?: () => string;
+    } = {}
   ) {
-    this.#store = new AtomicJsonStore(filePath);
-    this.#clock = clock;
+    this.#store = new AtomicJsonStore(filePath, {
+      maxBytes: MAX_APP_SETTINGS_DOCUMENT_BYTES
+    });
+    this.#secretVault = secretVault;
+    this.#clock =
+      options.clock ?? (() => new Date().toISOString());
+    this.#credentialRefFactory =
+      options.credentialRefFactory ??
+      (() => `${AI_API_KEY_CREDENTIAL_PREFIX}${randomUUID()}`);
   }
 
   async get(): Promise<AppSettingsLoadDto> {
@@ -83,7 +142,50 @@ export class AppSettingsService {
     return this.#enqueue(async () => {
       const current = await this.#load();
       const next = mergeSettings(current, patch, this.#clock());
-      await this.#store.write(next);
+      const apiKey = requestedApiKey(patch);
+      let newCredentialRef: string | undefined;
+
+      if (apiKey !== undefined) {
+        newCredentialRef = this.#credentialRefFactory();
+        assertCredentialRef(newCredentialRef);
+        if (
+          newCredentialRef ===
+          current.ai.apiKeyCredentialRef
+        ) {
+          throw new WorkspaceError(
+            "INVALID_REQUEST",
+            "The AI credential reference must be unique."
+          );
+        }
+        await this.#secretVault.save(newCredentialRef, apiKey);
+        next.ai = {
+          ...next.ai,
+          apiKeyCredentialRef: newCredentialRef
+        };
+      }
+
+      try {
+        await this.#store.write(next);
+      } catch (error) {
+        if (newCredentialRef) {
+          await this.#secretVault
+            .delete(newCredentialRef)
+            .catch(() => undefined);
+        }
+        throw error;
+      }
+
+      const oldCredentialRef =
+        current.ai.apiKeyCredentialRef;
+      if (
+        newCredentialRef &&
+        oldCredentialRef &&
+        oldCredentialRef !== newCredentialRef
+      ) {
+        await this.#secretVault
+          .delete(oldCredentialRef)
+          .catch(() => undefined);
+      }
       this.#loadPromise = Promise.resolve(next);
       this.#storageState = "persisted";
       return toPublicSettings(next);
@@ -101,31 +203,53 @@ export class AppSettingsService {
     }
     return this.#enqueue(async () => {
       const current = await this.#load();
+      const credentialRef =
+        current.ai.apiKeyCredentialRef;
       const next: AppSettingsDocument = {
         ...current,
-        ai: {
-          ...current.ai,
-          apiKey: ""
-        },
+        ai: withoutAiCredential(current.ai),
         updatedAt: this.#clock()
       };
       await this.#store.write(next);
       this.#loadPromise = Promise.resolve(next);
       this.#storageState = "persisted";
+      if (credentialRef) {
+        await this.#secretVault
+          .delete(credentialRef)
+          .catch(() => undefined);
+      }
       return toPublicSettings(next);
     });
   }
 
-  async getInternalAiSettings(): Promise<InternalAiSettings> {
+  async getInternalAiSettings(
+    options: { includeApiKey?: boolean } = {}
+  ): Promise<InternalAiSettings> {
     const document = await this.#load();
-    return { ...document.ai };
+    const { apiKeyCredentialRef, ...settings } = document.ai;
+    return {
+      ...settings,
+      apiKey:
+        options.includeApiKey !== false &&
+        apiKeyCredentialRef
+        ? await this.#secretVault.read(apiKeyCredentialRef)
+        : ""
+    };
   }
 
   async #load(): Promise<AppSettingsDocument> {
     if (!this.#loadPromise) {
       this.#loadPromise = this.#readDocument();
     }
-    return this.#loadPromise;
+    const loadPromise = this.#loadPromise;
+    try {
+      return await loadPromise;
+    } catch (error) {
+      if (this.#loadPromise === loadPromise) {
+        this.#loadPromise = undefined;
+      }
+      throw error;
+    }
   }
 
   async #readDocument(): Promise<AppSettingsDocument> {
@@ -135,9 +259,12 @@ export class AppSettingsService {
       return createDefaultDocument(this.#clock());
     }
     if (isAppSettingsDocumentV1(value)) {
-      const migrated = migrateV1Document(value);
-      await this.#store.write(migrated);
-      return migrated;
+      return this.#migrateLegacyDocument(
+        migrateV1Document(value)
+      );
+    }
+    if (isAppSettingsDocumentV2(value)) {
+      return this.#migrateLegacyDocument(value);
     }
     if (!isAppSettingsDocument(value)) {
       this.#store.blockWrites(
@@ -148,8 +275,51 @@ export class AppSettingsService {
         "The persisted application settings are invalid."
       );
     }
+    const normalized =
+      await this.#normalizeCurrentDocument(value);
     this.#storageState = "persisted";
-    return cloneDocument(value);
+    return normalized;
+  }
+
+  async #normalizeCurrentDocument(
+    document: AppSettingsDocumentV3Input
+  ): Promise<AppSettingsDocument> {
+    let credentialRef = document.ai.apiKeyCredentialRef;
+    if (!credentialRef && document.ai.apiKey) {
+      credentialRef = LEGACY_AI_API_KEY_CREDENTIAL_REF;
+      assertCredentialRef(credentialRef);
+      await this.#secretVault.save(
+        credentialRef,
+        document.ai.apiKey
+      );
+    }
+    const normalized = cloneDocument(
+      document,
+      credentialRef
+    );
+    if (!documentsMatch(document, normalized)) {
+      await this.#store.write(normalized);
+    }
+    return normalized;
+  }
+
+  async #migrateLegacyDocument(
+    document: AppSettingsDocumentV2
+  ): Promise<AppSettingsDocument> {
+    const apiKey = document.ai.apiKey;
+    let credentialRef: string | undefined;
+    if (apiKey) {
+      credentialRef = LEGACY_AI_API_KEY_CREDENTIAL_REF;
+      assertCredentialRef(credentialRef);
+      await this.#secretVault.save(credentialRef, apiKey);
+    }
+    const migrated = migrateV2Document(
+      document,
+      credentialRef
+    );
+    await this.#store.write(migrated);
+    this.#storageState = "persisted";
+    return migrated;
   }
 
   #enqueue<Value>(action: () => Promise<Value>): Promise<Value> {
@@ -174,7 +344,6 @@ function createDefaultDocument(now: string): AppSettingsDocument {
       enabled: defaults.ai.enabled,
       apiUrl: defaults.ai.apiUrl,
       model: defaults.ai.model,
-      apiKey: "",
       prompt: defaults.ai.prompt
     },
     codeAnalysis: cloneCodeAnalysisSettings(
@@ -214,10 +383,7 @@ function mergeSettings(
       ...current.git,
       ...patch.git
     },
-    ai: {
-      ...current.ai,
-      ...patch.ai
-    },
+    ai: mergeStoredAiSettings(current.ai, patch.ai),
     codeAnalysis: mergeCodeAnalysisSettings(
       current.codeAnalysis,
       patch.codeAnalysis
@@ -228,6 +394,49 @@ function mergeSettings(
     },
     updatedAt
   };
+}
+
+function mergeStoredAiSettings(
+  current: StoredAiSettings,
+  patch: UpdateAppSettingsRequest["ai"]
+): StoredAiSettings {
+  if (!patch) {
+    return { ...current };
+  }
+  const {
+    apiKey: _apiKey,
+    ...persistedPatch
+  } = patch;
+  return {
+    ...current,
+    ...persistedPatch
+  };
+}
+
+function requestedApiKey(
+  patch: UpdateAppSettingsRequest
+): string | undefined {
+  if (!patch.ai || !("apiKey" in patch.ai)) {
+    return undefined;
+  }
+  const apiKey = patch.ai.apiKey?.trim() ?? "";
+  if (!apiKey || apiKey.length > MAX_AI_API_KEY_LENGTH) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "The AI API Key exceeds the supported bounds."
+    );
+  }
+  return apiKey;
+}
+
+function withoutAiCredential(
+  settings: StoredAiSettings
+): StoredAiSettings {
+  const {
+    apiKeyCredentialRef: _credentialRef,
+    ...remaining
+  } = settings;
+  return remaining;
 }
 
 function toPublicSettings(
@@ -248,7 +457,9 @@ function toPublicSettings(
       apiUrl: document.ai.apiUrl,
       model: document.ai.model,
       prompt: document.ai.prompt,
-      apiKeyConfigured: Boolean(document.ai.apiKey)
+      apiKeyConfigured: Boolean(
+        document.ai.apiKeyCredentialRef
+      )
     },
     codeAnalysis: cloneCodeAnalysisSettings(
       document.codeAnalysis
@@ -258,33 +469,57 @@ function toPublicSettings(
 }
 
 function cloneDocument(
-  document: AppSettingsDocument
+  document: AppSettingsDocumentV3Input,
+  credentialRef = document.ai.apiKeyCredentialRef
 ): AppSettingsDocument {
   return {
-    ...document,
-    general: { ...document.general },
-    appearance: { ...document.appearance },
+    schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
+    general: {
+      restoreLastView: document.general.restoreLastView,
+      defaultTerminalKind:
+        document.general.defaultTerminalKind
+    },
+    appearance: {
+      theme: document.appearance.theme
+    },
     diff: {
-      ...document.diff,
+      fileView: document.diff.fileView,
+      layout: document.diff.layout,
+      wrap: document.diff.wrap,
+      treeDirectoriesCollapsed:
+        document.diff.treeDirectoriesCollapsed,
       commitPanelHeight: normalizeDiffCommitPanelHeight(
         document.diff.commitPanelHeight
       )
     },
     git: {
-      ...document.git,
+      fetchMode: document.git.fetchMode,
       pushStrategy: document.git.pushStrategy ?? "rebase"
     },
-    ai: { ...document.ai },
+    ai: {
+      enabled: document.ai.enabled,
+      apiUrl: document.ai.apiUrl,
+      model: document.ai.model,
+      ...(credentialRef
+        ? { apiKeyCredentialRef: credentialRef }
+        : {}),
+      prompt: document.ai.prompt
+    },
     codeAnalysis: cloneCodeAnalysisSettings(
       document.codeAnalysis
     ),
-    navigation: { ...document.navigation }
+    navigation: {
+      lastContentView: document.navigation.lastContentView,
+      workspaceTab: document.navigation.workspaceTab,
+      repositoryTab: document.navigation.repositoryTab
+    },
+    updatedAt: document.updatedAt
   };
 }
 
 function isAppSettingsDocument(
   value: unknown
-): value is AppSettingsDocument {
+): value is AppSettingsDocumentV3Input {
   if (!isRecord(value)) {
     return false;
   }
@@ -313,7 +548,26 @@ function isAppSettingsDocumentV1(
     isAppearanceSettings(value.appearance) &&
     isDiffSettings(value.diff) &&
     isGitSettings(value.git) &&
-    isAiSettings(value.ai) &&
+    isLegacyAiSettings(value.ai) &&
+    isNavigationSettings(value.navigation) &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+function isAppSettingsDocumentV2(
+  value: unknown
+): value is AppSettingsDocumentV2 {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    value.schemaVersion === 2 &&
+    isGeneralSettings(value.general) &&
+    isAppearanceSettings(value.appearance) &&
+    isDiffSettings(value.diff) &&
+    isGitSettings(value.git) &&
+    isLegacyAiSettings(value.ai) &&
+    isCodeAnalysisSettings(value.codeAnalysis) &&
     isNavigationSettings(value.navigation) &&
     typeof value.updatedAt === "string"
   );
@@ -387,6 +641,29 @@ function isAiSettings(value: unknown): boolean {
       MAX_AI_API_URL_LENGTH
     ) &&
     isBoundedStoredString(value.model, MAX_AI_MODEL_LENGTH) &&
+    (value.apiKeyCredentialRef === undefined ||
+      isCredentialRef(value.apiKeyCredentialRef)) &&
+    (value.apiKey === undefined ||
+      isBoundedStoredString(
+        value.apiKey,
+        MAX_AI_API_KEY_LENGTH
+      )) &&
+    isBoundedStoredString(
+      value.prompt,
+      MAX_AI_PROMPT_LENGTH
+    )
+  );
+}
+
+function isLegacyAiSettings(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.enabled === "boolean" &&
+    isBoundedStoredString(
+      value.apiUrl,
+      MAX_AI_API_URL_LENGTH
+    ) &&
+    isBoundedStoredString(value.model, MAX_AI_MODEL_LENGTH) &&
     isBoundedStoredString(
       value.apiKey,
       MAX_AI_API_KEY_LENGTH
@@ -396,6 +673,25 @@ function isAiSettings(value: unknown): boolean {
       MAX_AI_PROMPT_LENGTH
     )
   );
+}
+
+function isCredentialRef(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.startsWith(AI_API_KEY_CREDENTIAL_PREFIX) &&
+    value.length > 0 &&
+    value.length <= 512 &&
+    /^[a-zA-Z0-9_-]+$/.test(value)
+  );
+}
+
+function assertCredentialRef(value: string): void {
+  if (!isCredentialRef(value)) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "The AI credential reference is invalid."
+    );
+  }
 }
 
 function isCodeAnalysisSettings(
@@ -526,14 +822,23 @@ function cloneCodeAnalysisSettings(
   settings: CodeAnalysisSettingsDto
 ): CodeAnalysisSettingsDto {
   return {
-    ...settings,
+    enabled: settings.enabled,
+    defaultScope: settings.defaultScope,
+    staticFallback: settings.staticFallback,
+    maxFiles: settings.maxFiles,
+    maxFileSizeKb: settings.maxFileSizeKb,
+    readConcurrency: settings.readConcurrency,
+    graphDepth: settings.graphDepth,
+    lspTimeoutMs: settings.lspTimeoutMs,
     ignoreDirectories: [...settings.ignoreDirectories],
     typescript: {
-      ...settings.typescript,
+      enabled: settings.typescript.enabled,
+      command: settings.typescript.command,
       args: [...settings.typescript.args]
     },
     java: {
-      ...settings.java,
+      enabled: settings.java.enabled,
+      command: settings.java.command,
       args: [...settings.java.args]
     }
   };
@@ -574,10 +879,10 @@ function mergeCodeAnalysisSettings(
 
 function migrateV1Document(
   document: AppSettingsDocumentV1
-): AppSettingsDocument {
+): AppSettingsDocumentV2 {
   const defaults = createDefaultAppSettings();
   return {
-    schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
+    schemaVersion: 2,
     general: { ...document.general },
     appearance: { ...document.appearance },
     diff: {
@@ -597,4 +902,64 @@ function migrateV1Document(
     navigation: { ...document.navigation },
     updatedAt: document.updatedAt
   };
+}
+
+function migrateV2Document(
+  document: AppSettingsDocumentV2,
+  credentialRef?: string
+): AppSettingsDocument {
+  const {
+    apiKey: _apiKey,
+    ...storedAiSettings
+  } = document.ai;
+  return {
+    schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
+    general: {
+      restoreLastView: document.general.restoreLastView,
+      defaultTerminalKind:
+        document.general.defaultTerminalKind
+    },
+    appearance: {
+      theme: document.appearance.theme
+    },
+    diff: {
+      fileView: document.diff.fileView,
+      layout: document.diff.layout,
+      wrap: document.diff.wrap,
+      treeDirectoriesCollapsed:
+        document.diff.treeDirectoriesCollapsed,
+      commitPanelHeight: normalizeDiffCommitPanelHeight(
+        document.diff.commitPanelHeight
+      )
+    },
+    git: {
+      fetchMode: document.git.fetchMode,
+      pushStrategy: document.git.pushStrategy ?? "rebase"
+    },
+    ai: {
+      enabled: storedAiSettings.enabled,
+      apiUrl: storedAiSettings.apiUrl,
+      model: storedAiSettings.model,
+      ...(credentialRef
+        ? { apiKeyCredentialRef: credentialRef }
+        : {}),
+      prompt: storedAiSettings.prompt
+    },
+    codeAnalysis: cloneCodeAnalysisSettings(
+      document.codeAnalysis
+    ),
+    navigation: {
+      lastContentView: document.navigation.lastContentView,
+      workspaceTab: document.navigation.workspaceTab,
+      repositoryTab: document.navigation.repositoryTab
+    },
+    updatedAt: document.updatedAt
+  };
+}
+
+function documentsMatch(
+  value: unknown,
+  normalized: AppSettingsDocument
+): boolean {
+  return JSON.stringify(value) === JSON.stringify(normalized);
 }

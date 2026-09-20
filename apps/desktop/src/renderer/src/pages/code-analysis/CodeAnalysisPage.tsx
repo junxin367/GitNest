@@ -19,6 +19,7 @@ import { Button } from "../../shared/ui/Button";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import {
+  isEventInsideMenu,
   MenuItem,
   MenuPopover
 } from "../../shared/ui/Menu";
@@ -34,7 +35,8 @@ import {
 import { repositoryDiffWorkspaceConfiguration } from "../../widgets/diff-workspace/diffWorkspaceConfiguration";
 import {
   countSearchableCodeNodes,
-  filterChains,
+  filterChainsWithMetadata,
+  MAX_VISIBLE_REQUEST_CHAINS,
   searchCodeNodes
 } from "./codeAnalysisNavigation";
 import { CodeRelationGraph } from "./CodeRelationGraph";
@@ -118,12 +120,24 @@ export function CodeAnalysisPage({
     workspace?.entries[0];
   const availableSnapshot = analysis.snapshot;
   const snapshot =
-    availableSnapshot?.scope === scope
+    availableSnapshot?.scope === scope &&
+    availableSnapshot.workspaceId ===
+      analysis.state.workspaceId &&
+    availableSnapshot.entryId === analysis.state.entryId &&
+    (
+      analysis.state.state !== "ready" ||
+      (
+        availableSnapshot.analysisId ===
+          analysis.state.analysisId &&
+        availableSnapshot.generatedAt ===
+          analysis.state.generatedAt
+      )
+    )
       ? availableSnapshot
       : null;
-  const chains = useMemo(
+  const chainFilterResult = useMemo(
     () =>
-      filterChains(
+      filterChainsWithMetadata(
         snapshot?.requestChains ?? [],
         snapshot?.nodes ?? [],
         chainQuery,
@@ -136,6 +150,7 @@ export function CodeAnalysisPage({
       snapshot?.requestChains
     ]
   );
+  const chains = chainFilterResult.chains;
   const nodeResults = useMemo(
     () => searchCodeNodes(snapshot?.nodes ?? [], nodeQuery),
     [nodeQuery, snapshot?.nodes]
@@ -610,7 +625,12 @@ export function CodeAnalysisPage({
             )}
           </section>
 
-          <div className="analysis-workbench">
+          <div
+            aria-label="代码分析工作区"
+            className={`analysis-workbench${
+              graphFullscreen ? " is-fullscreen" : ""
+            }`}
+          >
             <aside
               className={`panel analysis-chain-panel${
                 selectedNode ? " is-node-detail" : ""
@@ -817,6 +837,15 @@ export function CodeAnalysisPage({
                         </p>
                       </div>
                     )}
+                    {chainFilterResult.truncated && (
+                      <div
+                        className="analysis-list-limit"
+                        role="status"
+                      >
+                        为保持搜索和滚动流畅，仅显示前{" "}
+                        {MAX_VISIBLE_REQUEST_CHAINS} 条匹配结果；请继续缩小筛选范围。
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>
@@ -867,9 +896,7 @@ export function CodeAnalysisPage({
 
             <div
               aria-label="关系图工作区"
-              className={`analysis-graph-workspace${
-                graphFullscreen ? " is-fullscreen" : ""
-              }`}
+              className="analysis-graph-workspace"
             >
               {selectedNode && nodeFileExpanded && (
                 selectedNode.changed ? (
@@ -919,8 +946,8 @@ export function CodeAnalysisPage({
                     <Button
                       aria-label={
                         graphFullscreen
-                          ? "退出关系图全屏"
-                          : "全屏显示关系图"
+                          ? "退出代码分析全屏"
+                          : "全屏显示代码分析工作区"
                       }
                       aria-pressed={graphFullscreen}
                       icon={
@@ -942,7 +969,7 @@ export function CodeAnalysisPage({
                       title={
                         graphFullscreen
                           ? "退出全屏（Esc）"
-                          : "全屏显示"
+                          : "全屏显示代码分析工作区"
                       }
                       variant="icon"
                     />
@@ -1229,6 +1256,12 @@ function AnalysisMethodDropdown({
       return;
     }
     const close = () => setOpen(false);
+    const handleScroll = (event: Event) => {
+      if (isEventInsideMenu(event, menuRef.current)) {
+        return;
+      }
+      close();
+    };
     const handlePointerDown = (event: PointerEvent) => {
       if (
         event.target instanceof Node &&
@@ -1253,7 +1286,7 @@ function AnalysisMethodDropdown({
     document.addEventListener("keydown", handleKeyDown);
     window.addEventListener("blur", close);
     window.addEventListener("resize", close);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", handleScroll, true);
     requestAnimationFrame(() => {
       const items = menuRef.current?.querySelectorAll<
         HTMLButtonElement
@@ -1272,7 +1305,7 @@ function AnalysisMethodDropdown({
       document.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("blur", close);
       window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", handleScroll, true);
     };
   }, [open]);
 

@@ -14,9 +14,9 @@
 }
 
 .gn-input {
-  --gn-input-size-small: 32px;
-  --gn-input-size-medium: 35px;
-  --gn-input-size-large: 40px;
+  --gn-input-size-small: var(--control-compact);
+  --gn-input-size-medium: var(--control-default);
+  --gn-input-size-large: var(--control-large);
   --gn-input-height: var(--gn-input-size-medium);
   --gn-input-padding: var(--space-3);
   --gn-input-icon-size: var(--icon-small);

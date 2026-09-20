@@ -1,13 +1,18 @@
 import type { PreferenceStorage } from "./sidebarPreferences";
-
-const TAPD_KEYWORD_KEY_PREFIX =
-  "gitnest.workspace.tapd-keyword:";
+import {
+  readRendererPreference,
+  rendererPreferenceKeys,
+  writeRendererPreference
+} from "../../shared/lib/renderer-preferences";
 
 export function tapdKeywordPreferenceKey(
   workspaceId: string,
   entryId: string
 ): string {
-  return `${TAPD_KEYWORD_KEY_PREFIX}${workspaceId}:${entryId}`;
+  return rendererPreferenceKeys.tapdKeyword(
+    workspaceId,
+    entryId
+  );
 }
 
 export function readTapdKeywordPreference(
@@ -19,15 +24,12 @@ export function readTapdKeywordPreference(
     return "";
   }
 
-  try {
-    return normalizeTapdKeyword(
-      storage.getItem(
-        tapdKeywordPreferenceKey(workspaceId, entryId)
-      ) ?? ""
-    );
-  } catch {
-    return "";
-  }
+  return normalizeTapdKeyword(
+    readRendererPreference(
+      storage,
+      tapdKeywordPreferenceKey(workspaceId, entryId)
+    ) ?? ""
+  );
 }
 
 export function writeTapdKeywordPreference(
@@ -40,14 +42,11 @@ export function writeTapdKeywordPreference(
     return;
   }
 
-  try {
-    storage.setItem(
-      tapdKeywordPreferenceKey(workspaceId, entryId),
-      normalizeTapdKeyword(keyword)
-    );
-  } catch {
-    // Preference persistence is best-effort in restricted environments.
-  }
+  writeRendererPreference(
+    storage,
+    tapdKeywordPreferenceKey(workspaceId, entryId),
+    normalizeTapdKeyword(keyword)
+  );
 }
 
 export function normalizeTapdKeyword(value: string): string {

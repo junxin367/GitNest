@@ -17,6 +17,7 @@ import {
 import type { WorkspaceDetailsDto } from "@gitnest/contracts";
 
 import type { ExternalApplicationController } from "../../features/external-application/useExternalApplications";
+import { OpenInControl } from "./OpenInControl";
 import { RepositoryHeader } from "./RepositoryHeader";
 
 describe("RepositoryHeader", () => {
@@ -210,6 +211,61 @@ describe("RepositoryHeader", () => {
     expect(actionGroupChildren[2]?.classList).toContain(
       "open-in-control"
     );
+  });
+
+  it("keeps the open-in menu open for internal scrolling and closes it for page scrolling", () => {
+    const preferredProfile = {
+      kind: "vscode" as const,
+      label: "Visual Studio Code"
+    };
+    const applications: ExternalApplicationController = {
+      ...externalApplications,
+      profiles: [
+        preferredProfile,
+        {
+          kind: "cursor",
+          label: "Cursor"
+        }
+      ],
+      preferredProfile,
+      reload: vi.fn(async () => undefined)
+    };
+
+    act(() => {
+      root.render(
+        <OpenInControl
+          applications={applications}
+          scope="repository"
+        />
+      );
+    });
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[aria-label="选择打开方式"]'
+    );
+    act(() => {
+      trigger?.click();
+    });
+
+    const menu = document.querySelector<HTMLDivElement>(
+      ".open-in-menu"
+    );
+    expect(menu).not.toBeNull();
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+
+    act(() => {
+      menu?.dispatchEvent(new Event("scroll"));
+    });
+
+    expect(document.querySelector(".open-in-menu")).toBe(menu);
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+
+    act(() => {
+      window.dispatchEvent(new Event("scroll"));
+    });
+
+    expect(document.querySelector(".open-in-menu")).toBeNull();
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
   });
 });
 

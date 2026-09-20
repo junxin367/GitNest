@@ -20,6 +20,7 @@ import {
   MAX_DIFF_COMMIT_PANEL_HEIGHT,
   MIN_DIFF_COMMIT_PANEL_HEIGHT,
   IPC_CHANNELS,
+  IPC_EVENTS,
   type AiCommitMessageDto,
   type AiConnectionTestResultDto,
   type AccountRemovalImpactRequest,
@@ -36,7 +37,9 @@ import {
   type CodeAnalysisScopeDto,
   type CodeAnalysisSnapshotDto,
   type CodeAnalysisStateDto,
+  type CreateWorkspaceRequest,
   type CreateRepositoryCommitRequest,
+  type DeleteWorkspaceRequest,
   type GitReadErrorDto,
   type GitReadResult,
   type GenerateAiCommitMessageRequest,
@@ -60,6 +63,7 @@ import {
   type OpenFileLocationRequest,
   type RemoveWorkspaceEntryRequest,
   type RemoveAccountRequest,
+  type RenameWorkspaceRequest,
   type RepositoryInspectionRequest,
   type RepositoryCommitRequest,
   type RepositoryCommandDto,
@@ -84,6 +88,7 @@ import {
   type SelectRepositoryTargetRequest,
   type SelectWorkspaceEntryRequest,
   type SetWorkspaceGroupCollapsedRequest,
+  type SwitchWorkspaceRequest,
   type TestAccountRequest,
   type TestAiConnectionRequest,
   type UnbindAccountRequest,
@@ -117,6 +122,8 @@ const MAX_REPOSITORY_COMMAND_NAME_LENGTH = 255;
 const MAX_REPOSITORY_REVISION_LENGTH = 4_096;
 const MAX_OPERATION_ID_LENGTH = 160;
 const MAX_REPOSITORY_TARGET_ID_LENGTH = 512;
+const MAX_WORKSPACE_ID_LENGTH = 160;
+const MAX_WORKSPACE_NAME_LENGTH = 120;
 const MAX_WORKTREE_PATH_LENGTH = 32_767;
 const EXTERNAL_TERMINAL_KINDS = new Set([
   "windows-terminal",
@@ -209,7 +216,7 @@ export function registerIpcHandlers(
       _event,
       request
     ): Promise<GitReadResult<AppSettingsDto>> =>
-      captureGitRead(() =>
+      captureAppSettingsMutation(() =>
         services.settings.update(
           validateUpdateAppSettingsRequest(request)
         )
@@ -222,7 +229,7 @@ export function registerIpcHandlers(
       _event,
       request
     ): Promise<GitReadResult<AppSettingsDto>> =>
-      captureGitRead(() =>
+      captureAppSettingsMutation(() =>
         services.settings.clearAiApiKey(
           validateClearAiApiKeyRequest(request).confirmed
         )
@@ -620,6 +627,46 @@ export function registerIpcHandlers(
 
   registerHandler(IPC_CHANNELS.workspaceGetState, () =>
     captureWorkspace(() => services.workspace.getState())
+  );
+
+  registerHandler(
+    IPC_CHANNELS.workspaceCreate,
+    (_event, request) =>
+      captureWorkspace(() =>
+        services.workspace.createWorkspace(
+          validateCreateWorkspaceRequest(request)
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.workspaceSwitch,
+    (_event, request) =>
+      captureWorkspace(() =>
+        services.workspace.switchWorkspace(
+          validateSwitchWorkspaceRequest(request).workspaceId
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.workspaceRename,
+    (_event, request) =>
+      captureWorkspace(() =>
+        services.workspace.renameWorkspace(
+          validateRenameWorkspaceRequest(request)
+        )
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.workspaceDelete,
+    (_event, request) =>
+      captureWorkspace(() =>
+        services.workspace.deleteWorkspace(
+          validateDeleteWorkspaceRequest(request).workspaceId
+        )
+      )
   );
 
   registerHandler(
@@ -1028,6 +1075,80 @@ async function captureGitRead<Value>(
       error: toGitReadError(error)
     };
   }
+}
+
+interface AppSettingsEventWindow {
+  isDestroyed(): boolean;
+  webContents: {
+    isDestroyed(): boolean;
+    getURL(): string;
+    send(
+      channel: typeof IPC_EVENTS.settingsChanged,
+      settings: AppSettingsDto
+    ): void;
+  };
+}
+
+interface AppSettingsBroadcastOptions {
+  windows?: readonly AppSettingsEventWindow[];
+  isTrustedUrl?: (url: string) => boolean;
+}
+
+export function broadcastAppSettingsChanged(
+  settings: AppSettingsDto,
+  options: AppSettingsBroadcastOptions = {}
+): void {
+  const windows =
+    options.windows ?? BrowserWindow.getAllWindows();
+  const isTrustedUrl =
+    options.isTrustedUrl ??
+    ((senderUrl: string) =>
+      isTrustedSenderUrl({
+        senderUrl,
+        rendererUrl: process.env.ELECTRON_RENDERER_URL,
+        rendererDirectory: resolve(
+          import.meta.dirname,
+          "../renderer"
+        ),
+        packaged: app.isPackaged
+      }));
+
+  for (const window of windows) {
+    if (
+      window.isDestroyed() ||
+      window.webContents.isDestroyed()
+    ) {
+      continue;
+    }
+    try {
+      if (!isTrustedUrl(window.webContents.getURL())) {
+        continue;
+      }
+      window.webContents.send(
+        IPC_EVENTS.settingsChanged,
+        settings
+      );
+    } catch {
+      // A window may close or navigate while the broadcast is running.
+    }
+  }
+}
+
+export async function captureAppSettingsMutation(
+  action: () => Promise<AppSettingsDto>,
+  publish: (settings: AppSettingsDto) => void =
+    broadcastAppSettingsChanged
+): Promise<GitReadResult<AppSettingsDto>> {
+  return captureGitRead(async () => {
+    const settings = await action();
+    try {
+      publish(settings);
+    } catch {
+      // Settings persistence must not be reported as failed because
+      // a renderer closed while the best-effort event was sent.
+    }
+    return settings;
+  });
 }
 
 function isMissingFilesystemPath(error: unknown): boolean {
@@ -1657,6 +1778,78 @@ function validateInspectionRequest(
       ? { historyLimit: request.historyLimit }
       : {})
   };
+}
+
+function validateCreateWorkspaceRequest(
+  request: unknown
+): CreateWorkspaceRequest {
+  return {
+    name: readWorkspaceName(request)
+  };
+}
+
+function validateSwitchWorkspaceRequest(
+  request: unknown
+): SwitchWorkspaceRequest {
+  return {
+    workspaceId: readWorkspaceId(request)
+  };
+}
+
+function validateRenameWorkspaceRequest(
+  request: unknown
+): RenameWorkspaceRequest {
+  return {
+    workspaceId: readWorkspaceId(request),
+    name: readWorkspaceName(request)
+  };
+}
+
+function validateDeleteWorkspaceRequest(
+  request: unknown
+): DeleteWorkspaceRequest {
+  return {
+    workspaceId: readWorkspaceId(request)
+  };
+}
+
+function readWorkspaceId(request: unknown): string {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("workspaceId" in request) ||
+    typeof request.workspaceId !== "string" ||
+    !/^[a-zA-Z0-9_-]+$/.test(request.workspaceId) ||
+    request.workspaceId.length > MAX_WORKSPACE_ID_LENGTH
+  ) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "A valid Workspace id is required."
+    );
+  }
+  return request.workspaceId;
+}
+
+function readWorkspaceName(request: unknown): string {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("name" in request) ||
+    typeof request.name !== "string"
+  ) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "A Workspace name is required."
+    );
+  }
+  const name = request.name.trim();
+  if (!name || name.length > MAX_WORKSPACE_NAME_LENGTH) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "Workspace name must contain 1 to 120 characters."
+    );
+  }
+  return name;
 }
 
 function validateAddWorkspaceEntryRequest(
@@ -3453,7 +3646,9 @@ export function isTrustedSenderUrl({
 
     return (
       relativePath === "" ||
-      (!relativePath.startsWith("..") && !isAbsolute(relativePath))
+      (relativePath !== ".." &&
+        !relativePath.startsWith(`..${sep}`) &&
+        !isAbsolute(relativePath))
     );
   } catch {
     return false;

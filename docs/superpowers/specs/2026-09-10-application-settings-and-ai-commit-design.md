@@ -1,7 +1,7 @@
 # Application Settings and AI Commit Design
 
 **Date:** 2026-09-10
-**Status:** Ready for review
+**Status:** Implemented; credential storage amended 2026-09-19
 
 ## Goal
 
@@ -42,10 +42,10 @@ through an OpenAI-compatible Chat Completions endpoint.
 - AI generation fills the commit-message editor only. It never stages,
   unstages, commits, pushes, pulls, rebases, or changes branches.
 - Startup remote checking performs Fetch only.
-- The API Key may be stored as plaintext in
-  `userData/settings/app-settings.json`, as explicitly requested.
-- Existing Git account tokens remain in the protected credential vault.
-  This task does not move account tokens into `app-settings.json`.
+- The API Key is stored in the protected credential vault. The
+  `app-settings.json` document stores only a bounded credential reference.
+- Existing Git account tokens remain in the same protected credential
+  vault and keep their separate references.
 
 ## Non-goals
 
@@ -80,9 +80,9 @@ contracts, a Renderer controller, and a main-process AI service.
 
 This is the selected approach. It gives startup restoration, default
 terminal selection, startup Fetch, the settings UI, the standalone Diff
-window, and AI requests one consistent settings snapshot. It also permits
-the Key to be plaintext at rest without returning the saved value to the
-Renderer.
+window, and AI requests one consistent settings snapshot. The saved Key is
+resolved only inside the Main process from the protected credential vault
+and is never returned to the Renderer.
 
 ### Separate General, Git, AI, and navigation stores
 
@@ -220,8 +220,9 @@ AI Key rules:
 - Key values never appear in IPC responses, diagnostic events, error
   details, or toasts.
 
-Only the AI API Key follows this plaintext-at-rest rule. Existing HTTPS Git
-account tokens continue to use `SafeStorageCredentialVault`.
+The AI API Key and existing HTTPS Git account tokens both use
+`SafeStorageCredentialVault`; the settings document and account metadata
+contain references only.
 
 ## Contracts and services
 
@@ -620,7 +621,9 @@ The formal React application remains the source of truth for behavior.
 
 ## Migration and compatibility
 
-- `app-settings.json` starts at schema version 1.
+- `app-settings.json` started at schema version 1. Schema version 3 moves
+  legacy plaintext AI Keys into the protected credential vault before
+  atomically replacing the settings document.
 - A missing document uses defaults and is created on first successful
   update.
 - Existing `gitnest.theme` localStorage is imported only when no persisted
@@ -642,10 +645,10 @@ The formal React application remains the source of truth for behavior.
   generate.
 - Preload whitelist tests for every new channel.
 - IPC sender validation and request-size validation.
-- Default document, round-trip persistence, plaintext AI Key at the
-  required path, public redaction, Key preservation, Key replacement, Key
-  clearing, schema rejection, atomic-write recovery, and serialized patch
-  tests.
+- Default document, round-trip persistence, protected AI Key storage,
+  plaintext-to-vault migration, public redaction, Key preservation, Key
+  replacement, Key clearing, schema rejection, atomic-write recovery, and
+  serialized patch tests.
 
 ### Settings and startup
 
@@ -711,8 +714,9 @@ The feature is complete when:
 2. No dangerous-confirmation preference exists, and backend confirmations
    remain mandatory.
 3. Settings persist atomically to the required `app-settings.json` path.
-4. The saved AI Key is plaintext in that file but absent from all public
-   responses and logs.
+4. The saved AI Key is encrypted through the operating-system-backed
+   credential vault; `app-settings.json` stores only its reference, and
+   the Key is absent from all public responses and logs.
 5. Last business view and tab restoration follows the confirmed fallback
    rules.
 6. The Activity Rail uses the effective saved default terminal.

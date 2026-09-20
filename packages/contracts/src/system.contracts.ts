@@ -68,11 +68,15 @@ import type {
 } from "./repository.contracts";
 import type {
   AddWorkspaceEntryRequest,
+  CreateWorkspaceRequest,
+  DeleteWorkspaceRequest,
   RemoveWorkspaceEntryRequest,
+  RenameWorkspaceRequest,
   RepositoryTargetDto,
   SelectRepositoryTargetRequest,
   SelectWorkspaceEntryRequest,
   SetWorkspaceGroupCollapsedRequest,
+  SwitchWorkspaceRequest,
   UpdateWorkspaceEntryRequest,
   WorkspaceDetailsDto,
   WorkspaceDirectorySelectionDto,
@@ -164,6 +168,9 @@ export interface GitNestBridge {
     clearAiApiKey(
       request: ClearAiApiKeyRequest
     ): Promise<GitReadResult<AppSettingsDto>>;
+    onChanged(
+      listener: (settings: AppSettingsDto) => void
+    ): () => void;
   };
   ai: {
     testConnection(
@@ -224,6 +231,18 @@ export interface GitNestBridge {
   workspace: {
     getCurrent(): Promise<WorkspaceResult<WorkspaceDetailsDto>>;
     getState(): Promise<WorkspaceResult<WorkspaceRuntimeStateDto>>;
+    create(
+      request: CreateWorkspaceRequest
+    ): Promise<WorkspaceResult<WorkspaceRuntimeStateDto>>;
+    switch(
+      request: SwitchWorkspaceRequest
+    ): Promise<WorkspaceResult<WorkspaceRuntimeStateDto>>;
+    rename(
+      request: RenameWorkspaceRequest
+    ): Promise<WorkspaceResult<WorkspaceRuntimeStateDto>>;
+    delete(
+      request: DeleteWorkspaceRequest
+    ): Promise<WorkspaceResult<WorkspaceRuntimeStateDto>>;
     selectDirectory(): Promise<
       WorkspaceResult<WorkspaceDirectorySelectionDto>
     >;

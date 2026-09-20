@@ -1,8 +1,8 @@
-import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import {
   AnalysisCache,
+  assertCodeAnalysisSnapshotPayloadSize,
   type AnalysisCacheDocument
 } from "./analysis-cache";
 import { buildCodeGraph } from "./graph-builder";
@@ -16,6 +16,7 @@ import type {
 } from "./model";
 import { discoverSourceFiles } from "./source-inventory";
 import { parseSourceFile } from "./source-parser";
+import { readBoundedSourceFile } from "./source-reader";
 
 interface SourceDocument {
   file: ParsedSourceFile["file"];
@@ -23,6 +24,9 @@ interface SourceDocument {
 }
 
 const MAX_SNAPSHOT_WARNINGS = 100;
+const MAX_GRAPH_NODES = 20_000;
+const MAX_GRAPH_EDGES = 60_000;
+const MAX_REQUEST_CHAINS = 5_000;
 
 export class CodeAnalysisEngine {
   readonly #lspPool: ExternalLanguageServerPool;
@@ -124,9 +128,9 @@ export class CodeAnalysisEngine {
       async (file) => {
         throwIfAborted(input.signal);
         try {
-          const content = await readFile(
-            file.absolutePath,
-            "utf8"
+          const content = await readBoundedSourceFile(
+            file,
+            input.settings.maxFileSizeBytes
           );
           documents.push({ file, content });
         } catch (error) {
@@ -191,6 +195,7 @@ export class CodeAnalysisEngine {
         inventory.files,
         documents,
         input.settings.readConcurrency,
+        input.settings.maxFileSizeBytes,
         input.signal,
         (file, error) => {
           readFailurePaths.add(file.canonicalPath);
@@ -334,8 +339,18 @@ export class CodeAnalysisEngine {
     const graph = buildCodeGraph({
       files: graphFiles,
       scope: input.scope,
-      graphDepth: input.settings.graphDepth
+      graphDepth: input.settings.graphDepth,
+      limits: {
+        maxNodes: MAX_GRAPH_NODES,
+        maxEdges: MAX_GRAPH_EDGES,
+        maxRequestChains: MAX_REQUEST_CHAINS
+      }
     });
+    if (graph.truncated) {
+      addWarning(
+        `关系图达到安全上限（节点 ${MAX_GRAPH_NODES}、边 ${MAX_GRAPH_EDGES}、调用链 ${MAX_REQUEST_CHAINS}），本次结果已截断。`
+      );
+    }
     input.onProgress?.({
       stage: "linking",
       completed: 1,
@@ -380,7 +395,7 @@ export class CodeAnalysisEngine {
       });
     }
 
-    return {
+    const snapshot: CodeAnalysisSnapshot = {
       schemaVersion: 1,
       analysisId: input.analysisId,
       workspaceId: input.workspaceId,
@@ -411,10 +426,13 @@ export class CodeAnalysisEngine {
         ).length,
         edgeCount: graph.edges.length,
         requestChainCount: graph.requestChains.length,
-        truncated: inventory.truncated,
+        truncated:
+          inventory.truncated || graph.truncated,
         durationMs: Date.now() - startedAt
       }
     };
+    assertCodeAnalysisSnapshotPayloadSize(snapshot);
+    return snapshot;
   }
 
   dispose(): Promise<void> {
@@ -426,6 +444,7 @@ async function ensureLspDocuments(
   files: ParsedSourceFile["file"][],
   loadedDocuments: SourceDocument[],
   concurrency: number,
+  maxFileSizeBytes: number,
   signal?: AbortSignal,
   onReadError?: (
     file: ParsedSourceFile["file"],
@@ -449,7 +468,10 @@ async function ensureLspDocuments(
       try {
         documents.set(file.canonicalPath, {
           file,
-          content: await readFile(file.absolutePath, "utf8")
+          content: await readBoundedSourceFile(
+            file,
+            maxFileSizeBytes
+          )
         });
       } catch (error) {
         onReadError?.(file, error);

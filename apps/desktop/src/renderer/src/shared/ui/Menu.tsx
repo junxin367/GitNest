@@ -167,6 +167,12 @@ export const MenuPopover = forwardRef<
         )
       );
     };
+    const handleScroll = (event: Event) => {
+      if (isEventInsideMenu(event, menu)) {
+        return;
+      }
+      updatePlacement();
+    };
 
     updatePlacement();
     const resizeObserver =
@@ -178,7 +184,7 @@ export const MenuPopover = forwardRef<
     window.addEventListener("resize", updatePlacement);
     document.addEventListener(
       "scroll",
-      updatePlacement,
+      handleScroll,
       true
     );
 
@@ -187,7 +193,7 @@ export const MenuPopover = forwardRef<
       window.removeEventListener("resize", updatePlacement);
       document.removeEventListener(
         "scroll",
-        updatePlacement,
+        handleScroll,
         true
       );
     };
@@ -215,6 +221,25 @@ export const MenuPopover = forwardRef<
     </LayerPortal>
   );
 });
+
+export function isEventInsideMenu(
+  event: Event,
+  menu: HTMLElement | null
+): boolean {
+  if (!menu) {
+    return false;
+  }
+  if (
+    typeof event.composedPath === "function" &&
+    event.composedPath().includes(menu)
+  ) {
+    return true;
+  }
+  return (
+    event.target instanceof Node &&
+    menu.contains(event.target)
+  );
+}
 
 export function resolveMenuPlacement(
   anchor: MenuRect,

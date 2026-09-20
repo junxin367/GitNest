@@ -7,6 +7,9 @@ import {
 
 import { AtomicJsonStore } from "./atomic-json-store";
 
+const MAX_REPOSITORY_SNAPSHOT_DOCUMENT_BYTES =
+  128 * 1_024 * 1_024;
+
 interface RepositorySnapshotDocument {
   schemaVersion: 1;
   workspaceId: string;
@@ -24,7 +27,9 @@ export class JsonRepositorySnapshotStore
     filePath: string,
     clock: () => string = () => new Date().toISOString()
   ) {
-    this.#store = new AtomicJsonStore(filePath);
+    this.#store = new AtomicJsonStore(filePath, {
+      maxBytes: MAX_REPOSITORY_SNAPSHOT_DOCUMENT_BYTES
+    });
     this.#clock = clock;
   }
 

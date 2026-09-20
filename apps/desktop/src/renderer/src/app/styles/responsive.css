@@ -49,28 +49,6 @@
     flex-direction: column;
   }
 
-  .operation-metric-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .operation-history-header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .operation-filter-tabs {
-    width: 100%;
-    margin-left: 0;
-  }
-
-  .operation-history-meta {
-    grid-template-columns: auto;
-  }
-
-  .operation-history-meta > div {
-    justify-self: start;
-  }
-
   .repository-health-grid {
     gap: var(--space-2);
   }
@@ -120,7 +98,7 @@
 
 @media (max-width: 760px) {
   .settings-page-scroll {
-    padding: var(--space-4);
+    padding: var(--page-safe-margin-narrow);
   }
 
   .settings-layout {

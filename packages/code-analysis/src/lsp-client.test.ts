@@ -22,6 +22,7 @@ import {
 import {
   ExternalLanguageServerPool,
   JsonRpcClient,
+  parseDocumentSymbols,
   resolveLanguageServerStartupTimeoutMs,
   resolveLanguageServerWorkspaceReadyTimeoutMs,
   resolveLanguageServerWorkspace,
@@ -30,8 +31,33 @@ import {
 } from "./lsp-client";
 import type {
   AnalysisSourceFile,
-  CodeAnalysisSettings
+  CodeAnalysisSettings,
+  LspDocumentSymbol
 } from "./model";
+
+describe("parseDocumentSymbols budgets", () => {
+  it("caps symbol count, depth, and retained names", () => {
+    const flat = parseDocumentSymbols(
+      Array.from({ length: 5_002 }, (_, index) =>
+        lspSymbol(`${"x".repeat(1_100)}-${index}`)
+      )
+    );
+
+    expect(flat.symbols).toHaveLength(5_000);
+    expect(flat.truncated).toBe(true);
+    expect(flat.symbols[0]?.name).toHaveLength(1_024);
+
+    let nested: Record<string, unknown> =
+      lspSymbol("leaf");
+    for (let depth = 0; depth < 70; depth += 1) {
+      nested = lspSymbol(`level-${depth}`, [nested]);
+    }
+    const deep = parseDocumentSymbols([nested]);
+
+    expect(countParsedSymbols(deep.symbols)).toBe(65);
+    expect(deep.truncated).toBe(true);
+  });
+});
 
 describe("resolveWindowsEditorJdtls", () => {
   const directories: string[] = [];
@@ -119,6 +145,31 @@ describe("resolveWindowsEditorJdtls", () => {
     return directory;
   }
 });
+
+function lspSymbol(
+  name: string,
+  children: Record<string, unknown>[] = []
+): Record<string, unknown> {
+  return {
+    name,
+    kind: 12,
+    range: {
+      start: { line: 0, character: 0 },
+      end: { line: 0, character: 1 }
+    },
+    children
+  };
+}
+
+function countParsedSymbols(
+  symbols: LspDocumentSymbol[]
+): number {
+  return symbols.reduce(
+    (total, symbol) =>
+      total + 1 + countParsedSymbols(symbol.children),
+    0
+  );
+}
 
 describe("resolveNodeCommandShim", () => {
   const directories: string[] = [];
@@ -619,7 +670,55 @@ describe("Java language server readiness", () => {
     ).rejects.toThrow("code=23");
     await client.dispose();
   });
+
+  it("terminates a server that declares an oversized JSON-RPC message", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "gitnest-lsp-message-limit-")
+    );
+    directories.push(root);
+    const serverPath = join(
+      root,
+      "oversized-lsp-server.mjs"
+    );
+    await writeFile(
+      serverPath,
+      [
+        'process.stdout.write("Content-Length: 16777217\\r\\n\\r\\n");',
+        "process.stdin.resume();",
+        "setInterval(() => undefined, 1_000);"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const client = new JsonRpcClient(
+      process.execPath,
+      [serverPath],
+      root
+    );
+    await client.start();
+
+    await expect(
+      client.request("initialize", {}, 1_000)
+    ).rejects.toThrow("LSP 消息长度超过安全上限");
+    await viWaitForProcessExit(client);
+    expect(client.alive).toBe(false);
+    await client.dispose();
+  });
 });
+
+async function viWaitForProcessExit(
+  client: JsonRpcClient
+): Promise<void> {
+  for (
+    let attempt = 0;
+    attempt < 100 && client.alive;
+    attempt += 1
+  ) {
+    await new Promise((resolvePromise) =>
+      setTimeout(resolvePromise, 10)
+    );
+  }
+}
 
 async function createJdtlsExtension(
   extensionRoot: string,

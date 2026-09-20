@@ -8,13 +8,18 @@ import {
   migrateAccountMetadataDocument
 } from "./migrations/account-metadata-document";
 
+const MAX_ACCOUNT_METADATA_DOCUMENT_BYTES =
+  4 * 1_024 * 1_024;
+
 export class JsonAccountMetadataStore
   implements AccountMetadataStore
 {
   readonly #store: AtomicJsonStore;
 
   constructor(filePath: string) {
-    this.#store = new AtomicJsonStore(filePath);
+    this.#store = new AtomicJsonStore(filePath, {
+      maxBytes: MAX_ACCOUNT_METADATA_DOCUMENT_BYTES
+    });
   }
 
   async load(): Promise<AccountMetadata | null> {
@@ -25,7 +30,7 @@ export class JsonAccountMetadataStore
     try {
       const migrated =
         migrateAccountMetadataDocument(value);
-      if (readSchemaVersion(value) !== migrated.schemaVersion) {
+      if (!documentsMatch(value, migrated)) {
         await this.#store.write(migrated);
       }
       return migrated;
@@ -37,15 +42,16 @@ export class JsonAccountMetadataStore
     }
   }
 
-  save(metadata: AccountMetadata): Promise<void> {
-    return this.#store.write(metadata);
+  async save(metadata: AccountMetadata): Promise<void> {
+    await this.#store.write(
+      migrateAccountMetadataDocument(metadata)
+    );
   }
 }
 
-function readSchemaVersion(value: unknown): unknown {
-  return value &&
-    typeof value === "object" &&
-    "schemaVersion" in value
-    ? value.schemaVersion
-    : undefined;
+function documentsMatch(
+  value: unknown,
+  migrated: AccountMetadata
+): boolean {
+  return JSON.stringify(value) === JSON.stringify(migrated);
 }

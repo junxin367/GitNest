@@ -1,7 +1,7 @@
 .gn-button {
-  --gn-button-size-small: 32px;
-  --gn-button-size-medium: 35px;
-  --gn-button-size-large: 40px;
+  --gn-button-size-small: var(--control-compact);
+  --gn-button-size-medium: var(--control-default);
+  --gn-button-size-large: var(--control-large);
   --gn-button-height: var(--gn-button-size-small);
   --gn-button-padding: 0 var(--space-4);
   --gn-button-icon-size: var(--icon-small);

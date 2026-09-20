@@ -1,3 +1,4 @@
+import { MAX_CODE_DOCUMENTATION_CHARACTERS } from "./model";
 import type {
   AnalysisSourceFile,
   ParsedCall,
@@ -1471,7 +1472,9 @@ function summarizeDocumentation(
     description.push(line);
   }
   const value = description.join(" ").replace(/\s+/g, " ").trim();
-  return value || undefined;
+  return value
+    ? value.slice(0, MAX_CODE_DOCUMENTATION_CHARACTERS)
+    : undefined;
 }
 
 function isInsideAnyClass(

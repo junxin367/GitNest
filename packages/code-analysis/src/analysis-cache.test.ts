@@ -2,6 +2,7 @@ import {
   mkdtemp,
   readdir,
   rm,
+  truncate,
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,10 +17,13 @@ import {
 
 import {
   AnalysisSnapshotCache,
+  assertCodeAnalysisSnapshotPayloadSize,
+  MAX_ANALYSIS_SNAPSHOT_PAYLOAD_BYTES,
   type AnalysisRoot,
   type CodeAnalysisSettings,
   type CodeAnalysisSnapshot
 } from "./index";
+import { MAX_ANALYSIS_SNAPSHOT_BYTES } from "./analysis-cache";
 
 describe("AnalysisSnapshotCache", () => {
   const temporaryPaths: string[] = [];
@@ -146,6 +150,43 @@ describe("AnalysisSnapshotCache", () => {
         snapshot.roots
       )
     ).resolves.toBeNull();
+  });
+
+  it("does not read a snapshot above the safety limit", async () => {
+    const directory = await createTemporaryDirectory();
+    const store = new AnalysisSnapshotCache(directory);
+    const snapshot = createSnapshot("oversized-analysis");
+    await store.save(snapshot, createSettings());
+    const [entryDirectory] = await readdir(directory);
+    expect(entryDirectory).toBeDefined();
+    await truncate(
+      join(
+        directory,
+        entryDirectory as string,
+        "snapshot.json"
+      ),
+      MAX_ANALYSIS_SNAPSHOT_BYTES + 1
+    );
+
+    await expect(
+      store.load(
+        snapshot.workspaceId,
+        snapshot.entryId,
+        createSettings(),
+        snapshot.roots
+      )
+    ).resolves.toBeNull();
+  });
+
+  it("rejects a live snapshot above the IPC payload limit", () => {
+    const snapshot = createSnapshot("oversized-payload");
+    snapshot.warnings = [
+      "x".repeat(MAX_ANALYSIS_SNAPSHOT_PAYLOAD_BYTES)
+    ];
+
+    expect(() =>
+      assertCodeAnalysisSnapshotPayloadSize(snapshot)
+    ).toThrow("snapshot payload");
   });
 
   async function createTemporaryDirectory(): Promise<string> {

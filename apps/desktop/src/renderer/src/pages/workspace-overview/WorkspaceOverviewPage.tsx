@@ -37,6 +37,7 @@ type LocalWorkspaceOperation =
   | "loading"
   | "selecting"
   | "scanning"
+  | "switching"
   | "saving"
   | null;
 

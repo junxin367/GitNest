@@ -4,7 +4,7 @@ import {
 } from "node:crypto";
 import {
   mkdir,
-  readFile,
+  open,
   rename,
   rm,
   writeFile
@@ -18,11 +18,19 @@ import type {
   ParsedSourceFile
 } from "./model";
 import { BUILTIN_ANALYSIS_PROFILE_VERSIONS } from "./profiles/registry";
+import { DEFAULT_MAX_TOTAL_SOURCE_BYTES } from "./source-inventory";
 
 const CACHE_SCHEMA_VERSION = 1;
 const SNAPSHOT_CACHE_SCHEMA_VERSION = 2;
 const PARSER_VERSION = 8;
-const GRAPH_VERSION = 7;
+const GRAPH_VERSION = 8;
+export const MAX_ANALYSIS_INDEX_CACHE_BYTES =
+  128 * 1_024 * 1_024;
+export const MAX_ANALYSIS_SNAPSHOT_BYTES =
+  40 * 1_024 * 1_024;
+export const MAX_ANALYSIS_SNAPSHOT_PAYLOAD_BYTES =
+  32 * 1_024 * 1_024;
+const CACHE_READ_CHUNK_BYTES = 64 * 1_024;
 
 interface CachedFile {
   fingerprint: string;
@@ -46,7 +54,7 @@ export class AnalysisCache {
     entryId: string
   ) {
     this.#filePath = join(
-      cacheEntryDirectory(
+      codeAnalysisCacheEntryDirectory(
         cacheDirectory,
         workspaceId,
         entryId
@@ -60,10 +68,11 @@ export class AnalysisCache {
     roots: AnalysisRoot[]
   ): Promise<AnalysisCacheDocument> {
     const empty = createEmptyCache(settings, roots);
-    let raw: string;
-    try {
-      raw = await readFile(this.#filePath, "utf8");
-    } catch {
+    const raw = await readBoundedTextFile(
+      this.#filePath,
+      MAX_ANALYSIS_INDEX_CACHE_BYTES
+    );
+    if (raw === null) {
       return empty;
     }
 
@@ -86,9 +95,15 @@ export class AnalysisCache {
       recursive: true
     });
     const temporaryPath = `${this.#filePath}.${process.pid}.tmp`;
+    const serialized = JSON.stringify(document);
+    assertSerializedSize(
+      serialized,
+      MAX_ANALYSIS_INDEX_CACHE_BYTES,
+      "Code analysis index cache"
+    );
     await writeFile(
       temporaryPath,
-      JSON.stringify(document),
+      serialized,
       "utf8"
     );
     await rm(this.#filePath, { force: true });
@@ -116,6 +131,16 @@ export interface CodeAnalysisSnapshotStore {
     snapshot: CodeAnalysisSnapshot,
     settings: CodeAnalysisSettings
   ): Promise<void>;
+}
+
+export function assertCodeAnalysisSnapshotPayloadSize(
+  snapshot: CodeAnalysisSnapshot
+): void {
+  assertSerializedSize(
+    JSON.stringify(snapshot),
+    MAX_ANALYSIS_SNAPSHOT_PAYLOAD_BYTES,
+    "Code analysis snapshot payload"
+  );
 }
 
 export interface AnalysisSnapshotCacheOptions {
@@ -194,19 +219,26 @@ export class AnalysisSnapshotCache
     });
     const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
     try {
-      await writeFile(
-        temporaryPath,
-        JSON.stringify({
-          schemaVersion: SNAPSHOT_CACHE_SCHEMA_VERSION,
-          workspaceId: snapshot.workspaceId,
-          entryId: snapshot.entryId,
-          configurationKey: codeAnalysisSnapshotConfigurationKey(
+      const serialized = JSON.stringify({
+        schemaVersion: SNAPSHOT_CACHE_SCHEMA_VERSION,
+        workspaceId: snapshot.workspaceId,
+        entryId: snapshot.entryId,
+        configurationKey:
+          codeAnalysisSnapshotConfigurationKey(
             settings,
             snapshot.roots
           ),
-          savedAt: new Date().toISOString(),
-          snapshot
-        } satisfies AnalysisSnapshotDocument),
+        savedAt: new Date().toISOString(),
+        snapshot
+      } satisfies AnalysisSnapshotDocument);
+      assertSerializedSize(
+        serialized,
+        MAX_ANALYSIS_SNAPSHOT_BYTES,
+        "Code analysis snapshot"
+      );
+      await writeFile(
+        temporaryPath,
+        serialized,
         "utf8"
       );
       await rename(temporaryPath, filePath);
@@ -226,17 +258,15 @@ async function loadSnapshotFromDirectory(
   settings: CodeAnalysisSettings,
   roots: AnalysisRoot[]
 ): Promise<CodeAnalysisSnapshot | null> {
-  let raw: string;
-  try {
-    raw = await readFile(
-      snapshotFilePath(
-        cacheDirectory,
-        workspaceId,
-        entryId
-      ),
-      "utf8"
-    );
-  } catch {
+  const raw = await readBoundedTextFile(
+    snapshotFilePath(
+      cacheDirectory,
+      workspaceId,
+      entryId
+    ),
+    MAX_ANALYSIS_SNAPSHOT_BYTES
+  );
+  if (raw === null) {
     return null;
   }
 
@@ -285,6 +315,8 @@ function settingsKey(
       JSON.stringify({
         parserVersion: PARSER_VERSION,
         profiles: BUILTIN_ANALYSIS_PROFILE_VERSIONS,
+        maxTotalSourceBytes:
+          DEFAULT_MAX_TOTAL_SOURCE_BYTES,
         maxFiles: settings.maxFiles,
         maxFileSizeBytes: settings.maxFileSizeBytes,
         ignoreDirectories: [...settings.ignoreDirectories].sort(),
@@ -315,6 +347,8 @@ export function codeAnalysisSnapshotConfigurationKey(
         parserVersion: PARSER_VERSION,
         graphVersion: GRAPH_VERSION,
         profiles: BUILTIN_ANALYSIS_PROFILE_VERSIONS,
+        maxTotalSourceBytes:
+          DEFAULT_MAX_TOTAL_SOURCE_BYTES,
         maxFiles: settings.maxFiles,
         maxFileSizeBytes: settings.maxFileSizeBytes,
         ignoreDirectories: [...settings.ignoreDirectories].sort(),
@@ -354,6 +388,68 @@ function canonicalPath(path: string): string {
     : normalized;
 }
 
+async function readBoundedTextFile(
+  filePath: string,
+  maximumBytes: number
+): Promise<string | null> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(filePath, "r");
+    const details = await handle.stat();
+    if (
+      !details.isFile() ||
+      details.size > maximumBytes
+    ) {
+      return null;
+    }
+    const chunk = Buffer.allocUnsafe(
+      Math.min(
+        CACHE_READ_CHUNK_BYTES,
+        maximumBytes + 1
+      )
+    );
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    while (true) {
+      const remainingBytes = maximumBytes - totalBytes;
+      const { bytesRead } = await handle.read(
+        chunk,
+        0,
+        Math.min(chunk.length, remainingBytes + 1),
+        null
+      );
+      if (bytesRead === 0) {
+        break;
+      }
+      totalBytes += bytesRead;
+      if (totalBytes > maximumBytes) {
+        return null;
+      }
+      chunks.push(
+        Buffer.from(chunk.subarray(0, bytesRead))
+      );
+    }
+    return Buffer.concat(chunks, totalBytes).toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+function assertSerializedSize(
+  serialized: string,
+  maximumBytes: number,
+  label: string
+): void {
+  const size = Buffer.byteLength(serialized, "utf8");
+  if (size > maximumBytes) {
+    throw new Error(
+      `${label} exceeded the ${maximumBytes}-byte safety limit.`
+    );
+  }
+}
+
 function analysisRootsMatch(
   left: AnalysisRoot[],
   right: AnalysisRoot[]
@@ -377,7 +473,7 @@ function analysisRootsMatch(
   );
 }
 
-function cacheEntryDirectory(
+export function codeAnalysisCacheEntryDirectory(
   cacheDirectory: string,
   workspaceId: string,
   entryId: string
@@ -395,7 +491,7 @@ function snapshotFilePath(
   entryId: string
 ): string {
   return join(
-    cacheEntryDirectory(
+    codeAnalysisCacheEntryDirectory(
       cacheDirectory,
       workspaceId,
       entryId

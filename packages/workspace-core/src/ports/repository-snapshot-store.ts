@@ -6,4 +6,5 @@ export interface RepositorySnapshotStore {
     workspaceId: string,
     snapshots: RepositoryStatusSnapshot[]
   ): Promise<void>;
+  delete?(workspaceId: string): Promise<void>;
 }

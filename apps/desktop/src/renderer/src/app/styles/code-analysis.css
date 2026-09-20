@@ -545,12 +545,26 @@
   margin-top: 0;
 }
 
-.analysis-graph-workspace.is-fullscreen {
+.analysis-workbench.is-fullscreen {
   position: fixed;
   inset: 0;
   z-index: var(--z-modal);
+  grid-template-columns:
+    minmax(230px, 280px)
+    minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
+  min-height: 0;
+  overflow: hidden;
   padding: var(--space-3);
   background: var(--canvas);
+}
+
+.analysis-workbench.is-fullscreen .analysis-chain-panel,
+.analysis-workbench.is-fullscreen .analysis-graph-workspace,
+.analysis-workbench.is-fullscreen .analysis-graph-panel {
+  height: 100%;
+  min-height: 0;
 }
 
 .analysis-chain-panel {

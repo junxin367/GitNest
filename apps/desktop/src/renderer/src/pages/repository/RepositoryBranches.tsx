@@ -16,6 +16,7 @@ import { Button } from "../../shared/ui/Button";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import {
+  isEventInsideMenu,
   MenuItem,
   MenuPopover
 } from "../../shared/ui/Menu";
@@ -62,6 +63,12 @@ export function RepositoryBranches({
     }
 
     const close = () => setBranchMenu(null);
+    const handleScroll = (event: Event) => {
+      if (isEventInsideMenu(event, branchMenuRef.current)) {
+        return;
+      }
+      close();
+    };
     const handlePointerDown = (event: PointerEvent) => {
       const eventTarget = event.target;
       if (
@@ -94,7 +101,7 @@ export function RepositoryBranches({
     document.addEventListener("keydown", handleKeyDown);
     window.addEventListener("blur", close);
     window.addEventListener("resize", close);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", handleScroll, true);
     return () => {
       window.cancelAnimationFrame(focusFrame);
       document.removeEventListener(
@@ -104,7 +111,7 @@ export function RepositoryBranches({
       document.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("blur", close);
       window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", handleScroll, true);
     };
   }, [branchMenu]);
 

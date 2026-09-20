@@ -315,6 +315,11 @@
       z-index: 200;
       display: grid;
       width: 222px;
+      max-width: calc(100vw - var(--space-4));
+      max-height: calc(100vh - var(--space-4));
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
       padding: var(--space-2);
       color: var(--text);
       background: var(--surface);
@@ -337,7 +342,7 @@
       align-items: center;
       gap: var(--space-2);
       width: 100%;
-      min-height: 34px;
+      min-height: var(--control-compact);
       padding: 0 var(--space-2);
       color: var(--text-soft);
       text-align: left;

@@ -6,6 +6,7 @@ import {
   readFile,
   readdir,
   rename,
+  rm,
   writeFile
 } from "node:fs/promises";
 import {
@@ -23,6 +24,7 @@ import {
   pathToFileURL
 } from "node:url";
 
+import { MAX_CODE_DOCUMENTATION_CHARACTERS } from "./model";
 import type {
   AnalysisSourceFile,
   CodeAnalysisLanguage,
@@ -66,6 +68,15 @@ const JAVA_WARMUP_TIMEOUT_MS = 120_000;
 const JAVA_WORKSPACE_READY_TIMEOUT_MS = 5 * 60_000;
 const JAVA_STATUS_DISCOVERY_TIMEOUT_MS = 2_000;
 const JAVA_DATA_STATE_FILE = "active-generation.json";
+const MAX_LSP_HEADER_BYTES = 64 * 1_024;
+const MAX_LSP_MESSAGE_BYTES = 16 * 1_024 * 1_024;
+const MAX_LSP_BUFFER_BYTES = 32 * 1_024 * 1_024;
+const MAX_LSP_QUEUED_WRITE_BYTES = 32 * 1_024 * 1_024;
+const MAX_LSP_STATUS_TYPE_CHARACTERS = 128;
+const MAX_LSP_STATUS_MESSAGE_CHARACTERS = 2_048;
+const MAX_LSP_SYMBOLS_PER_DOCUMENT = 5_000;
+const MAX_LSP_SYMBOL_DEPTH = 64;
+const MAX_LSP_SYMBOL_NAME_CHARACTERS = 1_024;
 
 interface NotificationWaiter {
   predicate(params: unknown): boolean;
@@ -173,6 +184,7 @@ export class ExternalLanguageServerPool {
         let symbolCount = 0;
         let hierarchyCallCount = 0;
         let documentationCount = 0;
+        let truncatedSymbolDocuments = 0;
         let hierarchyRequestBudget =
           language === "java" ? 40 : 50;
         let documentationRequestBudget =
@@ -230,7 +242,12 @@ export class ExternalLanguageServerPool {
               : requestTimeoutMs,
             input.signal
           );
-          const symbols = parseDocumentSymbols(response);
+          const parsedSymbols =
+            parseDocumentSymbols(response);
+          const symbols = parsedSymbols.symbols;
+          if (parsedSymbols.truncated) {
+            truncatedSymbolDocuments += 1;
+          }
           if (
             hoverSupported &&
             documentationRequestBudget > 0
@@ -292,6 +309,10 @@ export class ExternalLanguageServerPool {
               documents.length > documentLimit
                 ? `已连接，按性能上限增强前 ${documentLimit} 个文件，并补充 ${documentationCount} 条文档、${hierarchyCallCount} 条调用关系。`
                 : `已连接并完成符号增强，补充 ${documentationCount} 条文档、${hierarchyCallCount} 条调用关系。`
+            }${
+              truncatedSymbolDocuments > 0
+                ? ` ${truncatedSymbolDocuments} 个文件的符号结果达到每文件 ${MAX_LSP_SYMBOLS_PER_DOCUMENT} 条安全上限。`
+                : ""
             }`,
           symbolCount
         });
@@ -697,6 +718,10 @@ async function readJavaDataWorkspace(
     `generation-${generation}`
   );
   await mkdir(dataDirectory, { recursive: true });
+  await removeInactiveJavaDataWorkspaces(
+    baseDirectory,
+    generation
+  );
   return {
     baseDirectory,
     generation,
@@ -724,11 +749,45 @@ async function advanceJavaDataWorkspace(
     `generation-${generation}`
   );
   await mkdir(dataDirectory, { recursive: true });
+  await removeInactiveJavaDataWorkspaces(
+    workspace.baseDirectory,
+    generation
+  );
   return {
     baseDirectory: workspace.baseDirectory,
     generation,
     dataDirectory
   };
+}
+
+async function removeInactiveJavaDataWorkspaces(
+  baseDirectory: string,
+  activeGeneration: number
+): Promise<void> {
+  const entries = await readdir(baseDirectory, {
+    withFileTypes: true
+  }).catch(() => []);
+  await Promise.all(
+    entries.flatMap((entry) => {
+      const match = /^generation-(\d+)$/.exec(entry.name);
+      if (
+        !entry.isDirectory() ||
+        entry.isSymbolicLink() ||
+        !match?.[1] ||
+        Number(match[1]) === activeGeneration
+      ) {
+        return [];
+      }
+      return [
+        rm(join(baseDirectory, entry.name), {
+          recursive: true,
+          force: true,
+          maxRetries: 2,
+          retryDelay: 50
+        }).catch(() => undefined)
+      ];
+    })
+  );
 }
 
 function hasJavaDataArgument(args: readonly string[]): boolean {
@@ -1167,6 +1226,8 @@ export class JsonRpcClient {
   #expectsJavaServiceReady = false;
   #exitError: Error | undefined;
   #stderr = "";
+  #writeTail: Promise<void> = Promise.resolve();
+  #queuedWriteBytes = 0;
 
   constructor(command: string, args: string[], cwd: string) {
     this.#command = command;
@@ -1230,27 +1291,19 @@ export class JsonRpcClient {
         // A timed-out or cancelled request can race with process shutdown.
       });
       child.once("exit", (code, exitSignal) => {
-        const reason = new Error(
-          `LSP 进程已退出（code=${String(
-            code
-          )}, signal=${String(exitSignal)}）${
-            this.#stderr.trim()
-              ? `：${this.#stderr.trim()}`
-              : ""
-          }`
-        );
+        const reason =
+          this.#exitError ??
+          new Error(
+            `LSP 进程已退出（code=${String(
+              code
+            )}, signal=${String(exitSignal)}）${
+              this.#stderr.trim()
+                ? `：${this.#stderr.trim()}`
+                : ""
+            }`
+          );
         this.#exitError = reason;
-        for (const pending of this.#pending.values()) {
-          clearTimeout(pending.timer);
-          pending.reject(reason);
-        }
-        this.#pending.clear();
-        for (const waiters of this.#notificationWaiters.values()) {
-          for (const waiter of [...waiters]) {
-            waiter.reject(reason);
-          }
-        }
-        this.#notificationWaiters.clear();
+        this.#rejectOutstanding(reason);
       });
     });
   }
@@ -1448,17 +1501,82 @@ export class JsonRpcClient {
       JSON.stringify(message),
       "utf8"
     );
-    this.#process.stdin.write(
-      `Content-Length: ${body.byteLength}\r\n\r\n`
+    if (body.byteLength > MAX_LSP_MESSAGE_BYTES) {
+      throw new Error(
+        `LSP 消息超过安全上限 ${MAX_LSP_MESSAGE_BYTES} 字节。`
+      );
+    }
+    const header = Buffer.from(
+      `Content-Length: ${body.byteLength}\r\n\r\n`,
+      "ascii"
     );
-    this.#process.stdin.write(body);
+    const frame = Buffer.concat([header, body]);
+    if (
+      this.#queuedWriteBytes + frame.byteLength >
+      MAX_LSP_QUEUED_WRITE_BYTES
+    ) {
+      const error = new Error(
+        "LSP 写入队列超过安全上限。"
+      );
+      this.#failProtocol(error);
+      throw error;
+    }
+
+    const child = this.#process;
+    this.#queuedWriteBytes += frame.byteLength;
+    const write = this.#writeTail
+      .catch(() => undefined)
+      .then(async () => {
+        if (
+          child.exitCode !== null ||
+          child.killed ||
+          this.#process !== child
+        ) {
+          throw (
+            this.#exitError ??
+            new Error("LSP 进程当前不可用。")
+          );
+        }
+        await writeFrame(child.stdin, frame);
+      })
+      .finally(() => {
+        this.#queuedWriteBytes -= frame.byteLength;
+      });
+    this.#writeTail = write;
+    void write.catch((error) => {
+      this.#failProtocol(
+        error instanceof Error
+          ? error
+          : new Error(String(error))
+      );
+    });
   }
 
   #consume(chunk: Buffer): void {
+    if (
+      chunk.byteLength >
+      MAX_LSP_BUFFER_BYTES - this.#buffer.byteLength
+    ) {
+      this.#failProtocol(
+        new Error("LSP 输入缓冲区超过安全上限。")
+      );
+      return;
+    }
     this.#buffer = Buffer.concat([this.#buffer, chunk]);
     while (true) {
       const headerEnd = this.#buffer.indexOf("\r\n\r\n");
       if (headerEnd < 0) {
+        if (this.#buffer.byteLength > MAX_LSP_HEADER_BYTES) {
+          this.#failProtocol(
+            new Error("LSP 消息头超过安全上限。")
+          );
+        }
+        return;
+      }
+      if (headerEnd > MAX_LSP_HEADER_BYTES) {
+        this.#failProtocol(
+          new Error("LSP 消息头超过安全上限。")
+        );
         return;
       }
       const header = this.#buffer
@@ -1468,12 +1586,22 @@ export class JsonRpcClient {
         header
       );
       if (!lengthMatch?.[1]) {
-        this.#buffer = this.#buffer.subarray(
-          headerEnd + 4
+        this.#failProtocol(
+          new Error("LSP 消息缺少有效的 Content-Length。")
         );
-        continue;
+        return;
       }
       const length = Number(lengthMatch[1]);
+      if (
+        !Number.isSafeInteger(length) ||
+        length < 0 ||
+        length > MAX_LSP_MESSAGE_BYTES
+      ) {
+        this.#failProtocol(
+          new Error("LSP 消息长度超过安全上限。")
+        );
+        return;
+      }
       const bodyStart = headerEnd + 4;
       if (this.#buffer.length < bodyStart + length) {
         return;
@@ -1486,6 +1614,37 @@ export class JsonRpcClient {
       );
       this.#handleMessage(body);
     }
+  }
+
+  #failProtocol(error: Error): void {
+    if (!this.#exitError) {
+      this.#exitError = error;
+    }
+    this.#buffer = Buffer.alloc(0);
+    this.#rejectOutstanding(this.#exitError);
+    const child = this.#process;
+    if (
+      child &&
+      child.exitCode === null &&
+      !child.killed
+    ) {
+      child.kill();
+    }
+  }
+
+  #rejectOutstanding(reason: Error): void {
+    for (const pending of [...this.#pending.values()]) {
+      clearTimeout(pending.timer);
+      pending.reject(reason);
+    }
+    this.#pending.clear();
+    this.#lastNotifications.clear();
+    for (const waiters of this.#notificationWaiters.values()) {
+      for (const waiter of [...waiters]) {
+        waiter.reject(reason);
+      }
+    }
+    this.#notificationWaiters.clear();
   }
 
   #handleMessage(body: string): void {
@@ -1566,7 +1725,12 @@ export class JsonRpcClient {
     method: string,
     params: unknown
   ): void {
-    this.#lastNotifications.set(method, params);
+    if (method === "language/status") {
+      const retained = retainJavaLanguageStatus(params);
+      if (retained) {
+        this.#lastNotifications.set(method, retained);
+      }
+    }
     const waiters = this.#notificationWaiters.get(method);
     if (!waiters) {
       return;
@@ -2152,20 +2316,51 @@ async function openOrUpdateDocument(
   await delayWithSignal(Math.min(timeoutMs, 80), signal);
 }
 
-function parseDocumentSymbols(
+export function parseDocumentSymbols(
   value: unknown
-): LspDocumentSymbol[] {
+): {
+  symbols: LspDocumentSymbol[];
+  truncated: boolean;
+} {
+  const budget = {
+    remaining: MAX_LSP_SYMBOLS_PER_DOCUMENT,
+    truncated: false
+  };
   if (!Array.isArray(value)) {
-    return [];
+    return { symbols: [], truncated: false };
   }
-  return value.flatMap((candidate) =>
-    parseDocumentSymbol(candidate)
-  );
+  const symbols: LspDocumentSymbol[] = [];
+  for (const candidate of value) {
+    if (budget.remaining <= 0) {
+      budget.truncated = true;
+      break;
+    }
+    symbols.push(
+      ...parseDocumentSymbol(candidate, budget, 0)
+    );
+  }
+  return {
+    symbols,
+    truncated: budget.truncated
+  };
 }
 
 function parseDocumentSymbol(
-  value: unknown
+  value: unknown,
+  budget: {
+    remaining: number;
+    truncated: boolean;
+  },
+  depth: number
 ): LspDocumentSymbol[] {
+  if (
+    budget.remaining <= 0 ||
+    depth > MAX_LSP_SYMBOL_DEPTH
+  ) {
+    budget.truncated = true;
+    return [];
+  }
+  budget.remaining -= 1;
   if (
     !value ||
     typeof value !== "object" ||
@@ -2195,26 +2390,39 @@ function parseDocumentSymbol(
     range && isRecord(range.end) ? range.end : undefined;
   if (
     typeof name !== "string" ||
+    name.length === 0 ||
     typeof kind !== "number" ||
+    !Number.isSafeInteger(kind) ||
     !start ||
     !end ||
-    typeof start.line !== "number" ||
-    typeof end.line !== "number"
+    !isNonNegativeSafeInteger(start.line) ||
+    !isNonNegativeSafeInteger(end.line)
   ) {
     return [];
   }
-  const children = Array.isArray(input.children)
-    ? input.children.flatMap((child) =>
-        parseDocumentSymbol(child)
-      )
-    : [];
+  const children: LspDocumentSymbol[] = [];
+  if (Array.isArray(input.children)) {
+    for (const child of input.children) {
+      if (budget.remaining <= 0) {
+        budget.truncated = true;
+        break;
+      }
+      children.push(
+        ...parseDocumentSymbol(
+          child,
+          budget,
+          depth + 1
+        )
+      );
+    }
+  }
   return [
     {
-      name,
+      name: name.slice(0, MAX_LSP_SYMBOL_NAME_CHARACTERS),
       kind,
       line: start.line + 1,
       character:
-        typeof start.character === "number"
+        isNonNegativeSafeInteger(start.character)
           ? start.character
           : 0,
       endLine: end.line + 1,
@@ -2222,6 +2430,16 @@ function parseDocumentSymbol(
       outgoingCalls: []
     }
   ];
+}
+
+function isNonNegativeSafeInteger(
+  value: unknown
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0
+  );
 }
 
 function parseHoverDocumentation(
@@ -2263,7 +2481,8 @@ function parseHoverDocumentation(
   return [...new Set(normalized)]
     .join(" ")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim()
+    .slice(0, MAX_CODE_DOCUMENTATION_CHARACTERS);
 }
 
 function normalizeHoverDocumentation(
@@ -2315,7 +2534,10 @@ function normalizeHoverDocumentation(
   ) {
     return undefined;
   }
-  return documentation;
+  return documentation.slice(
+    0,
+    MAX_CODE_DOCUMENTATION_CHARACTERS
+  );
 }
 
 function countSymbols(symbols: LspDocumentSymbol[]): number {
@@ -2375,6 +2597,25 @@ function isJavaLanguageStatus(
   value: unknown
 ): value is Record<string, unknown> & { type: string } {
   return isRecord(value) && typeof value.type === "string";
+}
+
+function retainJavaLanguageStatus(
+  value: unknown
+): Record<string, unknown> | undefined {
+  if (!isJavaLanguageStatus(value)) {
+    return undefined;
+  }
+  return {
+    type: value.type.slice(0, MAX_LSP_STATUS_TYPE_CHARACTERS),
+    ...(typeof value.message === "string"
+      ? {
+          message: value.message.slice(
+            0,
+            MAX_LSP_STATUS_MESSAGE_CHARACTERS
+          )
+        }
+      : {})
+  };
 }
 
 function isJavaServiceReadyStatus(
@@ -2475,6 +2716,21 @@ function waitForChildExit(
     }, timeoutMs);
     timer.unref();
     child.once("exit", onExit);
+  });
+}
+
+function writeFrame(
+  stdin: ChildProcessWithoutNullStreams["stdin"],
+  frame: Buffer
+): Promise<void> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    stdin.write(frame, (error) => {
+      if (error) {
+        rejectPromise(error);
+        return;
+      }
+      resolvePromise();
+    });
   });
 }
 

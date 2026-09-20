@@ -51,18 +51,56 @@ export function useCodeAnalysis(
   const [error, setError] =
     useState<GitReadErrorDto | null>(null);
   const generationRef = useRef(0);
+  const stateRef = useRef<CodeAnalysisStateDto>(INITIAL_STATE);
+  const snapshotRequestRef = useRef(0);
+  const snapshotExpectationRef = useRef(
+    snapshotExpectationKey(INITIAL_STATE)
+  );
+  const requestedSnapshotKeyRef = useRef("");
   const snapshotKeyRef = useRef("");
 
   const loadSnapshot = useCallback(
-    async (generation = generationRef.current) => {
+    async (
+      expectedState: CodeAnalysisStateDto,
+      generation = generationRef.current
+    ) => {
+      const expectationKey =
+        snapshotExpectationKey(expectedState);
+      const requestId = ++snapshotRequestRef.current;
+      requestedSnapshotKeyRef.current = expectationKey;
       try {
         const result =
           await window.gitnest.codeAnalysis.getSnapshot();
-        if (generation !== generationRef.current) {
+        if (
+          generation !== generationRef.current ||
+          requestId !== snapshotRequestRef.current ||
+          expectationKey !==
+            snapshotExpectationRef.current ||
+          expectationKey !==
+            snapshotExpectationKey(stateRef.current)
+        ) {
           return;
         }
         if (!result.ok) {
+          requestedSnapshotKeyRef.current = "";
           setError(result.error);
+          return;
+        }
+        if (
+          !snapshotMatchesState(
+            result.value,
+            stateRef.current
+          )
+        ) {
+          setSnapshot(null);
+          snapshotKeyRef.current = "";
+          requestedSnapshotKeyRef.current = "";
+          setError({
+            code: "COMMAND_FAILED",
+            message:
+              "代码分析快照与当前 Workspace 状态不匹配。",
+            details: {}
+          });
           return;
         }
         setSnapshot(result.value);
@@ -70,7 +108,14 @@ export function useCodeAnalysis(
           ? `${result.value.analysisId}:${result.value.generatedAt}`
           : "";
       } catch (reason) {
-        if (generation === generationRef.current) {
+        if (
+          generation === generationRef.current &&
+          requestId === snapshotRequestRef.current &&
+          expectationKey === snapshotExpectationRef.current &&
+          expectationKey ===
+            snapshotExpectationKey(stateRef.current)
+        ) {
+          requestedSnapshotKeyRef.current = "";
           setError(unexpectedError(reason));
         }
       }
@@ -79,7 +124,20 @@ export function useCodeAnalysis(
   );
 
   const applyState = useCallback(
-    (nextState: CodeAnalysisStateDto) => {
+    (
+      nextState: CodeAnalysisStateDto,
+      loadAvailableSnapshot = true
+    ) => {
+      const expectationKey =
+        snapshotExpectationKey(nextState);
+      stateRef.current = nextState;
+      if (
+        snapshotExpectationRef.current !== expectationKey
+      ) {
+        snapshotExpectationRef.current = expectationKey;
+        snapshotRequestRef.current += 1;
+        requestedSnapshotKeyRef.current = "";
+      }
       setState(nextState);
       setAction(null);
       if (nextState.error) {
@@ -90,21 +148,28 @@ export function useCodeAnalysis(
       if (!nextState.snapshotAvailable) {
         setSnapshot(null);
         snapshotKeyRef.current = "";
+        requestedSnapshotKeyRef.current = "";
       }
       if (
+        loadAvailableSnapshot &&
         nextState.state === "ready" &&
         nextState.analysisId &&
         nextState.generatedAt
       ) {
         const key = `${nextState.analysisId}:${nextState.generatedAt}`;
-        if (snapshotKeyRef.current !== key) {
-          void loadSnapshot();
+        if (
+          snapshotKeyRef.current !== key &&
+          requestedSnapshotKeyRef.current !== expectationKey
+        ) {
+          void loadSnapshot(nextState);
         }
       } else if (
+        loadAvailableSnapshot &&
         nextState.snapshotAvailable &&
-        !snapshotKeyRef.current
+        !snapshotKeyRef.current &&
+        requestedSnapshotKeyRef.current !== expectationKey
       ) {
-        void loadSnapshot();
+        void loadSnapshot(nextState);
       }
     },
     [loadSnapshot]
@@ -124,9 +189,9 @@ export function useCodeAnalysis(
         setError(result.error);
         return;
       }
-      applyState(result.value);
+      applyState(result.value, false);
       if (result.value.snapshotAvailable) {
-        await loadSnapshot(generation);
+        await loadSnapshot(result.value, generation);
       } else {
         setSnapshot(null);
         snapshotKeyRef.current = "";
@@ -154,6 +219,7 @@ export function useCodeAnalysis(
       );
     return () => {
       generationRef.current += 1;
+      snapshotRequestRef.current += 1;
       unsubscribe();
     };
   }, [applyState, enabled, reload]);
@@ -256,4 +322,50 @@ function unexpectedError(reason: unknown): GitReadErrorDto {
         : "代码分析操作失败。",
     details: {}
   };
+}
+
+function snapshotExpectationKey(
+  state: CodeAnalysisStateDto
+): string {
+  const context = `${state.workspaceId ?? ""}\0${
+    state.entryId ?? ""
+  }`;
+  if (!state.snapshotAvailable) {
+    return `unavailable\0${context}`;
+  }
+  if (
+    state.state === "ready" &&
+    state.analysisId &&
+    state.generatedAt
+  ) {
+    return `ready\0${context}\0${state.analysisId}\0${state.generatedAt}`;
+  }
+  return `available\0${context}`;
+}
+
+function snapshotMatchesState(
+  snapshot: CodeAnalysisSnapshotDto | null,
+  state: CodeAnalysisStateDto
+): boolean {
+  if (!state.snapshotAvailable) {
+    return snapshot === null;
+  }
+  if (
+    !snapshot ||
+    !state.workspaceId ||
+    !state.entryId ||
+    snapshot.workspaceId !== state.workspaceId ||
+    snapshot.entryId !== state.entryId
+  ) {
+    return false;
+  }
+  if (state.state !== "ready") {
+    return true;
+  }
+  return (
+    Boolean(state.analysisId) &&
+    Boolean(state.generatedAt) &&
+    snapshot.analysisId === state.analysisId &&
+    snapshot.generatedAt === state.generatedAt
+  );
 }

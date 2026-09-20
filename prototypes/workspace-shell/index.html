@@ -42,14 +42,14 @@
       --radius-regular: 8px;
       --radius-large: 12px;
       --control-compact: 32px;
-      --control-default: 40px;
-      --control-large: 48px;
+      --control-default: 35px;
+      --control-large: 40px;
       --icon-small: 16px;
       --icon-regular: 20px;
       --icon-large: 24px;
       --page-max-width: 1440px;
-      --page-safe-margin: 24px;
-      --page-safe-margin-narrow: 16px;
+      --page-safe-margin: 12px;
+      --page-safe-margin-narrow: 12px;
       --motion-exit: 140ms;
       --motion-micro: 180ms;
       --motion-layer: 240ms;
@@ -359,6 +359,11 @@
       z-index: var(--z-popover);
       display: grid;
       width: 222px;
+      max-width: calc(100vw - var(--space-4));
+      max-height: calc(100vh - var(--space-4));
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
       padding: var(--space-2);
       color: var(--text);
       background: var(--surface);
@@ -382,7 +387,7 @@
       align-items: center;
       gap: var(--space-2);
       width: 100%;
-      min-height: 34px;
+      min-height: var(--control-compact);
       padding: 0 var(--space-2);
       color: var(--text-soft);
       text-align: left;
@@ -1806,11 +1811,6 @@
       margin-bottom: var(--space-6);
     }
 
-    .settings-page .page-actions {
-      margin-left: auto;
-      justify-content: flex-end;
-    }
-
     .settings-layout {
       display: grid;
       grid-template-columns: 220px minmax(0, 1fr);
@@ -2017,6 +2017,7 @@
       align-items: center;
       width: 42px;
       height: 24px;
+      max-height: 24px;
       padding: 2px;
       background: var(--surface-3);
       border: 1px solid var(--border);
@@ -7739,12 +7740,26 @@
       margin-top: 0;
     }
 
-    .analysis-graph-workspace.is-fullscreen {
+    .analysis-workbench.is-fullscreen {
       position: fixed;
       inset: 0;
       z-index: var(--z-modal);
+      grid-template-columns:
+        minmax(230px, 280px)
+        minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+      align-items: stretch;
+      min-height: 0;
+      overflow: hidden;
       padding: var(--space-3);
       background: var(--canvas);
+    }
+
+    .analysis-workbench.is-fullscreen .analysis-chain-panel,
+    .analysis-workbench.is-fullscreen .analysis-graph-workspace,
+    .analysis-workbench.is-fullscreen .analysis-graph-panel {
+      height: 100%;
+      min-height: 0;
     }
 
     .analysis-chain-panel {
@@ -8321,12 +8336,8 @@
       box-shadow: var(--shadow-floating);
     }
 
-    .analysis-graph-workspace.is-fullscreen .analysis-node-diff-drawer {
-      inset:
-        var(--space-3)
-        auto
-        var(--space-3)
-        var(--space-3);
+    .analysis-workbench.is-fullscreen .analysis-node-diff-drawer {
+      inset: 0 auto 0 0;
     }
 
     .analysis-node-details {
@@ -8677,9 +8688,6 @@
         width: 100%;
       }
 
-      .settings-page .page-actions {
-        justify-content: flex-end;
-      }
     }
 
     @media (max-width: 760px) {
@@ -8704,7 +8712,7 @@
       }
 
       .settings-page-scroll {
-        padding: var(--space-4);
+        padding: var(--page-safe-margin-narrow);
       }
 
       .settings-layout {
@@ -13862,15 +13870,6 @@
                 <h1 class="page-title">设置</h1>
                 <p class="page-description">管理应用行为、AI、LSP 代码分析、Git 同步策略以及账号认证。</p>
               </div>
-              <div class="page-actions">
-                ${renderButton({
-                  label: "保存设置",
-                  size: "small",
-                  variant: "primary",
-                  icon: icon("check"),
-                  attributes: 'onclick="saveSettings()"'
-                })}
-              </div>
             </div>
 
             <div class="settings-layout">
@@ -14278,7 +14277,6 @@
           </div>
           <div class="settings-card-body">
             ${settingsToggle("记住上次打开的视图", "重新打开 GitNest 时恢复最近使用的 Workspace 或仓库页面。", "settingsRestoreLastView")}
-            <div class="settings-inline-note">${icon("alert", 14)}危险操作始终确认：删除分支、清理或移除 Worktree、删除账号等操作无法跳过保护性确认。</div>
           </div>
         </section>
         <section class="panel settings-card">
@@ -15264,14 +15262,18 @@
             </details>
           </div>
 
-          <div class="analysis-workbench">
+          <div
+            class="analysis-workbench${state.analysisGraphFullscreen ? " is-fullscreen" : ""}"
+            id="analysisFullscreenWorkspace"
+            aria-label="代码分析工作区"
+          >
             <aside class="panel analysis-chain-panel${selected ? " is-node-detail" : ""}" id="analysisNavigationPanel">
               ${selected
                 ? renderAnalysisNodePanel(chain, selected)
                 : renderAnalysisNavigationPanel(chains, chain)}
             </aside>
 
-            <div class="analysis-graph-workspace${state.analysisGraphFullscreen ? " is-fullscreen" : ""}" id="analysisGraphWorkspace" aria-label="关系图工作区">
+            <div class="analysis-graph-workspace" id="analysisGraphWorkspace" aria-label="关系图工作区">
               ${selected && state.analysisDiffExpanded ? renderAnalysisNodeDiffDrawer(selected) : ""}
               <section class="panel analysis-graph-panel">
                 <header class="analysis-panel-heading">
@@ -15282,9 +15284,9 @@
                   <div class="analysis-panel-heading-actions">
                     <span class="status-pill neutral">自由拖动 · 滚轮缩放</span>
                     ${renderButton({
-                      label: state.analysisGraphFullscreen ? "退出关系图全屏" : "全屏显示关系图",
-                      ariaLabel: state.analysisGraphFullscreen ? "退出关系图全屏" : "全屏显示关系图",
-                      title: state.analysisGraphFullscreen ? "退出全屏（Esc）" : "全屏显示",
+                      label: state.analysisGraphFullscreen ? "退出代码分析全屏" : "全屏显示代码分析工作区",
+                      ariaLabel: state.analysisGraphFullscreen ? "退出代码分析全屏" : "全屏显示代码分析工作区",
+                      title: state.analysisGraphFullscreen ? "退出全屏（Esc）" : "全屏显示代码分析工作区",
                       size: "small",
                       variant: "icon",
                       selected: state.analysisGraphFullscreen,
@@ -15679,18 +15681,18 @@
     function toggleAnalysisGraphFullscreen(force) {
       state.analysisGraphFullscreen =
         typeof force === "boolean" ? force : !state.analysisGraphFullscreen;
-      const workspace = document.getElementById("analysisGraphWorkspace");
+      const workspace = document.getElementById("analysisFullscreenWorkspace");
       const button = document.getElementById("analysisGraphFullscreenButton");
       workspace?.classList.toggle("is-fullscreen", state.analysisGraphFullscreen);
       if (button) {
         button.setAttribute(
           "aria-label",
-          state.analysisGraphFullscreen ? "退出关系图全屏" : "全屏显示关系图"
+          state.analysisGraphFullscreen ? "退出代码分析全屏" : "全屏显示代码分析工作区"
         );
         button.setAttribute("aria-pressed", String(state.analysisGraphFullscreen));
         button.setAttribute(
           "title",
-          state.analysisGraphFullscreen ? "退出全屏（Esc）" : "全屏显示"
+          state.analysisGraphFullscreen ? "退出全屏（Esc）" : "全屏显示代码分析工作区"
         );
         button.dataset.selected = String(state.analysisGraphFullscreen);
         const iconSlot = button.querySelector(".gn-button__icon");
@@ -15754,22 +15756,6 @@
             <div>
               <h1 class="page-title">操作中心</h1>
               <p class="page-description">集中查看 Workspace 与仓库任务的排队、执行和终态；原型只展示状态，不会执行真实 Git 操作。</p>
-            </div>
-            <div class="page-actions">
-              ${renderButton({
-                label: "重新扫描",
-                size: "small",
-                variant: "default",
-                icon: icon("refresh"),
-                attributes: 'onclick="runOperation(\'scan\', event.currentTarget)"'
-              })}
-              ${renderButton({
-                label: "Fetch 全部",
-                size: "small",
-                variant: "primary",
-                icon: icon("download"),
-                attributes: 'onclick="runOperation(\'fetch-all\', event.currentTarget)"'
-              })}
             </div>
           </div>
 

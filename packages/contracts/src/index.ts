@@ -138,15 +138,19 @@ export type {
 export type {
   AddWorkspaceEntryRequest,
   AggregateWorkspaceEntryDto,
+  CreateWorkspaceRequest,
+  DeleteWorkspaceRequest,
   DirectoryWorkspaceEntryDto,
   RepositoryGroupDto,
   RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
   RemoveWorkspaceEntryRequest,
+  RenameWorkspaceRequest,
   SelectRepositoryTargetRequest,
   SelectWorkspaceEntryRequest,
   SetWorkspaceGroupCollapsedRequest,
   StandaloneRepositoryEntryDto,
+  SwitchWorkspaceRequest,
   UpdateWorkspaceEntryRequest,
   WorkspaceDetailsDto,
   WorkspaceDirectorySelectionDto,
@@ -162,6 +166,7 @@ export type {
   WorkspaceResult,
   WorkspaceRuntimeStateDto,
   WorkspaceScanIssueDto,
+  WorkspaceSummaryDto,
   WorkspaceWorktreeDto
 } from "./workspace.contracts";
 export type {

@@ -54,7 +54,7 @@ describe("JsonAccountMetadataStore", () => {
     );
   });
 
-  it("rejects persisted plaintext secret fields", async () => {
+  it("removes unknown plaintext secret fields from current schema documents", async () => {
     const directory = await mkdtemp(
       join(tmpdir(), "gitnest-account-metadata-")
     );
@@ -65,15 +65,68 @@ describe("JsonAccountMetadataStore", () => {
       filePath,
       JSON.stringify({
         ...createMetadata(),
-        nested: {
-          AccessToken: TOKEN
-        }
+        apiKey: TOKEN,
+        token: TOKEN,
+        credential: TOKEN,
+        profiles: createMetadata().profiles.map((profile) => ({
+          ...profile,
+          apiKey: TOKEN,
+          token: TOKEN,
+          credential: TOKEN
+        }))
       }),
+      "utf8"
+    );
+
+    await expect(store.load()).resolves.toEqual(createMetadata());
+    const persisted = await readFile(filePath, "utf8");
+    expect(persisted).not.toContain(TOKEN);
+    expect(persisted).not.toMatch(
+      /"(?:apiKey|token|credential)"\s*:/
+    );
+  });
+
+  it("rejects credential references owned by another secret domain", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "gitnest-account-metadata-")
+    );
+    temporaryPaths.push(directory);
+    const filePath = join(directory, "accounts.json");
+    const store = new JsonAccountMetadataStore(filePath);
+    const metadata = createMetadata();
+    metadata.profiles[0] = {
+      ...metadata.profiles[0]!,
+      credentialRef: "settings_ai_api_key_shared"
+    };
+    await writeFile(
+      filePath,
+      JSON.stringify(metadata),
       "utf8"
     );
 
     await expect(store.load()).rejects.toMatchObject({
       code: "INVALID_PERSISTED_DATA"
+    });
+  });
+
+  it("refuses to save credential references outside the account namespace", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "gitnest-account-metadata-")
+    );
+    temporaryPaths.push(directory);
+    const filePath = join(directory, "accounts.json");
+    const store = new JsonAccountMetadataStore(filePath);
+    const metadata = createMetadata();
+    metadata.profiles[0] = {
+      ...metadata.profiles[0]!,
+      credentialRef: "settings_ai_api_key_shared"
+    };
+
+    await expect(store.save(metadata)).rejects.toMatchObject({
+      code: "INVALID_PERSISTED_DATA"
+    });
+    await expect(readFile(filePath, "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
     });
   });
 

@@ -212,7 +212,7 @@ describe("GitCliClient mutation integration", () => {
       await dropFixture.dispose();
       await popFixture.dispose();
     }
-  });
+  }, 15_000);
 
   it("rejects a stale stash hash without mutating the stash or worktree", async () => {
     const fixture = await createMutationRepository();

@@ -15,6 +15,13 @@ interface GraphBuildResult {
   nodes: CodeGraphNode[];
   edges: CodeGraphEdge[];
   requestChains: CodeRequestChain[];
+  truncated: boolean;
+}
+
+interface GraphBuildLimits {
+  maxNodes: number;
+  maxEdges: number;
+  maxRequestChains: number;
 }
 
 interface RemoteGraphBoundary {
@@ -30,11 +37,29 @@ interface RemoteGraphLink {
   ambiguous: boolean;
 }
 
+interface HttpEndpointIndex {
+  exactByMethodAndShape: Map<string, CodeGraphNode[]>;
+  suffixByMethodAndShape: Map<string, CodeGraphNode[]>;
+  orderById: Map<string, number>;
+}
+
 export function buildCodeGraph(input: {
   files: ParsedSourceFile[];
   scope: CodeAnalysisScope;
   graphDepth: number;
+  limits?: Partial<GraphBuildLimits>;
 }): GraphBuildResult {
+  const limits: GraphBuildLimits = {
+    maxNodes:
+      input.limits?.maxNodes ??
+      Number.MAX_SAFE_INTEGER,
+    maxEdges:
+      input.limits?.maxEdges ??
+      Number.MAX_SAFE_INTEGER,
+    maxRequestChains:
+      input.limits?.maxRequestChains ??
+      Number.MAX_SAFE_INTEGER
+  };
   const nodes: CodeGraphNode[] = [];
   const edges: CodeGraphEdge[] = [];
   const nodeById = new Map<string, CodeGraphNode>();
@@ -52,9 +77,16 @@ export function buildCodeGraph(input: {
   const requests: CodeGraphNode[] = [];
   const rpcClients: RemoteGraphBoundary[] = [];
   const rpcHandlers: RemoteGraphBoundary[] = [];
+  let truncated = false;
 
-  const addNode = (node: CodeGraphNode) => {
+  const addNode = (
+    node: CodeGraphNode
+  ): CodeGraphNode | undefined => {
     if (!nodeById.has(node.id)) {
+      if (nodes.length >= limits.maxNodes) {
+        truncated = true;
+        return undefined;
+      }
       nodeById.set(node.id, node);
       nodes.push(node);
     }
@@ -62,7 +94,7 @@ export function buildCodeGraph(input: {
   };
   const addEdge = (
     edge: Omit<CodeGraphEdge, "id">
-  ): CodeGraphEdge => {
+  ): CodeGraphEdge | undefined => {
     const id = stableId(
       "edge",
       edge.from,
@@ -80,13 +112,17 @@ export function buildCodeGraph(input: {
       }
       return existing;
     }
+    if (edges.length >= limits.maxEdges) {
+      truncated = true;
+      return undefined;
+    }
     const value: CodeGraphEdge = { id, ...edge };
     edges.push(value);
     edgeById.set(id, value);
     return value;
   };
 
-  for (const parsed of input.files) {
+  fileLoop: for (const parsed of input.files) {
     const fileNode = addNode({
       id: stableId(
         "file",
@@ -106,6 +142,9 @@ export function buildCodeGraph(input: {
         size: parsed.file.size
       }
     });
+    if (!fileNode) {
+      break;
+    }
     const perFile = new Map<string, CodeGraphNode>();
     symbolNodesByFile.set(parsed.file.canonicalPath, perFile);
 
@@ -135,6 +174,9 @@ export function buildCodeGraph(input: {
             : {})
         }
       });
+      if (!symbolNode) {
+        break fileLoop;
+      }
       perFile.set(symbol.qualifiedName, symbolNode);
       addNamedSymbol(symbolNode);
       const byLocation =
@@ -147,12 +189,16 @@ export function buildCodeGraph(input: {
         parsed.file.canonicalPath,
         byLocation
       );
-      addEdge({
-        from: fileNode.id,
-        to: symbolNode.id,
-        kind: "contains",
-        confidence: "exact"
-      });
+      if (
+        !addEdge({
+          from: fileNode.id,
+          to: symbolNode.id,
+          kind: "contains",
+          confidence: "exact"
+        })
+      ) {
+        break fileLoop;
+      }
     }
 
     for (const endpoint of parsed.serverEndpoints) {
@@ -186,13 +232,20 @@ export function buildCodeGraph(input: {
               annotation: endpoint.annotation
             }
           });
+      if (!endpointNode) {
+        break fileLoop;
+      }
       if (!symbolNode) {
-        addEdge({
-          from: fileNode.id,
-          to: endpointNode.id,
-          kind: "contains",
-          confidence: "exact"
-        });
+        if (
+          !addEdge({
+            from: fileNode.id,
+            to: endpointNode.id,
+            kind: "contains",
+            confidence: "exact"
+          })
+        ) {
+          break fileLoop;
+        }
       }
       endpoints.push(endpointNode);
     }
@@ -231,13 +284,20 @@ export function buildCodeGraph(input: {
           ...(documentation ? { documentation } : {})
         }
       });
+      if (!requestNode) {
+        break fileLoop;
+      }
       requests.push(requestNode);
-      addEdge({
-        from: container?.id ?? fileNode.id,
-        to: requestNode.id,
-        kind: container ? "calls" : "contains",
-        confidence: container ? "exact" : "probable"
-      });
+      if (
+        !addEdge({
+          from: container?.id ?? fileNode.id,
+          to: requestNode.id,
+          kind: container ? "calls" : "contains",
+          confidence: container ? "exact" : "probable"
+        })
+      ) {
+        break fileLoop;
+      }
     }
 
     for (const boundary of parsed.remoteBoundaries) {
@@ -270,14 +330,21 @@ export function buildCodeGraph(input: {
             confidence: boundary.confidence,
             metadata: remoteBoundaryMetadata(boundary)
           });
+      if (!boundaryNode) {
+        break fileLoop;
+      }
       if (!symbolNode) {
         addNamedSymbol(boundaryNode);
-        addEdge({
-          from: fileNode.id,
-          to: boundaryNode.id,
-          kind: "contains",
-          confidence: "exact"
-        });
+        if (
+          !addEdge({
+            from: fileNode.id,
+            to: boundaryNode.id,
+            kind: "contains",
+            confidence: "exact"
+          })
+        ) {
+          break fileLoop;
+        }
       }
       if (boundary.role === "client") {
         rpcClients.push({
@@ -293,7 +360,7 @@ export function buildCodeGraph(input: {
     }
   }
 
-  for (const parsed of input.files) {
+  callFileLoop: for (const parsed of input.files) {
     const perFile = symbolNodesByFile.get(
       parsed.file.canonicalPath
     );
@@ -317,23 +384,42 @@ export function buildCodeGraph(input: {
         if (!resolution) {
           continue;
         }
-        addEdge({
-          from: sourceNode.id,
-          to: resolution.node.id,
-          kind: "calls",
-          confidence: resolution.confidence,
-          label: call.receiver
-            ? `${call.receiver}.${call.name}`
-            : call.name
-        });
+        if (
+          !addEdge({
+            from: sourceNode.id,
+            to: resolution.node.id,
+            kind: "calls",
+            confidence: resolution.confidence,
+            label: call.receiver
+              ? `${call.receiver}.${call.name}`
+              : call.name
+          })
+        ) {
+          break callFileLoop;
+        }
       }
     }
   }
 
+  const rpcHandlersByOperation = new Map<
+    string,
+    RemoteGraphBoundary[]
+  >();
+  for (const handler of rpcHandlers) {
+    appendMapValue(
+      rpcHandlersByOperation,
+      remoteBoundaryKey(handler.boundary),
+      handler
+    );
+  }
   const rpcLinks: RemoteGraphLink[] = [];
   const ambiguousRpcEdgeIds = new Set<string>();
-  for (const client of rpcClients) {
-    const matches = rpcHandlers
+  rpcClientLoop: for (const client of rpcClients) {
+    const matches = (
+      rpcHandlersByOperation.get(
+        remoteBoundaryKey(client.boundary)
+      ) ?? []
+    )
       .map((handler) => ({
         handler,
         confidence: remoteMatchConfidence(
@@ -358,6 +444,9 @@ export function buildCodeGraph(input: {
         confidence: match.confidence,
         label: client.boundary.operationName
       });
+      if (!edge) {
+        break rpcClientLoop;
+      }
       if (ambiguous) {
         ambiguousRpcEdgeIds.add(edge.id);
       }
@@ -376,8 +465,12 @@ export function buildCodeGraph(input: {
   const outgoingExecutionRelations =
     buildOutgoingExecutionRelations(edges);
   const requestChains: CodeRequestChain[] = [];
-  for (const request of requests) {
-    const matches = endpoints
+  const endpointIndex = buildHttpEndpointIndex(endpoints);
+  httpRequestLoop: for (const request of requests) {
+    const matches = findHttpEndpointCandidates(
+      request,
+      endpointIndex
+    )
       .map((endpoint) => ({
         endpoint,
         confidence: routeMatchConfidence(request, endpoint)
@@ -399,6 +492,9 @@ export function buildCodeGraph(input: {
         confidence: match.confidence,
         label: `${request.metadata.httpMethod} ${request.metadata.route}`
       });
+      if (!httpEdge) {
+        break httpRequestLoop;
+      }
       const reachable = collectReachable(
         match.endpoint.id,
         outgoingExecutionRelations,
@@ -421,6 +517,12 @@ export function buildCodeGraph(input: {
         httpEdge.id,
         ...reachable.edgeIds
       ]);
+      if (
+        requestChains.length >= limits.maxRequestChains
+      ) {
+        truncated = true;
+        break httpRequestLoop;
+      }
       requestChains.push({
         id: stableId(
           "chain",
@@ -452,6 +554,12 @@ export function buildCodeGraph(input: {
   }
 
   for (const link of rpcLinks) {
+    if (
+      requestChains.length >= limits.maxRequestChains
+    ) {
+      truncated = true;
+      break;
+    }
     const reachable = collectReachable(
       link.handler.node.id,
       outgoingCalls,
@@ -504,14 +612,16 @@ export function buildCodeGraph(input: {
     return filterChangedGraph({
       nodes,
       edges,
-      requestChains
+      requestChains,
+      truncated
     });
   }
 
   return {
     nodes,
     edges,
-    requestChains
+    requestChains,
+    truncated
   };
 
   function addNamedSymbol(node: CodeGraphNode): void {
@@ -943,6 +1053,123 @@ function routeSegments(route: string): string[] {
   return route.split("/").filter(Boolean);
 }
 
+function buildHttpEndpointIndex(
+  endpoints: readonly CodeGraphNode[]
+): HttpEndpointIndex {
+  const exactByMethodAndShape = new Map<
+    string,
+    CodeGraphNode[]
+  >();
+  const suffixByMethodAndShape = new Map<
+    string,
+    CodeGraphNode[]
+  >();
+  const orderById = new Map<string, number>();
+  for (let index = 0; index < endpoints.length; index += 1) {
+    const endpoint = endpoints[index];
+    if (!endpoint) {
+      continue;
+    }
+    orderById.set(endpoint.id, index);
+    const method = String(endpoint.metadata.httpMethod ?? "");
+    const segments = routeSegments(
+      routeShape(String(endpoint.metadata.route ?? ""))
+    );
+    const shape = segments.join("/");
+    appendMapValue(
+      exactByMethodAndShape,
+      httpRouteIndexKey(method, shape),
+      endpoint
+    );
+    for (
+      let start = 0;
+      start <= segments.length - 2;
+      start += 1
+    ) {
+      appendMapValue(
+        suffixByMethodAndShape,
+        httpRouteIndexKey(
+          method,
+          segments.slice(start).join("/")
+        ),
+        endpoint
+      );
+    }
+  }
+  return {
+    exactByMethodAndShape,
+    suffixByMethodAndShape,
+    orderById
+  };
+}
+
+function findHttpEndpointCandidates(
+  request: CodeGraphNode,
+  index: HttpEndpointIndex
+): CodeGraphNode[] {
+  const method = String(request.metadata.httpMethod ?? "");
+  const segments = routeSegments(
+    routeShape(String(request.metadata.route ?? ""))
+  );
+  const shape = segments.join("/");
+  const candidates = new Map<string, CodeGraphNode>();
+  for (const endpointMethod of unique([method, "ANY"])) {
+    for (const endpoint of [
+      ...(index.exactByMethodAndShape.get(
+        httpRouteIndexKey(endpointMethod, shape)
+      ) ?? [])
+    ]) {
+      candidates.set(endpoint.id, endpoint);
+    }
+    for (const endpoint of [
+      ...(index.suffixByMethodAndShape.get(
+        httpRouteIndexKey(endpointMethod, shape)
+      ) ?? [])
+    ]) {
+      candidates.set(endpoint.id, endpoint);
+    }
+    for (
+      let start = 0;
+      start <= segments.length - 2;
+      start += 1
+    ) {
+      const suffix = segments.slice(start).join("/");
+      for (const endpoint of [
+        ...(index.exactByMethodAndShape.get(
+          httpRouteIndexKey(endpointMethod, suffix)
+        ) ?? [])
+      ]) {
+        candidates.set(endpoint.id, endpoint);
+      }
+    }
+  }
+  return [...candidates.values()].sort(
+    (left, right) =>
+      (index.orderById.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+      (index.orderById.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+  );
+}
+
+function httpRouteIndexKey(method: string, shape: string): string {
+  return `${method}\0${shape}`;
+}
+
+function remoteBoundaryKey(
+  boundary: ParsedRemoteBoundary
+): string {
+  return `${boundary.profileId}\0${boundary.transport}\0${boundary.operationKey}`;
+}
+
+function appendMapValue<Key, Value>(
+  map: Map<Key, Value[]>,
+  key: Key,
+  value: Value
+): void {
+  const values = map.get(key) ?? [];
+  values.push(value);
+  map.set(key, values);
+}
+
 function collectReachable(
   rootId: string,
   outgoingCalls: Map<string, CodeGraphEdge[]>,
@@ -1012,7 +1239,8 @@ function filterChangedGraph(
       (chain) =>
         chain.changed &&
         chain.edgeIds.every((edgeId) => edgeIds.has(edgeId))
-    )
+    ),
+    truncated: graph.truncated
   };
 }
 

@@ -1,11 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  createDefaultAppSettings,
   MAX_DIFF_COMMIT_PANEL_HEIGHT,
-  MIN_DIFF_COMMIT_PANEL_HEIGHT
+  MIN_DIFF_COMMIT_PANEL_HEIGHT,
+  type AppSettingsDto
 } from "@gitnest/contracts";
 
 import {
+  broadcastAppSettingsChanged,
+  captureAppSettingsMutation,
   isTrustedSenderUrl,
   validateAccountRemovalImpactRequest,
   validateBindAccountRequest,
@@ -38,6 +42,111 @@ import {
   validateWorktreeCommandPreflightRequest
 } from "./register-ipc";
 
+describe("application settings IPC events", () => {
+  it("publishes settings only after a successful mutation", async () => {
+    const settings = createDefaultAppSettings();
+    const publish = vi.fn();
+
+    await expect(
+      captureAppSettingsMutation(
+        async () => settings,
+        publish
+      )
+    ).resolves.toEqual({
+      ok: true,
+      value: settings
+    });
+    expect(publish).toHaveBeenCalledWith(settings);
+
+    publish.mockClear();
+    await expect(
+      captureAppSettingsMutation(
+        async () => {
+          throw new Error("write failed");
+        },
+        publish
+      )
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { message: "write failed" }
+    });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("does not turn a persisted mutation into a failure when publishing throws", async () => {
+    const settings = createDefaultAppSettings();
+
+    await expect(
+      captureAppSettingsMutation(
+        async () => settings,
+        () => {
+          throw new Error("window closed");
+        }
+      )
+    ).resolves.toEqual({
+      ok: true,
+      value: settings
+    });
+  });
+
+  it("broadcasts only to live trusted BrowserWindows", () => {
+    const settings = createDefaultAppSettings();
+    const trustedSend =
+      vi.fn<SettingsChangedSender>();
+    const untrustedSend =
+      vi.fn<SettingsChangedSender>();
+    const destroyedSend =
+      vi.fn<SettingsChangedSender>();
+
+    broadcastAppSettingsChanged(settings, {
+      windows: [
+        createSettingsWindow(
+          "file:///trusted/index.html",
+          trustedSend
+        ),
+        createSettingsWindow(
+          "https://attacker.invalid/",
+          untrustedSend
+        ),
+        createSettingsWindow(
+          "file:///trusted/closed.html",
+          destroyedSend,
+          true
+        )
+      ],
+      isTrustedUrl: (url) =>
+        url.startsWith("file:///trusted/")
+    });
+
+    expect(trustedSend).toHaveBeenCalledWith(
+      "settings:changed",
+      settings
+    );
+    expect(untrustedSend).not.toHaveBeenCalled();
+    expect(destroyedSend).not.toHaveBeenCalled();
+  });
+});
+
+function createSettingsWindow(
+  url: string,
+  send: SettingsChangedSender,
+  destroyed = false
+) {
+  return {
+    isDestroyed: () => destroyed,
+    webContents: {
+      isDestroyed: () => destroyed,
+      getURL: () => url,
+      send
+    }
+  };
+}
+
+type SettingsChangedSender = (
+  channel: "settings:changed",
+  settings: AppSettingsDto
+) => void;
+
 describe("isTrustedSenderUrl", () => {
   it("accepts the configured development origin", () => {
     expect(
@@ -65,6 +174,14 @@ describe("isTrustedSenderUrl", () => {
     expect(
       isTrustedSenderUrl({
         senderUrl: "file:///C:/GitNest/out/renderer/index.html",
+        rendererDirectory: "C:\\GitNest\\out\\renderer",
+        packaged: true
+      })
+    ).toBe(true);
+    expect(
+      isTrustedSenderUrl({
+        senderUrl:
+          "file:///C:/GitNest/out/renderer/..safe/index.html",
         rendererDirectory: "C:\\GitNest\\out\\renderer",
         packaged: true
       })

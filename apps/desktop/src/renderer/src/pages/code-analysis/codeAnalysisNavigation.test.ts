@@ -9,6 +9,7 @@ import type { CodeGraphNodeDto } from "@gitnest/contracts";
 import {
   countSearchableCodeNodes,
   filterChains,
+  filterChainsWithMetadata,
   searchCodeNodes
 } from "./codeAnalysisNavigation";
 
@@ -106,6 +107,45 @@ describe("code analysis node search", () => {
         "RPC"
       )
     ).toEqual([rpcChain]);
+  });
+
+  it("bounds request-chain rendering and per-chain node search work", () => {
+    const chains = Array.from({ length: 300 }, (_, index) => ({
+      id: `chain-${index}`,
+      profileId: "http",
+      transport: "http" as const,
+      operationKey: `GET /items/${index}`,
+      method: "GET",
+      route: `/items/${index}`,
+      title: `Item ${index}`,
+      clientNodeId: "load",
+      endpointNodeId: "endpoint",
+      nodeIds: [
+        ...Array.from(
+          { length: 80 },
+          (_, nodeIndex) => `ignored-${nodeIndex}`
+        ),
+        "save"
+      ],
+      edgeIds: [],
+      changed: false,
+      ambiguous: false,
+      confidence: "exact" as const
+    }));
+
+    const result = filterChainsWithMetadata(
+      chains,
+      nodes,
+      "",
+      "all",
+      25
+    );
+
+    expect(result.chains).toHaveLength(25);
+    expect(result.truncated).toBe(true);
+    expect(
+      filterChains(chains, nodes, "materialservice", "all")
+    ).toEqual([]);
   });
 });
 

@@ -12,6 +12,13 @@ import {
   type UpdateAppSettingsRequest
 } from "@gitnest/contracts";
 
+import {
+  getRendererPreferenceStorage,
+  readRendererPreference,
+  removeRendererPreference,
+  rendererPreferenceKeys
+} from "../../shared/lib/renderer-preferences";
+
 export interface AppSettingsController {
   settings: AppSettingsDto;
   loaded: boolean;
@@ -44,6 +51,8 @@ export function useAppSettings(): AppSettingsController {
     useState<GitReadErrorDto | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const generation = useRef(0);
+  const settingsEventGeneration = useRef(0);
+  const mounted = useRef(true);
 
   const update = useCallback(
     async (
@@ -54,6 +63,8 @@ export function useAppSettings(): AppSettingsController {
       } = {}
     ): Promise<boolean> => {
       const requestGeneration = generation.current;
+      const requestEventGeneration =
+        settingsEventGeneration.current;
       setSavingCount((count) => count + 1);
       if (!options.silent) {
         setError(null);
@@ -63,6 +74,24 @@ export function useAppSettings(): AppSettingsController {
         const result =
           await window.gitnest.settings.update(patch);
         if (requestGeneration !== generation.current) {
+          if (
+            mounted.current &&
+            requestEventGeneration !==
+              settingsEventGeneration.current
+          ) {
+            if (!result.ok) {
+              if (!options.silent) {
+                setError(result.error);
+              }
+              return false;
+            }
+            if (!options.silent) {
+              setNotice(
+                options.notice ?? "设置已保存。"
+              );
+            }
+            return true;
+          }
           return false;
         }
         if (!result.ok) {
@@ -85,7 +114,7 @@ export function useAppSettings(): AppSettingsController {
         }
         return false;
       } finally {
-        if (requestGeneration === generation.current) {
+        if (mounted.current) {
           setSavingCount((count) => Math.max(0, count - 1));
         }
       }
@@ -114,15 +143,22 @@ export function useAppSettings(): AppSettingsController {
       if (result.value.storageState === "missing") {
         const legacyTheme = readLegacyTheme();
         if (legacyTheme) {
+          const migrationEventGeneration =
+            settingsEventGeneration.current;
           const migrated =
             await window.gitnest.settings.update({
               appearance: { theme: legacyTheme }
             });
           if (
-            requestGeneration === generation.current &&
-            migrated.ok
+            mounted.current &&
+            migrated.ok &&
+            (requestGeneration === generation.current ||
+              migrationEventGeneration !==
+                settingsEventGeneration.current)
           ) {
-            setSettings(migrated.value);
+            if (requestGeneration === generation.current) {
+              setSettings(migrated.value);
+            }
             removeLegacyTheme();
           }
         }
@@ -141,14 +177,35 @@ export function useAppSettings(): AppSettingsController {
   }, []);
 
   useEffect(() => {
+    mounted.current = true;
+    const subscribe =
+      window.gitnest.settings.onChanged;
+    const unsubscribe =
+      typeof subscribe === "function"
+        ? subscribe((nextSettings) => {
+            if (!mounted.current) {
+              return;
+            }
+            settingsEventGeneration.current += 1;
+            generation.current += 1;
+            setSettings(nextSettings);
+            setLoaded(true);
+            setLoading(false);
+            setError(null);
+          })
+        : () => undefined;
     void reload();
     return () => {
+      mounted.current = false;
       generation.current += 1;
+      unsubscribe();
     };
   }, [reload]);
 
   const clearAiApiKey = useCallback(async (): Promise<boolean> => {
     const requestGeneration = generation.current;
+    const requestEventGeneration =
+      settingsEventGeneration.current;
     setClearingKey(true);
     setError(null);
     setNotice(null);
@@ -158,6 +215,18 @@ export function useAppSettings(): AppSettingsController {
           confirmed: true
         });
       if (requestGeneration !== generation.current) {
+        if (
+          mounted.current &&
+          requestEventGeneration !==
+            settingsEventGeneration.current
+        ) {
+          if (!result.ok) {
+            setError(result.error);
+            return false;
+          }
+          setNotice("AI API Key 已清空。");
+          return true;
+        }
         return false;
       }
       if (!result.ok) {
@@ -173,7 +242,7 @@ export function useAppSettings(): AppSettingsController {
       }
       return false;
     } finally {
-      if (requestGeneration === generation.current) {
+      if (mounted.current) {
         setClearingKey(false);
       }
     }
@@ -200,22 +269,20 @@ export function useAppSettings(): AppSettingsController {
 }
 
 function readLegacyTheme(): "dark" | "light" | null {
-  try {
-    const value = window.localStorage.getItem("gitnest.theme");
-    return value === "dark" || value === "light"
-      ? value
-      : null;
-  } catch {
-    return null;
-  }
+  const value = readRendererPreference(
+    getRendererPreferenceStorage(),
+    rendererPreferenceKeys.legacyTheme
+  );
+  return value === "dark" || value === "light"
+    ? value
+    : null;
 }
 
 function removeLegacyTheme(): void {
-  try {
-    window.localStorage.removeItem("gitnest.theme");
-  } catch {
-    // Legacy preference cleanup is best-effort.
-  }
+  removeRendererPreference(
+    getRendererPreferenceStorage(),
+    rendererPreferenceKeys.legacyTheme
+  );
 }
 
 function unexpectedSettingsError(

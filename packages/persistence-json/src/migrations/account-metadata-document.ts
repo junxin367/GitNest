@@ -21,14 +21,7 @@ const VERIFICATION_STATUSES = new Set([
   "permission-denied",
   "unavailable"
 ]);
-const FORBIDDEN_SECRET_FIELDS = new Set([
-  "token",
-  "secret",
-  "password",
-  "privatekey",
-  "accesstoken",
-  "refreshtoken"
-]);
+const ACCOUNT_CREDENTIAL_PREFIX = "credential_";
 
 export function migrateAccountMetadataDocument(
   value: unknown
@@ -38,7 +31,6 @@ export function migrateAccountMetadataDocument(
   );
   if (
     !isRecord(migrated) ||
-    containsForbiddenSecretField(migrated) ||
     migrated.schemaVersion !== ACCOUNT_METADATA_SCHEMA_VERSION ||
     typeof migrated.updatedAt !== "string" ||
     !Array.isArray(migrated.profiles) ||
@@ -142,7 +134,7 @@ function isAccountProfile(value: unknown): boolean {
     (value.username !== undefined &&
       typeof value.username !== "string") ||
     (value.credentialRef !== undefined &&
-      typeof value.credentialRef !== "string") ||
+      !isAccountCredentialRef(value.credentialRef)) ||
     (value.lastVerifiedAt !== undefined &&
       typeof value.lastVerifiedAt !== "string")
   ) {
@@ -155,20 +147,15 @@ function isAccountProfile(value: unknown): boolean {
   );
 }
 
-function containsForbiddenSecretField(
+function isAccountCredentialRef(
   value: unknown
-): boolean {
-  if (Array.isArray(value)) {
-    return value.some(containsForbiddenSecretField);
-  }
-  if (!isRecord(value)) {
-    return false;
-  }
-  return Object.entries(value).some(
-    ([key, candidate]) =>
-      FORBIDDEN_SECRET_FIELDS.has(
-        key.toLocaleLowerCase("en-US")
-      ) || containsForbiddenSecretField(candidate)
+): value is string {
+  return (
+    typeof value === "string" &&
+    value.startsWith(ACCOUNT_CREDENTIAL_PREFIX) &&
+    value.length > ACCOUNT_CREDENTIAL_PREFIX.length &&
+    value.length <= 512 &&
+    /^[a-zA-Z0-9_-]+$/.test(value)
   );
 }
 

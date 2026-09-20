@@ -1,16 +1,22 @@
-const CHANGED_REPOSITORIES_ONLY_KEY_PREFIX =
-  "gitnest.workspace.sidebar.changed-repositories-only:";
+import {
+  getRendererPreferenceStorage,
+  readRendererPreference,
+  rendererPreferenceKeys,
+  writeRendererPreference,
+  type RendererPreferenceStorage
+} from "../../shared/lib/renderer-preferences";
 
-export interface PreferenceStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-}
+export type PreferenceStorage = RendererPreferenceStorage;
+export { getRendererPreferenceStorage };
 
 export function changedRepositoriesOnlyPreferenceKey(
   workspaceId: string,
   entryId: string
 ): string {
-  return `${CHANGED_REPOSITORIES_ONLY_KEY_PREFIX}${workspaceId}:${entryId}`;
+  return rendererPreferenceKeys.changedRepositoriesOnly(
+    workspaceId,
+    entryId
+  );
 }
 
 export function readChangedRepositoriesOnlyPreference(
@@ -22,18 +28,15 @@ export function readChangedRepositoriesOnlyPreference(
     return false;
   }
 
-  try {
-    return (
-      storage.getItem(
-        changedRepositoriesOnlyPreferenceKey(
-          workspaceId,
-          entryId
-        )
-      ) === "true"
-    );
-  } catch {
-    return false;
-  }
+  return (
+    readRendererPreference(
+      storage,
+      changedRepositoriesOnlyPreferenceKey(
+        workspaceId,
+        entryId
+      )
+    ) === "true"
+  );
 }
 
 export function writeChangedRepositoriesOnlyPreference(
@@ -46,25 +49,12 @@ export function writeChangedRepositoriesOnlyPreference(
     return;
   }
 
-  try {
-    storage.setItem(
-      changedRepositoriesOnlyPreferenceKey(
-        workspaceId,
-        entryId
-      ),
-      String(enabled)
-    );
-  } catch {
-    // Preference persistence is best-effort in restricted environments.
-  }
-}
-
-export function getRendererPreferenceStorage():
-  | PreferenceStorage
-  | undefined {
-  try {
-    return window.localStorage;
-  } catch {
-    return undefined;
-  }
+  writeRendererPreference(
+    storage,
+    changedRepositoriesOnlyPreferenceKey(
+      workspaceId,
+      entryId
+    ),
+    String(enabled)
+  );
 }

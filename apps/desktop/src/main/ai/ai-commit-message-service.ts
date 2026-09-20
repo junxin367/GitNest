@@ -32,7 +32,9 @@ interface WorkspaceReader {
 }
 
 interface AiSettingsReader {
-  getInternalAiSettings(): Promise<InternalAiSettings>;
+  getInternalAiSettings(
+    options?: { includeApiKey?: boolean }
+  ): Promise<InternalAiSettings>;
 }
 
 interface AiGitReader {
@@ -63,7 +65,10 @@ export class AiCommitMessageService {
   async testConnection(
     request: TestAiConnectionRequest
   ): Promise<AiConnectionTestResultDto> {
-    const saved = await this.#settings.getInternalAiSettings();
+    const saved =
+      await this.#settings.getInternalAiSettings({
+        includeApiKey: !request.apiKey
+      });
     const configuration = resolveConfiguration({
       ...saved,
       apiUrl: request.apiUrl,

@@ -27,6 +27,7 @@ import {
   SkeletonBoundary
 } from "../../shared/ui/Skeleton";
 import {
+  isEventInsideMenu,
   MenuItem,
   MenuPopover
 } from "../../shared/ui/Menu";
@@ -361,10 +362,7 @@ function WorkspaceWorktreesPanel({
 
     const close = () => setRepoMenuOpen(false);
     const handleScroll = (event: Event) => {
-      if (
-        event.target instanceof Node &&
-        repoMenuRef.current?.contains(event.target)
-      ) {
+      if (isEventInsideMenu(event, repoMenuRef.current)) {
         return;
       }
       close();

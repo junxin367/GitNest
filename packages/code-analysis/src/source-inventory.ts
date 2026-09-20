@@ -29,12 +29,15 @@ const SUPPORTED_EXTENSIONS = new Map<
   [".vue", "vue"],
   [".java", "java"]
 ]);
+export const DEFAULT_MAX_TOTAL_SOURCE_BYTES =
+  128 * 1_024 * 1_024;
 
 export async function discoverSourceFiles(input: {
   roots: AnalysisRoot[];
   changedPaths: ChangedAnalysisPath[];
   scope: "changed" | "workspace";
   settings: CodeAnalysisSettings;
+  maxTotalSizeBytes?: number;
   signal?: AbortSignal;
 }): Promise<SourceInventoryResult> {
   const warnings: string[] = [];
@@ -42,6 +45,33 @@ export async function discoverSourceFiles(input: {
   const seen = new Set<string>();
   let skippedFiles = 0;
   let truncated = false;
+  let totalBytes = 0;
+  let truncationReason: "files" | "bytes" | undefined;
+  const maxTotalSizeBytes =
+    input.maxTotalSizeBytes ??
+    DEFAULT_MAX_TOTAL_SOURCE_BYTES;
+
+  const addFile = (
+    descriptor: AnalysisSourceFile
+  ): boolean => {
+    if (files.length >= input.settings.maxFiles) {
+      truncated = true;
+      truncationReason = "files";
+      return false;
+    }
+    if (
+      totalBytes + descriptor.size >
+      maxTotalSizeBytes
+    ) {
+      truncated = true;
+      truncationReason = "bytes";
+      return false;
+    }
+    seen.add(descriptor.canonicalPath);
+    files.push(descriptor);
+    totalBytes += descriptor.size;
+    return true;
+  };
 
   if (input.scope === "changed") {
     const rootsByTarget = new Map(
@@ -74,11 +104,19 @@ export async function discoverSourceFiles(input: {
       if (seen.has(descriptor.canonicalPath)) {
         continue;
       }
-      seen.add(descriptor.canonicalPath);
-      files.push(descriptor);
+      if (!addFile(descriptor)) {
+        break;
+      }
     }
+    appendTruncationWarning(
+      warnings,
+      truncationReason,
+      input.settings.maxFiles,
+      maxTotalSizeBytes
+    );
     return {
       files,
+      totalBytes,
       skippedFiles,
       truncated,
       warnings
@@ -141,10 +179,6 @@ export async function discoverSourceFiles(input: {
         if (!language) {
           continue;
         }
-        if (files.length >= input.settings.maxFiles) {
-          truncated = true;
-          break;
-        }
         const descriptor = await inspectSourceFile(
           root,
           absolutePath,
@@ -158,8 +192,9 @@ export async function discoverSourceFiles(input: {
         if (seen.has(descriptor.canonicalPath)) {
           continue;
         }
-        seen.add(descriptor.canonicalPath);
-        files.push(descriptor);
+        if (!addFile(descriptor)) {
+          break;
+        }
       }
 
       if (truncated) {
@@ -171,18 +206,47 @@ export async function discoverSourceFiles(input: {
     }
   }
 
-  if (truncated) {
-    warnings.push(
-      `文件数量达到上限 ${input.settings.maxFiles}，本次结果已截断。`
-    );
-  }
+  appendTruncationWarning(
+    warnings,
+    truncationReason,
+    input.settings.maxFiles,
+    maxTotalSizeBytes
+  );
 
   return {
     files,
+    totalBytes,
     skippedFiles,
     truncated,
     warnings
   };
+}
+
+function appendTruncationWarning(
+  warnings: string[],
+  reason: "files" | "bytes" | undefined,
+  maxFiles: number,
+  maxTotalSizeBytes: number
+): void {
+  if (reason === "files") {
+    warnings.push(
+      `文件数量达到上限 ${maxFiles}，本次结果已截断。`
+    );
+    return;
+  }
+  if (reason === "bytes") {
+    warnings.push(
+      `源码读取总量达到安全上限 ${formatMegabytes(
+        maxTotalSizeBytes
+      )} MiB，本次结果已截断。`
+    );
+  }
+}
+
+function formatMegabytes(bytes: number): string {
+  return (bytes / (1_024 * 1_024)).toFixed(
+    bytes % (1_024 * 1_024) === 0 ? 0 : 1
+  );
 }
 
 async function inspectSourceFile(
@@ -246,7 +310,8 @@ function isWithin(rootPath: string, candidatePath: string): boolean {
   );
   return (
     relativePath === "" ||
-    (!relativePath.startsWith("..") &&
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${sep}`) &&
       !isAbsolute(relativePath))
   );
 }

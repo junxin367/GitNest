@@ -36,10 +36,37 @@ const sharedButtonCss = readFileSync(
   ),
   "utf8"
 );
+const sharedSelectSource = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../renderer/src/shared/ui/Select.tsx",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+const designTokensCss = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../packages/design-system/src/tokens/tokens.css",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
 const prototypeButtonCss = readFileSync(
   fileURLToPath(
     new URL(
       "../../../../prototypes/workspace-shell/button.css",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+const prototypeInputCss = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../prototypes/workspace-shell/input.css",
       import.meta.url
     )
   ),
@@ -103,6 +130,24 @@ const prototypeShellHtml = readFileSync(
   fileURLToPath(
     new URL(
       "../../../../prototypes/workspace-shell/index.html",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+const prototypeMenuGalleryHtml = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../prototypes/workspace-shell/menu-gallery.html",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+const prototypeDiffViewerHtml = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../prototypes/workspace-shell/diff-viewer.html",
       import.meta.url
     )
   ),
@@ -181,6 +226,160 @@ describe("renderer design-system guardrails", () => {
     );
   });
 
+  it("keeps popover menus scrollable inside the viewport", () => {
+    expect(css).toMatch(
+      /:where\(\.menu-surface\)\s*\{[\s\S]*?max-height:\s*calc\(100vh - var\(--space-4\)\);[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior:\s*contain;/
+    );
+    for (const source of [
+      prototypeShellHtml,
+      prototypeDiffViewerHtml
+    ]) {
+      expect(source).toMatch(
+        /\.menu-surface\s*\{[\s\S]*?max-height:\s*calc\(100vh - var\(--space-4\)\);[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior:\s*contain;/
+      );
+    }
+  });
+
+  it("keeps standard page margins at 12px while edge-to-edge pages opt out", () => {
+    for (const source of [
+      designTokensCss,
+      prototypeShellHtml
+    ]) {
+      expect(source).toContain("--page-safe-margin: 12px");
+      expect(source).toContain(
+        "--page-safe-margin-narrow: 12px"
+      );
+    }
+    expect(css).toMatch(
+      /\.page-scroll\s*\{[\s\S]*?padding:\s*var\(--page-safe-margin\);/
+    );
+    expect(css).toMatch(
+      /\.page-scroll\.repository-page-changes\s*\{[\s\S]*?padding:\s*0;/
+    );
+    expect(css).toMatch(
+      /\.page-scroll\.repository-page-history\s*\{[\s\S]*?padding:\s*0;/
+    );
+    expect(css).toMatch(
+      /\.page-scroll\.repository-page-branches\s*\{[\s\S]*?padding:\s*0;/
+    );
+  });
+
+  it("keeps operation metrics in one four-card row and operation records card-based", () => {
+    const metricGridRules =
+      css.match(/\.operation-metric-grid\s*\{[^}]*\}/g) ?? [];
+
+    expect(metricGridRules).toHaveLength(1);
+    expect(metricGridRules[0]).toMatch(
+      /grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/
+    );
+    expect(css).toMatch(
+      /\.operation-center-page \.gn-skeleton-metric-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/
+    );
+    expect(css).toMatch(
+      /\.operation-history-list\s*\{[^}]*gap:\s*var\(--space-2\);[^}]*padding:\s*var\(--space-4\);/
+    );
+    expect(css).toMatch(
+      /\.operation-history-card\s*\{[^}]*background:\s*var\(--surface-2\);[^}]*border:\s*1px solid var\(--border-soft\);[^}]*border-radius:\s*var\(--radius-regular\);/
+    );
+    expect(css).toMatch(
+      /\.operation-history-primary-target\s*\{[^}]*background:\s*transparent;[^}]*border:\s*0;[^}]*appearance:\s*none;/
+    );
+  });
+
+  it("caps switches at 24px and keeps single-line menus compact", () => {
+    for (const source of [css, prototypeShellHtml]) {
+      expect(source).toMatch(
+        /\.settings-switch\s*\{[\s\S]*?width:\s*42px;[\s\S]*?height:\s*24px;[\s\S]*?max-height:\s*24px;/
+      );
+      expect(source).toMatch(
+        /\.settings-switch-thumb\s*\{[\s\S]*?width:\s*18px;[\s\S]*?height:\s*18px;/
+      );
+      expect(source).toMatch(
+        /\.menu-item\s*\{[\s\S]*?min-height:\s*var\(--control-compact\);/
+      );
+    }
+    expect(prototypeMenuGalleryHtml).toMatch(
+      /\.toggle-demo\s*\{[\s\S]*?width:\s*42px;[\s\S]*?height:\s*24px;[\s\S]*?max-height:\s*24px;/
+    );
+    expect(prototypeMenuGalleryHtml).toContain(
+      "<strong>42 × 24px</strong>"
+    );
+    expect(prototypeMenuGalleryHtml).not.toMatch(
+      /min-height:\s*34px/
+    );
+    expect(prototypeDiffViewerHtml).toMatch(
+      /\.menu-item\s*\{[\s\S]*?min-height:\s*var\(--control-compact\);/
+    );
+    expect(prototypeDiffWorkspaceCss).toMatch(
+      /\.gn-diff-workspace__stash-context-menu\s*>\s*button\s*\{[\s\S]*?min-height:\s*var\(--control-compact\);/
+    );
+  });
+
+  it("keeps button, input, and dropdown size tiers at 32, 35, and 40px", () => {
+    for (const source of [
+      designTokensCss,
+      prototypeShellHtml,
+      prototypeMenuGalleryHtml
+    ]) {
+      expect(source).toContain("--control-compact: 32px");
+      expect(source).toContain("--control-default: 35px");
+      expect(source).toContain("--control-large: 40px");
+    }
+    expect(sharedButtonCss).toMatch(
+      /\.gn-button\s*\{[\s\S]*?--gn-button-height:\s*var\(--control-compact\);/
+    );
+    expect(sharedButtonCss).toMatch(
+      /\.gn-button\[data-size="medium"\]\s*\{[\s\S]*?--gn-button-height:\s*var\(--control-default\);/
+    );
+    expect(sharedButtonCss).toMatch(
+      /\.gn-button\[data-size="large"\]\s*\{[\s\S]*?--gn-button-height:\s*var\(--control-large\);/
+    );
+    expect(sharedButtonCss).toMatch(
+      /\.gn-input\s*\{[\s\S]*?--gn-input-height:\s*var\(--control-default\);/
+    );
+    expect(sharedButtonCss).toMatch(
+      /\.gn-input\[data-size="small"\]\s*\{[\s\S]*?--gn-input-height:\s*var\(--control-compact\);/
+    );
+    expect(sharedButtonCss).toMatch(
+      /\.gn-input\[data-size="large"\]\s*\{[\s\S]*?--gn-input-height:\s*var\(--control-large\);/
+    );
+    expect(sharedButtonCss).toMatch(
+      /\.gn-select__trigger\.gn-button\s*\{[\s\S]*?justify-content:\s*space-between;/
+    );
+    expect(sharedSelectSource).toContain(
+      'size = "medium"'
+    );
+    expect(sharedSelectSource).toContain(
+      "size={size}"
+    );
+    for (const source of [
+      prototypeButtonCss,
+      prototypeInputCss
+    ]) {
+      expect(source).toContain(
+        "size-small: var(--control-compact)"
+      );
+      expect(source).toContain(
+        "size-medium: var(--control-default)"
+      );
+      expect(source).toContain(
+        "size-large: var(--control-large)"
+      );
+    }
+    expect(prototypeMenuGalleryHtml).toMatch(
+      /--dropdown-size-small:\s*var\(--control-compact\);[\s\S]*?--dropdown-size-medium:\s*var\(--control-default\);[\s\S]*?--dropdown-size-large:\s*var\(--control-large\);/
+    );
+    expect(prototypeMenuGalleryHtml).toContain(
+      "默认选择器支持 32 / 35 / 40px 三档尺寸"
+    );
+    expect(prototypeMenuGalleryHtml).not.toContain(
+      "Medium · 40px"
+    );
+    expect(prototypeMenuGalleryHtml).not.toContain(
+      "Large · 48px"
+    );
+  });
+
   it("lets settings pages and their skeletons fill the available content width", () => {
     const applicationSettingsRule =
       css.match(/\.application-settings-page\s*\{([^}]*)\}/)?.[1] ??
@@ -252,10 +451,13 @@ describe("renderer design-system guardrails", () => {
 
     expect(settingsCardStart).toBeGreaterThan(-1);
     expect(settingsCardSource).toContain(
-      "<TerminalProfileDropdown"
+      "<Select"
     );
     expect(applicationSettingsPageSource).toContain(
-      "<MenuPopover"
+      'from "../../shared/ui/Select"'
+    );
+    expect(applicationSettingsPageSource).not.toContain(
+      "function TerminalProfileDropdown"
     );
     expect(settingsCardSource).not.toContain("<select");
 
@@ -273,7 +475,7 @@ describe("renderer design-system guardrails", () => {
     );
   });
 
-  it("keeps the current AI API Key visible on request and after saving", () => {
+  it("keeps the AI API Key opt-in visible and clears it after saving", () => {
     const saveAiSettingsStart =
       applicationSettingsPageSource.indexOf(
         "const saveAiSettings = async () =>"
@@ -295,7 +497,13 @@ describe("renderer design-system guardrails", () => {
     );
 
     expect(saveAiSettingsStart).toBeGreaterThan(-1);
-    expect(saveAiSettingsSource).not.toContain('setAiKey("")');
+    expect(saveAiSettingsSource).toContain('setAiKey("")');
+    expect(saveAiSettingsSource).toContain(
+      "setAiKeyVisible(false)"
+    );
+    expect(applicationSettingsPageSource).toContain(
+      "useState(false)"
+    );
     expect(applicationSettingsPageSource).toContain(
       'type={aiKeyVisible ? "text" : "password"}'
     );
@@ -323,7 +531,7 @@ describe("renderer design-system guardrails", () => {
       /\.analysis-node-diff-drawer\s*\{[^}]*inset:\s*0 auto 0 0;/
     );
     expect(css).toMatch(
-      /\.analysis-graph-workspace\.is-fullscreen\s+\.analysis-node-diff-drawer\s*\{[\s\S]*?inset:\s*var\(--space-3\)\s+auto\s+var\(--space-3\)\s+var\(--space-3\);/
+      /\.analysis-workbench\.is-fullscreen\s+\.analysis-node-diff-drawer\s*\{[\s\S]*?inset:\s*0\s+auto\s+0\s+0;/
     );
   });
 

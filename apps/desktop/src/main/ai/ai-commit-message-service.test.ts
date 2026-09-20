@@ -206,6 +206,13 @@ describe("AiCommitMessageService", () => {
   });
 
   it("uses a temporary key for connection tests without requiring AI generation to be enabled", async () => {
+    const getInternalAiSettings = vi.fn(
+      async () => ({
+        ...baseSettings(),
+        enabled: false,
+        apiKey: ""
+      })
+    );
     const fetchImpl = vi.fn(
       async (_input: string | URL | Request, init?: RequestInit) => {
         expect(
@@ -216,11 +223,7 @@ describe("AiCommitMessageService", () => {
     );
     const service = createService({
       fetchImpl,
-      settings: {
-        ...baseSettings(),
-        enabled: false,
-        apiKey: "saved-key"
-      }
+      getInternalAiSettings
     });
 
     await expect(
@@ -234,11 +237,17 @@ describe("AiCommitMessageService", () => {
         "https://ai.example.test/v1/chat/completions",
       model: "connection-model"
     });
+    expect(getInternalAiSettings).toHaveBeenCalledWith({
+      includeApiKey: false
+    });
   });
 });
 
 function createService(options: {
   settings?: InternalAiSettings;
+  getInternalAiSettings?: (
+    options?: { includeApiKey?: boolean }
+  ) => Promise<InternalAiSettings>;
   snapshot?: RepositorySnapshot;
   readRepositoryDiff?: GitClient["readRepositoryDiff"];
   fetchImpl?: typeof fetch;
@@ -258,7 +267,9 @@ function createService(options: {
   };
   return new AiCommitMessageService(
     {
-      getInternalAiSettings: async () => ({ ...settings })
+      getInternalAiSettings:
+        options.getInternalAiSettings ??
+        (async () => ({ ...settings }))
     },
     {
       getCurrent: async () => createWorkspace()

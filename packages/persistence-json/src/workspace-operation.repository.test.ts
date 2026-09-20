@@ -21,6 +21,7 @@ import {
   JsonWorkspaceOperationStore,
   WORKSPACE_OPERATION_SCHEMA_VERSION
 } from "./workspace-operation.repository";
+import { JsonWorkspaceOperationCollectionStore } from "./workspace-runtime-stores";
 
 describe("JsonWorkspaceOperationStore", () => {
   let temporary: TemporaryDirectoryFixture | undefined;
@@ -55,6 +56,38 @@ describe("JsonWorkspaceOperationStore", () => {
     await expect(store.load("other")).rejects.toMatchObject({
       code: "INVALID_PERSISTED_DATA"
     });
+  });
+
+  it("isolates operation history by Workspace id", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture(
+        "operation-collection"
+      );
+    const store =
+      new JsonWorkspaceOperationCollectionStore({
+        directoryPath: join(
+          temporary.path,
+          "operations",
+          "items"
+        ),
+        clock: () => "2026-09-20T12:00:00.000Z"
+      });
+    const first = [
+      createOperation("operation_first", "succeeded")
+    ];
+    const second = [
+      createOperation("operation_second", "running")
+    ];
+
+    await store.save("workspace_one", first);
+    await store.save("workspace_two", second);
+
+    await expect(
+      store.load("workspace_one")
+    ).resolves.toEqual(first);
+    await expect(
+      store.load("workspace_two")
+    ).resolves.toEqual(second);
   });
 
   it("migrates a v0 operation document and drops unknown fields", async () => {

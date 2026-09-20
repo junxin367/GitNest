@@ -165,9 +165,27 @@ const rendererHtml = extractAsarFile(
 assert(
   rendererHtml.includes(
     "Content-Security-Policy"
-  ) &&
-    rendererHtml.includes("object-src 'none'"),
+  ),
   "Packaged renderer CSP is missing."
+);
+for (const directive of [
+  "default-src 'self'",
+  "script-src 'self'",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-src 'none'"
+]) {
+  assert(
+    rendererHtml.includes(directive),
+    `Packaged renderer CSP is missing required directive: ${directive}.`
+  );
+}
+assert(
+  !rendererHtml.includes("'unsafe-eval'") &&
+    !rendererHtml.includes("script-src *") &&
+    !rendererHtml.includes("connect-src *"),
+  "Packaged renderer CSP contains an unsafe script or connection policy."
 );
 
 const signingConfigured = Boolean(
@@ -262,6 +280,9 @@ function isAllowedAsarEntry(entry) {
     entry === "out" ||
     entry === "out/main" ||
     entry === "out/main/index.js" ||
+    /^out\/main\/code-analysis-process-entry-[A-Za-z0-9_-]+\.js$/.test(
+      entry
+    ) ||
     entry === "out/preload" ||
     entry === "out/preload/index.js" ||
     entry === "out/renderer" ||

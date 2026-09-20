@@ -6,9 +6,15 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { WorkspaceService } from "@gitnest/application";
+import {
+  WorkspaceCollectionService,
+  WorkspaceService
+} from "@gitnest/application";
 import { GitCliClient } from "@gitnest/git-cli";
-import { JsonWorkspaceStore } from "@gitnest/persistence-json";
+import {
+  JsonWorkspaceCollectionStore,
+  JsonWorkspaceStore
+} from "@gitnest/persistence-json";
 import {
   createTemporaryDirectoryFixture,
   createWorkspaceFixture,
@@ -170,6 +176,105 @@ describe("WorkspaceService integration", () => {
       code: "NO_REPOSITORIES_FOUND"
     });
   });
+
+  it("creates, switches, restores, renames, and deletes independent multi-repository Workspaces", async () => {
+    const localAppData =
+      await createTemporaryDirectoryFixture(
+        "workspace-collection-app-data"
+      );
+    const options = {
+      catalogFilePath: join(
+        localAppData.path,
+        "workspaces",
+        "catalog.json"
+      ),
+      workspaceDirectory: join(
+        localAppData.path,
+        "workspaces",
+        "items"
+      )
+    };
+    const createService = () =>
+      new WorkspaceCollectionService(
+        new GitCliClient(),
+        new NodeWorkspaceFileSystem(),
+        new JsonWorkspaceCollectionStore(options),
+        {
+          clock,
+          idFactory: () => "workspace_second"
+        }
+      );
+
+    try {
+      const collection = createService();
+      await collection.addEntry({
+        path: fixture.metaRootPath,
+        source: "picker"
+      });
+      const second = await collection.createWorkspace({
+        name: "Second Workspace"
+      });
+      expect(second).toMatchObject({
+        id: "workspace_second",
+        name: "Second Workspace",
+        entries: []
+      });
+      await collection.addEntry({
+        path: fixture.standaloneRepositoryPath,
+        source: "manual"
+      });
+
+      const first = await collection.switchWorkspace(
+        "default"
+      );
+      expect(first.entries).toHaveLength(1);
+      expect(first.entries[0]?.path).toBe(
+        fixture.metaRootPath
+      );
+
+      const restoredSecond =
+        await collection.switchWorkspace(
+          "workspace_second"
+        );
+      expect(restoredSecond.entries).toHaveLength(1);
+      expect(restoredSecond.entries[0]?.path).toBe(
+        fixture.standaloneRepositoryPath
+      );
+      await collection.renameWorkspace({
+        workspaceId: "workspace_second",
+        name: "Renamed Workspace"
+      });
+      expect(await collection.listWorkspaces()).toEqual([
+        expect.objectContaining({
+          id: "default",
+          name: "GitNest Workspace"
+        }),
+        expect.objectContaining({
+          id: "workspace_second",
+          name: "Renamed Workspace"
+        })
+      ]);
+
+      const afterDelete = await collection.deleteWorkspace(
+        "workspace_second"
+      );
+      expect(afterDelete.id).toBe("default");
+      expect(await collection.listWorkspaces()).toHaveLength(1);
+
+      const restored = createService();
+      await expect(restored.getCurrent()).resolves.toMatchObject({
+        id: "default",
+        entries: [{ path: fixture.metaRootPath }]
+      });
+      await expect(
+        restored.listWorkspaces()
+      ).resolves.toEqual([
+        expect.objectContaining({ id: "default" })
+      ]);
+    } finally {
+      await localAppData.dispose();
+    }
+  }, 15_000);
 
   it("removes an entry from Workspace without deleting its directory", async () => {
     const localFixture = await createWorkspaceFixture();

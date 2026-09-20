@@ -147,6 +147,76 @@ describe("useWorkspace target selection", () => {
     );
   });
 
+  it("replaces the complete runtime state after creating a Workspace", async () => {
+    const {
+      selectedEntryId: _selectedEntryId,
+      selectedTarget: _selectedTarget,
+      ...workspaceBase
+    } = workspaceWithTarget(TARGET_A);
+    const secondWorkspace = {
+      ...workspaceBase,
+      id: "workspace_second",
+      name: "Second Workspace",
+      entries: [],
+      repositories: [],
+      worktrees: [],
+      updatedAt: "2026-09-20T12:00:00.000Z"
+    } satisfies WorkspaceDetailsDto;
+    const create = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        workspace: secondWorkspace,
+        workspaces: [
+          {
+            id: "workspace",
+            name: "Workspace",
+            updatedAt: "2026-09-16T12:00:00.000Z"
+          },
+          {
+            id: "workspace_second",
+            name: "Second Workspace",
+            updatedAt: "2026-09-20T12:00:00.000Z"
+          }
+        ],
+        snapshots: [],
+        operations: [],
+        monitor: {
+          mode: "inactive" as const,
+          watchedTargets: 0,
+          message: "当前没有可监听的仓库。"
+        }
+      }
+    }));
+    installBridge(
+      vi.fn(async () => ({
+        ok: true as const,
+        value: workspaceWithTarget(TARGET_A)
+      })),
+      { create }
+    );
+    await renderHarness();
+
+    let created!: Promise<boolean>;
+    act(() => {
+      created = controller!.createWorkspace(
+        "Second Workspace"
+      );
+    });
+    await act(async () => {
+      await created;
+      await flushAsyncWork();
+    });
+
+    await expect(created).resolves.toBe(true);
+    expect(create).toHaveBeenCalledWith({
+      name: "Second Workspace"
+    });
+    expect(controller?.workspace?.id).toBe(
+      "workspace_second"
+    );
+    expect(controller?.workspaces).toHaveLength(2);
+  });
+
   async function renderHarness() {
     await act(async () => {
       root.render(
@@ -171,7 +241,8 @@ function Harness({
 }
 
 function installBridge(
-  selectTarget: GitNestBridge["workspace"]["selectTarget"]
+  selectTarget: GitNestBridge["workspace"]["selectTarget"],
+  overrides: Partial<GitNestBridge["workspace"]> = {}
 ) {
   Object.defineProperty(window, "gitnest", {
     configurable: true,
@@ -182,7 +253,8 @@ function installBridge(
           value: createRuntimeState()
         })),
         onStateChanged: vi.fn(() => vi.fn()),
-        selectTarget
+        selectTarget,
+        ...overrides
       }
     } as unknown as GitNestBridge
   });
@@ -204,6 +276,13 @@ const TARGET_C: RepositoryTargetDto = {
 function createRuntimeState(): WorkspaceRuntimeStateDto {
   return {
     workspace: workspaceWithTarget(TARGET_A),
+    workspaces: [
+      {
+        id: "workspace",
+        name: "Workspace",
+        updatedAt: "2026-09-16T12:00:00.000Z"
+      }
+    ],
     snapshots: [],
     operations: [],
     monitor: {

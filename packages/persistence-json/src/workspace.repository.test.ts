@@ -8,7 +8,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createEmptyWorkspace } from "@gitnest/workspace-core";
+import {
+  WORKSPACE_CATALOG_SCHEMA_VERSION,
+  createEmptyWorkspace,
+  type Workspace
+} from "@gitnest/workspace-core";
 import {
   createTemporaryDirectoryFixture,
   type TemporaryDirectoryFixture
@@ -16,6 +20,8 @@ import {
 
 import { AtomicJsonStore } from "./atomic-json-store";
 import { JsonRepositorySnapshotStore } from "./repository-snapshot.repository";
+import { JsonWorkspaceCollectionStore } from "./workspace-collection.repository";
+import { JsonWorkspaceSnapshotCollectionStore } from "./workspace-runtime-stores";
 import { JsonWorkspaceStore } from "./workspace.repository";
 
 describe("JsonWorkspaceStore", () => {
@@ -54,6 +60,187 @@ describe("JsonWorkspaceStore", () => {
     await expect(readFile(filePath, "utf8")).resolves.not.toMatch(
       /token|password|private.?key/i
     );
+  });
+
+  it("promotes each legacy top-level entry into an independent Workspace", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture(
+        "workspace-collection"
+      );
+    const legacyPath = join(
+      temporary.path,
+      "workspaces",
+      "default.workspace.json"
+    );
+    const legacy = createLegacyWorkspaceWithTwoEntries();
+    await new JsonWorkspaceStore(legacyPath).save(legacy);
+    const store = new JsonWorkspaceCollectionStore({
+      catalogFilePath: join(
+        temporary.path,
+        "workspaces",
+        "catalog.json"
+      ),
+      workspaceDirectory: join(
+        temporary.path,
+        "workspaces",
+        "items"
+      ),
+      legacyWorkspaceFilePath: legacyPath,
+      clock: () => "2026-09-20T10:00:00.000Z"
+    });
+
+    const catalog = await store.loadCatalog();
+    expect(catalog).toEqual({
+      schemaVersion: WORKSPACE_CATALOG_SCHEMA_VERSION,
+      activeWorkspaceId: "default",
+      workspaces: [
+        {
+          id: "default",
+          name: "Python",
+          updatedAt: "2026-09-20T09:00:00.000Z"
+        },
+        {
+          id: expect.stringMatching(
+            /^workspace_[a-f0-9]{32}$/
+          ),
+          name: "Web",
+          updatedAt: "2026-09-20T09:00:00.000Z"
+        }
+      ],
+      updatedAt: "2026-09-20T10:00:00.000Z"
+    });
+    const promotedId = catalog?.workspaces[1]?.id;
+    expect(promotedId).toBeTruthy();
+    await expect(store.loadWorkspace("default")).resolves.toMatchObject({
+      id: "default",
+      name: "Python",
+      entries: [{ id: "entry" }],
+      repositories: [{ id: "repository" }],
+      worktrees: [{ id: "worktree" }],
+      selectedEntryId: "entry"
+    });
+    await expect(
+      store.loadWorkspace(promotedId as string)
+    ).resolves.toMatchObject({
+      id: promotedId,
+      name: "Web",
+      entries: [{ id: "entry_web" }],
+      repositories: [{ id: "repository_web" }],
+      worktrees: [{ id: "worktree_web" }],
+      selectedEntryId: "entry_web"
+    });
+    await expect(
+      readdir(
+        join(temporary.path, "workspaces", "items")
+      )
+    ).resolves.toEqual(
+      [
+        "default.workspace.json",
+        `${promotedId}.workspace.json`
+      ].sort()
+    );
+  });
+
+  it("repairs a v1 catalog that previously wrapped all legacy entries in one Workspace", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture(
+        "workspace-catalog-v1-repair"
+      );
+    const workspaceDirectory = join(
+      temporary.path,
+      "workspaces"
+    );
+    const legacyPath = join(
+      workspaceDirectory,
+      "default.workspace.json"
+    );
+    const itemDirectory = join(
+      workspaceDirectory,
+      "items"
+    );
+    const legacy = createLegacyWorkspaceWithTwoEntries();
+    const current = structuredClone(legacy);
+    current.entries[0]!.displayName = "Python Current";
+    current.updatedAt = "2026-09-20T09:30:00.000Z";
+    const existing = {
+      ...createEmptyWorkspace(
+        "2026-09-20T09:45:00.000Z"
+      ),
+      id: "workspace_existing",
+      name: "Existing Workspace"
+    };
+
+    await new JsonWorkspaceStore(legacyPath).save(legacy);
+    await new JsonWorkspaceStore(
+      join(itemDirectory, "default.workspace.json")
+    ).save(current);
+    await new JsonWorkspaceStore(
+      join(
+        itemDirectory,
+        "workspace_existing.workspace.json"
+      )
+    ).save(existing);
+    await new AtomicJsonStore(
+      join(workspaceDirectory, "catalog.json")
+    ).write({
+      schemaVersion: 1,
+      activeWorkspaceId: existing.id,
+      workspaces: [
+        {
+          id: current.id,
+          name: current.name,
+          updatedAt: current.updatedAt
+        },
+        {
+          id: existing.id,
+          name: existing.name,
+          updatedAt: existing.updatedAt
+        }
+      ],
+      updatedAt: "2026-09-20T09:45:00.000Z"
+    });
+
+    const store = new JsonWorkspaceCollectionStore({
+      catalogFilePath: join(
+        workspaceDirectory,
+        "catalog.json"
+      ),
+      workspaceDirectory: itemDirectory,
+      legacyWorkspaceFilePath: legacyPath,
+      clock: () => "2026-09-20T10:00:00.000Z"
+    });
+    const catalog = await store.loadCatalog();
+
+    expect(catalog).toMatchObject({
+      schemaVersion: WORKSPACE_CATALOG_SCHEMA_VERSION,
+      activeWorkspaceId: existing.id,
+      workspaces: [
+        {
+          id: "default",
+          name: "Python Current",
+          updatedAt: current.updatedAt
+        },
+        {
+          name: "Web",
+          updatedAt: current.updatedAt
+        },
+        {
+          id: existing.id,
+          name: existing.name,
+          updatedAt: existing.updatedAt
+        }
+      ],
+      updatedAt: "2026-09-20T10:00:00.000Z"
+    });
+    await expect(
+      store.loadWorkspace("default")
+    ).resolves.toMatchObject({
+      name: "Python Current",
+      entries: [{ id: "entry" }]
+    });
+    await expect(
+      store.loadWorkspace(existing.id)
+    ).resolves.toEqual(existing);
   });
 
   it("rejects an unsupported persisted schema", async () => {
@@ -382,6 +569,49 @@ describe("JsonWorkspaceStore", () => {
     });
   });
 
+  it("isolates repository snapshot caches by Workspace id", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture(
+        "snapshot-collection"
+      );
+    const store =
+      new JsonWorkspaceSnapshotCollectionStore({
+        directoryPath: join(
+          temporary.path,
+          "cache",
+          "repository-snapshots"
+        ),
+        clock: () => "2026-09-20T12:00:00.000Z"
+      });
+    const snapshots = [
+      {
+        repositoryId: "repository",
+        worktreeId: "worktree",
+        branch: "main",
+        head: "abc123",
+        ahead: 0,
+        behind: 0,
+        staged: 1,
+        unstaged: 0,
+        untracked: 0,
+        conflicted: 0,
+        refreshPending: false,
+        stale: false,
+        refreshedAt: "2026-09-20T11:59:00.000Z"
+      }
+    ];
+
+    await store.save("workspace_one", snapshots);
+    await store.save("workspace_two", []);
+
+    await expect(
+      store.load("workspace_one")
+    ).resolves.toEqual(snapshots);
+    await expect(
+      store.load("workspace_two")
+    ).resolves.toEqual([]);
+  });
+
   it("migrates legacy snapshots to explicit stale terminal cache state", async () => {
     temporary =
       await createTemporaryDirectoryFixture(
@@ -521,4 +751,53 @@ function createCurrentWorkspaceDocument(): unknown {
     worktree.isPrunable = false;
   }
   return document;
+}
+
+function createLegacyWorkspaceWithTwoEntries(): Workspace {
+  const workspace =
+    createCurrentWorkspaceDocument() as Workspace;
+  workspace.id = "default";
+  workspace.name = "GitNest Workspace";
+  workspace.updatedAt = "2026-09-20T09:00:00.000Z";
+  workspace.entries[0]!.displayName = "Python";
+  workspace.entries.push({
+    id: "entry_web",
+    displayName: "Web",
+    path: "C:\\workspace\\web",
+    canonicalPath: "c:\\workspace\\web",
+    excludes: [],
+    order: 1,
+    groups: [],
+    scanIssues: [],
+    lastScannedAt: "2026-09-20T08:59:00.000Z",
+    kind: "standalone-repository",
+    target: {
+      repositoryId: "repository_web",
+      worktreeId: "worktree_web"
+    }
+  });
+  workspace.repositories.push({
+    id: "repository_web",
+    name: "web",
+    commonDir: "C:\\workspace\\web\\.git",
+    canonicalCommonDir: "c:\\workspace\\web\\.git",
+    primaryWorktreeId: "worktree_web",
+    worktreeIds: ["worktree_web"]
+  });
+  workspace.worktrees.push({
+    id: "worktree_web",
+    repositoryId: "repository_web",
+    name: "web",
+    path: "C:\\workspace\\web",
+    canonicalPath: "c:\\workspace\\web",
+    gitDir: "C:\\workspace\\web\\.git",
+    head: "def456",
+    branch: "main",
+    isPrimary: true,
+    isBare: false,
+    isDetached: false,
+    isLocked: false,
+    isPrunable: false
+  });
+  return workspace;
 }

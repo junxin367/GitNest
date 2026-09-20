@@ -4,6 +4,7 @@ import { AtomicJsonStore } from "@gitnest/persistence-json";
 export const WINDOW_STATE_SCHEMA_VERSION = 1;
 export const MIN_WINDOW_WIDTH = 1_060;
 export const MIN_WINDOW_HEIGHT = 720;
+const MAX_WINDOW_STATE_DOCUMENT_BYTES = 64 * 1_024;
 
 export interface WindowBounds {
   x: number;
@@ -39,7 +40,9 @@ export class JsonWindowStateStore {
     filePath: string,
     clock: () => string = () => new Date().toISOString()
   ) {
-    this.#store = new AtomicJsonStore(filePath);
+    this.#store = new AtomicJsonStore(filePath, {
+      maxBytes: MAX_WINDOW_STATE_DOCUMENT_BYTES
+    });
     this.#clock = clock;
   }
 

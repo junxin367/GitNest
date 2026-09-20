@@ -1,6 +1,5 @@
 import {
   AnalysisSnapshotCache,
-  CodeAnalysisEngine,
   codeAnalysisSnapshotConfigurationKey,
   type CodeAnalysisProgress,
   type CodeAnalysisScope,
@@ -32,6 +31,8 @@ import {
   type WorkspaceEntry,
   type WorkspaceWorktree
 } from "@gitnest/workspace-core";
+
+import type { CodeAnalysisRunnerPort } from "./code-analysis-runner";
 
 interface WorkspaceReader {
   getCurrent(): Promise<Workspace>;
@@ -90,7 +91,7 @@ export interface CodeAnalysisServiceOptions {
   lspDataDirectory: string;
   settingsProvider(): Promise<CodeAnalysisSettings>;
   idFactory?: () => string;
-  engine?: Pick<CodeAnalysisEngine, "analyze" | "dispose">;
+  runner: CodeAnalysisRunnerPort;
   snapshotStore?: CodeAnalysisSnapshotStore;
 }
 
@@ -105,10 +106,7 @@ export class CodeAnalysisService {
   readonly #lspDataDirectory: string;
   readonly #settingsProvider: () => Promise<CodeAnalysisSettings>;
   readonly #idFactory: () => string;
-  readonly #engine: Pick<
-    CodeAnalysisEngine,
-    "analyze" | "dispose"
-  >;
+  readonly #runner: CodeAnalysisRunnerPort;
   readonly #snapshotStore: CodeAnalysisSnapshotStore;
   readonly #listeners = new Set<StateListener>();
   #state: CodeAnalysisState = {
@@ -152,7 +150,7 @@ export class CodeAnalysisService {
         `analysis_${Date.now()}_${Math.random()
           .toString(36)
           .slice(2, 10)}`);
-    this.#engine = options.engine ?? new CodeAnalysisEngine();
+    this.#runner = options.runner;
     this.#snapshotStore =
       options.snapshotStore ??
       new AnalysisSnapshotCache(options.cacheDirectory);
@@ -185,7 +183,9 @@ export class CodeAnalysisService {
   async start(
     scope: CodeAnalysisScope
   ): Promise<CodeAnalysisAccepted> {
+    this.#assertNotDisposed();
     const settings = await this.#settingsProvider();
+    this.#assertNotDisposed();
     if (!settings.enabled) {
       throw new WorkspaceError(
         "INVALID_REQUEST",
@@ -193,12 +193,14 @@ export class CodeAnalysisService {
       );
     }
     const workspace = await this.#workspace.getCurrent();
+    this.#assertNotDisposed();
     const context = resolveAnalysisContext(workspace);
     await this.#ensureSnapshotHydrated(
       workspace,
       settings,
       context
     );
+    this.#assertNotDisposed();
     const selectionKey = analysisSelectionKey(
       workspace,
       context
@@ -628,8 +630,18 @@ export class CodeAnalysisService {
     );
     await this.#runQueue.catch(() => undefined);
     await this.#restore?.task.catch(() => undefined);
-    await this.#engine.dispose();
+    await this.#runner.dispose();
     this.#listeners.clear();
+  }
+
+  #assertNotDisposed(): void {
+    if (!this.#disposed) {
+      return;
+    }
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "The code analysis service has been disposed."
+    );
   }
 
   async #run(input: {
@@ -649,7 +661,7 @@ export class CodeAnalysisService {
               input.controller.signal
             )
           : [];
-      const snapshot = await this.#engine.analyze({
+      const snapshot = await this.#runner.analyze({
         analysisId: input.analysisId,
         workspaceId: input.workspace.id,
         entryId: input.context.entry.id,

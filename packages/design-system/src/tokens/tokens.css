@@ -25,14 +25,14 @@
   --radius-regular: 8px;
   --radius-large: 12px;
   --control-compact: 32px;
-  --control-default: 40px;
-  --control-large: 48px;
+  --control-default: 35px;
+  --control-large: 40px;
   --icon-small: 16px;
   --icon-regular: 20px;
   --icon-large: 24px;
   --page-max-width: 1440px;
-  --page-safe-margin: 24px;
-  --page-safe-margin-narrow: 16px;
+  --page-safe-margin: 12px;
+  --page-safe-margin-narrow: 12px;
   --motion-exit: 140ms;
   --motion-micro: 180ms;
   --motion-layer: 240ms;

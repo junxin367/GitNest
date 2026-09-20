@@ -186,7 +186,7 @@ export class WorkspaceService {
     });
   }
 
-  rescan(): Promise<Workspace> {
+  rescan(signal?: AbortSignal): Promise<Workspace> {
     return this.#runExclusive(async () => {
       const current = await this.#loadWorkspace();
 
@@ -196,7 +196,11 @@ export class WorkspaceService {
 
       const now = this.#clock();
       const roots = current.entries.map(toRootDefinition);
-      const scans = await this.#scanRoots(roots, now);
+      const scans = await this.#scanRoots(
+        roots,
+        now,
+        signal
+      );
       const workspace = this.#assembler.assemble({
         current,
         roots,
@@ -563,13 +567,17 @@ export class WorkspaceService {
 
   async #scanRoots(
     roots: WorkspaceRootDefinition[],
-    scannedAt: string
+    scannedAt: string,
+    signal?: AbortSignal
   ): Promise<WorkspaceRootScan[]> {
     const scans: WorkspaceRootScan[] = [];
 
     for (const root of roots) {
       scans.push(
-        await this.#scanner.scanRoot(root, { scannedAt })
+        await this.#scanner.scanRoot(root, {
+          scannedAt,
+          ...(signal ? { signal } : {})
+        })
       );
     }
 

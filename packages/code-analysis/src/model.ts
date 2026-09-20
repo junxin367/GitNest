@@ -34,6 +34,8 @@ export type AnalysisConfidence =
   | "probable"
   | "heuristic";
 
+export const MAX_CODE_DOCUMENTATION_CHARACTERS = 4_000;
+
 export interface AnalysisRoot {
   repositoryId: string;
   worktreeId: string;
@@ -264,6 +266,7 @@ export interface CodeAnalysisInput {
 
 export interface SourceInventoryResult {
   files: AnalysisSourceFile[];
+  totalBytes: number;
   skippedFiles: number;
   truncated: boolean;
   warnings: string[];

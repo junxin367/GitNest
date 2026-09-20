@@ -808,7 +808,7 @@
   }
 
   .page-scroll {
-    padding: var(--space-4);
+    padding: var(--page-safe-margin-narrow);
   }
 
   .metric-grid {
@@ -885,23 +885,6 @@
 
   .settings-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .operation-history-card {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .operation-history-meta {
-    grid-column: 2;
-    grid-template-columns: auto auto minmax(0, 1fr);
-    align-items: center;
-    justify-items: start;
-    width: 100%;
-  }
-
-  .operation-history-meta > div {
-    justify-self: end;
-    margin: 0;
   }
 
   .dashboard-grid {

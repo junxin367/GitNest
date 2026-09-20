@@ -16,7 +16,8 @@ import type {
   WorkspaceErrorDto,
   WorkspaceMonitorStateDto,
   WorkspaceOperationDto,
-  WorkspaceRuntimeStateDto
+  WorkspaceRuntimeStateDto,
+  WorkspaceSummaryDto
 } from "@gitnest/contracts";
 
 import { addWorkspaceEntries } from "./addWorkspaceEntries";
@@ -25,11 +26,13 @@ type WorkspaceOperation =
   | "loading"
   | "selecting"
   | "scanning"
+  | "switching"
   | "saving"
   | null;
 
 export interface WorkspaceController {
   workspace: WorkspaceDetailsDto | null;
+  workspaces: WorkspaceSummaryDto[];
   snapshots: RepositoryStatusSnapshotDto[];
   operations: WorkspaceOperationDto[];
   monitor: WorkspaceMonitorStateDto | null;
@@ -37,6 +40,13 @@ export interface WorkspaceController {
   notice: string | null;
   operation: WorkspaceOperation;
   busy: boolean;
+  createWorkspace(name: string): Promise<boolean>;
+  switchWorkspace(workspaceId: string): Promise<boolean>;
+  renameWorkspace(
+    workspaceId: string,
+    name: string
+  ): Promise<boolean>;
+  deleteWorkspace(workspaceId: string): Promise<boolean>;
   chooseDirectory(): Promise<void>;
   addManualPath(path: string): Promise<boolean>;
   addDroppedFiles(files: File[]): Promise<void>;
@@ -78,6 +88,13 @@ export function useWorkspace(): WorkspaceController {
             }
           : {
               workspace: nextWorkspace,
+              workspaces: [
+                {
+                  id: nextWorkspace.id,
+                  name: nextWorkspace.name,
+                  updatedAt: nextWorkspace.updatedAt
+                }
+              ],
               snapshots: [],
               operations: [],
               monitor: {
@@ -101,6 +118,126 @@ export function useWorkspace(): WorkspaceController {
       details: {}
     });
   }, []);
+
+  const beginWorkspaceTransition = useCallback(() => {
+    targetSelectionSequenceRef.current += 1;
+    pendingTargetSelectionsRef.current.clear();
+    setOperation("switching");
+    setError(null);
+    setNotice(null);
+  }, []);
+
+  const createWorkspace = useCallback(
+    async (name: string): Promise<boolean> => {
+      beginWorkspaceTransition();
+      try {
+        const result = await window.gitnest.workspace.create({
+          name
+        });
+        if (result.ok) {
+          setRuntimeState(result.value);
+          setNotice(
+            `Workspace“${result.value.workspace.name}”已创建，可继续添加目录。`
+          );
+          return true;
+        }
+        setError(result.error);
+        return false;
+      } catch (reason) {
+        setUnexpectedError(reason);
+        return false;
+      } finally {
+        setOperation(null);
+      }
+    },
+    [beginWorkspaceTransition, setUnexpectedError]
+  );
+
+  const switchWorkspace = useCallback(
+    async (workspaceId: string): Promise<boolean> => {
+      if (workspace?.id === workspaceId) {
+        return true;
+      }
+      beginWorkspaceTransition();
+      try {
+        const result = await window.gitnest.workspace.switch({
+          workspaceId
+        });
+        if (result.ok) {
+          setRuntimeState(result.value);
+          return true;
+        }
+        setError(result.error);
+        return false;
+      } catch (reason) {
+        setUnexpectedError(reason);
+        return false;
+      } finally {
+        setOperation(null);
+      }
+    },
+    [
+      beginWorkspaceTransition,
+      setUnexpectedError,
+      workspace?.id
+    ]
+  );
+
+  const renameWorkspace = useCallback(
+    async (
+      workspaceId: string,
+      name: string
+    ): Promise<boolean> => {
+      setOperation("saving");
+      setError(null);
+      setNotice(null);
+      try {
+        const result = await window.gitnest.workspace.rename({
+          workspaceId,
+          name
+        });
+        if (result.ok) {
+          setRuntimeState(result.value);
+          setNotice("Workspace 名称已更新。");
+          return true;
+        }
+        setError(result.error);
+        return false;
+      } catch (reason) {
+        setUnexpectedError(reason);
+        return false;
+      } finally {
+        setOperation(null);
+      }
+    },
+    [setUnexpectedError]
+  );
+
+  const deleteWorkspace = useCallback(
+    async (workspaceId: string): Promise<boolean> => {
+      beginWorkspaceTransition();
+      try {
+        const result = await window.gitnest.workspace.delete({
+          workspaceId
+        });
+        if (result.ok) {
+          setRuntimeState(result.value);
+          setNotice(
+            "Workspace 已从 GitNest 中删除；磁盘上的仓库文件未被删除。"
+          );
+          return true;
+        }
+        setError(result.error);
+        return false;
+      } catch (reason) {
+        setUnexpectedError(reason);
+        return false;
+      } finally {
+        setOperation(null);
+      }
+    },
+    [beginWorkspaceTransition, setUnexpectedError]
+  );
 
   useEffect(() => {
     let active = true;
@@ -469,6 +606,7 @@ export function useWorkspace(): WorkspaceController {
   return useMemo(
     () => ({
       workspace,
+      workspaces: runtimeState?.workspaces ?? [],
       snapshots: runtimeState?.snapshots ?? [],
       operations: runtimeState?.operations ?? [],
       monitor: runtimeState?.monitor ?? null,
@@ -476,6 +614,10 @@ export function useWorkspace(): WorkspaceController {
       notice,
       operation,
       busy: operation !== null,
+      createWorkspace,
+      switchWorkspace,
+      renameWorkspace,
+      deleteWorkspace,
       chooseDirectory,
       addManualPath,
       addDroppedFiles,
@@ -490,12 +632,17 @@ export function useWorkspace(): WorkspaceController {
     }),
     [
       workspace,
+      runtimeState?.workspaces,
       runtimeState?.snapshots,
       runtimeState?.operations,
       runtimeState?.monitor,
       error,
       notice,
       operation,
+      createWorkspace,
+      switchWorkspace,
+      renameWorkspace,
+      deleteWorkspace,
       chooseDirectory,
       addManualPath,
       addDroppedFiles,

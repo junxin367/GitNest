@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "electron-vite dev --watch",
     "build": "electron-vite build",
-    "dist:win": "electron-builder --win --x64 --config electron-builder.yml",
+    "dist:win": "node ../../scripts/build-windows-release.mjs",
     "preview": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit"
   },

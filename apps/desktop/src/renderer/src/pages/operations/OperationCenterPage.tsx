@@ -152,7 +152,10 @@ export function OperationCenterPage({
             </span>
             <div>
               <strong>暂无操作记录</strong>
-              <p>添加 Workspace 后，后台任务会显示在这里。</p>
+              <p>
+                添加 Workspace 后，手动刷新、同步或 Git
+                操作会显示在这里。
+              </p>
             </div>
           </div>
         </div>
@@ -283,9 +286,12 @@ export function OperationCenterPage({
 
       <article className="panel operation-history-panel">
         <header className="panel-header operation-history-header">
-          <div className="panel-title">
-            <Icon name="activity" />
-            操作记录
+          <div className="operation-history-heading">
+            <div className="panel-title">
+              <Icon name="operations" />
+              操作记录
+            </div>
+            <span className="panel-caption">最近任务优先</span>
           </div>
           <div className="operation-filter-tabs">
             {(
@@ -329,7 +335,9 @@ export function OperationCenterPage({
             </span>
             <div>
               <strong>当前筛选下没有操作</strong>
-              <p>启动刷新、同步或仓库写操作后会显示在这里。</p>
+              <p>
+                手动刷新、同步或 Git 操作后会显示在这里。
+              </p>
               {filter !== "all" && (
                 <Button size="small"
                   onClick={() => setFilter("all")}
@@ -430,8 +438,9 @@ function OperationCard({
   onOpenTarget(target: RepositoryTargetDto): void;
 }) {
   const targets = resolveOperationTargets(operation, workspace);
-  const primaryTarget =
-    targets.length === 1 ? targets[0]?.target : undefined;
+  const primaryResolvedTarget =
+    targets.length === 1 ? targets[0] : undefined;
+  const primaryTarget = primaryResolvedTarget?.target;
   const canCancel =
     isRepositoryCommandKind(operation.kind) &&
     (operation.state === "queued" ||
@@ -441,111 +450,140 @@ function OperationCard({
     operation.state === "failed" &&
     ["fetch", "pull", "push"].includes(operation.kind) &&
     Boolean(primaryTarget);
+  const progress = Math.max(
+    0,
+    Math.min(operation.progress, 1)
+  );
+  const progressPercent = Math.round(progress * 100);
+  const label = operationLabel(operation);
+  const showProgress =
+    operation.state === "running" ||
+    operation.state === "cancelling";
 
   return (
     <article className="operation-history-card">
-      <span
-        className={`operation-icon state-${operation.state}`}
-      >
-        <Icon
-          name={
-            operation.state === "failed" ||
-            operation.state === "interrupted"
-              ? "warning"
-              : operation.state === "succeeded"
-                ? "check"
-                : operation.state === "cancelled"
-                  ? "close"
-                  : "refresh"
-          }
-          size={15}
-        />
-      </span>
-      <div className="operation-history-copy">
-        <div>
-          <strong>{operationKindLabel(operation.kind)}</strong>
-          <span
-            className={`status-pill ${operationStateTone(
-              operation.state
-            )}`}
-          >
-            {operationStateLabel(operation.state)}
-          </span>
-        </div>
-        <p>{operation.message}</p>
-        <div className="operation-target-list">
-          {targets.map(({ target, label, path }) => (
-            <Button variant="unstyled"
-              key={`${target.repositoryId}:${target.worktreeId}`}
-              onClick={() => onOpenTarget(target)}
-              title={path}
-              type="button"
-            >
-              <Icon name="repository" size={11} />
-              {label}
-            </Button>
-          ))}
-          {targets.length === 0 && (
-            <span>{operation.targetIds.length} 个目标</span>
+      <div className="operation-history-head">
+        <span
+          className={`operation-icon state-${operation.state}`}
+        >
+          <Icon
+            name={
+              operation.state === "failed" ||
+              operation.state === "interrupted"
+                ? "warning"
+                : operation.state === "succeeded"
+                  ? "check"
+                  : operation.state === "cancelled"
+                    ? "close"
+                    : "refresh"
+            }
+            size={14}
+          />
+        </span>
+        <div className="operation-history-name">
+          {primaryResolvedTarget && (
+            <>
+              <Button variant="unstyled"
+                className="operation-history-primary-target"
+                onClick={() =>
+                  onOpenTarget(primaryResolvedTarget.target)
+                }
+                title={primaryResolvedTarget.path}
+                type="button"
+              >
+                {primaryResolvedTarget.label}
+              </Button>
+              <span aria-hidden="true">·</span>
+            </>
+          )}
+          <strong>{label}</strong>
+          {!primaryResolvedTarget && targets.length > 1 && (
+            <span>· {targets.length} 个目标</span>
           )}
         </div>
+        <span className="operation-history-state">
+          {operationStateLabel(operation.state)}
+        </span>
+      </div>
+      {showProgress && (
         <div
-          aria-label={`${operationKindLabel(operation.kind)}进度`}
+          aria-label={`${label}进度`}
           aria-valuemax={100}
           aria-valuemin={0}
-          aria-valuenow={Math.round(
-            Math.max(0, Math.min(operation.progress, 1)) * 100
-          )}
+          aria-valuenow={progressPercent}
           className="operation-progress"
           role="progressbar"
         >
           <span
             style={{
-              transform: `scaleX(${Math.max(
-                0,
-                Math.min(operation.progress, 1)
-              )})`
+              transform: `scaleX(${progress})`
             }}
           />
         </div>
-      </div>
-      <div className="operation-history-meta">
-        <span>
-          {formatDuration(operation, now)}
-        </span>
-        <span>
-          成功 {operation.succeeded} · 失败 {operation.failed}
-        </span>
-        <div>
-          {canRetry && primaryTarget && (
-            <Button variant="unstyled"
-              className="mini-action"
-              disabled={commands.busy}
-              onClick={() =>
-                void retryOperation(
-                  operation.kind,
-                  primaryTarget,
-                  commands
-                )
-              }
-              type="button"
-            >
-              重新预检
-            </Button>
+      )}
+      <div className="operation-history-foot">
+        <div className="operation-history-summary">
+          <span className="operation-history-message">
+            {operation.message}
+          </span>
+          {targets.length > 1 && (
+            <div className="operation-target-list">
+              {targets.map(({ target, label, path }) => (
+                <Button variant="unstyled"
+                  key={`${target.repositoryId}:${target.worktreeId}`}
+                  onClick={() => onOpenTarget(target)}
+                  title={path}
+                  type="button"
+                >
+                  <Icon name="repository" size={11} />
+                  {label}
+                </Button>
+              ))}
+            </div>
           )}
-          {canCancel && (
-            <Button variant="unstyled"
-              className="mini-action danger"
-              disabled={operation.state === "cancelling"}
-              onClick={() =>
-                void commands.cancelOperation(operation.id)
-              }
-              type="button"
-            >
-              {operation.state === "cancelling"
-                ? "取消中"
-                : "取消"}
-            </Button>
+          {targets.length === 0 &&
+            operation.targetIds.length > 0 && (
+              <span className="operation-target-count">
+                {operation.targetIds.length} 个目标
+              </span>
+            )}
+        </div>
+        <div className="operation-history-meta">
+          {showProgress && <span>{progressPercent}%</span>}
+          <span>{formatOperationTime(operation, now)}</span>
+          {(canRetry || canCancel) && (
+            <div className="operation-history-actions">
+              {canRetry && primaryTarget && (
+                <Button variant="unstyled"
+                  className="mini-action"
+                  disabled={commands.busy}
+                  onClick={() =>
+                    void retryOperation(
+                      operation.kind,
+                      primaryTarget,
+                      commands
+                    )
+                  }
+                  type="button"
+                >
+                  重新预检
+                </Button>
+              )}
+              {canCancel && (
+                <Button variant="unstyled"
+                  className="mini-action danger"
+                  disabled={operation.state === "cancelling"}
+                  onClick={() =>
+                    void commands.cancelOperation(operation.id)
+                  }
+                  type="button"
+                >
+                  {operation.state === "cancelling"
+                    ? "取消中"
+                    : "取消"}
+                </Button>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -673,12 +711,24 @@ function isRepositoryCommandKind(
   ].includes(kind);
 }
 
+function operationLabel(
+  operation: WorkspaceOperationDto
+): string {
+  if (
+    operation.kind === "fetch" &&
+    operation.scope === "workspace"
+  ) {
+    return "Fetch 全部仓库";
+  }
+  return operationKindLabel(operation.kind);
+}
+
 function operationKindLabel(
   kind: WorkspaceOperationDto["kind"]
 ): string {
   return {
-    scan: "Workspace 扫描",
-    status: "仓库状态刷新",
+    scan: "Workspace 状态扫描",
+    status: "读取仓库状态",
     stage: "暂存文件",
     unstage: "取消暂存",
     discard: "放弃更改",
@@ -707,33 +757,48 @@ function operationStateLabel(
   state: WorkspaceOperationDto["state"]
 ): string {
   return {
-    queued: "排队中",
-    running: "运行中",
+    queued: "已排队",
+    running: "进行中",
     cancelling: "取消中",
-    succeeded: "成功",
+    succeeded: "已完成",
     failed: "失败",
     cancelled: "已取消",
     interrupted: "已中断"
   }[state];
 }
 
-function operationStateTone(
-  state: WorkspaceOperationDto["state"]
-): "neutral" | "blue" | "green" | "yellow" | "red" {
-  if (state === "succeeded") {
-    return "green";
-  }
-  if (state === "failed" || state === "interrupted") {
-    return "red";
+function formatOperationTime(
+  operation: WorkspaceOperationDto,
+  now: number
+): string {
+  if (operation.state === "queued") {
+    return "等待执行";
   }
   if (
-    state === "queued" ||
-    state === "running" ||
-    state === "cancelling"
+    operation.state === "running" ||
+    operation.state === "cancelling"
   ) {
-    return "blue";
+    return formatDuration(operation, now);
   }
-  return "neutral";
+  const timestamp =
+    operation.finishedAt ?? operation.startedAt;
+  return timestamp
+    ? formatOperationTimestamp(timestamp)
+    : "时间未知";
+}
+
+function formatOperationTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "时间未知";
+  }
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return [
+    `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(
+      date.getDate()
+    )}`,
+    `${pad(date.getHours())}:${pad(date.getMinutes())}`
+  ].join(" ");
 }
 
 function formatDuration(

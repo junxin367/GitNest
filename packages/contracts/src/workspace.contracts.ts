@@ -126,6 +126,29 @@ export interface WorkspaceDetailsDto {
   updatedAt: string;
 }
 
+export interface WorkspaceSummaryDto {
+  id: string;
+  name: string;
+  updatedAt: string;
+}
+
+export interface CreateWorkspaceRequest {
+  name: string;
+}
+
+export interface SwitchWorkspaceRequest {
+  workspaceId: string;
+}
+
+export interface RenameWorkspaceRequest {
+  workspaceId: string;
+  name: string;
+}
+
+export interface DeleteWorkspaceRequest {
+  workspaceId: string;
+}
+
 export interface AddWorkspaceEntryRequest {
   path: string;
   source: "picker" | "manual" | "drop";
@@ -236,6 +259,7 @@ export interface WorkspaceMonitorStateDto {
 
 export interface WorkspaceRuntimeStateDto {
   workspace: WorkspaceDetailsDto;
+  workspaces: WorkspaceSummaryDto[];
   snapshots: RepositoryStatusSnapshotDto[];
   operations: WorkspaceOperationDto[];
   monitor: WorkspaceMonitorStateDto;

@@ -40,8 +40,8 @@
       --radius-regular: 8px;
       --radius-large: 12px;
       --control-compact: 32px;
-      --control-default: 40px;
-      --control-large: 48px;
+      --control-default: 35px;
+      --control-large: 40px;
       --icon-small: 16px;
       --icon-regular: 20px;
       --icon-large: 24px;
@@ -604,7 +604,7 @@
       display: flex;
       align-items: center;
       gap: var(--space-2);
-      min-height: 34px;
+      min-height: var(--control-compact);
       padding: 0 var(--space-2);
       color: var(--text-soft);
       text-align: left;
@@ -655,7 +655,7 @@
       align-items: center;
       gap: var(--space-2);
       min-width: 0;
-      min-height: 34px;
+      min-height: var(--control-compact);
       padding: 0 var(--space-2);
       color: var(--text-soft);
       text-align: left;
@@ -710,7 +710,7 @@
       align-items: center;
       gap: var(--space-2);
       width: 100%;
-      min-height: 34px;
+      min-height: var(--control-compact);
       padding: 0 var(--space-2);
       color: var(--text-soft);
       text-align: left;
@@ -766,7 +766,7 @@
       grid-template-columns: 22px minmax(0, 1fr);
       align-items: center;
       gap: var(--space-2);
-      min-height: 34px;
+      min-height: var(--control-compact);
       padding: 0 var(--space-2);
       color: var(--text-soft);
       text-align: left;
@@ -813,7 +813,7 @@
       display: flex;
       align-items: center;
       gap: var(--space-2);
-      min-height: 34px;
+      min-height: var(--control-compact);
       padding: 0 var(--space-2);
       color: var(--text-soft);
       text-align: left;
@@ -849,9 +849,9 @@
     }
 
     .settings-terminal-trigger {
-      --dropdown-size-small: 32px;
-      --dropdown-size-medium: 35px;
-      --dropdown-size-large: 40px;
+      --dropdown-size-small: var(--control-compact);
+      --dropdown-size-medium: var(--control-default);
+      --dropdown-size-large: var(--control-large);
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -910,7 +910,7 @@
       align-items: center;
       gap: var(--space-2);
       min-width: 0;
-      min-height: 34px;
+      min-height: var(--control-compact);
       padding: 0 var(--space-2);
       color: var(--text-soft);
       text-align: left;
@@ -1054,7 +1054,7 @@
       display: flex;
       align-items: center;
       gap: var(--space-2);
-      min-height: 34px;
+      min-height: var(--control-compact);
       padding: 0 var(--space-2);
       color: var(--text-soft);
       text-align: left;
@@ -1804,10 +1804,12 @@
       justify-content: flex-start;
       width: 42px;
       height: 24px;
+      max-height: 24px;
       padding: 2px;
       background: var(--surface-3);
       border: 1px solid var(--border);
       border-radius: 999px;
+      cursor: pointer;
     }
 
     .toggle-demo span {
@@ -2280,7 +2282,7 @@
             <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
             <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
             <div class="sample-spec"><span>Padding</span><strong>8px</strong></div>
-            <div class="sample-spec"><span>Row</span><strong>34px</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
           </div>
         </article>
 
@@ -2314,7 +2316,7 @@
           </div>
           <div class="sample-specs">
             <div class="sample-spec"><span>Width</span><strong>244px / 286px</strong></div>
-            <div class="sample-spec"><span>Row</span><strong>34px</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
             <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
             <div class="sample-spec"><span>Shadow</span><strong>popover</strong></div>
           </div>
@@ -2343,7 +2345,7 @@
           <div class="sample-specs">
             <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
             <div class="sample-spec"><span>Padding</span><strong>8px</strong></div>
-            <div class="sample-spec"><span>Row</span><strong>34px</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
             <div class="sample-spec"><span>Shadow</span><strong>popover</strong></div>
           </div>
         </article>
@@ -2374,7 +2376,7 @@
           </div>
           <div class="sample-specs">
             <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
-            <div class="sample-spec"><span>Row</span><strong>34px</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
             <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
             <div class="sample-spec"><span>Align</span><strong>left / bottom</strong></div>
           </div>
@@ -2423,7 +2425,7 @@
           </div>
           <div class="sample-specs">
             <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
-            <div class="sample-spec"><span>Row</span><strong>34px</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
             <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
             <div class="sample-spec"><span>Heading</span><strong>uppercase</strong></div>
           </div>
@@ -2588,7 +2590,7 @@
           </div>
           <div class="sample-specs">
             <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
-            <div class="sample-spec"><span>Row</span><strong>34px</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
             <div class="sample-spec"><span>Danger</span><strong>red text</strong></div>
             <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
           </div>
@@ -2642,7 +2644,7 @@
           <div class="sample-specs">
             <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
             <div class="sample-spec"><span>Heading</span><strong>none</strong></div>
-            <div class="sample-spec"><span>Row</span><strong>34px</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
             <div class="sample-spec"><span>Padding</span><strong>8px</strong></div>
           </div>
         </article>
@@ -3299,14 +3301,14 @@
             </tr>
           </thead>
           <tbody>
-            <tr><td>标题栏菜单</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>34px</td><td>popover / 200</td></tr>
-            <tr><td>Workspace 切换</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>34px</td><td>popover / 200</td></tr>
-            <tr><td>仓库筛选</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>34px</td><td>popover / 200</td></tr>
-            <tr><td>变更视图</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>34px</td><td>popover / 200</td></tr>
-            <tr><td>Open in</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>34px</td><td>popover / 200</td></tr>
-            <tr><td>默认终端选择器</td><td><code>100% / max 360px</code></td><td>8px / 12px</td><td>12px / 8px</td><td>40px / 34px</td><td>popover / 200</td></tr>
-            <tr><td>右键菜单</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>34px</td><td>popover / 200</td></tr>
-            <tr><td>右键二级菜单</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>34px</td><td>local z-index 1</td></tr>
+            <tr><td>标题栏菜单</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>popover / 200</td></tr>
+            <tr><td>Workspace 切换</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>popover / 200</td></tr>
+            <tr><td>仓库筛选</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>popover / 200</td></tr>
+            <tr><td>变更视图</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>popover / 200</td></tr>
+            <tr><td>Open in</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>popover / 200</td></tr>
+            <tr><td>默认终端选择器</td><td><code>100% / max 360px</code></td><td>8px / 12px</td><td>12px / 8px</td><td>35px / 32px</td><td>popover / 200</td></tr>
+            <tr><td>右键菜单</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>popover / 200</td></tr>
+            <tr><td>右键二级菜单</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>local z-index 1</td></tr>
             <tr><td>Diff 搜索</td><td><code>360px</code></td><td>8px</td><td>2px 4px</td><td>32px+</td><td>popover / 200</td></tr>
             <tr><td>Ctrl+K 命令面板</td><td><code>610px / viewport</code></td><td>12px</td><td>16px / 8px</td><td>48px / 48px</td><td>modal / 500</td></tr>
             <tr><td>分支切换</td><td><code>520px</code></td><td>12px</td><td>16px / 24px</td><td>54px</td><td>modal / 500</td></tr>
@@ -3316,7 +3318,7 @@
             <tr><td>图标按钮</td><td><code>32px</code></td><td>8px</td><td>0</td><td>32px</td><td>content / 0</td></tr>
             <tr><td>工具栏按钮</td><td><code>auto</code></td><td>8px</td><td>0 12px</td><td>32px</td><td>content / 0</td></tr>
             <tr><td>快捷操作按钮</td><td><code>auto</code></td><td>8px</td><td>0 12px</td><td>32px</td><td>content / 0</td></tr>
-            <tr><td>设置开关</td><td><code>42px</code></td><td>999px</td><td>3px</td><td>24px</td><td>content / 0</td></tr>
+            <tr><td>设置开关</td><td><code>42px</code></td><td>999px</td><td>2px</td><td>24px max</td><td>content / 0</td></tr>
             <tr><td>提示信息 / Toast 弹窗</td><td><code>300–400px / viewport</code></td><td>12px</td><td>12px</td><td>48px+</td><td>toast / 600</td></tr>
             <tr><td>表单输入框</td><td><code>100%</code></td><td>8px</td><td>0 8px</td><td>35px</td><td>content / 0</td></tr>
             <tr><td>多行输入框</td><td><code>100%</code></td><td>8px</td><td>8px 12px 8px 8px</td><td>min 96px</td><td>content / 0</td></tr>

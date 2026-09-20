@@ -812,6 +812,80 @@ describe("buildCodeGraph request chains", () => {
       graph.requestChains.every((chain) => chain.ambiguous)
     ).toBe(true);
   });
+
+  it.each([
+    {
+      clientRoute: "/resource/items",
+      controllerPrefix: "/api",
+      endpointRoute: "/resource/items"
+    },
+    {
+      clientRoute: "/api/resource/items",
+      controllerPrefix: "",
+      endpointRoute: "/resource/items"
+    }
+  ])(
+    "indexes heuristic route suffixes in either direction",
+    ({ clientRoute, controllerPrefix, endpointRoute }) => {
+      const frontend = parseSourceFile(
+        sourceFile("client.ts", "typescript"),
+        [
+          "import { GET } from '@/api/request';",
+          `export const load = () => GET('${clientRoute}');`
+        ].join("\n")
+      );
+      const controller = parseSourceFile(
+        sourceFile("Controller.java", "java"),
+        [
+          "@RestController",
+          ...(controllerPrefix
+            ? [`@RequestMapping("${controllerPrefix}")`]
+            : []),
+          "public class Controller {",
+          `  @GetMapping("${endpointRoute}")`,
+          "  public Object list() { return service.list(); }",
+          "}"
+        ].join("\n")
+      );
+
+      const graph = buildCodeGraph({
+        files: [frontend, controller],
+        scope: "workspace",
+        graphDepth: 3
+      });
+
+      expect(graph.requestChains).toHaveLength(1);
+      expect(graph.requestChains[0]?.confidence).toBe(
+        "heuristic"
+      );
+    }
+  );
+
+  it("stops building when a graph budget is exhausted", () => {
+    const parsed = parseSourceFile(
+      sourceFile("large.ts", "typescript"),
+      [
+        "export function first() { return 1; }",
+        "export function second() { return first(); }"
+      ].join("\n")
+    );
+
+    const graph = buildCodeGraph({
+      files: [parsed],
+      scope: "workspace",
+      graphDepth: 3,
+      limits: {
+        maxNodes: 1,
+        maxEdges: 1,
+        maxRequestChains: 1
+      }
+    });
+
+    expect(graph.nodes).toHaveLength(1);
+    expect(graph.edges).toHaveLength(0);
+    expect(graph.requestChains).toHaveLength(0);
+    expect(graph.truncated).toBe(true);
+  });
 });
 
 function sourceFile(

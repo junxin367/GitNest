@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   GitError,
@@ -6,10 +6,12 @@ import {
   type GitEnvironment,
   type GitReadOptions,
   type InspectRepositoryOptions,
+  type ReadRepositorySnapshotOptions,
   type RepositoryInspection,
   type RepositorySnapshot
 } from "@gitnest/git-core";
 import {
+  WorkspaceError,
   listWorkspaceTargets,
   type RepositorySnapshotStore,
   type RepositoryStatusSnapshot,
@@ -26,8 +28,10 @@ import {
   type WorkspaceConfigurationService,
   type WorkspaceOperation,
   type WorkspaceOperationStore,
+  type WorkspaceRefreshDiagnostic,
   type WorkspaceRuntimeState
 } from "./workspace-runtime-service";
+import { WorkspaceRefreshScheduler } from "./workspace-refresh-scheduler";
 
 describe("WorkspaceRuntimeService", () => {
   it("shows cached snapshots first, caps Git reads at four, merges duplicate requests, and debounces watcher events", async () => {
@@ -74,7 +78,7 @@ describe("WorkspaceRuntimeService", () => {
         state.monitor.mode === "watching" &&
         state.operations.some(
           (operation) =>
-            operation.kind === "status" &&
+            operation.kind === "scan" &&
             operation.state === "running"
         )
     );
@@ -93,7 +97,7 @@ describe("WorkspaceRuntimeService", () => {
         ) &&
         state.operations.some(
           (operation) =>
-            operation.kind === "status" &&
+            operation.kind === "scan" &&
             operation.state === "succeeded"
         )
     );
@@ -102,8 +106,198 @@ describe("WorkspaceRuntimeService", () => {
     expect(gitClient.maxActive).toBeLessThanOrEqual(4);
     expect(gitClient.calls).toHaveLength(7);
     expect(snapshotStore.saved).toHaveLength(6);
+    expect(
+      completed.operations.filter(
+        (operation) => operation.kind === "status"
+      )
+    ).toHaveLength(0);
 
     unsubscribeThrowingListener();
+    await runtime.dispose();
+  });
+
+  it("switches one active Workspace at a time and restores isolated snapshots and operation history", async () => {
+    const first = createWorkspace(1);
+    first.id = "workspace_first";
+    first.name = "First Workspace";
+    const second = structuredClone(first);
+    second.id = "workspace_second";
+    second.name = "Second Workspace";
+    second.entries[0] = {
+      ...(second.entries[0] as Workspace["entries"][number]),
+      path: "C:\\second",
+      canonicalPath: "c:\\second"
+    };
+    second.worktrees[0] = {
+      ...(second.worktrees[0] as Workspace["worktrees"][number]),
+      path: "C:\\second\\repository-0",
+      canonicalPath: "c:\\second\\repository-0",
+      head: "second-head"
+    };
+    const target = first.selectedTarget as RepositoryTarget;
+    const snapshotStore =
+      new WorkspaceScopedMemorySnapshotStore({
+        workspace_first: [
+          {
+            ...createCachedSnapshot(target),
+            head: "first-cache"
+          }
+        ],
+        workspace_second: [
+          {
+            ...createCachedSnapshot(target),
+            head: "second-cache"
+          }
+        ]
+      });
+    const operationStore =
+      new WorkspaceScopedMemoryOperationStore({
+        workspace_first: [
+          completedOperation("operation_first")
+        ],
+        workspace_second: [
+          completedOperation("operation_second")
+        ]
+      });
+    const watcher = new FakeWatcher();
+    const runtime = new WorkspaceRuntimeService(
+      new SwitchingConfiguration([first, second]),
+      new TrackingGitClient(),
+      snapshotStore,
+      watcher,
+      {
+        autoRefresh: false,
+        operationStore
+      }
+    );
+
+    const initial = await runtime.getState();
+    expect(initial.workspaces.map(({ id }) => id)).toEqual([
+      "workspace_first",
+      "workspace_second"
+    ]);
+    expect(initial.snapshots[0]?.head).toBe("first-cache");
+    expect(initial.operations[0]?.id).toBe("operation_first");
+
+    const switched = await runtime.switchWorkspace(
+      "workspace_second"
+    );
+    expect(switched.workspace.id).toBe("workspace_second");
+    expect(switched.snapshots[0]?.head).toBe("second-cache");
+    expect(switched.operations[0]?.id).toBe(
+      "operation_second"
+    );
+    expect(
+      watcher.registrations.map(({ path }) => path)
+    ).toContain("C:\\second\\repository-0");
+
+    const restored = await runtime.switchWorkspace(
+      "workspace_first"
+    );
+    expect(restored.snapshots[0]?.head).toBe("first-cache");
+    expect(restored.operations[0]?.id).toBe(
+      "operation_first"
+    );
+    await runtime.dispose();
+  });
+
+  it("switches without waiting for superseded background status reads", async () => {
+    const first = createWorkspace(2);
+    first.id = "workspace_first";
+    first.name = "First Workspace";
+    const second = structuredClone(first);
+    second.id = "workspace_second";
+    second.name = "Second Workspace";
+    second.entries[0] = {
+      ...(second.entries[0] as Workspace["entries"][number]),
+      path: "C:\\second",
+      canonicalPath: "c:\\second"
+    };
+    second.worktrees = second.worktrees.map(
+      (worktree, index) => ({
+        ...worktree,
+        path: `C:\\second\\repository-${index}`,
+        canonicalPath: `c:\\second\\repository-${index}`,
+        head: `second-head-${index}`
+      })
+    );
+    let releaseRead: () => void = () => undefined;
+    const readBlocked = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const observedSignals: AbortSignal[] = [];
+    const gitClient = new TrackingGitClient(
+      (_callIndex, _path, options) => {
+        if (options?.signal) {
+          observedSignals.push(options.signal);
+        }
+        return readBlocked;
+      }
+    );
+    const runtime = new WorkspaceRuntimeService(
+      new SwitchingConfiguration([first, second]),
+      gitClient,
+      new WorkspaceScopedMemorySnapshotStore({}),
+      new FakeWatcher(),
+      { autoRefresh: false }
+    );
+
+    await runtime.getState();
+    await runtime.rescan();
+    await waitForCondition(() => gitClient.calls.length > 0);
+
+    let switched: WorkspaceRuntimeState;
+    try {
+      switched = await resolveWithin(
+        runtime.switchWorkspace("workspace_second"),
+        500
+      );
+    } finally {
+      releaseRead();
+    }
+
+    expect(switched.workspace.id).toBe("workspace_second");
+    expect(observedSignals.length).toBeGreaterThan(0);
+    expect(
+      observedSignals.every((signal) => signal.aborted)
+    ).toBe(true);
+    await waitForCondition(() => gitClient.active === 0);
+    const settled = await runtime.getState();
+    expect(settled.workspace.id).toBe("workspace_second");
+    expect(settled.snapshots).toEqual([]);
+    await runtime.dispose();
+  });
+
+  it("cancels the startup topology scan before switching Workspace", async () => {
+    const first = createWorkspace(1);
+    first.id = "workspace_first";
+    const second = structuredClone(first);
+    second.id = "workspace_second";
+    second.name = "Second Workspace";
+    const configuration =
+      new BlockingStartupSwitchingConfiguration([
+        first,
+        second
+      ]);
+    const runtime = new WorkspaceRuntimeService(
+      configuration,
+      new TrackingGitClient(),
+      new WorkspaceScopedMemorySnapshotStore({}),
+      new FakeWatcher(),
+      { autoRefresh: true }
+    );
+
+    await runtime.getState();
+    await waitForCondition(
+      () => configuration.rescanStarted
+    );
+    const switched = await resolveWithin(
+      runtime.switchWorkspace("workspace_second"),
+      500
+    );
+
+    expect(configuration.rescanAborted).toBe(true);
+    expect(switched.workspace.id).toBe("workspace_second");
     await runtime.dispose();
   });
 
@@ -122,7 +316,7 @@ describe("WorkspaceRuntimeService", () => {
       {
         autoRefresh: false,
         currentTargetDebounceMs: 1,
-        selectedTargetPollingIntervalMs: 40,
+        selectedTargetHeartbeatIntervalMs: 40,
         staleAfterMs: 1,
         clock: () => now
       }
@@ -136,45 +330,39 @@ describe("WorkspaceRuntimeService", () => {
         state.snapshots[0]?.contentVersion === 1 &&
         state.operations.some(
           (operation) =>
-            operation.kind === "status" &&
+            operation.kind === "scan" &&
             operation.state === "succeeded"
         )
     );
-    const initialStatusCount = initial.operations.filter(
-      (operation) => operation.kind === "status"
-    ).length;
+    const initialOperationIds = initial.operations.map(
+      (operation) => operation.id
+    );
 
     now = "2026-09-17T12:01:00.000Z";
     const heartbeat = await waitForState(
       runtime,
       (state) =>
         gitClient.calls.length >= 2 &&
-        state.operations.filter(
-          (operation) => operation.kind === "status"
-        ).length > initialStatusCount &&
-        !state.operations.some(
-          (operation) =>
-            operation.kind === "status" &&
-            operation.state === "running"
-        )
+        !state.snapshots[0]?.refreshPending
     );
 
     expect(heartbeat.snapshots[0]?.contentVersion).toBe(1);
+    expect(
+      heartbeat.operations.map((operation) => operation.id)
+    ).toEqual(initialOperationIds);
 
     now = "2026-09-17T12:00:00.000Z";
     watcher.emit(target);
     const watched = await waitForState(
       runtime,
       (state) =>
-        state.snapshots[0]?.contentVersion === 2 &&
-        state.operations.some(
-          (operation) =>
-            operation.kind === "status" &&
-            operation.state === "succeeded"
-        )
+        state.snapshots[0]?.contentVersion === 2
     );
 
     expect(watched.snapshots[0]?.contentVersion).toBe(2);
+    expect(
+      watched.operations.map((operation) => operation.id)
+    ).toEqual(initialOperationIds);
     await runtime.dispose();
   });
 
@@ -202,7 +390,7 @@ describe("WorkspaceRuntimeService", () => {
         state.monitor.mode === "watching" &&
         state.operations.some(
           (operation) =>
-            operation.kind === "status" &&
+            operation.kind === "scan" &&
             operation.state === "succeeded"
         )
     );
@@ -258,13 +446,13 @@ describe("WorkspaceRuntimeService", () => {
         state.monitor.mode === "watching" &&
         state.operations.some(
           (operation) =>
-            operation.kind === "status" &&
+            operation.kind === "scan" &&
             operation.state === "succeeded"
         )
     );
-    const initialStatusOperations = initial.operations.filter(
-      (operation) => operation.kind === "status"
-    ).length;
+    const initialOperationIds = initial.operations.map(
+      (operation) => operation.id
+    );
     gitClient.calls.length = 0;
 
     watcher.emit(target);
@@ -279,10 +467,8 @@ describe("WorkspaceRuntimeService", () => {
 
     expect(gitClient.calls).toHaveLength(2);
     expect(
-      completed.operations.filter(
-        (operation) => operation.kind === "status"
-      )
-    ).toHaveLength(initialStatusOperations + 2);
+      completed.operations.map((operation) => operation.id)
+    ).toEqual(initialOperationIds);
     await runtime.dispose();
   });
 
@@ -310,7 +496,7 @@ describe("WorkspaceRuntimeService", () => {
         state.monitor.mode === "watching" &&
         state.operations.some(
           (operation) =>
-            operation.kind === "status" &&
+            operation.kind === "scan" &&
             operation.state === "succeeded"
         )
     );
@@ -318,6 +504,7 @@ describe("WorkspaceRuntimeService", () => {
 
     const targets = listWorkspaceTargets(workspace);
     watcher.emit(targets[0] as RepositoryTarget);
+    await waitForCondition(() => snapshotStore.saveCalls >= 1);
     watcher.emit(targets[1] as RepositoryTarget);
     await waitForCondition(() => snapshotStore.saveCalls >= 2);
     await runtime.dispose();
@@ -427,6 +614,42 @@ describe("WorkspaceRuntimeService", () => {
         failed: 0,
         message: "Fetch completed.",
         finishedAt: "2026-09-04T10:00:00.000Z"
+      },
+      {
+        id: "operation_5_20260904095900000",
+        kind: "status",
+        scope: "workspace",
+        targetIds: ["repository-0:worktree-0"],
+        state: "succeeded",
+        progress: 1,
+        succeeded: 1,
+        failed: 0,
+        message: "Legacy automatic refresh.",
+        finishedAt: "2026-09-04T09:59:00.000Z"
+      },
+      {
+        id: "operation_4_20260904095800000",
+        kind: "status",
+        scope: "workspace",
+        targetIds: ["repository-0:worktree-0"],
+        state: "running",
+        progress: 0.5,
+        succeeded: 0,
+        failed: 0,
+        message: "Legacy running refresh.",
+        startedAt: "2026-09-04T09:58:00.000Z"
+      },
+      {
+        id: "operation_3_20260904095700000",
+        kind: "status",
+        scope: "workspace",
+        targetIds: ["repository-0:worktree-0"],
+        state: "failed",
+        progress: 1,
+        succeeded: 0,
+        failed: 1,
+        message: "Legacy refresh failure.",
+        finishedAt: "2026-09-04T09:57:00.000Z"
       }
     ]);
     const runtime = new WorkspaceRuntimeService(
@@ -457,11 +680,25 @@ describe("WorkspaceRuntimeService", () => {
       state: "succeeded",
       message: "Fetch completed."
     });
+    expect(state.operations[2]).toMatchObject({
+      kind: "status",
+      state: "failed",
+      message: "Legacy refresh failure."
+    });
+    expect(state.operations).toHaveLength(3);
 
     await runtime.dispose();
+    expect(operationStore.saved).toHaveLength(3);
     expect(operationStore.saved[0]).toMatchObject({
       state: "interrupted"
     });
+    expect(
+      operationStore.saved.some(
+        (operation) =>
+          operation.kind === "status" &&
+          operation.state === "succeeded"
+      )
+    ).toBe(false);
   });
 
   it("persists terminal operation transitions for the next launch", async () => {
@@ -511,6 +748,7 @@ describe("WorkspaceRuntimeService", () => {
 
   it("falls back to polling when file watching cannot start", async () => {
     const workspace = createWorkspace(1);
+    const diagnostics: WorkspaceRefreshDiagnostic[] = [];
     const runtime = new WorkspaceRuntimeService(
       new FakeConfiguration(workspace),
       new TrackingGitClient(),
@@ -519,6 +757,9 @@ describe("WorkspaceRuntimeService", () => {
       {
         autoRefresh: false,
         pollingIntervalMs: 60_000,
+        onDiagnostic: (diagnostic) => {
+          diagnostics.push(diagnostic);
+        },
         clock: () => "2026-09-04T12:00:00.000Z"
       }
     );
@@ -530,7 +771,142 @@ describe("WorkspaceRuntimeService", () => {
     );
 
     expect(state.monitor.message).toContain("已降级为低频轮询");
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        name: "workspace.monitor-fallback",
+        level: "warning",
+        context: expect.objectContaining({
+          monitorMode: "polling",
+          activeTargetCount: 1
+        })
+      })
+    );
+    expect(JSON.stringify(diagnostics)).not.toContain(
+      "repository-0"
+    );
     await runtime.dispose();
+  });
+
+  it("polls selected, selected-entry, and background targets on separate distributed schedules", async () => {
+    vi.useFakeTimers();
+    const workspace = createWorkspaceWithBackgroundEntry();
+    const selected =
+      workspace.selectedTarget as RepositoryTarget;
+    const selectedEntryTarget =
+      workspace.entries[0]?.groups[0]?.targets[1] as RepositoryTarget;
+    const backgroundTarget =
+      workspace.entries[1]?.groups[0]?.targets[0] as RepositoryTarget;
+    const startedAt = Date.now();
+    const calls: Array<{
+      at: number;
+      target: RepositoryTarget;
+    }> = [];
+    const scheduler = new WorkspaceRefreshScheduler({
+      selectedDebounceMs: 1,
+      backgroundDebounceMs: 1,
+      selectedMinIntervalMs: 1,
+      backgroundMinIntervalMs: 1,
+      heartbeatIntervalMs: 0,
+      selectedPollingIntervalMs: 30,
+      selectedEntryPollingIntervalMs: 70,
+      backgroundPollingIntervalMs: 140,
+      clock: () => "2026-09-20T12:00:00.000Z",
+      isStale: () => true,
+      execute: async (requests) => {
+        for (const request of requests) {
+          calls.push({
+            at: Date.now() - startedAt,
+            target: request.target
+          });
+        }
+        return {
+          requested: requests.length,
+          succeeded: requests.length,
+          failed: 0,
+          changed: 0,
+          failures: []
+        };
+      }
+    });
+
+    scheduler.updateWorkspace(workspace);
+    scheduler.activatePolling();
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls[0]?.target).toEqual(selected);
+      expect(calls).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(70);
+      const selectedEntryCall = calls.find((call) =>
+        repositoryTargetsMatch(
+          call.target,
+          selectedEntryTarget
+        )
+      );
+      expect(selectedEntryCall?.at).toBe(70);
+
+      await vi.advanceTimersByTimeAsync(70);
+      const backgroundCall = calls.find((call) =>
+        repositoryTargetsMatch(
+          call.target,
+          backgroundTarget
+        )
+      );
+      expect(backgroundCall?.at).toBe(140);
+      expect(backgroundCall?.at).toBeGreaterThan(
+        selectedEntryCall?.at ?? 0
+      );
+    } finally {
+      scheduler.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("pauses watcher heartbeat in the background and checks the selected target on return", async () => {
+    vi.useFakeTimers();
+    const workspace = createWorkspace(1);
+    const reasons: string[] = [];
+    const scheduler = new WorkspaceRefreshScheduler({
+      selectedDebounceMs: 1,
+      backgroundDebounceMs: 1,
+      selectedMinIntervalMs: 1,
+      backgroundMinIntervalMs: 1,
+      heartbeatIntervalMs: 20,
+      selectedPollingIntervalMs: 30,
+      selectedEntryPollingIntervalMs: 70,
+      backgroundPollingIntervalMs: 140,
+      clock: () => "2026-09-20T12:00:00.000Z",
+      isStale: () => true,
+      execute: async (requests) => {
+        reasons.push(...requests.map((request) => request.reason));
+        return {
+          requested: requests.length,
+          succeeded: requests.length,
+          failed: 0,
+          changed: 0,
+          failures: []
+        };
+      }
+    });
+
+    scheduler.updateWorkspace(workspace);
+    scheduler.activateWatching();
+    try {
+      scheduler.setForeground(false);
+      await vi.advanceTimersByTimeAsync(60);
+      expect(reasons).toHaveLength(0);
+
+      scheduler.setForeground(true);
+      scheduler.requestSelectedIfStale("focus");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reasons).toEqual(["focus"]);
+
+      await vi.advanceTimersByTimeAsync(21);
+      expect(reasons).toEqual(["focus", "heartbeat"]);
+    } finally {
+      scheduler.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("lets the startup refresh own the first focus event", async () => {
@@ -556,19 +932,149 @@ describe("WorkspaceRuntimeService", () => {
     const completed = await waitForState(
       runtime,
       (state) =>
-        state.operations.some(
-          (operation) =>
-            operation.kind === "status" &&
-            operation.state === "succeeded"
+        state.monitor.mode === "watching" &&
+        state.snapshots.length === 1 &&
+        state.snapshots.every(
+          (snapshot) =>
+            !snapshot.stale && !snapshot.refreshPending
         )
     );
 
     expect(configuration.rescanCount).toBe(1);
+    expect(completed.operations).toHaveLength(0);
+    await runtime.dispose();
+  });
+
+  it("refreshes only a stale selected target on focus without adding operation history", async () => {
+    const workspace = createWorkspace(3);
+    const gitClient = new TrackingGitClient();
+    let now = "2026-09-04T12:00:00.000Z";
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      gitClient,
+      new MemorySnapshotStore(),
+      new FakeWatcher(),
+      {
+        autoRefresh: false,
+        selectedTargetHeartbeatIntervalMs: 0,
+        clock: () => now
+      }
+    );
+
+    await runtime.requestWorkspaceRefresh("manual");
+    const initial = await waitForState(
+      runtime,
+      (state) =>
+        state.operations.some(
+          (operation) =>
+            operation.kind === "scan" &&
+            operation.state === "succeeded"
+        )
+    );
+    const initialOperationIds = initial.operations.map(
+      (operation) => operation.id
+    );
+    gitClient.calls.length = 0;
+    now = "2026-09-04T12:01:00.000Z";
+
+    await runtime.refreshStaleOnFocus();
+    await waitForCondition(() => gitClient.calls.length === 1);
+    const completed = await runtime.getState();
+
+    expect(gitClient.calls).toEqual([
+      "C:\\root\\repository-0"
+    ]);
     expect(
-      completed.operations.filter(
-        (operation) => operation.kind === "status"
+      completed.operations.map((operation) => operation.id)
+    ).toEqual(initialOperationIds);
+    await runtime.dispose();
+  });
+
+  it("merges repeated background failures and keeps raw paths out of operation history", async () => {
+    const workspace = createWorkspace(1);
+    const watcher = new FakeWatcher();
+    const diagnostics: WorkspaceRefreshDiagnostic[] = [];
+    let failReads = false;
+    const gitClient = new TrackingGitClient(async () => {
+      if (failReads) {
+        throw new GitError(
+          "COMMAND_FAILED",
+          "git status failed in C:\\Users\\secret\\repository"
+        );
+      }
+    });
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      gitClient,
+      new MemorySnapshotStore(),
+      watcher,
+      {
+        autoRefresh: false,
+        currentTargetDebounceMs: 1,
+        selectedTargetHeartbeatIntervalMs: 0,
+        onDiagnostic: (diagnostic) => {
+          diagnostics.push(diagnostic);
+        },
+        clock: () => "2026-09-04T12:00:00.000Z"
+      }
+    );
+
+    await runtime.requestWorkspaceRefresh("manual");
+    await waitForState(
+      runtime,
+      (state) =>
+        state.operations.some(
+          (operation) =>
+            operation.kind === "scan" &&
+            operation.state === "succeeded"
+        )
+    );
+    failReads = true;
+    const target = workspace.selectedTarget as RepositoryTarget;
+
+    watcher.emit(target);
+    const first = await waitForState(
+      runtime,
+      (state) =>
+        state.operations.some(
+          (operation) =>
+            operation.kind === "status" &&
+            operation.state === "failed"
+        )
+    );
+    const failure = first.operations.find(
+      (operation) =>
+        operation.kind === "status" &&
+        operation.state === "failed"
+    );
+
+    watcher.emit(target);
+    await waitForCondition(() => gitClient.calls.length >= 3);
+    const repeated = await runtime.getState();
+    const failures = repeated.operations.filter(
+      (operation) =>
+        operation.kind === "status" &&
+        operation.state === "failed"
+    );
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.id).toBe(failure?.id);
+    expect(failures[0]?.failed).toBe(1);
+    expect(failures[0]?.message).not.toContain(
+      "C:\\Users\\secret"
+    );
+    await waitForCondition(() =>
+      diagnostics.some(
+        (diagnostic) =>
+          diagnostic.name === "workspace.refresh-failed"
       )
-    ).toHaveLength(1);
+    );
+    expect(JSON.stringify(diagnostics)).not.toContain(
+      "C:\\Users\\secret"
+    );
+    expect(JSON.stringify(diagnostics)).not.toContain(
+      "repository-0"
+    );
     await runtime.dispose();
   });
 
@@ -1090,6 +1596,122 @@ class FakeConfiguration implements WorkspaceConfigurationService {
   }
 }
 
+class SwitchingConfiguration
+  implements WorkspaceConfigurationService
+{
+  readonly #workspaces: Map<string, Workspace>;
+  #activeWorkspaceId: string;
+
+  constructor(workspaces: Workspace[]) {
+    this.#workspaces = new Map(
+      workspaces.map((workspace) => [
+        workspace.id,
+        structuredClone(workspace)
+      ])
+    );
+    this.#activeWorkspaceId =
+      workspaces[0]?.id ?? "missing";
+  }
+
+  async getCurrent(): Promise<Workspace> {
+    return structuredClone(this.#active());
+  }
+
+  async listWorkspaces() {
+    return [...this.#workspaces.values()].map(
+      ({ id, name, updatedAt }) => ({
+        id,
+        name,
+        updatedAt
+      })
+    );
+  }
+
+  async switchWorkspace(
+    workspaceId: string
+  ): Promise<Workspace> {
+    if (!this.#workspaces.has(workspaceId)) {
+      throw new Error("Workspace not found.");
+    }
+    this.#activeWorkspaceId = workspaceId;
+    return this.getCurrent();
+  }
+
+  async addEntry(): Promise<never> {
+    throw new Error("Not used.");
+  }
+
+  async rescan(): Promise<Workspace> {
+    return this.getCurrent();
+  }
+
+  async updateEntry(): Promise<Workspace> {
+    return this.getCurrent();
+  }
+
+  async removeEntry(): Promise<Workspace> {
+    return this.getCurrent();
+  }
+
+  async setGroupCollapsed(): Promise<Workspace> {
+    return this.getCurrent();
+  }
+
+  async selectEntry(): Promise<Workspace> {
+    return this.getCurrent();
+  }
+
+  async selectTarget(
+    target: RepositoryTarget
+  ): Promise<Workspace> {
+    const workspace = this.#active();
+    workspace.selectedTarget = target;
+    return structuredClone(workspace);
+  }
+
+  #active(): Workspace {
+    const workspace = this.#workspaces.get(
+      this.#activeWorkspaceId
+    );
+    if (!workspace) {
+      throw new Error("Active Workspace is unavailable.");
+    }
+    return workspace;
+  }
+}
+
+class BlockingStartupSwitchingConfiguration
+  extends SwitchingConfiguration
+{
+  rescanStarted = false;
+  rescanAborted = false;
+
+  override async rescan(
+    signal?: AbortSignal
+  ): Promise<Workspace> {
+    this.rescanStarted = true;
+    await new Promise<void>((_resolve, reject) => {
+      const cancel = () => {
+        this.rescanAborted = true;
+        reject(
+          new WorkspaceError(
+            "SCAN_CANCELLED",
+            "Workspace scan cancelled."
+          )
+        );
+      };
+      if (signal?.aborted) {
+        cancel();
+        return;
+      }
+      signal?.addEventListener("abort", cancel, {
+        once: true
+      });
+    });
+    return super.rescan();
+  }
+}
+
 class TrackingGitClient implements GitClient {
   active = 0;
   maxActive = 0;
@@ -1098,7 +1720,8 @@ class TrackingGitClient implements GitClient {
   constructor(
     readonly beforeRead?: (
       callIndex: number,
-      path: string
+      path: string,
+      options?: ReadRepositorySnapshotOptions
     ) => Promise<void>
   ) {}
 
@@ -1109,27 +1732,31 @@ class TrackingGitClient implements GitClient {
   }
 
   async readRepositorySnapshot(
-    path: string
+    path: string,
+    options?: ReadRepositorySnapshotOptions
   ): Promise<RepositorySnapshot> {
     this.active += 1;
     this.maxActive = Math.max(this.maxActive, this.active);
     const callIndex = this.calls.length;
     this.calls.push(path);
-    await this.beforeRead?.(callIndex, path);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    this.active -= 1;
-    return {
-      branch: "main",
-      head: path,
-      ahead: 0,
-      behind: 0,
-      staged: path.endsWith("1") ? 1 : 0,
-      unstaged: 0,
-      untracked: 0,
-      conflicted: 0,
-      changes: [],
-      refreshedAt: "2026-09-04T12:00:00.000Z"
-    };
+    try {
+      await this.beforeRead?.(callIndex, path, options);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return {
+        branch: "main",
+        head: path,
+        ahead: 0,
+        behind: 0,
+        staged: path.endsWith("1") ? 1 : 0,
+        unstaged: 0,
+        untracked: 0,
+        conflicted: 0,
+        changes: [],
+        refreshedAt: "2026-09-04T12:00:00.000Z"
+      };
+    } finally {
+      this.active -= 1;
+    }
   }
 
   async readRepositoryDiff(): Promise<never> {
@@ -1173,6 +1800,46 @@ class MemorySnapshotStore implements RepositorySnapshotStore {
     snapshots: RepositoryStatusSnapshot[]
   ): Promise<void> {
     this.saved = structuredClone(snapshots);
+  }
+}
+
+class WorkspaceScopedMemorySnapshotStore
+  implements RepositorySnapshotStore
+{
+  readonly #snapshots: Map<
+    string,
+    RepositoryStatusSnapshot[]
+  >;
+
+  constructor(
+    snapshots: Record<string, RepositoryStatusSnapshot[]>
+  ) {
+    this.#snapshots = new Map(
+      Object.entries(snapshots).map(
+        ([workspaceId, values]) => [
+          workspaceId,
+          structuredClone(values)
+        ]
+      )
+    );
+  }
+
+  async load(
+    workspaceId: string
+  ): Promise<RepositoryStatusSnapshot[]> {
+    return structuredClone(
+      this.#snapshots.get(workspaceId) ?? []
+    );
+  }
+
+  async save(
+    workspaceId: string,
+    snapshots: RepositoryStatusSnapshot[]
+  ): Promise<void> {
+    this.#snapshots.set(
+      workspaceId,
+      structuredClone(snapshots)
+    );
   }
 }
 
@@ -1221,6 +1888,43 @@ class MemoryOperationStore
     operations: WorkspaceOperation[]
   ): Promise<void> {
     this.saved = structuredClone(operations);
+  }
+}
+
+class WorkspaceScopedMemoryOperationStore
+  implements WorkspaceOperationStore
+{
+  readonly #operations: Map<string, WorkspaceOperation[]>;
+
+  constructor(
+    operations: Record<string, WorkspaceOperation[]>
+  ) {
+    this.#operations = new Map(
+      Object.entries(operations).map(
+        ([workspaceId, values]) => [
+          workspaceId,
+          structuredClone(values)
+        ]
+      )
+    );
+  }
+
+  async load(
+    workspaceId: string
+  ): Promise<WorkspaceOperation[]> {
+    return structuredClone(
+      this.#operations.get(workspaceId) ?? []
+    );
+  }
+
+  async save(
+    workspaceId: string,
+    operations: WorkspaceOperation[]
+  ): Promise<void> {
+    this.#operations.set(
+      workspaceId,
+      structuredClone(operations)
+    );
   }
 }
 
@@ -1358,6 +2062,56 @@ function createWorkspace(count: number): Workspace {
   };
 }
 
+function createWorkspaceWithBackgroundEntry(): Workspace {
+  const workspace = createWorkspace(3);
+  const entry = workspace.entries[0];
+  const group = entry?.groups[0];
+  const selected = group?.targets[0];
+  const selectedEntryTarget = group?.targets[1];
+  const backgroundTarget = group?.targets[2];
+  if (
+    !entry ||
+    !group ||
+    !selected ||
+    !selectedEntryTarget ||
+    !backgroundTarget
+  ) {
+    throw new Error("Workspace fixture is incomplete.");
+  }
+
+  group.targets = [selected, selectedEntryTarget];
+  workspace.entries.push({
+    id: "entry-background",
+    displayName: "Background",
+    path: "C:\\background",
+    canonicalPath: "c:\\background",
+    excludes: [],
+    order: 1,
+    kind: "workspace-directory",
+    groups: [
+      {
+        id: "group-background",
+        name: "后台仓库",
+        targets: [backgroundTarget],
+        collapsed: false
+      }
+    ],
+    scanIssues: [],
+    lastScannedAt: "2026-09-20T11:00:00.000Z"
+  });
+  return workspace;
+}
+
+function repositoryTargetsMatch(
+  left: RepositoryTarget,
+  right: RepositoryTarget
+): boolean {
+  return (
+    left.repositoryId === right.repositoryId &&
+    left.worktreeId === right.worktreeId
+  );
+}
+
 function addLinkedWorktree(workspace: Workspace): Workspace {
   const copy = structuredClone(workspace);
   const repository = copy.repositories[0];
@@ -1410,6 +2164,22 @@ function createCachedSnapshot(
   };
 }
 
+function completedOperation(id: string): WorkspaceOperation {
+  return {
+    id,
+    kind: "scan",
+    scope: "workspace",
+    targetIds: [],
+    state: "succeeded",
+    progress: 1,
+    succeeded: 1,
+    failed: 0,
+    message: "Workspace refreshed.",
+    startedAt: "2026-09-20T11:00:00.000Z",
+    finishedAt: "2026-09-20T11:01:00.000Z"
+  };
+}
+
 async function waitForState(
   runtime: WorkspaceRuntimeService,
   predicate: (state: WorkspaceRuntimeState) => boolean
@@ -1444,4 +2214,31 @@ async function waitForCondition(
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+}
+
+function resolveWithin<Result>(
+  promise: Promise<Result>,
+  timeoutMs: number
+): Promise<Result> {
+  return new Promise<Result>((resolve, reject) => {
+    const timeout = setTimeout(
+      () =>
+        reject(
+          new Error(
+            `Operation did not finish within ${timeoutMs} ms.`
+          )
+        ),
+      timeoutMs
+    );
+    void promise.then(
+      (result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    );
+  });
 }
