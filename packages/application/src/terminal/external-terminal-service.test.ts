@@ -117,24 +117,22 @@ class FakeTerminalPort implements ExternalTerminalPort {
 
 function createWorkspace(): Workspace {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "workspace",
     name: "Workspace",
-    entries: [
+    path: WORKTREE_PATH,
+    canonicalPath: "c:\\workspace\\repository",
+    excludes: [],
+    groups: [
       {
-        id: "entry",
-        displayName: "Repository",
-        path: WORKTREE_PATH,
-        canonicalPath: "c:\\workspace\\repository",
-        excludes: [],
-        order: 0,
-        groups: [],
-        scanIssues: [],
-        lastScannedAt: "2026-09-04T12:00:00.000Z",
-        kind: "standalone-repository",
-        target: TARGET
+        id: "group",
+        name: "原/根仓库",
+        targets: [TARGET],
+        collapsed: false
       }
     ],
+    scanIssues: [],
+    lastScannedAt: "2026-09-04T12:00:00.000Z",
     repositories: [
       {
         id: TARGET.repositoryId,
@@ -162,7 +160,6 @@ function createWorkspace(): Workspace {
         isPrunable: false
       }
     ],
-    selectedEntryId: "entry",
     selectedTarget: TARGET,
     updatedAt: "2026-09-04T12:00:00.000Z"
   };

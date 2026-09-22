@@ -227,6 +227,45 @@ describe("useRepositoryCommands", () => {
     });
   });
 
+  it("clears a pending confirmation when switching Workspaces with the same repository", async () => {
+    const command: RepositoryCommandDto = {
+      type: "pull",
+      targets: [TARGET_A],
+      strategy: "ff-only"
+    };
+    const executeCommand = vi.fn();
+    installBridge({
+      preflightCommand: vi.fn(async () => ({
+        ok: true as const,
+        value: createPreflight(command, true)
+      })),
+      executeCommand
+    });
+    await renderHarness(TARGET_A, [], "workspace-a");
+    await act(async () => {
+      await controller!.request(command);
+    });
+    expect(controller?.preflight).not.toBeNull();
+
+    await renderHarness(TARGET_A, [], "workspace-b");
+    expect(controller?.preflight).toBeNull();
+    expect(await controller!.confirm()).toBe(false);
+    expect(executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("does not submit the next batch through a request captured in another Workspace", async () => {
+    const preflightCommand = vi.fn();
+    installBridge({ preflightCommand, executeCommand: vi.fn() });
+    await renderHarness(TARGET_A, [], "workspace-a");
+    const oldRequest = controller!.request;
+    await renderHarness(TARGET_A, [], "workspace-b");
+    expect(await oldRequest({
+      type: "fetch",
+      targets: [TARGET_A]
+    })).toBe(false);
+    expect(preflightCommand).not.toHaveBeenCalled();
+  });
+
   it("delegates operation cancellation and reports the cancelling state", async () => {
     const cancelOperation = vi.fn(async () => ({
       ok: true as const,
@@ -254,7 +293,8 @@ describe("useRepositoryCommands", () => {
 
   async function renderHarness(
     target: RepositoryTargetDto,
-    operations: WorkspaceOperationDto[]
+    operations: WorkspaceOperationDto[],
+    workspaceId = "workspace"
   ): Promise<void> {
     await act(async () => {
       root.render(
@@ -264,6 +304,7 @@ describe("useRepositoryCommands", () => {
           }}
           operations={operations}
           target={target}
+          workspaceId={workspaceId}
         />
       );
     });
@@ -273,13 +314,15 @@ describe("useRepositoryCommands", () => {
 function Harness({
   target,
   operations,
+  workspaceId,
   onController
 }: {
   target: RepositoryTargetDto;
   operations: WorkspaceOperationDto[];
+  workspaceId: string;
   onController(value: RepositoryCommandController): void;
 }) {
-  onController(useRepositoryCommands(target, operations));
+  onController(useRepositoryCommands(target, operations, workspaceId));
   return null;
 }
 

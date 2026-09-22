@@ -227,6 +227,10 @@
   font-size: var(--font-size-body);
 }
 
+.analysis-scope-name {
+  color: var(--accent);
+}
+
 .analysis-header-actions {
   display: flex;
   flex: 0 0 auto;

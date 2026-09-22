@@ -396,30 +396,22 @@ function baseSnapshot(): RepositorySnapshot {
 
 function createWorkspace(): Workspace {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "workspace",
     name: "Workspace",
-    entries: [
+    path: "C:\\workspace",
+    canonicalPath: "c:\\workspace",
+    excludes: [],
+    groups: [
       {
-        id: "entry",
-        displayName: "Workspace",
-        path: "C:\\workspace",
-        canonicalPath: "c:\\workspace",
-        excludes: [],
-        order: 0,
-        groups: [
-          {
-            id: "group",
-            name: "Repositories",
-            targets: [target],
-            collapsed: false
-          }
-        ],
-        scanIssues: [],
-        lastScannedAt: "2026-09-10T12:00:00.000Z",
-        kind: "workspace-directory"
+        id: "group",
+        name: "Repositories",
+        targets: [target],
+        collapsed: false
       }
     ],
+    scanIssues: [],
+    lastScannedAt: "2026-09-10T12:00:00.000Z",
     repositories: [
       {
         id: target.repositoryId,
@@ -448,7 +440,6 @@ function createWorkspace(): Workspace {
         isPrunable: false
       }
     ],
-    selectedEntryId: "entry",
     selectedTarget: target,
     updatedAt: "2026-09-10T12:00:00.000Z"
   };

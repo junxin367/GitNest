@@ -10,17 +10,11 @@ export const rendererPreferenceKeys = {
   legacyTheme: `${KEY_PREFIX}theme`,
   preferredExternalApplication:
     `${KEY_PREFIX}open-in.preferred-application`,
-  changedRepositoriesOnly(
-    workspaceId: string,
-    entryId: string
-  ): string {
-    return `${KEY_PREFIX}workspace.sidebar.changed-repositories-only:${workspaceId}:${entryId}`;
+  changedRepositoriesOnly(workspaceId: string): string {
+    return `${KEY_PREFIX}workspace.sidebar.changed-repositories-only:${workspaceId}`;
   },
-  tapdKeyword(
-    workspaceId: string,
-    entryId: string
-  ): string {
-    return `${KEY_PREFIX}workspace.tapd-keyword:${workspaceId}:${entryId}`;
+  tapdKeyword(workspaceId: string): string {
+    return `${KEY_PREFIX}workspace.tapd-keyword:${workspaceId}`;
   }
 } as const;
 

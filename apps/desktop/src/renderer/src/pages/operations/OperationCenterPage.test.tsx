@@ -233,27 +233,27 @@ function createOperation(
 }
 
 const workspace: WorkspaceDetailsDto = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   id: "workspace",
   name: "Test Workspace",
-  entries: [
+  path: "C:\\repository-a",
+  canonicalPath: "c:\\repository-a",
+  excludes: [],
+  groups: [
     {
-      id: "entry-a",
-      displayName: "Repository A",
-      path: "C:\\repository-a",
-      canonicalPath: "c:\\repository-a",
-      excludes: [],
-      order: 0,
-      groups: [],
-      scanIssues: [],
-      lastScannedAt: "2026-09-17T12:00:00.000Z",
-      kind: "standalone-repository",
-      target: {
+      id: "group",
+      name: "原/根仓库",
+      targets: [
+        {
         repositoryId: "repository-a",
         worktreeId: "worktree-a"
-      }
+        }
+      ],
+      collapsed: false
     }
   ],
+  scanIssues: [],
+  lastScannedAt: "2026-09-17T12:00:00.000Z",
   repositories: [
     {
       id: "repository-a",
@@ -280,7 +280,6 @@ const workspace: WorkspaceDetailsDto = {
       isPrunable: false
     }
   ],
-  selectedEntryId: "entry-a",
   selectedTarget: {
     repositoryId: "repository-a",
     worktreeId: "worktree-a"

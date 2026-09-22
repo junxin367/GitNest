@@ -19,7 +19,8 @@ import {
   LANGUAGE_SERVER_LANGUAGES,
   type CodeAnalysisSnapshotDto,
   type GitNestBridge,
-  type LanguageServerLanguageDto
+  type LanguageServerLanguageDto,
+  type WorkspaceDetailsDto
 } from "@gitnest/contracts";
 
 import type { CodeAnalysisController } from "../../entities/code-analysis/useCodeAnalysis";
@@ -147,6 +148,30 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(header?.lastElementChild?.tagName).toBe("P");
   });
 
+  it("renders the current scope name with its accent hook", async () => {
+    const workspace = createWorkspaceDetails();
+
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={workspace}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    const scopeName = container.querySelector(
+      ".analysis-scope-name"
+    );
+    expect(scopeName?.textContent).toBe(workspace.name);
+    expect(scopeName?.parentElement?.textContent).toBe(
+      `当前范围：${workspace.name}`
+    );
+  });
+
   it("uses the same code-node count in the summary and navigation tab", async () => {
     const base = createSnapshot();
     const snapshot: CodeAnalysisSnapshotDto = {
@@ -254,6 +279,61 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       await flushAsyncWork();
     });
 
+    expect(
+      container.querySelectorAll(".analysis-symbol-result")
+    ).toHaveLength(1);
+  });
+
+  it("does not rerender the relation graph while the node query changes", async () => {
+    const base = createSnapshot();
+    let documentationReads = 0;
+    const trackedMetadata = {
+      ...base.nodes[0]!.metadata
+    };
+    Object.defineProperty(trackedMetadata, "documentation", {
+      configurable: true,
+      get: () => {
+        documentationReads += 1;
+        return "Tracked documentation";
+      }
+    });
+    analysisMock.controller = createController({
+      ...base,
+      nodes: [
+        {
+          ...base.nodes[0]!,
+          metadata: trackedMetadata
+        },
+        ...base.nodes.slice(1)
+      ]
+    });
+
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    const input = container.querySelector<HTMLInputElement>(
+      'input[aria-label="搜索代码节点"]'
+    );
+    if (!input) {
+      throw new Error("Code-node search input was not rendered.");
+    }
+    documentationReads = 0;
+
+    await act(async () => {
+      setInputValue(input, "callee");
+      await flushAsyncWork();
+    });
+
+    expect(documentationReads).toBe(0);
     expect(
       container.querySelectorAll(".analysis-symbol-result")
     ).toHaveLength(1);
@@ -560,8 +640,6 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       snapshotAvailable: false,
       analysisId: "running-analysis",
       workspaceId: "workspace",
-      entryId: "entry",
-      entryName: "Entry",
       scope: "workspace",
       startedAt: "2026-09-21T11:58:55.000Z",
       progress: {
@@ -720,6 +798,9 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       await flushAsyncWork();
     });
 
+    expect(controller.restoreSnapshot).toHaveBeenCalledWith(
+      "changed"
+    );
     expect(controller.start).toHaveBeenCalledWith("changed");
     expect(changedScope?.getAttribute("aria-pressed")).toBe(
       "true"
@@ -736,8 +817,6 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       snapshotAvailable: true,
       analysisId: "changed-analysis",
       workspaceId: "workspace",
-      entryId: "entry",
-      entryName: "Entry",
       scope: "changed",
       generatedAt: "2026-09-17T00:01:00.000Z"
     };
@@ -784,6 +863,125 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(
       container.querySelector(".analysis-summary-grid")
     ).not.toBeNull();
+  });
+
+  it("uses a cached scope snapshot without starting a new analysis", async () => {
+    const controller = createController();
+    controller.restoreSnapshot = vi.fn(async () => true);
+    analysisMock.controller = controller;
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    const changedScope = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        ".analysis-scope-switch button"
+      )
+    ).find((button) => button.textContent === "变动代码");
+
+    await act(async () => {
+      changedScope?.click();
+      await flushAsyncWork();
+    });
+
+    expect(controller.restoreSnapshot).toHaveBeenCalledWith(
+      "changed"
+    );
+    expect(controller.start).not.toHaveBeenCalled();
+    expect(
+      container.querySelector(".analysis-summary-grid")
+    ).toBeNull();
+
+    controller.state = {
+      state: "ready",
+      snapshotAvailable: true,
+      analysisId: "changed-analysis",
+      workspaceId: "workspace",
+      scope: "changed",
+      generatedAt: "2026-09-17T00:01:00.000Z"
+    };
+    controller.snapshot = {
+      ...createSnapshot(),
+      analysisId: "changed-analysis",
+      scope: "changed",
+      generatedAt: "2026-09-17T00:01:00.000Z"
+    };
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(
+      container.querySelector(".analysis-summary-grid")
+    ).not.toBeNull();
+  });
+
+  it("keeps a non-default scope selected when no cached snapshot exists", async () => {
+    const controller = createController();
+    controller.state = {
+      state: "idle",
+      snapshotAvailable: false,
+      workspaceId: "workspace"
+    };
+    controller.snapshot = null;
+    analysisMock.controller = controller;
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={createWorkspaceDetails()}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    const workspaceScope = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        ".analysis-scope-switch button"
+      )
+    ).find((button) => button.textContent === "全部代码");
+
+    await act(async () => {
+      workspaceScope?.click();
+      await flushAsyncWork();
+    });
+
+    expect(controller.restoreSnapshot).toHaveBeenCalledWith(
+      "workspace"
+    );
+    expect(workspaceScope?.getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(controller.start).not.toHaveBeenCalled();
+
+    const startButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("button")
+    ).find((button) =>
+      button.textContent?.includes("开始分析")
+    );
+    await act(async () => {
+      startButton?.click();
+      await flushAsyncWork();
+    });
+
+    expect(controller.start).toHaveBeenCalledWith("workspace");
   });
 
   it("aggregates connected LSPs while keeping failures and warnings separate", async () => {
@@ -1897,8 +2095,6 @@ function createController(
       snapshotAvailable: true,
       analysisId: "analysis",
       workspaceId: "workspace",
-      entryId: "entry",
-      entryName: "Entry",
       scope: "workspace",
       generatedAt: "2026-09-17T00:00:00.000Z"
     },
@@ -1908,6 +2104,7 @@ function createController(
     installingLanguage: null,
     error: null,
     start: vi.fn(async () => true),
+    restoreSnapshot: vi.fn(async () => false),
     cancel: vi.fn(async () => true),
     installLanguageServer: vi.fn(async () => null),
     reload: vi.fn(async () => undefined),
@@ -1961,8 +2158,6 @@ function createSnapshot(): CodeAnalysisSnapshotDto {
     schemaVersion: 1,
     analysisId: "analysis",
     workspaceId: "workspace",
-    entryId: "entry",
-    entryName: "Entry",
     scope: "workspace",
     generatedAt: "2026-09-17T00:00:00.000Z",
     roots: [],
@@ -1990,6 +2185,23 @@ function createSnapshot(): CodeAnalysisSnapshotDto {
       truncated: false,
       durationMs: 1
     }
+  };
+}
+
+function createWorkspaceDetails(): WorkspaceDetailsDto {
+  return {
+    schemaVersion: 2,
+    id: "workspace",
+    name: "Workspace",
+    path: "C:\\workspace",
+    canonicalPath: "c:\\workspace",
+    excludes: [],
+    groups: [],
+    scanIssues: [],
+    lastScannedAt: "2026-09-17T00:00:00.000Z",
+    repositories: [],
+    worktrees: [],
+    updatedAt: "2026-09-17T00:00:00.000Z"
   };
 }
 

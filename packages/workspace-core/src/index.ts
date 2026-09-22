@@ -3,17 +3,12 @@ export {
   WORKSPACE_SCHEMA_VERSION,
   createEmptyWorkspace,
   summarizeWorkspace,
-  type AggregateWorkspaceEntry,
-  type DirectoryWorkspaceEntry,
   type RepositoryGroup,
   type RepositoryTarget,
-  type StandaloneRepositoryEntry,
   type Workspace,
   type WorkspaceCatalog,
-  type WorkspaceEntry,
-  type WorkspaceEntryKind,
   type WorkspaceRepository,
-  type WorkspaceRootDefinition,
+  type WorkspaceRoot,
   type WorkspaceScanIssue,
   type WorkspaceScanIssueCode,
   type WorkspaceSummary,
@@ -65,9 +60,7 @@ export {
   type AssembleWorkspaceInput
 } from "./services/workspace-assembler";
 export {
-  findTargetEntry,
-  getEntryDefaultTarget,
-  listEntryTargets,
+  getWorkspaceDefaultTarget,
   listWorkspaceTargets,
   repositoryTargetKey,
   repositoryTargetsEqual

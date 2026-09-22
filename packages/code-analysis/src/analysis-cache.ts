@@ -7,28 +7,31 @@ import {
   open,
   rename,
   rm,
+  stat,
   writeFile
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import type {
   AnalysisRoot,
+  CodeAnalysisScope,
   CodeAnalysisSettings,
   CodeAnalysisSnapshot,
   ParsedSourceFile
 } from "./model";
 import { BUILTIN_ANALYSIS_PROFILE_VERSIONS } from "./profiles/registry";
 
-const CACHE_SCHEMA_VERSION = 2;
-const SNAPSHOT_CACHE_SCHEMA_VERSION = 3;
+const CACHE_SCHEMA_VERSION = 3;
+const SNAPSHOT_CACHE_SCHEMA_VERSION = 4;
+const SNAPSHOT_POINTER_SCHEMA_VERSION = 1;
 const PARSER_VERSION = 12;
 const GRAPH_VERSION = 13;
 export const MAX_ANALYSIS_INDEX_CACHE_BYTES =
   128 * 1_024 * 1_024;
 export const MAX_ANALYSIS_SNAPSHOT_BYTES =
-  72 * 1_024 * 1_024;
+  112 * 1_024 * 1_024;
 export const MAX_ANALYSIS_SNAPSHOT_PAYLOAD_BYTES =
-  64 * 1_024 * 1_024;
+  104 * 1_024 * 1_024;
 const CACHE_READ_CHUNK_BYTES = 64 * 1_024;
 
 interface CachedFile {
@@ -52,14 +55,12 @@ export class AnalysisCache {
 
   constructor(
     cacheDirectory: string,
-    workspaceId: string,
-    entryId: string
+    workspaceId: string
   ) {
     this.#filePath = join(
-      codeAnalysisCacheEntryDirectory(
+      codeAnalysisWorkspaceCacheDirectory(
         cacheDirectory,
-        workspaceId,
-        entryId
+        workspaceId
       ),
       "index.json"
     );
@@ -116,18 +117,30 @@ export class AnalysisCache {
 interface AnalysisSnapshotDocument {
   schemaVersion: typeof SNAPSHOT_CACHE_SCHEMA_VERSION;
   workspaceId: string;
-  entryId: string;
   configurationKey: string;
   savedAt: string;
   snapshot: CodeAnalysisSnapshot;
 }
 
+interface AnalysisSnapshotPointerDocument {
+  schemaVersion: typeof SNAPSHOT_POINTER_SCHEMA_VERSION;
+  scope: CodeAnalysisScope;
+  savedAt: string;
+}
+
+interface LoadedAnalysisSnapshot {
+  snapshot: CodeAnalysisSnapshot;
+  savedAt: string;
+  source: "scoped" | "legacy";
+  pointerNeedsRepair: boolean;
+}
+
 export interface CodeAnalysisSnapshotStore {
   load(
     workspaceId: string,
-    entryId: string,
     settings: CodeAnalysisSettings,
-    roots: AnalysisRoot[]
+    roots: AnalysisRoot[],
+    scope?: CodeAnalysisScope
   ): Promise<CodeAnalysisSnapshot | null>;
   save(
     snapshot: CodeAnalysisSnapshot,
@@ -173,36 +186,57 @@ export class AnalysisSnapshotCache
 
   async load(
     workspaceId: string,
-    entryId: string,
     settings: CodeAnalysisSettings,
-    roots: AnalysisRoot[]
+    roots: AnalysisRoot[],
+    scope?: CodeAnalysisScope
   ): Promise<CodeAnalysisSnapshot | null> {
     const primary = await loadSnapshotFromDirectory(
       this.#cacheDirectory,
       workspaceId,
-      entryId,
       settings,
-      roots
+      roots,
+      scope
     );
     if (primary) {
-      return primary;
+      if (primary.source === "legacy") {
+        await saveSnapshotToDirectory(
+          this.#cacheDirectory,
+          primary.snapshot,
+          settings,
+          primary.savedAt
+        ).catch(() => undefined);
+      } else if (
+        scope === undefined &&
+        primary.pointerNeedsRepair
+      ) {
+        await saveSnapshotPointer(
+          this.#cacheDirectory,
+          workspaceId,
+          primary.snapshot.scope,
+          primary.savedAt
+        ).catch(() => undefined);
+      }
+      return structuredClone(primary.snapshot);
     }
 
     for (const directory of this.#fallbackDirectories) {
       const fallback = await loadSnapshotFromDirectory(
         directory,
         workspaceId,
-        entryId,
         settings,
-        roots
+        roots,
+        scope
       );
       if (!fallback) {
         continue;
       }
-      await this.save(fallback, settings).catch(
-        () => undefined
-      );
-      return fallback;
+      await saveSnapshotToDirectory(
+        this.#cacheDirectory,
+        fallback.snapshot,
+        settings,
+        fallback.savedAt
+      ).catch(() => undefined);
+      return structuredClone(fallback.snapshot);
     }
     return null;
   }
@@ -211,61 +245,89 @@ export class AnalysisSnapshotCache
     snapshot: CodeAnalysisSnapshot,
     settings: CodeAnalysisSettings
   ): Promise<void> {
-    const filePath = snapshotFilePath(
+    await saveSnapshotToDirectory(
       this.#cacheDirectory,
-      snapshot.workspaceId,
-      snapshot.entryId
+      snapshot,
+      settings,
+      new Date().toISOString()
     );
-    await mkdir(dirname(filePath), {
-      recursive: true
-    });
-    const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-    try {
-      const serialized = JSON.stringify({
-        schemaVersion: SNAPSHOT_CACHE_SCHEMA_VERSION,
-        workspaceId: snapshot.workspaceId,
-        entryId: snapshot.entryId,
-        configurationKey:
-          codeAnalysisSnapshotConfigurationKey(
-            settings,
-            snapshot.roots
-          ),
-        savedAt: new Date().toISOString(),
-        snapshot
-      } satisfies AnalysisSnapshotDocument);
-      assertSerializedSize(
-        serialized,
-        MAX_ANALYSIS_SNAPSHOT_BYTES,
-        "Code analysis snapshot"
-      );
-      await writeFile(
-        temporaryPath,
-        serialized,
-        "utf8"
-      );
-      await rename(temporaryPath, filePath);
-    } catch (error) {
-      await rm(temporaryPath, { force: true }).catch(
-        () => undefined
-      );
-      throw error;
-    }
   }
 }
 
 async function loadSnapshotFromDirectory(
   cacheDirectory: string,
   workspaceId: string,
-  entryId: string,
   settings: CodeAnalysisSettings,
-  roots: AnalysisRoot[]
-): Promise<CodeAnalysisSnapshot | null> {
-  const raw = await readBoundedTextFile(
-    snapshotFilePath(
-      cacheDirectory,
+  roots: AnalysisRoot[],
+  requestedScope?: CodeAnalysisScope
+): Promise<LoadedAnalysisSnapshot | null> {
+  const pointer = requestedScope
+    ? null
+    : await loadSnapshotPointer(
+        cacheDirectory,
+        workspaceId
+      );
+  const scopes = requestedScope
+    ? [requestedScope]
+    : await orderedSnapshotScopes(
+        cacheDirectory,
+        workspaceId,
+        pointer?.scope
+      );
+
+  for (const scope of scopes) {
+    const document = await loadSnapshotDocument(
+      scopedSnapshotFilePath(
+        cacheDirectory,
+        workspaceId,
+        scope
+      ),
       workspaceId,
-      entryId
+      settings,
+      roots,
+      scope
+    );
+    if (document) {
+      return {
+        snapshot: document.snapshot,
+        savedAt: document.savedAt,
+        source: "scoped",
+        pointerNeedsRepair:
+          requestedScope === undefined &&
+          pointer?.scope !== document.snapshot.scope
+      };
+    }
+  }
+
+  const legacy = await loadSnapshotDocument(
+    legacySnapshotFilePath(
+      cacheDirectory,
+      workspaceId
     ),
+    workspaceId,
+    settings,
+    roots,
+    requestedScope
+  );
+  return legacy
+    ? {
+        snapshot: legacy.snapshot,
+        savedAt: legacy.savedAt,
+        source: "legacy",
+        pointerNeedsRepair: true
+      }
+    : null;
+}
+
+async function loadSnapshotDocument(
+  filePath: string,
+  workspaceId: string,
+  settings: CodeAnalysisSettings,
+  roots: AnalysisRoot[],
+  scope?: CodeAnalysisScope
+): Promise<AnalysisSnapshotDocument | null> {
+  const raw = await readBoundedTextFile(
+    filePath,
     MAX_ANALYSIS_SNAPSHOT_BYTES
   );
   if (raw === null) {
@@ -277,21 +339,166 @@ async function loadSnapshotFromDirectory(
     if (
       !isSnapshotDocument(value) ||
       value.workspaceId !== workspaceId ||
-      value.entryId !== entryId ||
       value.configurationKey !==
         codeAnalysisSnapshotConfigurationKey(
           settings,
           roots
         ) ||
       value.snapshot.workspaceId !== workspaceId ||
-      value.snapshot.entryId !== entryId ||
+      (scope !== undefined &&
+        value.snapshot.scope !== scope) ||
       !analysisRootsMatch(value.snapshot.roots, roots)
     ) {
       return null;
     }
-    return structuredClone(value.snapshot);
+    return value;
   } catch {
     return null;
+  }
+}
+
+async function loadSnapshotPointer(
+  cacheDirectory: string,
+  workspaceId: string
+): Promise<AnalysisSnapshotPointerDocument | null> {
+  const raw = await readBoundedTextFile(
+    snapshotPointerFilePath(
+      cacheDirectory,
+      workspaceId
+    ),
+    CACHE_READ_CHUNK_BYTES
+  );
+  if (raw === null) {
+    return null;
+  }
+  try {
+    const value = JSON.parse(raw) as unknown;
+    return isSnapshotPointerDocument(value)
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function orderedSnapshotScopes(
+  cacheDirectory: string,
+  workspaceId: string,
+  latestScope?: CodeAnalysisScope
+): Promise<CodeAnalysisScope[]> {
+  const scopes: CodeAnalysisScope[] = [
+    "workspace",
+    "changed"
+  ];
+  if (latestScope) {
+    return [
+      latestScope,
+      ...scopes.filter((scope) => scope !== latestScope)
+    ];
+  }
+  const candidates = await Promise.all(
+    scopes.map(async (scope) => {
+      try {
+        const details = await stat(
+          scopedSnapshotFilePath(
+            cacheDirectory,
+            workspaceId,
+            scope
+          )
+        );
+        return {
+          scope,
+          modifiedAtMs: details.isFile()
+            ? details.mtimeMs
+            : Number.NEGATIVE_INFINITY
+        };
+      } catch {
+        return {
+          scope,
+          modifiedAtMs: Number.NEGATIVE_INFINITY
+        };
+      }
+    })
+  );
+  return candidates
+    .sort(
+      (left, right) =>
+        right.modifiedAtMs - left.modifiedAtMs
+    )
+    .map((candidate) => candidate.scope);
+}
+
+async function saveSnapshotToDirectory(
+  cacheDirectory: string,
+  snapshot: CodeAnalysisSnapshot,
+  settings: CodeAnalysisSettings,
+  savedAt: string
+): Promise<void> {
+  const filePath = scopedSnapshotFilePath(
+    cacheDirectory,
+    snapshot.workspaceId,
+    snapshot.scope
+  );
+  const serialized = JSON.stringify({
+    schemaVersion: SNAPSHOT_CACHE_SCHEMA_VERSION,
+    workspaceId: snapshot.workspaceId,
+    configurationKey:
+      codeAnalysisSnapshotConfigurationKey(
+        settings,
+        snapshot.roots
+      ),
+    savedAt,
+    snapshot
+  } satisfies AnalysisSnapshotDocument);
+  assertSerializedSize(
+    serialized,
+    MAX_ANALYSIS_SNAPSHOT_BYTES,
+    "Code analysis snapshot"
+  );
+  await writeTextFileAtomically(filePath, serialized);
+  await saveSnapshotPointer(
+    cacheDirectory,
+    snapshot.workspaceId,
+    snapshot.scope,
+    savedAt
+  );
+}
+
+async function saveSnapshotPointer(
+  cacheDirectory: string,
+  workspaceId: string,
+  scope: CodeAnalysisScope,
+  savedAt: string
+): Promise<void> {
+  await writeTextFileAtomically(
+    snapshotPointerFilePath(
+      cacheDirectory,
+      workspaceId
+    ),
+    JSON.stringify({
+      schemaVersion: SNAPSHOT_POINTER_SCHEMA_VERSION,
+      scope,
+      savedAt
+    } satisfies AnalysisSnapshotPointerDocument)
+  );
+}
+
+async function writeTextFileAtomically(
+  filePath: string,
+  content: string
+): Promise<void> {
+  await mkdir(dirname(filePath), {
+    recursive: true
+  });
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, content, "utf8");
+    await rename(temporaryPath, filePath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(
+      () => undefined
+    );
+    throw error;
   }
 }
 
@@ -531,30 +738,54 @@ function analysisRootsMatch(
   );
 }
 
-export function codeAnalysisCacheEntryDirectory(
+export function codeAnalysisWorkspaceCacheDirectory(
   cacheDirectory: string,
-  workspaceId: string,
-  entryId: string
+  workspaceId: string
 ): string {
   const key = createHash("sha256")
-    .update(`${workspaceId}\0${entryId}`)
+    .update(workspaceId)
     .digest("hex")
     .slice(0, 24);
   return join(cacheDirectory, key);
 }
 
-function snapshotFilePath(
+function scopedSnapshotFilePath(
   cacheDirectory: string,
   workspaceId: string,
-  entryId: string
+  scope: CodeAnalysisScope
 ): string {
   return join(
-    codeAnalysisCacheEntryDirectory(
+    codeAnalysisWorkspaceCacheDirectory(
       cacheDirectory,
-      workspaceId,
-      entryId
+      workspaceId
+    ),
+    `snapshot-${scope}.json`
+  );
+}
+
+function legacySnapshotFilePath(
+  cacheDirectory: string,
+  workspaceId: string
+): string {
+  return join(
+    codeAnalysisWorkspaceCacheDirectory(
+      cacheDirectory,
+      workspaceId
     ),
     "snapshot.json"
+  );
+}
+
+function snapshotPointerFilePath(
+  cacheDirectory: string,
+  workspaceId: string
+): string {
+  return join(
+    codeAnalysisWorkspaceCacheDirectory(
+      cacheDirectory,
+      workspaceId
+    ),
+    "snapshot-latest.json"
   );
 }
 
@@ -593,10 +824,21 @@ function isSnapshotDocument(
     isRecord(value) &&
     value.schemaVersion === SNAPSHOT_CACHE_SCHEMA_VERSION &&
     typeof value.workspaceId === "string" &&
-    typeof value.entryId === "string" &&
     typeof value.configurationKey === "string" &&
     typeof value.savedAt === "string" &&
     isCodeAnalysisSnapshot(value.snapshot)
+  );
+}
+
+function isSnapshotPointerDocument(
+  value: unknown
+): value is AnalysisSnapshotPointerDocument {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === SNAPSHOT_POINTER_SCHEMA_VERSION &&
+    (value.scope === "changed" ||
+      value.scope === "workspace") &&
+    typeof value.savedAt === "string"
   );
 }
 
@@ -610,8 +852,6 @@ function isCodeAnalysisSnapshot(
     value.schemaVersion === 1 &&
     typeof value.analysisId === "string" &&
     typeof value.workspaceId === "string" &&
-    typeof value.entryId === "string" &&
-    typeof value.entryName === "string" &&
     (value.scope === "changed" ||
       value.scope === "workspace") &&
     typeof value.generatedAt === "string" &&

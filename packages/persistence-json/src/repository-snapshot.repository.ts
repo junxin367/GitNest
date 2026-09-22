@@ -1,5 +1,4 @@
 import {
-  WORKSPACE_SCHEMA_VERSION,
   WorkspaceError,
   type RepositorySnapshotStore,
   type RepositoryStatusSnapshot
@@ -9,6 +8,7 @@ import { AtomicJsonStore } from "./atomic-json-store";
 
 const MAX_REPOSITORY_SNAPSHOT_DOCUMENT_BYTES =
   128 * 1_024 * 1_024;
+const REPOSITORY_SNAPSHOT_SCHEMA_VERSION = 1;
 
 interface RepositorySnapshotDocument {
   schemaVersion: 1;
@@ -56,7 +56,7 @@ export class JsonRepositorySnapshotStore
     const snapshots = migrated.snapshots.map(rebuildSnapshot);
     if (readSchemaVersion(value) !== migrated.schemaVersion) {
       await this.#store.write({
-        schemaVersion: WORKSPACE_SCHEMA_VERSION,
+        schemaVersion: REPOSITORY_SNAPSHOT_SCHEMA_VERSION,
         workspaceId: migrated.workspaceId,
         snapshots,
         updatedAt: migrated.updatedAt
@@ -70,7 +70,7 @@ export class JsonRepositorySnapshotStore
     snapshots: RepositoryStatusSnapshot[]
   ): Promise<void> {
     const document: RepositorySnapshotDocument = {
-      schemaVersion: WORKSPACE_SCHEMA_VERSION,
+      schemaVersion: REPOSITORY_SNAPSHOT_SCHEMA_VERSION,
       workspaceId,
       snapshots: structuredClone(snapshots),
       updatedAt: this.#clock()
@@ -88,7 +88,7 @@ function migrateSnapshotDocument(value: unknown): unknown {
   }
   return {
     ...value,
-    schemaVersion: WORKSPACE_SCHEMA_VERSION,
+    schemaVersion: REPOSITORY_SNAPSHOT_SCHEMA_VERSION,
     snapshots: value.snapshots.map((snapshot) =>
       isRecord(snapshot)
         ? {
@@ -150,7 +150,7 @@ function isSnapshotDocument(
 ): value is RepositorySnapshotDocument {
   return (
     isRecord(value) &&
-    value.schemaVersion === WORKSPACE_SCHEMA_VERSION &&
+    value.schemaVersion === REPOSITORY_SNAPSHOT_SCHEMA_VERSION &&
     value.workspaceId === workspaceId &&
     typeof value.updatedAt === "string" &&
     Array.isArray(value.snapshots) &&

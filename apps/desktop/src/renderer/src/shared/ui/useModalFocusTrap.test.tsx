@@ -107,7 +107,7 @@ function Dialog() {
   return (
     <div className="page-scroll">
       <button type="button">Background</button>
-      <div className="command-dialog-backdrop">
+      <div data-modal-layer>
         <section ref={dialogRef} role="dialog">
           <button type="button">Cancel</button>
           <button

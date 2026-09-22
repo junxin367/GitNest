@@ -100,11 +100,18 @@ describe("Select", () => {
     );
     expect(trigger?.getAttribute("aria-expanded")).toBe("true");
     expect(menu?.getAttribute("role")).toBe("menu");
+    const selectedOption = menu?.querySelector(
+      '[role="menuitemradio"][aria-checked="true"]'
+    );
+    expect(selectedOption?.textContent).toContain(
+      "Windows Terminal"
+    );
+    expect(selectedOption?.classList.contains("is-selected")).toBe(
+      true
+    );
     expect(
-      menu?.querySelector(
-        '[role="menuitemradio"][aria-checked="true"]'
-      )?.textContent
-    ).toContain("Windows Terminal");
+      selectedOption?.querySelector(".menu-item-trailing")
+    ).toBeNull();
     act(() => {
       menu?.dispatchEvent(new Event("scroll"));
     });

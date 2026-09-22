@@ -738,10 +738,6 @@
   gap: var(--space-1);
 }
 
-.repository-stash-action-dialog {
-  width: min(560px, calc(100vw - 48px));
-}
-
 .repository-stash-action-target {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -1439,7 +1435,6 @@
 
 .diff-workspace-commit-submit.gn-button {
   flex: 1 1 auto;
-  width: auto;
   min-width: 0;
   min-height: var(--control-compact);
   height: var(--control-compact);
@@ -1467,10 +1462,6 @@
 
 .diff-workspace-status-spacer {
   flex: 1 1 auto;
-}
-
-.diff-discard-dialog {
-  width: min(560px, calc(100vw - 48px));
 }
 
 .diff-discard-target {

@@ -4,55 +4,25 @@ import {
   WorkspaceError,
   WorkspaceScanner,
   createEmptyWorkspace,
-  createPathIdentity,
-  findTargetEntry,
-  getEntryDefaultTarget,
-  listEntryTargets,
   listWorkspaceTargets,
   repositoryTargetKey,
   repositoryTargetsEqual,
   type RepositoryTarget,
   type Workspace,
-  type WorkspaceEntry,
   type WorkspaceFileSystem,
-  type WorkspaceRootDefinition,
-  type WorkspaceRootScan,
+  type WorkspaceRoot,
   type WorkspaceStore
 } from "@gitnest/workspace-core";
 
 import { GitRepositoryProbe } from "./git-repository-probe";
 
-export type AddWorkspaceEntrySource =
-  | "picker"
-  | "manual"
-  | "drop";
-
-export interface AddWorkspaceEntryInput {
-  path: string;
-  source: AddWorkspaceEntrySource;
-}
-
-export interface UpdateWorkspaceEntryInput {
-  entryId: string;
-  displayName?: string;
-  order?: number;
-}
-
-export interface RemoveWorkspaceEntryInput {
-  entryId: string;
-  target?: RepositoryTarget;
-}
-
 export interface SetWorkspaceGroupCollapsedInput {
-  entryId: string;
   groupId: string;
   collapsed: boolean;
 }
 
-export interface WorkspaceMutationResult {
-  workspace: Workspace;
-  focusedEntryId: string;
-  duplicate: boolean;
+export interface ExcludeWorkspaceRepositoryInput {
+  target: RepositoryTarget;
 }
 
 interface WorkspaceServiceOptions {
@@ -88,69 +58,42 @@ export class WorkspaceService {
     return this.#runExclusive(() => this.#loadWorkspace());
   }
 
-  addEntry(
-    input: AddWorkspaceEntryInput
-  ): Promise<WorkspaceMutationResult> {
+  configureRoot(path: string): Promise<Workspace> {
     return this.#runExclusive(async () => {
-      validateAddSource(input.source);
       const current = await this.#loadWorkspace();
-      const normalized = this.#fileSystem.normalizePath(input.path);
-      const duplicate = current.entries.find(
-        (entry) =>
-          entry.canonicalPath === normalized.canonicalPath
-      );
-
-      if (duplicate) {
-        const workspace =
-          current.selectedEntryId === duplicate.id
-            ? current
-            : {
-                ...current,
-                selectedEntryId: duplicate.id,
-                updatedAt: this.#clock()
-              };
-
-        if (workspace !== current) {
-          await this.#save(workspace);
-        }
-
-        return {
-          workspace,
-          focusedEntryId: duplicate.id,
-          duplicate: true
-        };
+      if (isConfiguredWorkspace(current)) {
+        throw new WorkspaceError(
+          "INVALID_REQUEST",
+          "The Workspace root is already configured."
+        );
+      }
+      if (!isEmptyWorkspacePlaceholder(current)) {
+        throw new WorkspaceError(
+          "INVALID_PERSISTED_DATA",
+          "An unconfigured Workspace cannot contain repository topology."
+        );
       }
 
-      const now = this.#clock();
-      const root: WorkspaceRootDefinition = {
-        id: createPathIdentity("entry", normalized.canonicalPath),
-        displayName:
-          this.#fileSystem.basename(normalized.path) ||
-          normalized.path,
+      const normalized = this.#fileSystem.normalizePath(path);
+      const root: WorkspaceRoot = {
         path: normalized.path,
         canonicalPath: normalized.canonicalPath,
-        excludes: [],
-        order: current.entries.length
+        excludes: []
       };
-      const roots = [
-        ...current.entries.map(toRootDefinition),
-        root
-      ];
-      const scans = await this.#scanRoots(roots, now);
-      const newRootScan = scans.find(
-        (scan) => scan.root.id === root.id
-      );
+      const now = this.#clock();
+      const scan = await this.#scanner.scanRoot(root, {
+        scannedAt: now
+      });
 
-      if (!newRootScan || newRootScan.repositories.length === 0) {
-        const rootIssue = newRootScan?.issues[0];
-
+      if (scan.repositories.length === 0) {
+        const rootIssue = scan.issues[0];
         if (rootIssue) {
           throw new WorkspaceError(
             "DIRECTORY_UNAVAILABLE",
             rootIssue.message,
             {
               path: root.path,
-              issueCount: newRootScan?.issues.length ?? 1
+              issueCount: scan.issues.length
             }
           );
         }
@@ -162,49 +105,32 @@ export class WorkspaceService {
         );
       }
 
-      const assembled = this.#assembler.assemble({
+      const workspace = this.#assembler.assemble({
         current,
-        roots,
-        scans,
+        scan,
         updatedAt: now
       });
-      const selectedTarget = getEntryDefaultTarget(
-        assembled.entries.find((entry) => entry.id === root.id)
-      );
-      const workspace: Workspace = {
-        ...assembled,
-        selectedEntryId: root.id,
-        ...(selectedTarget ? { selectedTarget } : {})
-      };
-
       await this.#save(workspace);
-      return {
-        workspace,
-        focusedEntryId: root.id,
-        duplicate: false
-      };
+      return workspace;
     });
   }
 
   rescan(signal?: AbortSignal): Promise<Workspace> {
     return this.#runExclusive(async () => {
       const current = await this.#loadWorkspace();
-
-      if (current.entries.length === 0) {
+      const root = toWorkspaceRoot(current);
+      if (!root) {
         return current;
       }
 
       const now = this.#clock();
-      const roots = current.entries.map(toRootDefinition);
-      const scans = await this.#scanRoots(
-        roots,
-        now,
-        signal
-      );
+      const scan = await this.#scanner.scanRoot(root, {
+        scannedAt: now,
+        ...(signal ? { signal } : {})
+      });
       const workspace = this.#assembler.assemble({
         current,
-        roots,
-        scans,
+        scan,
         updatedAt: now
       });
 
@@ -213,219 +139,84 @@ export class WorkspaceService {
     });
   }
 
-  updateEntry(
-    input: UpdateWorkspaceEntryInput
+  excludeRepository(
+    input: ExcludeWorkspaceRepositoryInput
   ): Promise<Workspace> {
     return this.#runExclusive(async () => {
       const current = await this.#loadWorkspace();
-      const index = current.entries.findIndex(
-        (entry) => entry.id === input.entryId
-      );
-
-      if (index < 0) {
+      const root = toWorkspaceRoot(current);
+      if (!root) {
         throw new WorkspaceError(
-          "ENTRY_NOT_FOUND",
-          "The Workspace entry no longer exists."
+          "INVALID_REQUEST",
+          "The Workspace root is not configured."
         );
       }
 
+      const targetKey = repositoryTargetKey(input.target);
       if (
-        input.displayName === undefined &&
-        input.order === undefined
+        !listWorkspaceTargets(current).some(
+          (candidate) =>
+            repositoryTargetKey(candidate) === targetKey
+        )
       ) {
         throw new WorkspaceError(
           "INVALID_REQUEST",
-          "A display name or order is required."
+          "The repository is not part of this Workspace."
         );
       }
 
-      const entries = [...current.entries];
-      const existing = entries[index] as WorkspaceEntry;
-      const displayName =
-        input.displayName === undefined
-          ? existing.displayName
-          : validateDisplayName(input.displayName);
-      entries[index] = {
-        ...existing,
-        displayName
-      };
-
-      if (input.order !== undefined) {
-        if (!Number.isInteger(input.order)) {
-          throw new WorkspaceError(
-            "INVALID_REQUEST",
-            "Workspace entry order must be an integer."
-          );
-        }
-
-        const [entry] = entries.splice(index, 1);
-        const targetIndex = Math.min(
-          Math.max(input.order, 0),
-          entries.length
-        );
-        entries.splice(targetIndex, 0, entry as WorkspaceEntry);
-      }
-
-      const workspace: Workspace = {
-        ...current,
-        entries: entries.map((entry, order) => ({
-          ...entry,
-          order
-        })),
-        updatedAt: this.#clock()
-      };
-
-      await this.#save(workspace);
-      return workspace;
-    });
-  }
-
-  removeEntry(
-    input: RemoveWorkspaceEntryInput
-  ): Promise<Workspace> {
-    return this.#runExclusive(async () => {
-      const current = await this.#loadWorkspace();
-      if (input.target) {
-        return this.#removeRepositoryFromEntry(
-          current,
-          input.entryId,
-          input.target
+      const worktree = current.worktrees.find(
+        (candidate) =>
+          candidate.id === input.target.worktreeId &&
+          candidate.repositoryId === input.target.repositoryId
+      );
+      if (!worktree) {
+        throw new WorkspaceError(
+          "INVALID_REQUEST",
+          "The repository worktree is no longer available."
         );
       }
-      return this.#removeEntry(current, input.entryId);
-    });
-  }
+      if (!this.#fileSystem.isWithin(root.path, worktree.path)) {
+        throw new WorkspaceError(
+          "INVALID_REQUEST",
+          "The repository is outside the Workspace root."
+        );
+      }
 
-  async #removeRepositoryFromEntry(
-    current: Workspace,
-    entryId: string,
-    target: RepositoryTarget
-  ): Promise<Workspace> {
-    const entry = current.entries.find(
-      (candidate) => candidate.id === entryId
-    );
-    if (!entry) {
-      throw new WorkspaceError(
-        "ENTRY_NOT_FOUND",
-        "The Workspace entry no longer exists."
-      );
-    }
-
-    const targetKey = repositoryTargetKey(target);
-    if (
-      !listEntryTargets(entry).some(
-        (candidate) => repositoryTargetKey(candidate) === targetKey
-      )
-    ) {
-      throw new WorkspaceError(
-        "INVALID_REQUEST",
-        "The repository is not part of the selected Workspace entry."
-      );
-    }
-
-    if (entry.kind === "standalone-repository") {
-      return this.#removeEntry(current, entryId);
-    }
-
-    const worktree = current.worktrees.find(
-      (candidate) =>
-        candidate.id === target.worktreeId &&
-        candidate.repositoryId === target.repositoryId
-    );
-    if (!worktree) {
-      throw new WorkspaceError(
-        "INVALID_REQUEST",
-        "The repository worktree is no longer available."
-      );
-    }
-
-    if (
-      !this.#fileSystem.isWithin(entry.path, worktree.path)
-    ) {
-      throw new WorkspaceError(
-        "INVALID_REQUEST",
-        "The repository is outside the selected Workspace entry."
-      );
-    }
-
-    const relativeSegments = this.#fileSystem.relativeSegments(
-      entry.path,
-      worktree.path
-    );
-    const excludedName = relativeSegments.join("/");
-
-    if (!excludedName) {
-      throw new WorkspaceError(
-        "INVALID_REQUEST",
-        "The Workspace root repository cannot be removed independently."
-      );
-    }
-
-    const roots = current.entries.map((candidate) => {
-      const root = toRootDefinition(candidate);
-      if (root.id !== entryId) {
-        return root;
+      const excludedPath = this.#fileSystem
+        .relativeSegments(root.path, worktree.path)
+        .join("/");
+      if (!excludedPath) {
+        throw new WorkspaceError(
+          "INVALID_REQUEST",
+          "The Workspace root repository cannot be excluded independently."
+        );
       }
 
       const alreadyExcluded = root.excludes.some(
         (value) =>
           value.toLocaleLowerCase() ===
-          excludedName.toLocaleLowerCase()
+          excludedPath.toLocaleLowerCase()
       );
-      return alreadyExcluded
+      const nextRoot = alreadyExcluded
         ? root
         : {
             ...root,
-            excludes: [...root.excludes, excludedName]
+            excludes: [...root.excludes, excludedPath]
           };
+      const now = this.#clock();
+      const scan = await this.#scanner.scanRoot(nextRoot, {
+        scannedAt: now
+      });
+      const workspace = this.#assembler.assemble({
+        current,
+        scan,
+        updatedAt: now
+      });
+
+      await this.#save(workspace);
+      return workspace;
     });
-    const now = this.#clock();
-    const scans = await this.#scanRoots(roots, now);
-    const workspace = this.#assembler.assemble({
-      current,
-      roots,
-      scans,
-      updatedAt: now
-    });
-
-    await this.#save(workspace);
-    return workspace;
-  }
-
-  async #removeEntry(
-    current: Workspace,
-    entryId: string
-  ): Promise<Workspace> {
-    const remainingEntries = current.entries.filter(
-      (entry) => entry.id !== entryId
-    );
-    if (remainingEntries.length === current.entries.length) {
-      throw new WorkspaceError(
-        "ENTRY_NOT_FOUND",
-        "The Workspace entry no longer exists."
-      );
-    }
-
-    const roots = remainingEntries.map(toRootDefinition);
-    const now = this.#clock();
-
-    if (remainingEntries.length === 0) {
-      throw new WorkspaceError(
-        "INVALID_REQUEST",
-        "The final Workspace entry cannot be removed. Delete the Workspace instead."
-      );
-    }
-
-    const scans = await this.#scanRoots(roots, now);
-    const workspace = this.#assembler.assemble({
-      current,
-      roots,
-      scans,
-      updatedAt: now
-    });
-
-    await this.#save(workspace);
-    return workspace;
   }
 
   setGroupCollapsed(
@@ -434,32 +225,16 @@ export class WorkspaceService {
     return this.#runExclusive(async () => {
       const current = await this.#loadWorkspace();
       let groupFound = false;
-      const entries = current.entries.map((entry) => {
-        if (entry.id !== input.entryId) {
-          return entry;
+      const groups = current.groups.map((group) => {
+        if (group.id !== input.groupId) {
+          return group;
         }
-
-        const groups = entry.groups.map((group) => {
-          if (group.id !== input.groupId) {
-            return group;
-          }
-
-          groupFound = true;
-          return {
-            ...group,
-            collapsed: input.collapsed
-          };
-        });
-
-        return { ...entry, groups };
+        groupFound = true;
+        return {
+          ...group,
+          collapsed: input.collapsed
+        };
       });
-
-      if (!current.entries.some((entry) => entry.id === input.entryId)) {
-        throw new WorkspaceError(
-          "ENTRY_NOT_FOUND",
-          "The Workspace entry no longer exists."
-        );
-      }
 
       if (!groupFound) {
         throw new WorkspaceError(
@@ -470,37 +245,7 @@ export class WorkspaceService {
 
       const workspace: Workspace = {
         ...current,
-        entries,
-        updatedAt: this.#clock()
-      };
-      await this.#save(workspace);
-      return workspace;
-    });
-  }
-
-  selectEntry(entryId: string): Promise<Workspace> {
-    return this.#runExclusive(async () => {
-      const current = await this.#loadWorkspace();
-
-      if (!current.entries.some((entry) => entry.id === entryId)) {
-        throw new WorkspaceError(
-          "ENTRY_NOT_FOUND",
-          "The Workspace entry no longer exists."
-        );
-      }
-
-      if (current.selectedEntryId === entryId) {
-        return current;
-      }
-
-      const entry = current.entries.find(
-        (candidate) => candidate.id === entryId
-      );
-      const target = getEntryDefaultTarget(entry);
-      const workspace: Workspace = {
-        ...current,
-        selectedEntryId: entryId,
-        ...(target ? { selectedTarget: target } : {}),
+        groups,
         updatedAt: this.#clock()
       };
       await this.#save(workspace);
@@ -528,10 +273,8 @@ export class WorkspaceService {
         return current;
       }
 
-      const owner = findTargetEntry(current, target);
       const workspace: Workspace = {
         ...current,
-        ...(owner ? { selectedEntryId: owner.id } : {}),
         selectedTarget: target,
         updatedAt: this.#clock()
       };
@@ -555,25 +298,6 @@ export class WorkspaceService {
     this.#workspace = workspace;
   }
 
-  async #scanRoots(
-    roots: WorkspaceRootDefinition[],
-    scannedAt: string,
-    signal?: AbortSignal
-  ): Promise<WorkspaceRootScan[]> {
-    const scans: WorkspaceRootScan[] = [];
-
-    for (const root of roots) {
-      scans.push(
-        await this.#scanner.scanRoot(root, {
-          scannedAt,
-          ...(signal ? { signal } : {})
-        })
-      );
-    }
-
-    return scans;
-  }
-
   #runExclusive<Result>(
     operation: () => Promise<Result>
   ): Promise<Result> {
@@ -586,37 +310,38 @@ export class WorkspaceService {
   }
 }
 
-function toRootDefinition(
-  entry: WorkspaceEntry
-): WorkspaceRootDefinition {
-  return {
-    id: entry.id,
-    displayName: entry.displayName,
-    path: entry.path,
-    canonicalPath: entry.canonicalPath,
-    excludes: [...entry.excludes],
-    order: entry.order
-  };
+function toWorkspaceRoot(
+  workspace: Workspace
+): WorkspaceRoot | undefined {
+  return workspace.path && workspace.canonicalPath
+    ? {
+        path: workspace.path,
+        canonicalPath: workspace.canonicalPath,
+        excludes: [...workspace.excludes]
+      }
+    : undefined;
 }
 
-function validateAddSource(source: string): void {
-  if (!["picker", "manual", "drop"].includes(source)) {
-    throw new WorkspaceError(
-      "INVALID_REQUEST",
-      "Unknown Workspace entry source."
-    );
-  }
+function isConfiguredWorkspace(workspace: Workspace): boolean {
+  return Boolean(
+    workspace.path &&
+    workspace.canonicalPath &&
+    workspace.lastScannedAt
+  );
 }
 
-function validateDisplayName(value: string): string {
-  const normalized = value.trim();
-
-  if (!normalized || normalized.length > 120) {
-    throw new WorkspaceError(
-      "INVALID_REQUEST",
-      "Display name must contain 1 to 120 characters."
-    );
-  }
-
-  return normalized;
+function isEmptyWorkspacePlaceholder(
+  workspace: Workspace
+): boolean {
+  return (
+    workspace.path === undefined &&
+    workspace.canonicalPath === undefined &&
+    workspace.lastScannedAt === undefined &&
+    workspace.excludes.length === 0 &&
+    workspace.groups.length === 0 &&
+    workspace.scanIssues.length === 0 &&
+    workspace.repositories.length === 0 &&
+    workspace.worktrees.length === 0 &&
+    workspace.selectedTarget === undefined
+  );
 }

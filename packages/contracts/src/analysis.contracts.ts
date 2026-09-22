@@ -243,8 +243,6 @@ export interface CodeAnalysisSnapshotDto {
   schemaVersion: 1;
   analysisId: string;
   workspaceId: string;
-  entryId: string;
-  entryName: string;
   scope: CodeAnalysisScopeDto;
   generatedAt: string;
   roots: CodeAnalysisRootDto[];
@@ -285,8 +283,6 @@ export interface CodeAnalysisStateDto {
   snapshotAvailable: boolean;
   analysisId?: string;
   workspaceId?: string;
-  entryId?: string;
-  entryName?: string;
   scope?: CodeAnalysisScopeDto;
   startedAt?: string;
   progress?: CodeAnalysisProgressDto;
@@ -296,6 +292,10 @@ export interface CodeAnalysisStateDto {
 }
 
 export interface StartCodeAnalysisRequest {
+  scope: CodeAnalysisScopeDto;
+}
+
+export interface RestoreCodeAnalysisSnapshotRequest {
   scope: CodeAnalysisScopeDto;
 }
 

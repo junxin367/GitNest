@@ -108,6 +108,7 @@ export function RepositoryOverview({
             aria-busy={directoryOpening}
             className="repository-hero-action"
             disabled={!repositoryPath || directoryOpening}
+            fullWidth
             onClick={onOpenDirectory}
             type="button"
           >
@@ -116,6 +117,7 @@ export function RepositoryOverview({
           </Button>
           <Button size="small" variant="primary"
             className="repository-hero-action"
+            fullWidth
             onClick={() => onOpenTab("changes")}
             type="button"
           >

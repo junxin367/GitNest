@@ -18,10 +18,17 @@ export interface CodeAnalysisController {
   state: CodeAnalysisStateDto;
   snapshot: CodeAnalysisSnapshotDto | null;
   loading: boolean;
-  action: "starting" | "cancelling" | null;
+  action:
+    | "starting"
+    | "restoring"
+    | "cancelling"
+    | null;
   installingLanguage: InstallableLanguageServerDto | null;
   error: GitReadErrorDto | null;
   start(scope: CodeAnalysisScopeDto): Promise<boolean>;
+  restoreSnapshot(
+    scope: CodeAnalysisScopeDto
+  ): Promise<boolean>;
   cancel(): Promise<boolean>;
   installLanguageServer(
     language: InstallableLanguageServerDto
@@ -44,7 +51,7 @@ export function useCodeAnalysis(
     useState<CodeAnalysisSnapshotDto | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [action, setAction] = useState<
-    "starting" | "cancelling" | null
+    "starting" | "restoring" | "cancelling" | null
   >(null);
   const [installingLanguage, setInstallingLanguage] =
     useState<InstallableLanguageServerDto | null>(null);
@@ -272,6 +279,33 @@ export function useCodeAnalysis(
     }
   }, [state.analysisId, state.state]);
 
+  const restoreSnapshot = useCallback(
+    async (scope: CodeAnalysisScopeDto) => {
+      setAction("restoring");
+      setError(null);
+      try {
+        const result =
+          await window.gitnest.codeAnalysis.restoreSnapshot({
+            scope
+          });
+        if (!result.ok) {
+          setError(result.error);
+          setAction(null);
+          return false;
+        }
+        if (!result.value) {
+          setAction(null);
+        }
+        return result.value;
+      } catch (reason) {
+        setError(unexpectedError(reason));
+        setAction(null);
+        return false;
+      }
+    },
+    []
+  );
+
   const installLanguageServer = useCallback(
     async (language: InstallableLanguageServerDto) => {
       setInstallingLanguage(language);
@@ -306,6 +340,7 @@ export function useCodeAnalysis(
     installingLanguage,
     error,
     start,
+    restoreSnapshot,
     cancel,
     installLanguageServer,
     reload,
@@ -328,7 +363,7 @@ function snapshotExpectationKey(
   state: CodeAnalysisStateDto
 ): string {
   const context = `${state.workspaceId ?? ""}\0${
-    state.entryId ?? ""
+    state.scope ?? ""
   }`;
   if (!state.snapshotAvailable) {
     return `unavailable\0${context}`;
@@ -353,9 +388,9 @@ function snapshotMatchesState(
   if (
     !snapshot ||
     !state.workspaceId ||
-    !state.entryId ||
     snapshot.workspaceId !== state.workspaceId ||
-    snapshot.entryId !== state.entryId
+    (state.scope !== undefined &&
+      snapshot.scope !== state.scope)
   ) {
     return false;
   }

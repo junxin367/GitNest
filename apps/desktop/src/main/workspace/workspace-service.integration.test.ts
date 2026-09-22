@@ -4,7 +4,7 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   WorkspaceCollectionService,
@@ -50,34 +50,38 @@ describe("WorkspaceService integration", () => {
     await appData.dispose();
   });
 
-  it("discovers, classifies, groups, deduplicates, reassigns overlapping roots, and restores persisted state", async () => {
-    const metaResult = await service.addEntry({
-      path: fixture.metaRootPath,
-      source: "picker"
-    });
-    const metaEntry = metaResult.workspace.entries[0];
+  it("discovers nested repositories and linked Worktrees, groups them, and restores persisted state", async () => {
+    const configured = await service.configureRoot(
+      fixture.metaRootPath
+    );
 
-    expect(metaEntry).toMatchObject({
-      kind: "workspace-meta-repository",
-      path: fixture.metaRootPath
+    expect(configured).toMatchObject({
+      path: fixture.metaRootPath,
+      excludes: [],
+      scanIssues: []
     });
-    expect(metaEntry?.groups.map((group) => group.name)).toEqual([
+    expect(configured.groups.map((group) => group.name)).toEqual([
       "原/根仓库",
       "svr"
     ]);
     expect(
-      metaEntry?.groups.find(
+      configured.groups.find(
         (group) => group.name === "原/根仓库"
       )?.targets
     ).toHaveLength(2);
-    expect(metaResult.workspace.repositories).toHaveLength(3);
     expect(
-      metaResult.workspace.worktrees.some(
+      configured.groups.find(
+        (group) => group.name === "svr"
+      )?.targets
+    ).toHaveLength(1);
+    expect(configured.repositories).toHaveLength(3);
+    expect(
+      configured.worktrees.some(
         (worktree) => worktree.path === fixture.linkedWorktreePath
       )
     ).toBe(true);
     expect(
-      metaResult.workspace.worktrees.some(
+      configured.worktrees.some(
         (worktree) =>
           worktree.path === fixture.ignoredRepositoryPath
       )
@@ -88,74 +92,19 @@ describe("WorkspaceService integration", () => {
       code: "ENOENT"
     });
 
-    const directoryResult = await service.addEntry({
-      path: fixture.directoryRootPath,
-      source: "manual"
-    });
-    expect(directoryResult.workspace.entries[1]).toMatchObject({
-      kind: "workspace-directory",
-      groups: [{ name: "web" }]
-    });
-
-    const standaloneResult = await service.addEntry({
-      path: fixture.standaloneRepositoryPath,
-      source: "drop"
-    });
-    expect(standaloneResult.workspace.entries[2]).toMatchObject({
-      kind: "standalone-repository",
-      groups: []
-    });
-
-    const duplicateResult = await service.addEntry({
-      path: fixture.metaRootPath,
-      source: "drop"
-    });
-    expect(duplicateResult.duplicate).toBe(true);
-    expect(duplicateResult.workspace.entries).toHaveLength(3);
-    expect(duplicateResult.focusedEntryId).toBe(metaEntry?.id);
-
-    const overlapResult = await service.addEntry({
-      path: join(fixture.metaRootPath, "svr"),
-      source: "manual"
-    });
-    const rescannedMeta = overlapResult.workspace.entries.find(
-      (entry) => entry.id === metaEntry?.id
+    const group = configured.groups.find(
+      (candidate) => candidate.name === "svr"
     );
-    const overlapEntry = overlapResult.workspace.entries.find(
-      (entry) => entry.path === join(fixture.metaRootPath, "svr")
-    );
-
-    expect(rescannedMeta?.groups.map((group) => group.name)).toEqual([
-      "原/根仓库"
-    ]);
-    expect(overlapEntry).toMatchObject({
-      kind: "workspace-directory",
-      groups: [{ name: "原/根仓库" }]
-    });
-
-    const group = overlapEntry?.groups[0];
     expect(group).toBeDefined();
     const collapsed = await service.setGroupCollapsed({
-      entryId: overlapEntry?.id as string,
       groupId: group?.id as string,
       collapsed: true
     });
     expect(
-      collapsed.entries.find(
-        (entry) => entry.id === overlapEntry?.id
-      )?.groups[0]?.collapsed
+      collapsed.groups.find(
+        (candidate) => candidate.id === group?.id
+      )?.collapsed
     ).toBe(true);
-
-    const renamed = await service.updateEntry({
-      entryId: overlapEntry?.id as string,
-      displayName: "Backend repositories",
-      order: 0
-    });
-    expect(renamed.entries[0]).toMatchObject({
-      id: overlapEntry?.id,
-      displayName: "Backend repositories",
-      order: 0
-    });
 
     const restored = await new WorkspaceService(
       new GitCliClient(),
@@ -163,19 +112,42 @@ describe("WorkspaceService integration", () => {
       new JsonWorkspaceStore(storePath),
       { clock }
     ).getCurrent();
-    expect(restored).toEqual(renamed);
-    expect(restored.entries[0]?.groups[0]?.collapsed).toBe(true);
+    expect(restored).toEqual(collapsed);
+    expect(
+      restored.groups.find(
+        (candidate) => candidate.id === group?.id
+      )?.collapsed
+    ).toBe(true);
   }, 15_000);
 
-  it("does not add a directory without repositories", async () => {
-    await expect(
-      service.addEntry({
-        path: fixture.emptyDirectoryPath,
-        source: "manual"
-      })
-    ).rejects.toMatchObject({
-      code: "NO_REPOSITORIES_FOUND"
-    });
+  it("does not configure a root without repositories", async () => {
+    const localAppData =
+      await createTemporaryDirectoryFixture(
+        "empty-workspace-app-data"
+      );
+    const localService = new WorkspaceService(
+      new GitCliClient(),
+      new NodeWorkspaceFileSystem(),
+      new JsonWorkspaceStore(
+        join(localAppData.path, "default.workspace.json")
+      ),
+      { clock }
+    );
+
+    try {
+      await expect(
+        localService.configureRoot(
+          fixture.emptyDirectoryPath
+        )
+      ).rejects.toMatchObject({
+        code: "NO_REPOSITORIES_FOUND"
+      });
+      await expect(
+        localService.getCurrent()
+      ).resolves.not.toHaveProperty("path");
+    } finally {
+      await localAppData.dispose();
+    }
   });
 
   it("creates, switches, restores, renames, and deletes independent multi-repository Workspaces", async () => {
@@ -208,39 +180,76 @@ describe("WorkspaceService integration", () => {
 
     try {
       const collection = createService();
-      await collection.addEntry({
-        path: fixture.metaRootPath,
-        source: "picker"
+      await expect(
+        collection.createWorkspace({
+          name: "Invalid Workspace",
+          path: fixture.emptyDirectoryPath
+        })
+      ).rejects.toMatchObject({
+        code: "NO_REPOSITORIES_FOUND"
       });
+      expect((await collection.getCurrent()).id).toBe("default");
+      expect(await collection.listWorkspaces()).toHaveLength(1);
+      expect(
+        await new JsonWorkspaceCollectionStore(options)
+          .loadWorkspace("workspace_second")
+      ).toBeNull();
+
+      const firstConfigured =
+        await collection.createWorkspace({
+          name: "Primary Workspace",
+          path: fixture.metaRootPath
+        });
+      expect(firstConfigured).toMatchObject({
+        id: "default",
+        name: "Primary Workspace",
+        path: fixture.metaRootPath,
+        groups: [
+          { name: "原/根仓库" },
+          { name: "svr" }
+        ]
+      });
+
       const second = await collection.createWorkspace({
-        name: "Second Workspace"
+        name: "Second Workspace",
+        path: fixture.standaloneRepositoryPath
       });
       expect(second).toMatchObject({
         id: "workspace_second",
         name: "Second Workspace",
-        entries: []
-      });
-      await collection.addEntry({
         path: fixture.standaloneRepositoryPath,
-        source: "manual"
+        groups: [
+          {
+            name: "原/根仓库",
+            targets: [expect.any(Object)]
+          }
+        ]
       });
+      const secondGroup = second.groups[0];
+      expect(secondGroup).toBeDefined();
+      const collapsedSecond =
+        await collection.setGroupCollapsed({
+          groupId: secondGroup?.id as string,
+          collapsed: true
+        });
+      expect(collapsedSecond.groups[0]?.collapsed).toBe(true);
 
       const first = await collection.switchWorkspace(
         "default"
       );
-      expect(first.entries).toHaveLength(1);
-      expect(first.entries[0]?.path).toBe(
-        fixture.metaRootPath
-      );
+      expect(first.path).toBe(fixture.metaRootPath);
+      expect(
+        first.groups.every((group) => !group.collapsed)
+      ).toBe(true);
 
       const restoredSecond =
         await collection.switchWorkspace(
           "workspace_second"
         );
-      expect(restoredSecond.entries).toHaveLength(1);
-      expect(restoredSecond.entries[0]?.path).toBe(
+      expect(restoredSecond.path).toBe(
         fixture.standaloneRepositoryPath
       );
+      expect(restoredSecond.groups[0]?.collapsed).toBe(true);
       await collection.renameWorkspace({
         workspaceId: "workspace_second",
         name: "Renamed Workspace"
@@ -248,7 +257,7 @@ describe("WorkspaceService integration", () => {
       expect(await collection.listWorkspaces()).toEqual([
         expect.objectContaining({
           id: "default",
-          name: "GitNest Workspace"
+          name: "Primary Workspace"
         }),
         expect.objectContaining({
           id: "workspace_second",
@@ -265,7 +274,8 @@ describe("WorkspaceService integration", () => {
       const restored = createService();
       await expect(restored.getCurrent()).resolves.toMatchObject({
         id: "default",
-        entries: [{ path: fixture.metaRootPath }]
+        name: "Primary Workspace",
+        path: fixture.metaRootPath
       });
       await expect(
         restored.listWorkspaces()
@@ -277,11 +287,64 @@ describe("WorkspaceService integration", () => {
     }
   }, 15_000);
 
-  it("removes an entry from Workspace without deleting its directory", async () => {
-    const localFixture = await createWorkspaceFixture();
+  it("reports document cleanup failures without restoring a deleted Workspace to the catalog", async () => {
     const localAppData =
       await createTemporaryDirectoryFixture(
-        "remove-entry-app-data"
+        "workspace-delete-failure"
+      );
+    try {
+      const store = new JsonWorkspaceCollectionStore({
+        catalogFilePath: join(
+          localAppData.path,
+          "catalog.json"
+        ),
+        workspaceDirectory: join(localAppData.path, "items")
+      });
+      const collection = new WorkspaceCollectionService(
+        new GitCliClient(),
+        new NodeWorkspaceFileSystem(),
+        store,
+        {
+          idFactory: () =>
+            "workspace_delete_failure"
+        }
+      );
+      await collection.createWorkspace({
+        name: "Primary Workspace",
+        path: fixture.metaRootPath
+      });
+      const created = await collection.createWorkspace({
+        name: "Delete test",
+        path: fixture.standaloneRepositoryPath
+      });
+      const remove = vi
+        .spyOn(store, "deleteWorkspace")
+        .mockRejectedValueOnce(new Error("Access denied"));
+      const next = await collection.deleteWorkspace(created.id);
+      expect(next.id).toBe("default");
+      expect(
+        (await store.loadCatalog())?.workspaces.map(
+          ({ id }) => id
+        )
+      ).toEqual(["default"]);
+      expect(
+        await store.loadWorkspace(created.id)
+      ).not.toBeNull();
+      expect(
+        collection.consumeCleanupWarning()
+      ).toContain("配置文件未能清理");
+      expect(collection.consumeCleanupWarning()).toBeUndefined();
+      expect((await collection.getCurrent()).id).toBe("default");
+      remove.mockRestore();
+    } finally {
+      await localAppData.dispose();
+    }
+  });
+
+  it("excludes a nested repository without deleting its directory", async () => {
+    const localAppData =
+      await createTemporaryDirectoryFixture(
+        "exclude-repository-app-data"
       );
     const localStorePath = join(
       localAppData.path,
@@ -299,83 +362,54 @@ describe("WorkspaceService integration", () => {
     );
 
     try {
-      const meta = await localService.addEntry({
-        path: localFixture.metaRootPath,
-        source: "picker"
-      });
-      const metaEntry = meta.workspace.entries[0];
-      const nestedTarget = metaEntry?.groups
+      const configured = await localService.configureRoot(
+        fixture.metaRootPath
+      );
+      const nestedTarget = configured.groups
         .find((group) => group.name === "svr")
         ?.targets[0];
 
-      if (!nestedTarget || !metaEntry) {
-        throw new Error("Workspace fixture did not contain a nested repository.");
+      if (!nestedTarget) {
+        throw new Error(
+          "Workspace fixture did not contain a nested repository."
+        );
       }
-      const withoutNested = await localService.removeEntry({
-        entryId: metaEntry.id,
-        target: nestedTarget
-      });
+
+      const withoutNested =
+        await localService.excludeRepository({
+          target: nestedTarget
+        });
       expect(
-        withoutNested.entries
-          .find((entry) => entry.id === metaEntry?.id)
-          ?.groups.some((group) =>
-            group.targets.some(
-              (target) =>
-                target.repositoryId ===
-                  nestedTarget?.repositoryId &&
-                target.worktreeId === nestedTarget?.worktreeId
-            )
+        withoutNested.groups.some((group) =>
+          group.targets.some(
+            (target) =>
+              target.repositoryId ===
+                nestedTarget.repositoryId &&
+              target.worktreeId === nestedTarget.worktreeId
           )
+        )
       ).toBe(false);
-      expect(
-        withoutNested.entries.find(
-          (entry) => entry.id === metaEntry.id
-        )?.excludes
-      ).toContain("svr/ScResSvr");
-      await expect(
-        access(localFixture.nestedRepositoryPath)
-      ).resolves.toBeUndefined();
-
-      const standalone = await localService.addEntry({
-        path: localFixture.standaloneRepositoryPath,
-        source: "manual"
-      });
-      const standaloneEntry = standalone.workspace.entries.find(
-        (entry) =>
-          entry.path === localFixture.standaloneRepositoryPath
+      expect(withoutNested.excludes).toContain(
+        "svr/ScResSvr"
       );
-
-      expect(standaloneEntry).toBeDefined();
-      const removed = await localService.removeEntry({
-        entryId: standaloneEntry?.id as string
-      });
-
       expect(
-        removed.entries.some(
-          (entry) => entry.id === standaloneEntry?.id
+        withoutNested.worktrees.some(
+          (worktree) =>
+            worktree.path === fixture.nestedRepositoryPath
         )
       ).toBe(false);
       await expect(
-        access(localFixture.standaloneRepositoryPath)
+        access(fixture.nestedRepositoryPath)
       ).resolves.toBeUndefined();
 
-      const remaining = removed.entries.find(
-        (entry) => entry.id === metaEntry?.id
-      );
-      expect(remaining).toBeDefined();
-      await expect(
-        localService.removeEntry({
-          entryId: remaining?.id as string
-        })
-      ).rejects.toMatchObject({
-        code: "INVALID_REQUEST"
-      });
-      expect(
-        (await localService.getCurrent()).entries
-      ).toHaveLength(1);
-      await expect(access(localFixture.metaRootPath)).resolves.toBeUndefined();
+      const restored = await new WorkspaceService(
+        new GitCliClient(),
+        new NodeWorkspaceFileSystem(),
+        new JsonWorkspaceStore(localStorePath),
+        { clock }
+      ).getCurrent();
+      expect(restored).toEqual(withoutNested);
     } finally {
-      await localFixture.dispose();
       await localAppData.dispose();
     }
   }, 15_000);
@@ -403,17 +437,15 @@ describe("WorkspaceService integration", () => {
         ),
         { clock }
       );
-      const added = await offlineService.addEntry({
-        path: originalPath,
-        source: "picker"
-      });
+      const added =
+        await offlineService.configureRoot(originalPath);
       const previousRepositoryId =
-        added.workspace.repositories[0]?.id;
+        added.repositories[0]?.id;
 
       await rename(originalPath, movedPath);
       moved = true;
       const offline = await offlineService.rescan();
-      expect(offline.entries[0]).toMatchObject({
+      expect(offline).toMatchObject({
         path: originalPath,
         scanIssues: [
           {
@@ -429,7 +461,7 @@ describe("WorkspaceService integration", () => {
       await rename(movedPath, originalPath);
       moved = false;
       const recovered = await offlineService.rescan();
-      expect(recovered.entries[0]?.scanIssues).toEqual([]);
+      expect(recovered.scanIssues).toEqual([]);
       expect(recovered.repositories[0]?.id).toBe(
         previousRepositoryId
       );

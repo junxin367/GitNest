@@ -1,5 +1,6 @@
 import {
   IPC_CHANNELS,
+  type ApplicationUpdateStateDto,
   type AppSettingsDto,
   type CodeAnalysisStateDto,
   type GitNestBridge,
@@ -9,7 +10,6 @@ import {
 
 export function createGitNestBridge(
   invoke: IpcInvoke,
-  resolveDroppedPath: (file: unknown) => string = () => "",
   subscribeWorkspaceState: (
     listener: (state: WorkspaceRuntimeStateDto) => void
   ) => () => void = () => () => undefined,
@@ -18,14 +18,42 @@ export function createGitNestBridge(
   ) => () => void = () => () => undefined,
   subscribeAppSettings: (
     listener: (settings: AppSettingsDto) => void
+  ) => () => void = () => () => undefined,
+  subscribeApplicationUpdateState: (
+    listener: (state: ApplicationUpdateStateDto) => void
+  ) => () => void = () => () => undefined,
+  subscribeWindowMaximized: (
+    listener: (maximized: boolean) => void
   ) => () => void = () => () => undefined
 ): GitNestBridge {
   return {
+    update: {
+      getState: () =>
+        invoke(IPC_CHANNELS.updateGetState),
+      check: () => invoke(IPC_CHANNELS.updateCheck),
+      acknowledgePrompt: (request) =>
+        invoke(
+          IPC_CHANNELS.updateAcknowledgePrompt,
+          request
+        ),
+      downloadAndInstall: () =>
+        invoke(IPC_CHANNELS.updateDownloadAndInstall),
+      openProjectPage: () =>
+        invoke(IPC_CHANNELS.updateOpenProjectPage),
+      openReleasePage: () =>
+        invoke(IPC_CHANNELS.updateOpenReleasePage),
+      onStateChanged: subscribeApplicationUpdateState
+    },
     codeAnalysis: {
       getState: () =>
         invoke(IPC_CHANNELS.codeAnalysisGetState),
       start: (request) =>
         invoke(IPC_CHANNELS.codeAnalysisStart, request),
+      restoreSnapshot: (request) =>
+        invoke(
+          IPC_CHANNELS.codeAnalysisRestoreSnapshot,
+          request
+        ),
       cancel: (request) =>
         invoke(IPC_CHANNELS.codeAnalysisCancel, request),
       getSnapshot: () =>
@@ -189,33 +217,32 @@ export function createGitNestBridge(
         invoke(IPC_CHANNELS.workspaceDelete, request),
       selectDirectory: () =>
         invoke(IPC_CHANNELS.workspaceSelectDirectory),
-      addEntry: (request) =>
-        invoke(IPC_CHANNELS.workspaceAddEntry, request),
       rescan: () =>
         invoke(IPC_CHANNELS.workspaceRescan),
-      updateEntry: (request) =>
-        invoke(IPC_CHANNELS.workspaceUpdateEntry, request),
-      removeEntry: (request) =>
-        invoke(IPC_CHANNELS.workspaceRemoveEntry, request),
+      removeRepository: (request) =>
+        invoke(
+          IPC_CHANNELS.workspaceRemoveRepository,
+          request
+        ),
       setGroupCollapsed: (request) =>
         invoke(
           IPC_CHANNELS.workspaceSetGroupCollapsed,
           request
         ),
-      selectEntry: (request) =>
-        invoke(IPC_CHANNELS.workspaceSelectEntry, request),
       selectTarget: (request) =>
         invoke(IPC_CHANNELS.workspaceSelectTarget, request),
       refresh: () =>
         invoke(IPC_CHANNELS.workspaceRefresh),
-      onStateChanged: subscribeWorkspaceState,
-      resolveDroppedPath
+      onStateChanged: subscribeWorkspaceState
     },
     window: {
+      isMaximized: () =>
+        invoke(IPC_CHANNELS.windowIsMaximized),
       minimize: () =>
         invoke(IPC_CHANNELS.windowMinimize),
       toggleMaximize: () =>
         invoke(IPC_CHANNELS.windowToggleMaximize),
+      onMaximizedChanged: subscribeWindowMaximized,
       close: () =>
         invoke(IPC_CHANNELS.windowClose),
       openDiffViewer: (request) =>

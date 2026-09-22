@@ -1,32 +1,39 @@
-import { createHash } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
   WORKSPACE_CATALOG_SCHEMA_VERSION,
   WorkspaceError,
-  getEntryDefaultTarget,
-  listEntryTargets,
-  repositoryTargetKey,
   summarizeWorkspace,
   type Workspace,
   type WorkspaceCatalog,
   type WorkspaceCollectionStore,
-  type WorkspaceEntry,
   type WorkspaceSummary
 } from "@gitnest/workspace-core";
 
 import { AtomicJsonStore } from "./atomic-json-store";
+import { migrateWorkspaceDocumentSet } from "./migrations/workspace-document";
 import { JsonWorkspaceStore } from "./workspace.repository";
 
 const MAX_WORKSPACE_CATALOG_BYTES = 4 * 1_024 * 1_024;
-const LEGACY_WORKSPACE_CATALOG_SCHEMA_VERSION = 1;
+const LEGACY_WORKSPACE_CATALOG_SCHEMA_VERSIONS = [1, 2] as const;
 
 interface LegacyWorkspaceCatalog {
-  schemaVersion: typeof LEGACY_WORKSPACE_CATALOG_SCHEMA_VERSION;
+  schemaVersion:
+    (typeof LEGACY_WORKSPACE_CATALOG_SCHEMA_VERSIONS)[number];
   activeWorkspaceId: string;
   workspaces: WorkspaceSummary[];
   updatedAt: string;
+}
+
+interface WorkspaceMigrationPlan {
+  sourceWorkspaceId: string;
+  workspaces: Workspace[];
+}
+
+interface RawWorkspaceDocument {
+  value: unknown;
+  store: JsonWorkspaceStore;
 }
 
 export interface JsonWorkspaceCollectionStoreOptions {
@@ -79,38 +86,43 @@ export class JsonWorkspaceCollectionStore
       return this.#migrateLegacyCatalog(value);
     }
 
-    const legacy = await this.#legacyStore?.load();
-    if (!legacy) {
+    const legacyValue = await this.#legacyStore?.readRaw();
+    if (legacyValue === null || legacyValue === undefined) {
       return null;
     }
-    assertWorkspaceId(legacy.id);
-    const migrated =
-      await this.#workspaceStore(legacy.id).load();
-    if (migrated && migrated.id !== legacy.id) {
-      throw invalidWorkspaceDocument(legacy.id);
-    }
-    const workspace = migrated ?? legacy;
-    const workspaces = splitLegacyWorkspace(
-      workspace,
+
+    const sourceWorkspaceId = readWorkspaceId(legacyValue);
+    assertWorkspaceId(sourceWorkspaceId);
+    const workspaces = this.#migrateWorkspaceDocument(
+      {
+        value: legacyValue,
+        store: this.#legacyStore as JsonWorkspaceStore
+      },
       new Set()
     );
+    const primary = workspaces.find(
+      (workspace) => workspace.id === sourceWorkspaceId
+    );
+    if (!primary) {
+      throw invalidWorkspaceDocument(sourceWorkspaceId);
+    }
     const catalog: WorkspaceCatalog = {
       schemaVersion: WORKSPACE_CATALOG_SCHEMA_VERSION,
-      activeWorkspaceId: workspace.id,
+      activeWorkspaceId: sourceWorkspaceId,
       workspaces: workspaces.map(summarizeWorkspace),
       updatedAt: this.#clock()
     };
-    for (const promotedWorkspace of workspaces) {
-      await this.saveWorkspace(promotedWorkspace);
-    }
-    await this.saveCatalog(catalog);
+    assertCurrentCatalog(catalog);
+
+    await this.#persistMigrationPlans(
+      [{ sourceWorkspaceId, workspaces }],
+      catalog
+    );
     return catalog;
   }
 
   saveCatalog(catalog: WorkspaceCatalog): Promise<void> {
-    if (!isWorkspaceCatalog(catalog)) {
-      throw invalidCatalog();
-    }
+    assertCurrentCatalog(catalog);
     return this.#catalogStore.write(
       structuredClone(catalog)
     );
@@ -130,12 +142,26 @@ export class JsonWorkspaceCollectionStore
       return workspace;
     }
 
-    const legacy =
-      workspaceId === "default"
-        ? await this.#legacyStore?.load()
-        : null;
-    if (!legacy || legacy.id !== workspaceId) {
+    const legacyValue = await this.#legacyStore?.readRaw();
+    if (
+      legacyValue === null ||
+      legacyValue === undefined ||
+      readWorkspaceId(legacyValue) !== workspaceId
+    ) {
       return null;
+    }
+    const workspaces = this.#migrateWorkspaceDocument(
+      {
+        value: legacyValue,
+        store: this.#legacyStore as JsonWorkspaceStore
+      },
+      new Set()
+    );
+    const legacy = workspaces.find(
+      (candidate) => candidate.id === workspaceId
+    );
+    if (!legacy) {
+      throw invalidWorkspaceDocument(workspaceId);
     }
     await this.saveWorkspace(legacy);
     return legacy;
@@ -186,56 +212,126 @@ export class JsonWorkspaceCollectionStore
   async #migrateLegacyCatalog(
     catalog: LegacyWorkspaceCatalog
   ): Promise<WorkspaceCatalog> {
-    const legacy = await this.#legacyStore?.load();
-    const legacyIndex = legacy
-      ? catalog.workspaces.findIndex(
-          (workspace) => workspace.id === legacy.id
+    const usedIds = new Set(
+      catalog.workspaces.map((workspace) => workspace.id)
+    );
+    const plans: WorkspaceMigrationPlan[] = [];
+    const summaries: WorkspaceSummary[] = [];
+
+    for (const summary of catalog.workspaces) {
+      const document =
+        await this.#readWorkspaceDocument(summary.id);
+      if (!document) {
+        this.#catalogStore.blockWrites(
+          "The Workspace catalog references a missing Workspace document."
+        );
+        throw invalidWorkspaceDocument(summary.id);
+      }
+      if (readWorkspaceId(document.value) !== summary.id) {
+        this.#catalogStore.blockWrites(
+          "A Workspace document id does not match its catalog entry."
+        );
+        throw invalidWorkspaceDocument(summary.id);
+      }
+
+      const workspaces = this.#migrateWorkspaceDocument(
+        document,
+        usedIds
+      );
+      if (
+        !workspaces.some(
+          (workspace) => workspace.id === summary.id
         )
-      : -1;
-
-    if (!legacy || legacyIndex < 0) {
-      const upgraded: WorkspaceCatalog = {
-        ...catalog,
-        schemaVersion: WORKSPACE_CATALOG_SCHEMA_VERSION
-      };
-      await this.saveCatalog(upgraded);
-      return upgraded;
+      ) {
+        throw invalidWorkspaceDocument(summary.id);
+      }
+      for (const workspace of workspaces) {
+        usedIds.add(workspace.id);
+        summaries.push(summarizeWorkspace(workspace));
+      }
+      plans.push({
+        sourceWorkspaceId: summary.id,
+        workspaces
+      });
     }
 
-    assertWorkspaceId(legacy.id);
-    const migrated =
-      await this.#workspaceStore(legacy.id).load();
-    if (migrated && migrated.id !== legacy.id) {
-      throw invalidWorkspaceDocument(legacy.id);
-    }
-    const source = migrated ?? legacy;
-    const reservedIds = new Set(
-      catalog.workspaces
-        .filter((workspace) => workspace.id !== source.id)
-        .map((workspace) => workspace.id)
-    );
-    const promotedWorkspaces = splitLegacyWorkspace(
-      source,
-      reservedIds
-    );
-    const workspaces = catalog.workspaces.flatMap(
-      (workspace, index) =>
-        index === legacyIndex
-          ? promotedWorkspaces.map(summarizeWorkspace)
-          : [workspace]
-    );
     const upgraded: WorkspaceCatalog = {
       schemaVersion: WORKSPACE_CATALOG_SCHEMA_VERSION,
       activeWorkspaceId: catalog.activeWorkspaceId,
-      workspaces,
+      workspaces: summaries,
       updatedAt: this.#clock()
     };
-
-    for (const promotedWorkspace of promotedWorkspaces) {
-      await this.saveWorkspace(promotedWorkspace);
-    }
-    await this.saveCatalog(upgraded);
+    assertCurrentCatalog(upgraded);
+    await this.#persistMigrationPlans(plans, upgraded);
     return upgraded;
+  }
+
+  async #readWorkspaceDocument(
+    workspaceId: string
+  ): Promise<RawWorkspaceDocument | null> {
+    const store = this.#workspaceStore(workspaceId);
+    const value = await store.readRaw();
+    if (value !== null) {
+      return { value, store };
+    }
+
+    const legacyValue = await this.#legacyStore?.readRaw();
+    return legacyValue !== null &&
+      legacyValue !== undefined &&
+      readWorkspaceId(legacyValue) === workspaceId
+      ? {
+          value: legacyValue,
+          store: this.#legacyStore as JsonWorkspaceStore
+        }
+      : null;
+  }
+
+  #migrateWorkspaceDocument(
+    document: RawWorkspaceDocument,
+    reservedIds: ReadonlySet<string>
+  ): Workspace[] {
+    try {
+      return migrateWorkspaceDocumentSet(
+        document.value,
+        reservedIds
+      );
+    } catch (error) {
+      document.store.blockWrites(
+        "Workspace schema validation or migration failed."
+      );
+      this.#catalogStore.blockWrites(
+        "A Workspace document could not be migrated."
+      );
+      throw error;
+    }
+  }
+
+  async #persistMigrationPlans(
+    plans: WorkspaceMigrationPlan[],
+    catalog: WorkspaceCatalog
+  ): Promise<void> {
+    for (const plan of plans) {
+      for (const workspace of plan.workspaces) {
+        if (workspace.id !== plan.sourceWorkspaceId) {
+          await this.saveWorkspace(workspace);
+        }
+      }
+    }
+
+    await this.saveCatalog(catalog);
+
+    for (const plan of plans) {
+      const primary = plan.workspaces.find(
+        (workspace) =>
+          workspace.id === plan.sourceWorkspaceId
+      );
+      if (!primary) {
+        throw invalidWorkspaceDocument(
+          plan.sourceWorkspaceId
+        );
+      }
+      await this.saveWorkspace(primary);
+    }
   }
 }
 
@@ -251,10 +347,21 @@ function isWorkspaceCatalog(
 function isLegacyWorkspaceCatalog(
   value: unknown
 ): value is LegacyWorkspaceCatalog {
-  return isWorkspaceCatalogShape(
-    value,
-    LEGACY_WORKSPACE_CATALOG_SCHEMA_VERSION
+  return (
+    isRecord(value) &&
+    LEGACY_WORKSPACE_CATALOG_SCHEMA_VERSIONS.includes(
+      value.schemaVersion as 1 | 2
+    ) &&
+    isWorkspaceCatalogShape(value, value.schemaVersion as 1 | 2)
   );
+}
+
+function assertCurrentCatalog(
+  value: WorkspaceCatalog
+): void {
+  if (!isWorkspaceCatalog(value)) {
+    throw invalidCatalog();
+  }
 }
 
 function isWorkspaceCatalogShape(
@@ -292,147 +399,14 @@ function isWorkspaceCatalogShape(
   return ids.has(value.activeWorkspaceId);
 }
 
-function splitLegacyWorkspace(
-  workspace: Workspace,
-  reservedIds: ReadonlySet<string>
-): Workspace[] {
-  if (workspace.entries.length === 0) {
-    return [structuredClone(workspace)];
+function readWorkspaceId(value: unknown): string {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string"
+  ) {
+    throw invalidWorkspaceDocument("unknown");
   }
-
-  const selectedEntry =
-    workspace.entries.find(
-      (entry) => entry.id === workspace.selectedEntryId
-    ) ?? workspace.entries[0];
-  if (!selectedEntry) {
-    return [structuredClone(workspace)];
-  }
-
-  const usedIds = new Set(reservedIds);
-  usedIds.add(workspace.id);
-  return workspace.entries.map((entry) => {
-    const workspaceId =
-      entry.id === selectedEntry.id
-        ? workspace.id
-        : createPromotedWorkspaceId(
-            workspace.id,
-            entry.id,
-            usedIds
-          );
-    usedIds.add(workspaceId);
-    return createPromotedWorkspace(
-      workspace,
-      entry,
-      workspaceId
-    );
-  });
-}
-
-function createPromotedWorkspace(
-  source: Workspace,
-  entry: WorkspaceEntry,
-  workspaceId: string
-): Workspace {
-  const targetKeys = new Set(
-    listEntryTargets(entry).map(repositoryTargetKey)
-  );
-  const worktrees = source.worktrees
-    .filter((worktree) =>
-      targetKeys.has(
-        repositoryTargetKey({
-          repositoryId: worktree.repositoryId,
-          worktreeId: worktree.id
-        })
-      )
-    )
-    .map((worktree) => structuredClone(worktree));
-  const repositories = source.repositories.flatMap(
-    (repository) => {
-      const worktreeIds = repository.worktreeIds.filter(
-        (worktreeId) =>
-          targetKeys.has(
-            repositoryTargetKey({
-              repositoryId: repository.id,
-              worktreeId
-            })
-          )
-      );
-      if (worktreeIds.length === 0) {
-        return [];
-      }
-      const primaryWorktreeId =
-        repository.primaryWorktreeId &&
-        worktreeIds.includes(repository.primaryWorktreeId)
-          ? repository.primaryWorktreeId
-          : undefined;
-      return [
-        {
-          id: repository.id,
-          name: repository.name,
-          commonDir: repository.commonDir,
-          canonicalCommonDir:
-            repository.canonicalCommonDir,
-          ...(primaryWorktreeId
-            ? { primaryWorktreeId }
-            : {}),
-          worktreeIds
-        }
-      ];
-    }
-  );
-  const selectedTarget =
-    source.selectedTarget &&
-    targetKeys.has(repositoryTargetKey(source.selectedTarget))
-      ? source.selectedTarget
-      : getEntryDefaultTarget(entry);
-
-  return {
-    schemaVersion: source.schemaVersion,
-    id: workspaceId,
-    name: createWorkspaceName(entry.displayName),
-    entries: [
-      {
-        ...structuredClone(entry),
-        order: 0
-      }
-    ],
-    repositories,
-    worktrees,
-    selectedEntryId: entry.id,
-    ...(selectedTarget
-      ? {
-          selectedTarget: {
-            repositoryId: selectedTarget.repositoryId,
-            worktreeId: selectedTarget.worktreeId
-          }
-        }
-      : {}),
-    updatedAt: source.updatedAt
-  };
-}
-
-function createPromotedWorkspaceId(
-  legacyWorkspaceId: string,
-  entryId: string,
-  usedIds: ReadonlySet<string>
-): string {
-  for (let attempt = 0; ; attempt += 1) {
-    const digest = createHash("sha256")
-      .update(
-        `${legacyWorkspaceId}\0${entryId}\0${attempt}`
-      )
-      .digest("hex")
-      .slice(0, 32);
-    const workspaceId = `workspace_${digest}`;
-    if (!usedIds.has(workspaceId)) {
-      return workspaceId;
-    }
-  }
-}
-
-function createWorkspaceName(displayName: string): string {
-  const trimmed = displayName.trim();
-  return (trimmed || "Workspace").slice(0, 120);
+  return value.id;
 }
 
 function assertWorkspaceId(workspaceId: string): void {

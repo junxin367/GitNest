@@ -17,15 +17,13 @@ import {
 
 import {
   WorkspaceService,
-  type AddWorkspaceEntryInput,
-  type RemoveWorkspaceEntryInput,
-  type SetWorkspaceGroupCollapsedInput,
-  type UpdateWorkspaceEntryInput,
-  type WorkspaceMutationResult
+  type ExcludeWorkspaceRepositoryInput,
+  type SetWorkspaceGroupCollapsedInput
 } from "./workspace-service";
 
 export interface CreateWorkspaceInput {
   name: string;
+  path: string;
 }
 
 export interface RenameWorkspaceInput {
@@ -46,6 +44,7 @@ export class WorkspaceCollectionService {
   readonly #idFactory: () => string;
   #catalog: WorkspaceCatalog | undefined;
   #activeService: WorkspaceService | undefined;
+  #cleanupWarning: string | undefined;
   #queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -84,19 +83,44 @@ export class WorkspaceCollectionService {
     return this.#runExclusive(async () => {
       const catalog = await this.#loadCatalog();
       const now = this.#clock();
-      const workspace: Workspace = {
+      const placeholder =
+        catalog.workspaces.length === 1
+          ? await this.#store.loadWorkspace(
+              catalog.activeWorkspaceId
+            )
+          : null;
+      const replacePlaceholder = Boolean(
+        placeholder && !placeholder.path
+      );
+      let workspace: Workspace = {
         ...createEmptyWorkspace(now),
-        id: await this.#createWorkspaceId(catalog),
+        id: replacePlaceholder
+          ? (placeholder as Workspace).id
+          : await this.#createWorkspaceId(catalog),
         name: validateWorkspaceName(input.name),
         updatedAt: now
       };
+      // Scan into an in-memory document. The catalog must never expose
+      // a new Workspace before its selected directory has been accepted.
+      const draft = new WorkspaceService(
+        this.#gitClient,
+        this.#fileSystem,
+        {
+          load: async () => workspace,
+          save: async (scanned) => { workspace = scanned; }
+        },
+        { clock: this.#clock }
+      );
+      workspace = await draft.configureRoot(input.path);
       const nextCatalog: WorkspaceCatalog = {
         ...catalog,
         activeWorkspaceId: workspace.id,
-        workspaces: [
-          ...catalog.workspaces,
-          summarizeWorkspace(workspace)
-        ],
+        workspaces: replacePlaceholder
+          ? [summarizeWorkspace(workspace)]
+          : [
+              ...catalog.workspaces,
+              summarizeWorkspace(workspace)
+            ],
         updatedAt: now
       };
 
@@ -185,6 +209,7 @@ export class WorkspaceCollectionService {
 
   deleteWorkspace(workspaceId: string): Promise<Workspace> {
     return this.#runExclusive(async () => {
+      this.#cleanupWarning = undefined;
       const catalog = await this.#loadCatalog();
       const index = catalog.workspaces.findIndex(
         (candidate) => candidate.id === workspaceId
@@ -229,27 +254,24 @@ export class WorkspaceCollectionService {
         updatedAt: this.#clock()
       };
       await this.#store.saveCatalog(nextCatalog);
-      await this.#store
-        .deleteWorkspace(workspaceId)
-        .catch(() => undefined);
       this.#catalog = nextCatalog;
       this.#activeService = this.#createService(
         nextActiveWorkspaceId
       );
+      try {
+        await this.#store.deleteWorkspace(workspaceId);
+      } catch {
+        this.#cleanupWarning =
+          `Workspace 已从列表删除，但配置文件未能清理（${workspaceId}）。`;
+      }
       return nextWorkspace;
     });
   }
 
-  addEntry(
-    input: AddWorkspaceEntryInput
-  ): Promise<WorkspaceMutationResult> {
-    return this.#runExclusive(async () => {
-      const result = await (
-        await this.#getActiveService()
-      ).addEntry(input);
-      await this.#syncSummary(result.workspace);
-      return result;
-    });
+  consumeCleanupWarning(): string | undefined {
+    const warning = this.#cleanupWarning;
+    this.#cleanupWarning = undefined;
+    return warning;
   }
 
   rescan(signal?: AbortSignal): Promise<Workspace> {
@@ -262,25 +284,13 @@ export class WorkspaceCollectionService {
     });
   }
 
-  updateEntry(
-    input: UpdateWorkspaceEntryInput
+  excludeRepository(
+    input: ExcludeWorkspaceRepositoryInput
   ): Promise<Workspace> {
     return this.#runExclusive(async () => {
       const workspace = await (
         await this.#getActiveService()
-      ).updateEntry(input);
-      await this.#syncSummary(workspace);
-      return workspace;
-    });
-  }
-
-  removeEntry(
-    input: RemoveWorkspaceEntryInput
-  ): Promise<Workspace> {
-    return this.#runExclusive(async () => {
-      const workspace = await (
-        await this.#getActiveService()
-      ).removeEntry(input);
+      ).excludeRepository(input);
       await this.#syncSummary(workspace);
       return workspace;
     });
@@ -293,16 +303,6 @@ export class WorkspaceCollectionService {
       const workspace = await (
         await this.#getActiveService()
       ).setGroupCollapsed(input);
-      await this.#syncSummary(workspace);
-      return workspace;
-    });
-  }
-
-  selectEntry(entryId: string): Promise<Workspace> {
-    return this.#runExclusive(async () => {
-      const workspace = await (
-        await this.#getActiveService()
-      ).selectEntry(entryId);
       await this.#syncSummary(workspace);
       return workspace;
     });

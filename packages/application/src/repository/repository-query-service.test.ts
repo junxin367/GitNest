@@ -521,30 +521,22 @@ function createService(
 
 function createWorkspace(): Workspace {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "workspace",
     name: "Workspace",
-    entries: [
+    path: "C:\\workspace",
+    canonicalPath: "c:\\workspace",
+    excludes: [],
+    groups: [
       {
-        id: "entry",
-        displayName: "Root",
-        path: "C:\\workspace",
-        canonicalPath: "c:\\workspace",
-        excludes: [],
-        order: 0,
-        kind: "workspace-directory",
-        groups: [
-          {
-            id: "group",
-            name: "原/根仓库",
-            targets: [TARGET],
-            collapsed: false
-          }
-        ],
-        scanIssues: [],
-        lastScannedAt: "2026-09-04T12:00:00.000Z"
+        id: "group",
+        name: "原/根仓库",
+        targets: [TARGET],
+        collapsed: false
       }
     ],
+    scanIssues: [],
+    lastScannedAt: "2026-09-04T12:00:00.000Z",
     repositories: [
       {
         id: TARGET.repositoryId,
@@ -572,7 +564,6 @@ function createWorkspace(): Workspace {
         isPrunable: false
       }
     ],
-    selectedEntryId: "entry",
     selectedTarget: TARGET,
     updatedAt: "2026-09-04T12:00:00.000Z"
   };

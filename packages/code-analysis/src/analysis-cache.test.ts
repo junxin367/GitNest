@@ -1,6 +1,8 @@
 import {
+  mkdir,
   mkdtemp,
   readdir,
+  rename,
   rm,
   truncate,
   writeFile
@@ -18,13 +20,17 @@ import {
 import {
   AnalysisSnapshotCache,
   assertCodeAnalysisSnapshotPayloadSize,
+  codeAnalysisWorkspaceCacheDirectory,
   codeAnalysisSnapshotConfigurationKey,
   MAX_ANALYSIS_SNAPSHOT_PAYLOAD_BYTES,
   type AnalysisRoot,
   type CodeAnalysisSettings,
   type CodeAnalysisSnapshot
 } from "./index";
-import { MAX_ANALYSIS_SNAPSHOT_BYTES } from "./analysis-cache";
+import {
+  AnalysisCache,
+  MAX_ANALYSIS_SNAPSHOT_BYTES
+} from "./analysis-cache";
 
 describe("AnalysisSnapshotCache", () => {
   const temporaryPaths: string[] = [];
@@ -35,6 +41,35 @@ describe("AnalysisSnapshotCache", () => {
         rm(path, { recursive: true, force: true })
       )
     );
+  });
+
+  it("invalidates the old entry-keyed index schema", async () => {
+    const directory = await createTemporaryDirectory();
+    const settings = createSettings();
+    const roots = createSnapshot("analysis").roots;
+    const cache = new AnalysisCache(directory, "workspace");
+    const document = await cache.load(settings, roots);
+    const workspaceDirectory =
+      codeAnalysisWorkspaceCacheDirectory(
+        directory,
+        "workspace"
+      );
+    await mkdir(workspaceDirectory, { recursive: true });
+    await writeFile(
+      join(workspaceDirectory, "index.json"),
+      JSON.stringify({
+        ...document,
+        schemaVersion: 2,
+        fullIndexComplete: true
+      }),
+      "utf8"
+    );
+
+    await expect(cache.load(settings, roots)).resolves.toMatchObject({
+      schemaVersion: 3,
+      fullIndexComplete: false,
+      files: {}
+    });
   });
 
   it("persists the latest complete snapshot across cache instances", async () => {
@@ -52,13 +87,66 @@ describe("AnalysisSnapshotCache", () => {
       directory
     ).load(
       original.workspaceId,
-      original.entryId,
       createSettings(),
       original.roots
     );
 
     expect(restored).toEqual(createSnapshot("analysis-2"));
     expect(restored).not.toBe(original);
+  });
+
+  it("keeps workspace and changed snapshots available at the same time", async () => {
+    const directory = await createTemporaryDirectory();
+    const store = new AnalysisSnapshotCache(directory);
+    const workspaceSnapshot = createSnapshot(
+      "workspace-analysis",
+      "workspace",
+      "2026-09-17T08:42:00.000Z"
+    );
+    const changedSnapshot = createSnapshot(
+      "changed-analysis",
+      "changed",
+      "2026-09-17T08:43:00.000Z"
+    );
+
+    await store.save(workspaceSnapshot, createSettings());
+    await store.save(changedSnapshot, createSettings());
+
+    await expect(
+      store.load(
+        workspaceSnapshot.workspaceId,
+        createSettings(),
+        workspaceSnapshot.roots,
+        "workspace"
+      )
+    ).resolves.toEqual(workspaceSnapshot);
+    await expect(
+      store.load(
+        changedSnapshot.workspaceId,
+        createSettings(),
+        changedSnapshot.roots,
+        "changed"
+      )
+    ).resolves.toEqual(changedSnapshot);
+    await expect(
+      store.load(
+        changedSnapshot.workspaceId,
+        createSettings(),
+        changedSnapshot.roots
+      )
+    ).resolves.toEqual(changedSnapshot);
+
+    const [workspaceDirectory] = await readdir(directory);
+    expect(workspaceDirectory).toBeDefined();
+    await expect(
+      readdir(join(directory, workspaceDirectory as string))
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        "snapshot-changed.json",
+        "snapshot-latest.json",
+        "snapshot-workspace.json"
+      ])
+    );
   });
 
   it("restores a legacy snapshot and migrates it into the primary directory", async () => {
@@ -78,7 +166,6 @@ describe("AnalysisSnapshotCache", () => {
       }
     ).load(
       snapshot.workspaceId,
-      snapshot.entryId,
       createSettings(),
       snapshot.roots
     );
@@ -87,11 +174,42 @@ describe("AnalysisSnapshotCache", () => {
     await expect(
       new AnalysisSnapshotCache(primaryDirectory).load(
         snapshot.workspaceId,
-        snapshot.entryId,
         createSettings(),
         snapshot.roots
       )
     ).resolves.toEqual(snapshot);
+  });
+
+  it("migrates the legacy snapshot filename into its scoped file", async () => {
+    const directory = await createTemporaryDirectory();
+    const store = new AnalysisSnapshotCache(directory);
+    const snapshot = createSnapshot(
+      "legacy-filename",
+      "changed"
+    );
+    await store.save(snapshot, createSettings());
+    const [workspaceDirectory] = await readdir(directory);
+    expect(workspaceDirectory).toBeDefined();
+    const workspacePath = join(
+      directory,
+      workspaceDirectory as string
+    );
+    await rename(
+      join(workspacePath, "snapshot-changed.json"),
+      join(workspacePath, "snapshot.json")
+    );
+
+    await expect(
+      store.load(
+        snapshot.workspaceId,
+        createSettings(),
+        snapshot.roots,
+        "changed"
+      )
+    ).resolves.toEqual(snapshot);
+    await expect(readdir(workspacePath)).resolves.toContain(
+      "snapshot-changed.json"
+    );
   });
 
   it("treats changed analysis settings or roots as a cache miss", async () => {
@@ -103,7 +221,6 @@ describe("AnalysisSnapshotCache", () => {
     expect(
       await store.load(
         snapshot.workspaceId,
-        snapshot.entryId,
         {
           ...createSettings(),
           graphDepth: 9
@@ -114,7 +231,6 @@ describe("AnalysisSnapshotCache", () => {
     expect(
       await store.load(
         snapshot.workspaceId,
-        snapshot.entryId,
         {
           ...createSettings(),
           maxGraphEdges: 80_000
@@ -125,7 +241,6 @@ describe("AnalysisSnapshotCache", () => {
     expect(
       await store.load(
         snapshot.workspaceId,
-        snapshot.entryId,
         {
           ...createSettings(),
           java: {
@@ -139,7 +254,6 @@ describe("AnalysisSnapshotCache", () => {
     expect(
       await store.load(
         snapshot.workspaceId,
-        snapshot.entryId,
         {
           ...createSettings(),
           maxGraphNodes: 40_000
@@ -150,7 +264,6 @@ describe("AnalysisSnapshotCache", () => {
     expect(
       await store.load(
         snapshot.workspaceId,
-        snapshot.entryId,
         createSettings(),
         [
           {
@@ -163,7 +276,6 @@ describe("AnalysisSnapshotCache", () => {
     expect(
       await store.load(
         snapshot.workspaceId,
-        snapshot.entryId,
         createSettings(),
         [
           {
@@ -250,13 +362,13 @@ describe("AnalysisSnapshotCache", () => {
     const store = new AnalysisSnapshotCache(directory);
     const snapshot = createSnapshot("analysis");
     await store.save(snapshot, createSettings());
-    const [entryDirectory] = await readdir(directory);
-    expect(entryDirectory).toBeDefined();
+    const [workspaceDirectory] = await readdir(directory);
+    expect(workspaceDirectory).toBeDefined();
     await writeFile(
       join(
         directory,
-        entryDirectory as string,
-        "snapshot.json"
+        workspaceDirectory as string,
+        "snapshot-workspace.json"
       ),
       "{ invalid",
       "utf8"
@@ -265,7 +377,6 @@ describe("AnalysisSnapshotCache", () => {
     await expect(
       store.load(
         snapshot.workspaceId,
-        snapshot.entryId,
         createSettings(),
         snapshot.roots
       )
@@ -277,13 +388,13 @@ describe("AnalysisSnapshotCache", () => {
     const store = new AnalysisSnapshotCache(directory);
     const snapshot = createSnapshot("oversized-analysis");
     await store.save(snapshot, createSettings());
-    const [entryDirectory] = await readdir(directory);
-    expect(entryDirectory).toBeDefined();
+    const [workspaceDirectory] = await readdir(directory);
+    expect(workspaceDirectory).toBeDefined();
     await truncate(
       join(
         directory,
-        entryDirectory as string,
-        "snapshot.json"
+        workspaceDirectory as string,
+        "snapshot-workspace.json"
       ),
       MAX_ANALYSIS_SNAPSHOT_BYTES + 1
     );
@@ -291,7 +402,6 @@ describe("AnalysisSnapshotCache", () => {
     await expect(
       store.load(
         snapshot.workspaceId,
-        snapshot.entryId,
         createSettings(),
         snapshot.roots
       )
@@ -359,7 +469,9 @@ function createSettings(): CodeAnalysisSettings {
 }
 
 function createSnapshot(
-  analysisId: string
+  analysisId: string,
+  scope: CodeAnalysisSnapshot["scope"] = "workspace",
+  generatedAt = "2026-09-17T08:42:00.000Z"
 ): CodeAnalysisSnapshot {
   const roots: AnalysisRoot[] = [
     {
@@ -374,10 +486,8 @@ function createSnapshot(
     schemaVersion: 1,
     analysisId,
     workspaceId: "workspace",
-    entryId: "entry",
-    entryName: "Workspace",
-    scope: "workspace",
-    generatedAt: "2026-09-17T08:42:00.000Z",
+    scope,
+    generatedAt,
     roots,
     nodes: [
       {

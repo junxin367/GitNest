@@ -12,16 +12,13 @@ import type {
   RepositoryCommitDto,
   RepositoryStatusSnapshotDto,
   RuntimeInfo,
-  UpdateWorkspaceEntryRequest,
   WorkspaceDetailsDto,
   WorkspaceMonitorStateDto,
   WorkspaceOperationDto
 } from "@gitnest/contracts";
 
 import {
-  WORKSPACE_ENTRY_LABELS,
   findTargetSnapshot,
-  getEntryRepositoryCount,
   getSnapshotChangeCount,
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
@@ -43,8 +40,9 @@ interface DetailInspectorProps {
   busy: boolean;
   onClose(): void;
   onOpenSettings(): void;
-  onUpdateEntry(
-    request: UpdateWorkspaceEntryRequest
+  onRenameWorkspace(
+    workspaceId: string,
+    name: string
   ): Promise<boolean>;
 }
 
@@ -61,11 +59,8 @@ export function DetailInspector({
   busy,
   onClose,
   onOpenSettings,
-  onUpdateEntry
+  onRenameWorkspace
 }: DetailInspectorProps) {
-  const selectedEntry = workspace?.entries.find(
-    (entry) => entry.id === workspace.selectedEntryId
-  );
   const selectedRepository =
     workspace?.selectedTarget && workspace
       ? resolveWorkspaceTarget(
@@ -77,7 +72,7 @@ export function DetailInspector({
     snapshots,
     workspace?.selectedTarget
   );
-  const [displayName, setDisplayName] = useState("");
+  const [workspaceName, setWorkspaceName] = useState("");
   const [commitNotice, setCommitNotice] = useState<string | null>(
     null
   );
@@ -121,21 +116,19 @@ export function DetailInspector({
           : "初始化";
 
   useEffect(() => {
-    setDisplayName(selectedEntry?.displayName ?? "");
-  }, [selectedEntry?.displayName, selectedEntry?.id]);
+    setWorkspaceName(workspace?.name ?? "");
+  }, [workspace?.id, workspace?.name]);
 
   useEffect(() => {
     setCommitNotice(null);
   }, [commit?.hash]);
 
-  const saveDisplayName = (event: FormEvent) => {
+  const saveWorkspaceName = (event: FormEvent) => {
     event.preventDefault();
+    const name = workspaceName.trim();
 
-    if (selectedEntry && displayName.trim()) {
-      void onUpdateEntry({
-        entryId: selectedEntry.id,
-        displayName
-      });
+    if (workspace && name) {
+      void onRenameWorkspace(workspace.id, name);
     }
   };
 
@@ -422,6 +415,7 @@ export function DetailInspector({
         </div>
         <Button size="small"
           className="inspector-settings-button"
+          fullWidth
           onClick={onOpenSettings}
           type="button"
         >
@@ -432,56 +426,71 @@ export function DetailInspector({
 
       <section className="inspector-section">
         <div className="inspector-section-title">
-          <span>当前顶层条目</span>
-          {selectedEntry && (
+          <span>Workspace 详情</span>
+          {workspace && (
             <span className="status-pill blue">
-              {WORKSPACE_ENTRY_LABELS[selectedEntry.kind]}
+              Schema v{workspace.schemaVersion}
             </span>
           )}
         </div>
-        {selectedEntry ? (
+        {workspace ? (
           <>
             <dl className="detail-list">
               <DetailRow
-                label="路径"
-                value={selectedEntry.path}
+                label="根目录"
+                value={workspace.path ?? "尚未设置"}
               />
               <DetailRow
                 label="仓库"
-                value={`${getEntryRepositoryCount(selectedEntry)} 个`}
+                value={`${workspace.repositories.length} 个`}
+              />
+              <DetailRow
+                label="Worktrees"
+                value={`${workspace.worktrees.length} 个`}
               />
               <DetailRow
                 label="分组"
-                value={`${selectedEntry.groups.length} 个`}
+                value={`${workspace.groups.length} 个`}
               />
               <DetailRow
                 label="扫描问题"
-                value={`${selectedEntry.scanIssues.length} 个`}
+                value={`${workspace.scanIssues.length} 个`}
+              />
+              <DetailRow
+                label="最近扫描"
+                value={
+                  workspace.lastScannedAt
+                    ? new Date(
+                        workspace.lastScannedAt
+                      ).toLocaleString()
+                    : "尚未扫描"
+                }
               />
             </dl>
             <form
-              className="entry-settings-form"
-              onSubmit={saveDisplayName}
+              className="workspace-settings-form"
+              onSubmit={saveWorkspaceName}
             >
-              <label htmlFor="entry-display-name">显示名称</label>
+              <label htmlFor="workspace-display-name">
+                Workspace 名称
+              </label>
               <div>
                 <Input
-                  fieldClassName="entry-settings-input"
+                  fieldClassName="workspace-settings-input"
                   fullWidth
-                  id="entry-display-name"
+                  id="workspace-display-name"
                   maxLength={120}
                   onChange={(event) =>
-                    setDisplayName(event.target.value)
+                    setWorkspaceName(event.target.value)
                   }
                   size="small"
-                  value={displayName}
+                  value={workspaceName}
                 />
                 <Button size="small"
                   disabled={
                     busy ||
-                    !displayName.trim() ||
-                    displayName.trim() ===
-                      selectedEntry.displayName
+                    !workspaceName.trim() ||
+                    workspaceName.trim() === workspace.name
                   }
                   type="submit"
                 >
@@ -489,40 +498,10 @@ export function DetailInspector({
                 </Button>
               </div>
             </form>
-            <div className="entry-order-actions">
-              <Button size="small"
-                disabled={busy || selectedEntry.order === 0}
-                onClick={() =>
-                  void onUpdateEntry({
-                    entryId: selectedEntry.id,
-                    order: selectedEntry.order - 1
-                  })
-                }
-                type="button"
-              >
-                上移
-              </Button>
-              <Button size="small"
-                disabled={
-                  busy ||
-                  selectedEntry.order ===
-                    (workspace?.entries.length ?? 1) - 1
-                }
-                onClick={() =>
-                  void onUpdateEntry({
-                    entryId: selectedEntry.id,
-                    order: selectedEntry.order + 1
-                  })
-                }
-                type="button"
-              >
-                下移
-              </Button>
-            </div>
           </>
         ) : (
           <div className="inspector-empty">
-            添加或选择顶层条目后，可在这里修改显示名称和顺序。
+            创建 Workspace 后，可在这里查看根目录与扫描摘要。
           </div>
         )}
       </section>

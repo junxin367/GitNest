@@ -1,7 +1,6 @@
 import type {
   RepositoryTarget,
-  Workspace,
-  WorkspaceEntry
+  Workspace
 } from "../domain/workspace";
 
 export function repositoryTargetKey(
@@ -22,17 +21,12 @@ export function repositoryTargetsEqual(
   );
 }
 
-export function listEntryTargets(
-  entry: WorkspaceEntry
+export function listWorkspaceTargets(
+  workspace: Workspace
 ): RepositoryTarget[] {
-  const targets = [
-    ...(entry.kind === "workspace-meta-repository"
-      ? [entry.rootTarget]
-      : entry.kind === "standalone-repository"
-        ? [entry.target]
-        : []),
-    ...entry.groups.flatMap((group) => group.targets)
-  ];
+  const targets = workspace.groups.flatMap(
+    (group) => group.targets
+  );
   const uniqueTargets = new Map<string, RepositoryTarget>();
 
   for (const target of targets) {
@@ -45,34 +39,8 @@ export function listEntryTargets(
   return [...uniqueTargets.values()];
 }
 
-export function listWorkspaceTargets(
+export function getWorkspaceDefaultTarget(
   workspace: Workspace
-): RepositoryTarget[] {
-  const targets = new Map<string, RepositoryTarget>();
-
-  for (const entry of workspace.entries) {
-    for (const target of listEntryTargets(entry)) {
-      targets.set(repositoryTargetKey(target), target);
-    }
-  }
-
-  return [...targets.values()];
-}
-
-export function getEntryDefaultTarget(
-  entry: WorkspaceEntry | undefined
 ): RepositoryTarget | undefined {
-  return entry ? listEntryTargets(entry)[0] : undefined;
-}
-
-export function findTargetEntry(
-  workspace: Workspace,
-  target: RepositoryTarget
-): WorkspaceEntry | undefined {
-  const key = repositoryTargetKey(target);
-  return workspace.entries.find((entry) =>
-    listEntryTargets(entry).some(
-      (candidate) => repositoryTargetKey(candidate) === key
-    )
-  );
+  return listWorkspaceTargets(workspace)[0];
 }

@@ -10,10 +10,10 @@ import type { StashSummaryDto } from "@gitnest/contracts";
 
 import type { RepositoryStashMutationAction } from "../../entities/repository/useRepositoryStashes";
 import { Button } from "../../shared/ui/Button";
+import { Dialog } from "../../shared/ui/Dialog";
 import { Icon } from "../../shared/ui/Icon";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
 import { Menu, MenuItem } from "../../shared/ui/Menu";
-import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
 
 const CONTEXT_MENU_WIDTH = 222;
 const CONTEXT_MENU_HEIGHT = 132;
@@ -205,26 +205,9 @@ export function RepositoryStashActionDialog({
   ): void | boolean | Promise<void | boolean>;
 }) {
   const [submitting, setSubmitting] = useState(false);
-  const dialogRef = useRef<HTMLElement>(null);
-  const titleId = useId();
-  const descriptionId = useId();
   const warningId = useId();
   const busy = mutationBusy || submitting;
   const copy = stashActionCopy(action, stash.ref);
-
-  useModalFocusTrap(dialogRef);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) {
-        event.preventDefault();
-        onCancel();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () =>
-      window.removeEventListener("keydown", handleKeyDown);
-  }, [busy, onCancel]);
 
   const confirm = async () => {
     if (busy) {
@@ -245,98 +228,74 @@ export function RepositoryStashActionDialog({
   };
 
   return (
-    <LayerPortal>
-      <div className="command-dialog-backdrop">
-        <section
-          aria-describedby={`${descriptionId} ${warningId}`}
-          aria-labelledby={titleId}
-          aria-modal="true"
-          className={`command-dialog repository-stash-action-dialog${
-            copy.danger ? " danger" : ""
-          }`}
-          ref={dialogRef}
-          role="alertdialog"
-        >
-          <header className="command-dialog-header">
-            <span
-              className={`command-dialog-icon${
-                copy.danger ? " danger" : ""
-              }`}
-            >
+    <Dialog
+      ariaDescribedBy={warningId}
+      dismissDisabled={busy}
+      footer={
+        <>
+          <Button
+            data-modal-initial-focus="true"
+            disabled={busy}
+            onClick={onCancel}
+            size="small"
+            type="button"
+          >
+            取消
+          </Button>
+          <Button
+            aria-busy={busy}
+            disabled={busy}
+            emphasis="strong"
+            icon={
               <Icon
-                name={copy.danger ? "warning" : "undo"}
-                size={20}
+                name={
+                  busy
+                    ? "refresh"
+                    : copy.danger
+                      ? "warning"
+                      : "undo"
+                }
               />
-            </span>
-            <div>
-              <span className="eyebrow">
-                {copy.danger ? "危险操作" : "储藏操作"}
-              </span>
-              <h2 id={titleId}>{copy.title}</h2>
-              <p id={descriptionId}>{copy.description}</p>
-            </div>
-          </header>
-
-          <div className="command-dialog-body">
-            <div
-              className={`command-warning${
-                copy.danger ? " danger" : ""
-              }`}
-              id={warningId}
-            >
-              <Icon
-                name={copy.danger ? "warning" : "operations"}
-                size={15}
-              />
-              <span>{copy.warning}</span>
-            </div>
-            <div className="repository-stash-action-target">
-              <span>目标储藏</span>
-              <code title={`${stash.ref} ${stash.subject}`}>
-                {stash.ref}
-                <small>{stash.hash.slice(0, 8)}</small>
-              </code>
-              <strong>{stash.subject}</strong>
-            </div>
-          </div>
-
-          <footer className="command-dialog-footer">
-            <p>{copy.footer}</p>
-            <div>
-              <Button
-                data-modal-initial-focus="true"
-                disabled={busy}
-                onClick={onCancel}
-                size="small"
-                type="button"
-              >
-                取消
-              </Button>
-              <Button
-                aria-busy={busy}
-                disabled={busy}
-                emphasis="strong"
-                onClick={() => void confirm()}
-                size="small"
-                type="button"
-                variant={copy.danger ? "danger" : "primary"}
-              >
-                <Icon
-                  name={
-                    busy
-                      ? "refresh"
-                      : copy.danger
-                        ? "warning"
-                        : "undo"
-                  }
-                />
-                {busy ? "处理中…" : copy.confirmLabel}
-              </Button>
-            </div>
-          </footer>
-        </section>
+            }
+            onClick={() => void confirm()}
+            size="small"
+            type="button"
+            variant={copy.danger ? "danger" : "primary"}
+          >
+            {busy ? "处理中…" : copy.confirmLabel}
+          </Button>
+        </>
+      }
+      icon={copy.danger ? "warning" : "undo"}
+      onDismiss={onCancel}
+      role="alertdialog"
+      size="target"
+      title={copy.title}
+      tone={copy.danger ? "danger" : "default"}
+    >
+      <div className="repository-stash-action-target">
+        <span>目标储藏</span>
+        <code title={`${stash.ref} ${stash.subject}`}>
+          {stash.ref}
+          <small>{stash.hash.slice(0, 8)}</small>
+        </code>
+        <strong>{stash.subject}</strong>
       </div>
-    </LayerPortal>
+      <div
+        className={`command-warning${
+          copy.danger ? " danger" : ""
+        }`}
+        id={warningId}
+      >
+        <Icon
+          name={copy.danger ? "warning" : "operations"}
+          size={15}
+        />
+        <span>
+          {copy.description} {copy.warning}
+        </span>
+      </div>
+    </Dialog>
   );
 }
 
@@ -347,7 +306,6 @@ function stashActionCopy(
   title: string;
   description: string;
   warning: string;
-  footer: string;
   confirmLabel: string;
   danger: boolean;
 } {
@@ -358,7 +316,6 @@ function stashActionCopy(
         "储藏中的变更会应用到当前工作区，储藏记录仍然保留。",
       warning:
         "当前工作区的未提交修改可能与储藏内容冲突。发生冲突时，请在工作区中解决冲突。",
-      footer: "该操作不会删除这条储藏记录。",
       confirmLabel: "确认恢复",
       danger: false
     };
@@ -370,7 +327,6 @@ function stashActionCopy(
         "这条储藏记录会从储藏列表中永久删除。",
       warning:
         "删除后无法通过 GitNest 撤销；储藏中的变更不会恢复到当前工作区。",
-      footer: "请确认这条储藏记录不再需要。",
       confirmLabel: "永久删除",
       danger: true
     };
@@ -381,7 +337,6 @@ function stashActionCopy(
       "Git 会先把储藏中的变更应用到当前工作区。",
     warning:
       "仅在恢复成功后才会删除储藏记录；若发生冲突，Git 会保留这条储藏记录。",
-    footer: "成功后删除储藏记录的操作无法撤销。",
     confirmLabel: "恢复并删除",
     danger: true
   };

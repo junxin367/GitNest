@@ -1,6 +1,9 @@
 import { app, BrowserWindow } from "electron";
 
-import type { OpenDiffViewerRequest } from "@gitnest/contracts";
+import {
+  IPC_EVENTS,
+  type OpenDiffViewerRequest
+} from "@gitnest/contracts";
 
 import { createWindowOptions } from "./window-options";
 import {
@@ -42,9 +45,20 @@ export async function openDiffViewerWindow(
   });
   windows.set(key, window);
 
+  const publishMaximizedState = () => {
+    if (!window.webContents.isDestroyed()) {
+      window.webContents.send(
+        IPC_EVENTS.windowMaximizedChanged,
+        window.isMaximized()
+      );
+    }
+  };
+
   window.once("ready-to-show", () => {
     window.show();
   });
+  window.on("maximize", publishMaximizedState);
+  window.on("unmaximize", publishMaximizedState);
   window.once("closed", () => {
     if (windows.get(key) === window) {
       windows.delete(key);

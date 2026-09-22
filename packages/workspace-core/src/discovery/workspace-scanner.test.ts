@@ -32,12 +32,9 @@ describe("WorkspaceScanner", () => {
     );
     const normalizedRoot = fileSystem.normalizePath("C:\\root");
     const scan = await scanner.scanRoot({
-      id: "root",
-      displayName: "root",
       path: normalizedRoot.path,
       canonicalPath: normalizedRoot.canonicalPath,
-      excludes: [],
-      order: 0
+      excludes: []
     });
 
     expect(
@@ -77,12 +74,9 @@ describe("WorkspaceScanner", () => {
       "C:\\exclude-root"
     );
     const scan = await scanner.scanRoot({
-      id: "exclude-root",
-      displayName: "exclude-root",
       path: normalizedRoot.path,
       canonicalPath: normalizedRoot.canonicalPath,
-      excludes: ["svr/ScResSvr"],
-      order: 0
+      excludes: ["svr/ScResSvr"]
     });
 
     expect(
@@ -91,28 +85,40 @@ describe("WorkspaceScanner", () => {
       "C:\\exclude-root\\other\\ScResSvr"
     ]);
   });
+
+  it("treats a single-segment user exclusion as a root-relative path", async () => {
+    const fileSystem = new FakeWindowsFileSystem();
+    const scanner = new WorkspaceScanner(
+      fileSystem,
+      new FakeRepositoryProbe()
+    );
+    const normalizedRoot = fileSystem.normalizePath(
+      "C:\\basename-exclude-root"
+    );
+    const scan = await scanner.scanRoot({
+      path: normalizedRoot.path,
+      canonicalPath: normalizedRoot.canonicalPath,
+      excludes: ["api"]
+    });
+
+    expect(
+      scan.repositories.map((repository) => repository.path)
+    ).toEqual([
+      "C:\\basename-exclude-root\\services\\api"
+    ]);
+  });
 });
 
 describe("WorkspaceAssembler", () => {
-  it("classifies roots, groups direct repositories, assigns overlaps to the most specific root, and merges linked worktrees", () => {
+  it("assembles one Workspace root, groups repositories, and merges linked worktrees", () => {
     const fileSystem = new FakeWindowsFileSystem();
-    const outer = rootDefinition(fileSystem, "C:\\root", 0);
-    const nested = rootDefinition(
-      fileSystem,
-      "C:\\root\\svr",
-      1
-    );
-    const standalone = rootDefinition(
-      fileSystem,
-      "C:\\standalone",
-      2
-    );
-    const outerScan: WorkspaceRootScan = {
-      root: outer,
+    const root = rootDefinition(fileSystem, "C:\\root");
+    const scan: WorkspaceRootScan = {
+      root,
       repositories: [
         discovery(
           fileSystem,
-          outer.path,
+          root.path,
           "C:\\root",
           repository("C:\\root", "C:\\root\\.git", [
             worktree("C:\\root", true),
@@ -121,7 +127,7 @@ describe("WorkspaceAssembler", () => {
         ),
         discovery(
           fileSystem,
-          outer.path,
+          root.path,
           "C:\\root\\core",
           repository(
             "C:\\root\\core",
@@ -130,43 +136,11 @@ describe("WorkspaceAssembler", () => {
         ),
         discovery(
           fileSystem,
-          outer.path,
+          root.path,
           "C:\\root\\svr\\ScResSvr",
           repository(
             "C:\\root\\svr\\ScResSvr",
             "C:\\root\\svr\\ScResSvr\\.git"
-          )
-        )
-      ],
-      issues: [],
-      scannedAt: "2026-09-04T10:00:00.000Z"
-    };
-    const nestedScan: WorkspaceRootScan = {
-      root: nested,
-      repositories: [
-        discovery(
-          fileSystem,
-          nested.path,
-          "C:\\root\\svr\\ScResSvr",
-          repository(
-            "C:\\root\\svr\\ScResSvr",
-            "C:\\root\\svr\\ScResSvr\\.git"
-          )
-        )
-      ],
-      issues: [],
-      scannedAt: "2026-09-04T10:00:00.000Z"
-    };
-    const standaloneScan: WorkspaceRootScan = {
-      root: standalone,
-      repositories: [
-        discovery(
-          fileSystem,
-          standalone.path,
-          standalone.path,
-          repository(
-            standalone.path,
-            `${standalone.path}\\.git`
           )
         )
       ],
@@ -177,39 +151,28 @@ describe("WorkspaceAssembler", () => {
       current: createEmptyWorkspace(
         "2026-09-04T09:00:00.000Z"
       ),
-      roots: [outer, nested, standalone],
-      scans: [outerScan, nestedScan, standaloneScan],
+      scan,
       updatedAt: "2026-09-04T10:00:00.000Z"
     });
 
-    expect(assembled.entries).toHaveLength(3);
-    expect(assembled.entries[0]).toMatchObject({
-      kind: "workspace-meta-repository",
+    expect(assembled).toMatchObject({
+      path: root.path,
+      canonicalPath: root.canonicalPath,
       groups: [
         {
           name: DEFAULT_ROOT_REPOSITORY_GROUP_NAME,
           collapsed: false
-        }
-      ]
-    });
-    expect(assembled.entries[1]).toMatchObject({
-      kind: "workspace-directory",
-      groups: [
+        },
         {
-          name: DEFAULT_ROOT_REPOSITORY_GROUP_NAME,
+          name: "svr",
           collapsed: false
         }
       ]
     });
-    expect(assembled.entries[2]).toMatchObject({
-      kind: "standalone-repository",
-      groups: []
-    });
-    expect(
-      assembled.entries[0]?.groups[0]?.targets
-    ).toHaveLength(2);
-    expect(assembled.repositories).toHaveLength(4);
-    expect(assembled.worktrees).toHaveLength(5);
+    expect(assembled.groups[0]?.targets).toHaveLength(2);
+    expect(assembled.groups[1]?.targets).toHaveLength(1);
+    expect(assembled.repositories).toHaveLength(3);
+    expect(assembled.worktrees).toHaveLength(4);
 
     const rootRepository = assembled.repositories.find(
       (candidate) =>
@@ -224,7 +187,7 @@ describe("WorkspaceAssembler", () => {
 
   it("keeps the primary worktree name when the same repository is also discovered through a linked worktree", () => {
     const fileSystem = new FakeWindowsFileSystem();
-    const root = rootDefinition(fileSystem, "C:\\root", 0);
+    const root = rootDefinition(fileSystem, "C:\\root");
     const scan: WorkspaceRootScan = {
       root,
       repositories: [
@@ -252,8 +215,7 @@ describe("WorkspaceAssembler", () => {
     };
     const assembled = new WorkspaceAssembler(fileSystem).assemble({
       current: createEmptyWorkspace("2026-09-04T09:00:00.000Z"),
-      roots: [root],
-      scans: [scan],
+      scan,
       updatedAt: "2026-09-04T10:00:00.000Z"
     });
 
@@ -353,6 +315,21 @@ class FakeWindowsFileSystem implements WorkspaceFileSystem {
       ).canonicalPath]: [["ScResSvr", "directory"]],
       [this.normalizePath(
         "C:\\exclude-root\\other\\ScResSvr"
+      ).canonicalPath]: [[".git", "directory"]],
+      [this.normalizePath(
+        "C:\\basename-exclude-root"
+      ).canonicalPath]: [
+        ["api", "directory"],
+        ["services", "directory"]
+      ],
+      [this.normalizePath(
+        "C:\\basename-exclude-root\\api"
+      ).canonicalPath]: [[".git", "directory"]],
+      [this.normalizePath(
+        "C:\\basename-exclude-root\\services"
+      ).canonicalPath]: [["api", "directory"]],
+      [this.normalizePath(
+        "C:\\basename-exclude-root\\services\\api"
       ).canonicalPath]: [[".git", "directory"]]
     };
 
@@ -383,17 +360,13 @@ class FakeRepositoryProbe implements RepositoryProbe {
 
 function rootDefinition(
   fileSystem: WorkspaceFileSystem,
-  path: string,
-  order: number
+  path: string
 ) {
   const normalized = fileSystem.normalizePath(path);
   return {
-    id: createPathIdentity("entry", normalized.canonicalPath),
-    displayName: fileSystem.basename(normalized.path),
     path: normalized.path,
     canonicalPath: normalized.canonicalPath,
-    excludes: [],
-    order
+    excludes: []
   };
 }
 

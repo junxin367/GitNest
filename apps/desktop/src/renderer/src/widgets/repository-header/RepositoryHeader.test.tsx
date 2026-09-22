@@ -58,9 +58,8 @@ describe("RepositoryHeader", () => {
           repositoryTab="overview"
           snapshots={[]}
           view="workspace"
-          workspace={workspace}
+          workspace={multiEntryWorkspace}
           workspaceCommandBusy={false}
-          workspaceRepositoryCount={2}
           workspaceTab="overview"
           onFetch={vi.fn()}
           onFetchWorkspace={onFetchWorkspace}
@@ -82,14 +81,14 @@ describe("RepositoryHeader", () => {
     });
 
     const pull = container.querySelector<HTMLButtonElement>(
-      'button[title="批量 Pull Workspace 中的全部 2 个仓库"]'
+      'button[title="批量 Pull Workspace 中的全部 3 个仓库"]'
     );
     const fetch = container.querySelector<HTMLButtonElement>(
-      'button[title="Fetch Workspace 中的全部 2 个仓库"]'
+      'button[title="Fetch Workspace 中的全部 3 个仓库"]'
     );
 
     expect(pull?.textContent).toContain("Pull");
-    expect(pull?.textContent).toContain("2");
+    expect(pull?.querySelector(".toolbar-count")).toBeNull();
     expect(fetch?.textContent).toContain("Fetch");
     expect(fetch?.textContent).not.toContain("Fetch 全部");
     expect(
@@ -104,7 +103,7 @@ describe("RepositoryHeader", () => {
     expect(onFetchWorkspace).toHaveBeenCalledOnce();
   });
 
-  it("scopes Workspace tab counts to the selected entry", () => {
+  it("counts every entry in the current Workspace regardless of selection", () => {
     act(() => {
       root.render(
         <RepositoryHeader
@@ -119,7 +118,6 @@ describe("RepositoryHeader", () => {
           view="workspace"
           workspace={multiEntryWorkspace}
           workspaceCommandBusy={false}
-          workspaceRepositoryCount={2}
           workspaceTab="repositories"
           onFetch={vi.fn()}
           onFetchWorkspace={vi.fn()}
@@ -149,9 +147,80 @@ describe("RepositoryHeader", () => {
         .find((tab) => tab.textContent?.includes(label))
         ?.querySelector(".tab-count")?.textContent;
 
-    expect(tabCount("仓库")).toBe("2");
-    expect(tabCount("活动")).toBe("2");
-    expect(tabCount("Worktrees")).toBe("3");
+    expect(tabCount("仓库")).toBe("3");
+    expect(tabCount("活动")).toBe("3");
+    expect(tabCount("Worktrees")).toBe("4");
+    expect(container.querySelector(".context-summary strong")?.textContent)
+      .toBe("Multi-repository Workspace");
+  });
+
+  it.each([0, 4])("shows a Pull badge only for local behind status (%i)", (behind) => {
+    const target = repositoryWorkspace.selectedTarget!;
+    act(() => {
+      root.render(
+        <RepositoryHeader
+          commandActive={null}
+          commandCompletionVersion={0}
+          commandLocked={false}
+          externalApplications={externalApplications}
+          inspectorOpen={false}
+          refreshing={false}
+          repositoryTab="overview"
+          snapshots={[
+            {
+              ...target,
+              head: "head",
+              ahead: 0,
+              behind,
+              staged: 0,
+              unstaged: 0,
+              untracked: 0,
+              conflicted: 0,
+              refreshPending: false,
+              stale: false,
+              refreshedAt: "2026-09-22T00:00:00.000Z"
+            },
+            {
+              repositoryId: "another-workspace-repository",
+              worktreeId: "another-workspace-worktree",
+              head: "foreign",
+              ahead: 0,
+              behind: 10,
+              staged: 0,
+              unstaged: 0,
+              untracked: 0,
+              conflicted: 0,
+              refreshPending: false,
+              stale: false,
+              refreshedAt: "2026-09-22T00:00:00.000Z"
+            }
+          ]}
+          view="workspace"
+          workspace={repositoryWorkspace}
+          workspaceCommandBusy={false}
+          workspaceTab="overview"
+          onFetch={vi.fn()}
+          onFetchWorkspace={vi.fn()}
+          onOpenOperations={vi.fn()}
+          onOpenRepository={vi.fn()}
+          onOpenSettings={vi.fn()}
+          onOpenWorkspace={vi.fn()}
+          onPull={vi.fn()}
+          onPullWorkspace={vi.fn()}
+          onPushWorkspace={vi.fn()}
+          onPush={vi.fn()}
+          onRefresh={vi.fn()}
+          onRepositoryTabChange={vi.fn()}
+          onSwitchBranch={vi.fn()}
+          onToggleInspector={vi.fn()}
+          onWorkspaceTabChange={vi.fn()}
+        />
+      );
+    });
+    const badge = container.querySelector(
+      'button[title="批量 Pull Workspace 中的全部 1 个仓库"] .toolbar-count'
+    );
+    expect(badge?.textContent ?? null).toBe(behind > 0 ? "1" : null);
   });
 
   it("shows repository actions without a force-push control", () => {
@@ -169,7 +238,6 @@ describe("RepositoryHeader", () => {
           view="repository"
           workspace={repositoryWorkspace}
           workspaceCommandBusy={false}
-          workspaceRepositoryCount={0}
           workspaceTab="overview"
           onFetch={vi.fn()}
           onFetchWorkspace={vi.fn()}
@@ -282,31 +350,35 @@ const externalApplications: ExternalApplicationController = {
 };
 
 const workspace: WorkspaceDetailsDto = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   id: "workspace",
   name: "Workspace",
-  entries: [
-    {
-      kind: "workspace-directory",
-      id: "entry",
-      displayName: "Workspace",
-      path: "C:\\workspace",
-      canonicalPath: "c:\\workspace",
-      excludes: [],
-      order: 0,
-      groups: [],
-      scanIssues: [],
-      lastScannedAt: "2026-09-08T00:00:00.000Z"
-    }
-  ],
+  path: "C:\\workspace",
+  canonicalPath: "c:\\workspace",
+  excludes: [],
+  groups: [],
+  scanIssues: [],
+  lastScannedAt: "2026-09-08T00:00:00.000Z",
   repositories: [],
   worktrees: [],
-  selectedEntryId: "entry",
   updatedAt: "2026-09-08T00:00:00.000Z"
 };
 
 const repositoryWorkspace: WorkspaceDetailsDto = {
   ...workspace,
+  groups: [
+    {
+      id: "group",
+      name: "原/根仓库",
+      targets: [
+        {
+          repositoryId: "repository",
+          worktreeId: "worktree"
+        }
+      ],
+      collapsed: false
+    }
+  ],
   repositories: [
     {
       id: "repository",
@@ -340,59 +412,46 @@ const repositoryWorkspace: WorkspaceDetailsDto = {
 };
 
 const multiEntryWorkspace: WorkspaceDetailsDto = {
-  schemaVersion: 1,
-  id: "multi-entry-workspace",
-  name: "Multi-entry Workspace",
-  entries: [
+  schemaVersion: 2,
+  id: "multi-repository-workspace",
+  name: "Multi-repository Workspace",
+  path: "C:\\workspace",
+  canonicalPath: "c:\\workspace",
+  excludes: [],
+  groups: [
     {
-      id: "entry-a",
-      displayName: "Workspace A",
-      path: "C:\\workspace-a",
-      canonicalPath: "c:\\workspace-a",
-      excludes: [],
-      order: 0,
-      groups: [
+      id: "group-a",
+      name: "Workspace A",
+      collapsed: false,
+      targets: [
         {
-          id: "group-a",
-          name: "Workspace A",
-          collapsed: false,
-          targets: [
-            {
-              repositoryId: "repository-a",
-              worktreeId: "worktree-a"
-            },
-            {
-              repositoryId: "repository-a",
-              worktreeId: "worktree-a-linked"
-            },
-            {
-              repositoryId: "repository-b",
-              worktreeId: "worktree-b"
-            }
-          ]
+          repositoryId: "repository-a",
+          worktreeId: "worktree-a"
+        },
+        {
+          repositoryId: "repository-a",
+          worktreeId: "worktree-a-linked"
+        },
+        {
+          repositoryId: "repository-b",
+          worktreeId: "worktree-b"
         }
-      ],
-      scanIssues: [],
-      lastScannedAt: "2026-09-16T00:00:00.000Z",
-      kind: "workspace-directory"
+      ]
     },
     {
-      id: "entry-c",
-      displayName: "Workspace C",
-      path: "C:\\workspace-c",
-      canonicalPath: "c:\\workspace-c",
-      excludes: [],
-      order: 1,
-      groups: [],
-      scanIssues: [],
-      lastScannedAt: "2026-09-16T00:00:00.000Z",
-      kind: "standalone-repository",
-      target: {
-        repositoryId: "repository-c",
-        worktreeId: "worktree-c"
-      }
+      id: "group-c",
+      name: "Workspace C",
+      collapsed: false,
+      targets: [
+        {
+          repositoryId: "repository-c",
+          worktreeId: "worktree-c"
+        }
+      ]
     }
   ],
+  scanIssues: [],
+  lastScannedAt: "2026-09-16T00:00:00.000Z",
   repositories: [
     {
       id: "repository-a",
@@ -425,7 +484,10 @@ const multiEntryWorkspace: WorkspaceDetailsDto = {
     createWorktree("repository-b", "worktree-b"),
     createWorktree("repository-c", "worktree-c")
   ],
-  selectedEntryId: "entry-a",
+  selectedTarget: {
+    repositoryId: "repository-a",
+    worktreeId: "worktree-a"
+  },
   updatedAt: "2026-09-16T00:00:00.000Z"
 };
 

@@ -1,8 +1,6 @@
 import { Button } from "../../shared/ui/Button";
 import {
-  useEffect,
   useMemo,
-  useRef,
   useState,
   type FormEvent
 } from "react";
@@ -17,15 +15,14 @@ import type {
 } from "@gitnest/contracts";
 
 import type { AccountController } from "../../features/account-manage/useAccounts";
+import { Dialog } from "../../shared/ui/Dialog";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
-import { LayerPortal } from "../../shared/ui/LayerPortal";
 import {
   Skeleton,
   SkeletonBoundary
 } from "../../shared/ui/Skeleton";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
-import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
 
 interface SettingsPageProps {
   workspace: WorkspaceDetailsDto | null;
@@ -499,110 +496,88 @@ function AccountRemovalDialog({
   repositoryNames: Map<string, string>;
 }) {
   const impact = accounts.removalImpact;
-  const dialogRef = useRef<HTMLElement>(null);
-  useModalFocusTrap(dialogRef);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.key === "Escape" &&
-        accounts.active === null
-      ) {
-        accounts.dismissRemoval();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () =>
-      window.removeEventListener("keydown", handleKeyDown);
-  }, [accounts.active, accounts.dismissRemoval]);
 
   if (!impact) {
     return null;
   }
 
   return (
-    <LayerPortal>
-      <div className="command-dialog-backdrop">
-        <section
-        aria-describedby="account-removal-description"
-        aria-labelledby="account-removal-title"
-        aria-modal="true"
-        className="command-dialog danger account-removal-dialog"
-        ref={dialogRef}
-        role="dialog"
+    <Dialog
+      ariaDescribedBy="account-removal-description"
+      dismissDisabled={accounts.active !== null}
+      footer={
+        <>
+          <Button
+            data-modal-initial-focus
+            disabled={accounts.active !== null}
+            onClick={accounts.dismissRemoval}
+            size="small"
+            type="button"
+          >
+            取消
+          </Button>
+          <Button
+            aria-busy={accounts.active === "removing"}
+            disabled={accounts.active !== null}
+            emphasis="strong"
+            icon={<Icon name="warning" />}
+            onClick={() => void accounts.confirmRemoval()}
+            size="small"
+            type="button"
+            variant="danger"
+          >
+            {accounts.active === "removing"
+              ? "删除中…"
+              : "确认删除账号"}
+          </Button>
+        </>
+      }
+      icon="warning"
+      onDismiss={accounts.dismissRemoval}
+      role="alertdialog"
+      size="information"
+      title="删除账号？"
+      tone="danger"
+    >
+      <div
+        className="command-warning danger"
+        id="account-removal-description"
       >
-        <header className="command-dialog-header">
-          <span className="command-dialog-icon danger">
-            <Icon name="warning" size={20} />
-          </span>
-          <div>
-            <span className="eyebrow">删除账号</span>
-            <h2 id="account-removal-title">{impact.host}</h2>
-            <p id="account-removal-description">
-              将删除安全凭据和全部账号绑定，已完成的 Git
-              操作不会回滚。
-            </p>
-          </div>
-        </header>
-        <div className="command-dialog-body">
-          <section>
-            <h3>影响范围</h3>
-            <div className="command-impact-list">
-              <article>
-                <div>
-                  <strong>主机默认绑定</strong>
-                  <span>
-                    {impact.hostDefault ? "将移除" : "无"}
-                  </span>
-                </div>
-                <p>{impact.host}</p>
-              </article>
-              <article>
-                <div>
-                  <strong>仓库覆盖绑定</strong>
-                  <span>
-                    {impact.repositoryIds.length} 个
-                  </span>
-                </div>
-                <p>
-                  {impact.repositoryIds
-                    .map((id) => repositoryNames.get(id) ?? id)
-                    .join("、") || "无"}
-                </p>
-              </article>
-            </div>
-          </section>
-        </div>
-        <footer className="command-dialog-footer">
-          <p>
-            删除后这些仓库将回退到主机默认账号或系统 Git
-            认证。
-          </p>
-          <div>
-            <Button size="small"
-              data-modal-initial-focus
-              disabled={accounts.active !== null}
-              onClick={accounts.dismissRemoval}
-              type="button"
-            >
-              取消
-            </Button>
-            <Button size="small" emphasis="strong" variant="danger"
-              aria-busy={accounts.active === "removing"}
-              disabled={accounts.active !== null}
-              onClick={() => void accounts.confirmRemoval()}
-              type="button"
-            >
-              <Icon name="warning" />
-              {accounts.active === "removing"
-                ? "删除中…"
-                : "确认删除账号"}
-            </Button>
-          </div>
-        </footer>
-        </section>
+        <Icon name="warning" size={15} />
+        <span>
+          将删除 {impact.host}
+          的安全凭据和全部账号绑定。相关仓库会回退到主机默认账号或系统
+          Git 认证，已完成的操作不会回滚。
+        </span>
       </div>
-    </LayerPortal>
+      <section>
+        <h3>影响范围</h3>
+        <div className="command-impact-list">
+          <article>
+            <div>
+              <strong>主机默认绑定</strong>
+              <span>
+                {impact.hostDefault ? "将移除" : "无"}
+              </span>
+            </div>
+            <p>{impact.host}</p>
+          </article>
+          <article>
+            <div>
+              <strong>仓库覆盖绑定</strong>
+              <span>
+                {impact.repositoryIds.length} 个
+              </span>
+            </div>
+            <p>
+              {impact.repositoryIds
+                .map((id) => repositoryNames.get(id) ?? id)
+                .join("、") || "无"}
+            </p>
+          </article>
+        </div>
+      </section>
+    </Dialog>
   );
 }
 

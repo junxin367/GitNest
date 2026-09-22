@@ -47,6 +47,8 @@ export interface GitNestDataPaths {
   accountMetadata: string;
   credentialVault: string;
   askpassRuntime: string;
+  applicationUpdateState: string;
+  applicationUpdateDownloads: string;
 }
 
 export interface GitNestDataRegistry {
@@ -141,7 +143,17 @@ export function createDataRegistry(
       "accounts",
       "credentials"
     ),
-    askpassRuntime: join(root, "runtime", "askpass")
+    askpassRuntime: join(root, "runtime", "askpass"),
+    applicationUpdateState: join(
+      root,
+      "updates",
+      "state.json"
+    ),
+    applicationUpdateDownloads: join(
+      root,
+      "updates",
+      "downloads"
+    )
   };
   const permanent = (): DataRetention => ({
     policy: "permanent"
@@ -310,6 +322,24 @@ export function createDataRegistry(
       rebuildable: true,
       sensitive: true,
       retention: ephemeral()
+    },
+    {
+      id: "application-update-state",
+      owner: "application-update",
+      category: "durable",
+      path: paths.applicationUpdateState,
+      rebuildable: true,
+      sensitive: false,
+      retention: permanent()
+    },
+    {
+      id: "application-update-downloads",
+      owner: "application-update",
+      category: "cache",
+      path: paths.applicationUpdateDownloads,
+      rebuildable: true,
+      sensitive: false,
+      retention: bounded(14, 512 * MIB)
     }
   ];
 

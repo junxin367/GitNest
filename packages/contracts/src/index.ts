@@ -62,6 +62,7 @@ export type {
   LanguageServerStateDto,
   LanguageServerStatusDto,
   ReadCodeAnalysisFileRequest,
+  RestoreCodeAnalysisSnapshotRequest,
   StartCodeAnalysisRequest,
   UpdateCodeAnalysisSettingsRequest
 } from "./analysis.contracts";
@@ -166,29 +167,20 @@ export type {
   RuntimePlatform
 } from "./system.contracts";
 export type {
-  AddWorkspaceEntryRequest,
-  AggregateWorkspaceEntryDto,
   CreateWorkspaceRequest,
   DeleteWorkspaceRequest,
-  DirectoryWorkspaceEntryDto,
   RepositoryGroupDto,
   RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
-  RemoveWorkspaceEntryRequest,
+  RemoveWorkspaceRepositoryRequest,
   RenameWorkspaceRequest,
   SelectRepositoryTargetRequest,
-  SelectWorkspaceEntryRequest,
   SetWorkspaceGroupCollapsedRequest,
-  StandaloneRepositoryEntryDto,
   SwitchWorkspaceRequest,
-  UpdateWorkspaceEntryRequest,
   WorkspaceDetailsDto,
   WorkspaceDirectorySelectionDto,
-  WorkspaceEntryDto,
-  WorkspaceEntryKindDto,
   WorkspaceErrorCode,
   WorkspaceErrorDto,
-  WorkspaceMutationResultDto,
   WorkspaceMonitorStateDto,
   WorkspaceOperationDto,
   WorkspaceRefreshAcceptedDto,
@@ -233,3 +225,10 @@ export type {
   UpdateAppSettingsRequest,
   WorkspaceTabDto
 } from "./settings.contracts";
+export type {
+  AcknowledgeApplicationUpdatePromptRequest,
+  ApplicationUpdateDistributionDto,
+  ApplicationUpdatePhaseDto,
+  ApplicationUpdateStateDto
+} from "./update.contracts";
+export { GITNEST_PROJECT_URL } from "./update.contracts";

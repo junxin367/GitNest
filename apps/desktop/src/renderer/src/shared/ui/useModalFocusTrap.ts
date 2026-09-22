@@ -126,7 +126,7 @@ function inertOutsideDialog(
     inert: boolean;
   }> = [];
   let activeBranch: HTMLElement | null =
-    dialog.closest<HTMLElement>(".command-dialog-backdrop") ??
+    dialog.closest<HTMLElement>("[data-modal-layer]") ??
     dialog;
 
   while (activeBranch && activeBranch !== document.body) {

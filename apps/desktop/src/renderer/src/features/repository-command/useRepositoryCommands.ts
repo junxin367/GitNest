@@ -36,7 +36,8 @@ const TERMINAL_STATES = new Set<
 
 export function useRepositoryCommands(
   target: RepositoryTargetDto | undefined,
-  operations: WorkspaceOperationDto[]
+  operations: WorkspaceOperationDto[],
+  workspaceId?: string
 ): RepositoryCommandController {
   const stableTarget = useMemo(
     () =>
@@ -51,6 +52,9 @@ export function useRepositoryCommands(
   const targetKey = stableTarget
     ? `${stableTarget.repositoryId}:${stableTarget.worktreeId}`
     : "";
+  const scopeKey = `${workspaceId ?? ""}:${targetKey}`;
+  const currentScopeRef = useRef(scopeKey);
+  currentScopeRef.current = scopeKey;
   const [active, setActive] =
     useState<RepositoryCommandDto["type"] | null>(null);
   const [preflight, setPreflight] =
@@ -88,7 +92,7 @@ export function useRepositoryCommands(
     setError(null);
     setNotice(null);
     setTrackedOperationIds([]);
-  }, [targetKey]);
+  }, [targetKey, workspaceId]);
 
   useEffect(() => {
     if (trackedOperationIds.length === 0) {
@@ -199,7 +203,7 @@ export function useRepositoryCommands(
 
   const request = useCallback(
     async (command: RepositoryCommandDto): Promise<boolean> => {
-      if (inFlight.current) {
+      if (inFlight.current || currentScopeRef.current !== scopeKey) {
         return false;
       }
 
@@ -244,7 +248,7 @@ export function useRepositoryCommands(
         }
       }
     },
-    [executePreflight]
+    [executePreflight, scopeKey]
   );
 
   const confirm = useCallback(async (): Promise<boolean> => {

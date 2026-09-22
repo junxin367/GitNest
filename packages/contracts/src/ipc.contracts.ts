@@ -8,6 +8,7 @@ import type {
   InstallLanguageServerRequest,
   LanguageServerInstallResultDto,
   ReadCodeAnalysisFileRequest,
+  RestoreCodeAnalysisSnapshotRequest,
   StartCodeAnalysisRequest
 } from "./analysis.contracts";
 import type {
@@ -74,19 +75,15 @@ import type {
   RepositoryQueryRequest
 } from "./repository.contracts";
 import type {
-  AddWorkspaceEntryRequest,
   CreateWorkspaceRequest,
   DeleteWorkspaceRequest,
-  RemoveWorkspaceEntryRequest,
+  RemoveWorkspaceRepositoryRequest,
   RenameWorkspaceRequest,
   SelectRepositoryTargetRequest,
-  SelectWorkspaceEntryRequest,
   SetWorkspaceGroupCollapsedRequest,
   SwitchWorkspaceRequest,
-  UpdateWorkspaceEntryRequest,
   WorkspaceDetailsDto,
   WorkspaceDirectorySelectionDto,
-  WorkspaceMutationResultDto,
   WorkspaceRefreshAcceptedDto,
   WorkspaceRuntimeStateDto,
   WorkspaceResult
@@ -107,6 +104,10 @@ import type {
   TestAiConnectionRequest,
   UpdateAppSettingsRequest
 } from "./settings.contracts";
+import type {
+  AcknowledgeApplicationUpdatePromptRequest,
+  ApplicationUpdateStateDto
+} from "./update.contracts";
 
 interface IpcContract<
   Arguments extends unknown[],
@@ -117,6 +118,30 @@ interface IpcContract<
 }
 
 export interface IpcContractMap {
+  [IPC_CHANNELS.updateGetState]: IpcContract<
+    [],
+    ApplicationUpdateStateDto
+  >;
+  [IPC_CHANNELS.updateCheck]: IpcContract<
+    [],
+    ApplicationUpdateStateDto
+  >;
+  [IPC_CHANNELS.updateAcknowledgePrompt]: IpcContract<
+    [request: AcknowledgeApplicationUpdatePromptRequest],
+    ApplicationUpdateStateDto
+  >;
+  [IPC_CHANNELS.updateDownloadAndInstall]: IpcContract<
+    [],
+    ApplicationUpdateStateDto
+  >;
+  [IPC_CHANNELS.updateOpenProjectPage]: IpcContract<
+    [],
+    ApplicationUpdateStateDto
+  >;
+  [IPC_CHANNELS.updateOpenReleasePage]: IpcContract<
+    [],
+    ApplicationUpdateStateDto
+  >;
   [IPC_CHANNELS.codeAnalysisGetState]: IpcContract<
     [],
     GitReadResult<CodeAnalysisStateDto>
@@ -124,6 +149,10 @@ export interface IpcContractMap {
   [IPC_CHANNELS.codeAnalysisStart]: IpcContract<
     [request: StartCodeAnalysisRequest],
     GitReadResult<CodeAnalysisAcceptedDto>
+  >;
+  [IPC_CHANNELS.codeAnalysisRestoreSnapshot]: IpcContract<
+    [request: RestoreCodeAnalysisSnapshotRequest],
+    GitReadResult<boolean>
   >;
   [IPC_CHANNELS.codeAnalysisCancel]: IpcContract<
     [request: CancelCodeAnalysisRequest],
@@ -214,6 +243,7 @@ export interface IpcContractMap {
     [request: TestAccountRequest],
     GitReadResult<AccountConnectionTestResultDto>
   >;
+  [IPC_CHANNELS.windowIsMaximized]: IpcContract<[], boolean>;
   [IPC_CHANNELS.windowMinimize]: IpcContract<[], void>;
   [IPC_CHANNELS.windowToggleMaximize]: IpcContract<[], boolean>;
   [IPC_CHANNELS.windowClose]: IpcContract<[], void>;
@@ -257,28 +287,16 @@ export interface IpcContractMap {
     [],
     WorkspaceResult<WorkspaceDirectorySelectionDto>
   >;
-  [IPC_CHANNELS.workspaceAddEntry]: IpcContract<
-    [request: AddWorkspaceEntryRequest],
-    WorkspaceResult<WorkspaceMutationResultDto>
-  >;
   [IPC_CHANNELS.workspaceRescan]: IpcContract<
     [],
     WorkspaceResult<WorkspaceDetailsDto>
   >;
-  [IPC_CHANNELS.workspaceUpdateEntry]: IpcContract<
-    [request: UpdateWorkspaceEntryRequest],
-    WorkspaceResult<WorkspaceDetailsDto>
-  >;
-  [IPC_CHANNELS.workspaceRemoveEntry]: IpcContract<
-    [request: RemoveWorkspaceEntryRequest],
+  [IPC_CHANNELS.workspaceRemoveRepository]: IpcContract<
+    [request: RemoveWorkspaceRepositoryRequest],
     WorkspaceResult<WorkspaceDetailsDto>
   >;
   [IPC_CHANNELS.workspaceSetGroupCollapsed]: IpcContract<
     [request: SetWorkspaceGroupCollapsedRequest],
-    WorkspaceResult<WorkspaceDetailsDto>
-  >;
-  [IPC_CHANNELS.workspaceSelectEntry]: IpcContract<
-    [request: SelectWorkspaceEntryRequest],
     WorkspaceResult<WorkspaceDetailsDto>
   >;
   [IPC_CHANNELS.workspaceSelectTarget]: IpcContract<

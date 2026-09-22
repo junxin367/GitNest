@@ -114,6 +114,68 @@ describe("CodeAnalysisService snapshot persistence", () => {
     await restoredService.dispose();
   });
 
+  it("restores workspace and changed snapshots without rerunning analysis", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "gitnest-analysis-scopes-")
+    );
+    temporaryDirectories.push(directory);
+    const workspace = createWorkspace();
+    const firstService = createService(
+      workspace,
+      new AnalysisSnapshotCache(directory),
+      createEngine()
+    );
+    const workspaceReady = waitForState(
+      firstService,
+      (state) =>
+        state.state === "ready" &&
+        state.scope === "workspace"
+    );
+
+    await firstService.start("workspace");
+    await workspaceReady;
+
+    const changedReady = waitForState(
+      firstService,
+      (state) =>
+        state.state === "ready" &&
+        state.scope === "changed"
+    );
+    await firstService.start("changed");
+    await changedReady;
+    await firstService.dispose();
+
+    const restoredEngine = createEngine();
+    const restoredService = createService(
+      workspace,
+      new AnalysisSnapshotCache(directory),
+      restoredEngine
+    );
+
+    await expect(restoredService.getState()).resolves.toMatchObject({
+      state: "ready",
+      scope: "changed"
+    });
+    await expect(
+      restoredService.restoreSnapshot("workspace")
+    ).resolves.toBe(true);
+    await expect(
+      restoredService.getSnapshot()
+    ).resolves.toMatchObject({
+      scope: "workspace"
+    });
+    await expect(
+      restoredService.restoreSnapshot("changed")
+    ).resolves.toBe(true);
+    await expect(
+      restoredService.getSnapshot()
+    ).resolves.toMatchObject({
+      scope: "changed"
+    });
+    expect(restoredEngine.analyze).not.toHaveBeenCalled();
+    await restoredService.dispose();
+  });
+
   it("persists a completed analysis and keeps it available when saving fails", async () => {
     const workspace = createWorkspace();
     const snapshot = createSnapshot("fresh");
@@ -159,7 +221,6 @@ describe("CodeAnalysisService snapshot persistence", () => {
     const engine = createEngine(async (input) => ({
       ...createSnapshot(
         input.analysisId,
-        input.entryId,
         input.roots[0]?.worktreeId ?? "worktree"
       ),
       roots: structuredClone(input.roots)
@@ -208,17 +269,16 @@ describe("CodeAnalysisService snapshot persistence", () => {
     await service.dispose();
   });
 
-  it("does not let a late restore from the previous entry replace the current entry", async () => {
-    let workspace = createWorkspace("entry-a", "worktree-a");
+  it("does not let a late restore from the previous Workspace root replace the current root", async () => {
+    let workspace = createWorkspace("worktree-a");
     const pending = deferred<CodeAnalysisSnapshot | null>();
     const store: TestSnapshotStore = {
       load: vi.fn(
-        async (_workspaceId, entryId) =>
-          entryId === "entry-a"
+        async (_workspaceId, _settings, roots) =>
+          roots[0]?.worktreeId === "worktree-a"
             ? pending.promise
             : createSnapshot(
                 "entry-b-cache",
-                "entry-b",
                 "worktree-b"
               )
       ),
@@ -240,13 +300,12 @@ describe("CodeAnalysisService snapshot persistence", () => {
     );
 
     const firstLoad = service.getState();
-    workspace = createWorkspace("entry-b", "worktree-b");
+    workspace = createWorkspace("worktree-b");
     service.handleWorkspaceChanged(workspace);
     const currentState = await service.getState();
     pending.resolve(
       createSnapshot(
         "entry-a-cache",
-        "entry-a",
         "worktree-a"
       )
     );
@@ -254,13 +313,74 @@ describe("CodeAnalysisService snapshot persistence", () => {
 
     expect(currentState).toMatchObject({
       state: "ready",
-      analysisId: "entry-b-cache",
-      entryId: "entry-b"
+      analysisId: "entry-b-cache"
     });
     await expect(service.getSnapshot()).resolves.toMatchObject({
-      analysisId: "entry-b-cache",
-      entryId: "entry-b"
+      analysisId: "entry-b-cache"
     });
+    await service.dispose();
+  });
+
+  it("does not let a cached scope restore replace a newly started analysis", async () => {
+    const workspace = createWorkspace();
+    const restoreStarted = deferred<boolean>();
+    const pendingRestore =
+      deferred<CodeAnalysisSnapshot | null>();
+    const analysisCompletion =
+      deferred<CodeAnalysisSnapshot>();
+    const store: TestSnapshotStore = {
+      load: vi.fn(
+        async (
+          _workspaceId,
+          _settings,
+          _roots,
+          scope
+        ) => {
+          if (scope === "changed") {
+            restoreStarted.resolve(true);
+            return pendingRestore.promise;
+          }
+          return createSnapshot("workspace-cache");
+        }
+      ),
+      save: vi.fn(async () => undefined)
+    };
+    const service = createService(
+      workspace,
+      store,
+      createEngine(async () => analysisCompletion.promise)
+    );
+    await service.getState();
+
+    const restore = service.restoreSnapshot("changed");
+    await restoreStarted.promise;
+    const running = waitForState(
+      service,
+      (state) => state.state === "running"
+    );
+    await service.start("workspace");
+    await running;
+
+    pendingRestore.resolve(
+      createSnapshot(
+        "changed-cache",
+        "worktree",
+        "changed"
+      )
+    );
+
+    await expect(restore).resolves.toBe(false);
+    await expect(service.getState()).resolves.toMatchObject({
+      state: "running",
+      scope: "workspace"
+    });
+
+    const ready = waitForState(
+      service,
+      (state) => state.state === "ready"
+    );
+    analysisCompletion.resolve(createSnapshot("fresh"));
+    await ready;
     await service.dispose();
   });
 });
@@ -494,11 +614,13 @@ function createEngine(
   analyze: (
     input: CodeAnalysisInput
   ) => Promise<CodeAnalysisSnapshot> = async (input) =>
-    createSnapshot(
-      input.analysisId,
-      input.entryId,
-      input.roots[0]?.worktreeId ?? "worktree"
-    )
+    ({
+      ...createSnapshot(
+        input.analysisId,
+        input.roots[0]?.worktreeId ?? "worktree"
+      ),
+      scope: input.scope
+    })
 ) {
   return {
     analyze: vi.fn(analyze),
@@ -528,39 +650,28 @@ function createGitClient(
   };
 }
 
-function createWorkspace(
-  entryId = "entry",
-  worktreeId = "worktree"
-): Workspace {
+function createWorkspace(worktreeId = "worktree"): Workspace {
   const target = {
     repositoryId: "repository",
     worktreeId
   };
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "workspace",
     name: "Workspace",
-    entries: [
+    path: `C:\\workspace\\${worktreeId}`,
+    canonicalPath: `c:\\workspace\\${worktreeId}`,
+    excludes: [],
+    groups: [
       {
-        id: entryId,
-        displayName: `Entry ${entryId}`,
-        path: `C:\\workspace\\${entryId}`,
-        canonicalPath: `c:\\workspace\\${entryId}`,
-        excludes: [],
-        order: 0,
-        kind: "workspace-directory",
-        groups: [
-          {
-            id: "group",
-            name: "Repositories",
-            targets: [target],
-            collapsed: false
-          }
-        ],
-        scanIssues: [],
-        lastScannedAt: "2026-09-17T08:42:00.000Z"
+        id: "group",
+        name: "Repositories",
+        targets: [target],
+        collapsed: false
       }
     ],
+    scanIssues: [],
+    lastScannedAt: "2026-09-17T08:42:00.000Z",
     repositories: [
       {
         id: target.repositoryId,
@@ -588,7 +699,6 @@ function createWorkspace(
         isPrunable: false
       }
     ],
-    selectedEntryId: entryId,
     selectedTarget: target,
     updatedAt: "2026-09-17T08:42:00.000Z"
   };
@@ -596,14 +706,13 @@ function createWorkspace(
 
 function createWorkspaceAt(rootPath: string): Workspace {
   const workspace = createWorkspace();
-  const entry = workspace.entries[0];
   const repository = workspace.repositories[0];
   const worktree = workspace.worktrees[0];
-  if (!entry || !repository || !worktree) {
+  if (!repository || !worktree) {
     throw new Error("Workspace fixture is incomplete.");
   }
-  entry.path = rootPath;
-  entry.canonicalPath = rootPath;
+  workspace.path = rootPath;
+  workspace.canonicalPath = rootPath;
   repository.commonDir = join(rootPath, ".git");
   repository.canonicalCommonDir = join(rootPath, ".git");
   worktree.path = rootPath;
@@ -614,16 +723,14 @@ function createWorkspaceAt(rootPath: string): Workspace {
 
 function createSnapshot(
   analysisId: string,
-  entryId = "entry",
-  worktreeId = "worktree"
+  worktreeId = "worktree",
+  scope: CodeAnalysisSnapshot["scope"] = "workspace"
 ): CodeAnalysisSnapshot {
   return {
     schemaVersion: 1,
     analysisId,
     workspaceId: "workspace",
-    entryId,
-    entryName: `Entry ${entryId}`,
-    scope: "workspace",
+    scope,
     generatedAt: "2026-09-17T08:42:00.000Z",
     roots: [
       {

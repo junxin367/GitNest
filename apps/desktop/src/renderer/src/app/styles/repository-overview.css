@@ -76,7 +76,6 @@
 }
 
 .repository-hero-actions .gn-button {
-  width: 100%;
   min-width: 0;
   height: var(--control-compact);
   padding: 0 var(--space-2);

@@ -1,5 +1,4 @@
 import {
-  findTargetEntry,
   listWorkspaceTargets,
   repositoryTargetKey,
   repositoryTargetsEqual,
@@ -17,7 +16,6 @@ export type BackgroundRefreshReason =
 
 export type WorkspaceRefreshPriority =
   | "selected"
-  | "selected-entry"
   | "background";
 
 export interface BackgroundRefreshRequest {
@@ -69,7 +67,6 @@ export interface WorkspaceRefreshSchedulerOptions {
   backgroundMinIntervalMs: number;
   heartbeatIntervalMs: number;
   selectedPollingIntervalMs: number;
-  selectedEntryPollingIntervalMs: number;
   backgroundPollingIntervalMs: number;
   clock: () => string;
   execute(
@@ -489,7 +486,6 @@ export class WorkspaceRefreshScheduler {
       RepositoryTarget[]
     > = {
       selected: [],
-      "selected-entry": [],
       background: []
     };
     for (const target of listWorkspaceTargets(this.#workspace)) {
@@ -498,7 +494,6 @@ export class WorkspaceRefreshScheduler {
 
     for (const priority of [
       "selected",
-      "selected-entry",
       "background"
     ] as const) {
       const targets = groups[priority].sort((left, right) =>
@@ -509,9 +504,7 @@ export class WorkspaceRefreshScheduler {
       const interval =
         priority === "selected"
           ? this.#options.selectedPollingIntervalMs
-          : priority === "selected-entry"
-            ? this.#options.selectedEntryPollingIntervalMs
-            : this.#options.backgroundPollingIntervalMs;
+          : this.#options.backgroundPollingIntervalMs;
       if (interval <= 0) {
         continue;
       }
@@ -540,9 +533,7 @@ export class WorkspaceRefreshScheduler {
       1,
       priority === "selected"
         ? this.#options.selectedPollingIntervalMs
-        : priority === "selected-entry"
-          ? this.#options.selectedEntryPollingIntervalMs
-          : this.#options.backgroundPollingIntervalMs
+        : this.#options.backgroundPollingIntervalMs
     );
   }
 
@@ -556,12 +547,7 @@ export class WorkspaceRefreshScheduler {
     ) {
       return "selected";
     }
-    const entry = workspace
-      ? findTargetEntry(workspace, target)
-      : undefined;
-    return entry && entry.id === workspace?.selectedEntryId
-      ? "selected-entry"
-      : "background";
+    return "background";
   }
 
   #startHeartbeat(): void {
@@ -671,9 +657,7 @@ function priorityWeight(
 ): number {
   return priority === "selected"
     ? 0
-    : priority === "selected-entry"
-      ? 1
-      : 2;
+    : 1;
 }
 
 function createDiagnosticCounters(): DiagnosticCounters {

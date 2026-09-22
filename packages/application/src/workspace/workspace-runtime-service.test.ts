@@ -126,11 +126,8 @@ describe("WorkspaceRuntimeService", () => {
     const second = structuredClone(first);
     second.id = "workspace_second";
     second.name = "Second Workspace";
-    second.entries[0] = {
-      ...(second.entries[0] as Workspace["entries"][number]),
-      path: "C:\\second",
-      canonicalPath: "c:\\second"
-    };
+    second.path = "C:\\second";
+    second.canonicalPath = "c:\\second";
     second.worktrees[0] = {
       ...(second.worktrees[0] as Workspace["worktrees"][number]),
       path: "C:\\second\\repository-0",
@@ -211,11 +208,8 @@ describe("WorkspaceRuntimeService", () => {
     const second = structuredClone(first);
     second.id = "workspace_second";
     second.name = "Second Workspace";
-    second.entries[0] = {
-      ...(second.entries[0] as Workspace["entries"][number]),
-      path: "C:\\second",
-      canonicalPath: "c:\\second"
-    };
+    second.path = "C:\\second";
+    second.canonicalPath = "c:\\second";
     second.worktrees = second.worktrees.map(
       (worktree, index) => ({
         ...worktree,
@@ -269,6 +263,106 @@ describe("WorkspaceRuntimeService", () => {
     expect(settled.workspace.id).toBe("workspace_second");
     expect(settled.snapshots).toEqual([]);
     await runtime.dispose();
+  });
+
+  it("retains document and cache cleanup warnings in the resulting runtime state", async () => {
+    const workspace = createWorkspace(1);
+    const configuration: WorkspaceConfigurationService =
+      new FakeConfiguration(workspace);
+    configuration.deleteWorkspace = async () => workspace;
+    configuration.consumeCleanupWarning = () => "Workspace 配置文件未能清理。";
+    const snapshotStore: RepositorySnapshotStore = new MemorySnapshotStore();
+    snapshotStore.delete = async () => { throw new Error("Access denied"); };
+    const runtime = new WorkspaceRuntimeService(
+      configuration,
+      new TrackingGitClient(),
+      snapshotStore,
+      new FakeWatcher(),
+      { autoRefresh: false }
+    );
+    try {
+      const state = await runtime.deleteWorkspace("deleted-workspace");
+      expect(state.workspace.id).toBe(workspace.id);
+      expect(state.cleanupWarning).toContain("配置文件未能清理");
+      expect(state.cleanupWarning).toContain("快照或操作历史");
+      expect((await runtime.getState()).cleanupWarning).toBe(state.cleanupWarning);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("honors a queued switch back to the Workspace that is still active", async () => {
+    const first = createWorkspace(1);
+    first.id = "workspace-first";
+    const second = { ...structuredClone(first), id: "workspace-second" };
+    const runtime = new WorkspaceRuntimeService(
+      new SwitchingConfiguration([first, second]),
+      new TrackingGitClient(),
+      new WorkspaceScopedMemorySnapshotStore({}),
+      new FakeWatcher(),
+      { autoRefresh: false }
+    );
+    try {
+      await runtime.getState();
+      const switched = runtime.switchWorkspace(second.id);
+      const restored = runtime.switchWorkspace(first.id);
+      await switched;
+      expect((await restored).workspace.id).toBe(first.id);
+      expect((await runtime.getCurrent()).id).toBe(first.id);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("rejects an operation queued for another Workspace even for a shared repository", async () => {
+    const workspace = createWorkspace(1);
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      new FakeWatcher(),
+      { autoRefresh: false }
+    );
+    try {
+      await expect(runtime.queueRepositoryOperation(
+        workspace.selectedTarget!,
+        "pull",
+        async () => { throw new Error("Must not execute"); },
+        { expectedWorkspaceId: "another-workspace" }
+      )).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+      expect((await runtime.getState()).operations).toHaveLength(0);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("does not apply a queued selection from the old Workspace to the new Workspace", async () => {
+    const first = createWorkspace(2);
+    first.id = "workspace-first";
+    const second = { ...structuredClone(first), id: "workspace-second" };
+    const runtime = new WorkspaceRuntimeService(
+      new SwitchingConfiguration([first, second]),
+      new TrackingGitClient(),
+      new WorkspaceScopedMemorySnapshotStore({}),
+      new FakeWatcher(),
+      { autoRefresh: false }
+    );
+    try {
+      await runtime.getState();
+      const switching = runtime.switchWorkspace(second.id);
+      const selection = runtime.selectTarget(
+        listWorkspaceTargets(first)[1]!
+      );
+      await expect(selection).rejects.toMatchObject({
+        code: "INVALID_REQUEST"
+      });
+      await switching;
+      const state = await runtime.getState();
+      expect(state.workspace.id).toBe(second.id);
+      expect(state.workspace.selectedTarget).toEqual(second.selectedTarget);
+    } finally {
+      await runtime.dispose();
+    }
   });
 
   it("cancels the startup topology scan before switching Workspace", async () => {
@@ -871,15 +965,15 @@ describe("WorkspaceRuntimeService", () => {
     await runtime.dispose();
   });
 
-  it("polls selected, selected-entry, and background targets on separate distributed schedules", async () => {
+  it("polls selected and background targets on separate distributed schedules", async () => {
     vi.useFakeTimers();
-    const workspace = createWorkspaceWithBackgroundEntry();
+    const workspace = createWorkspace(3);
     const selected =
       workspace.selectedTarget as RepositoryTarget;
-    const selectedEntryTarget =
-      workspace.entries[0]?.groups[0]?.targets[1] as RepositoryTarget;
-    const backgroundTarget =
-      workspace.entries[1]?.groups[0]?.targets[0] as RepositoryTarget;
+    const firstBackgroundTarget =
+      workspace.groups[0]?.targets[1] as RepositoryTarget;
+    const secondBackgroundTarget =
+      workspace.groups[0]?.targets[2] as RepositoryTarget;
     const startedAt = Date.now();
     const calls: Array<{
       at: number;
@@ -892,8 +986,7 @@ describe("WorkspaceRuntimeService", () => {
       backgroundMinIntervalMs: 1,
       heartbeatIntervalMs: 0,
       selectedPollingIntervalMs: 30,
-      selectedEntryPollingIntervalMs: 70,
-      backgroundPollingIntervalMs: 140,
+      backgroundPollingIntervalMs: 70,
       clock: () => "2026-09-20T12:00:00.000Z",
       isStale: () => true,
       execute: async (requests) => {
@@ -920,25 +1013,25 @@ describe("WorkspaceRuntimeService", () => {
       expect(calls[0]?.target).toEqual(selected);
       expect(calls).toHaveLength(1);
 
-      await vi.advanceTimersByTimeAsync(70);
-      const selectedEntryCall = calls.find((call) =>
+      await vi.advanceTimersByTimeAsync(35);
+      const firstBackgroundCall = calls.find((call) =>
         repositoryTargetsMatch(
           call.target,
-          selectedEntryTarget
+          firstBackgroundTarget
         )
       );
-      expect(selectedEntryCall?.at).toBe(70);
+      expect(firstBackgroundCall?.at).toBe(35);
 
-      await vi.advanceTimersByTimeAsync(70);
-      const backgroundCall = calls.find((call) =>
+      await vi.advanceTimersByTimeAsync(35);
+      const secondBackgroundCall = calls.find((call) =>
         repositoryTargetsMatch(
           call.target,
-          backgroundTarget
+          secondBackgroundTarget
         )
       );
-      expect(backgroundCall?.at).toBe(140);
-      expect(backgroundCall?.at).toBeGreaterThan(
-        selectedEntryCall?.at ?? 0
+      expect(secondBackgroundCall?.at).toBe(70);
+      expect(secondBackgroundCall?.at).toBeGreaterThan(
+        firstBackgroundCall?.at ?? 0
       );
     } finally {
       scheduler.dispose();
@@ -957,7 +1050,6 @@ describe("WorkspaceRuntimeService", () => {
       backgroundMinIntervalMs: 1,
       heartbeatIntervalMs: 20,
       selectedPollingIntervalMs: 30,
-      selectedEntryPollingIntervalMs: 70,
       backgroundPollingIntervalMs: 140,
       clock: () => "2026-09-20T12:00:00.000Z",
       isStale: () => true,
@@ -1636,10 +1728,6 @@ class FakeConfiguration implements WorkspaceConfigurationService {
     return structuredClone(this.#workspace);
   }
 
-  async addEntry(): Promise<never> {
-    throw new Error("Not used.");
-  }
-
   async rescan(): Promise<Workspace> {
     this.rescanCount += 1;
     if (this.rescanError) {
@@ -1653,19 +1741,11 @@ class FakeConfiguration implements WorkspaceConfigurationService {
     return structuredClone(this.#workspace);
   }
 
-  async updateEntry(): Promise<Workspace> {
-    return structuredClone(this.#workspace);
-  }
-
-  async removeEntry(): Promise<Workspace> {
+  async excludeRepository(): Promise<Workspace> {
     return structuredClone(this.#workspace);
   }
 
   async setGroupCollapsed(): Promise<Workspace> {
-    return structuredClone(this.#workspace);
-  }
-
-  async selectEntry(): Promise<Workspace> {
     return structuredClone(this.#workspace);
   }
 
@@ -1721,27 +1801,15 @@ class SwitchingConfiguration
     return this.getCurrent();
   }
 
-  async addEntry(): Promise<never> {
-    throw new Error("Not used.");
-  }
-
   async rescan(): Promise<Workspace> {
     return this.getCurrent();
   }
 
-  async updateEntry(): Promise<Workspace> {
-    return this.getCurrent();
-  }
-
-  async removeEntry(): Promise<Workspace> {
+  async excludeRepository(): Promise<Workspace> {
     return this.getCurrent();
   }
 
   async setGroupCollapsed(): Promise<Workspace> {
-    return this.getCurrent();
-  }
-
-  async selectEntry(): Promise<Workspace> {
     return this.getCurrent();
   }
 
@@ -2096,30 +2164,22 @@ function createWorkspace(count: number): Workspace {
     worktreeId: `worktree-${index}`
   }));
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "workspace",
     name: "Workspace",
-    entries: [
+    path: "C:\\root",
+    canonicalPath: "c:\\root",
+    excludes: [],
+    groups: [
       {
-        id: "entry",
-        displayName: "Root",
-        path: "C:\\root",
-        canonicalPath: "c:\\root",
-        excludes: [],
-        order: 0,
-        kind: "workspace-directory",
-        groups: [
-          {
-            id: "group",
-            name: "原/根仓库",
-            targets,
-            collapsed: false
-          }
-        ],
-        scanIssues: [],
-        lastScannedAt: "2026-09-04T11:00:00.000Z"
+        id: "group",
+        name: "原/根仓库",
+        targets,
+        collapsed: false
       }
     ],
+    scanIssues: [],
+    lastScannedAt: "2026-09-04T11:00:00.000Z",
     repositories: targets.map((target, index) => ({
       id: target.repositoryId,
       name: `repository-${index}`,
@@ -2143,7 +2203,6 @@ function createWorkspace(count: number): Workspace {
       isLocked: false,
       isPrunable: false
     })),
-    selectedEntryId: "entry",
     selectedTarget: targets[0] as RepositoryTarget,
     updatedAt: "2026-09-04T11:00:00.000Z"
   };
@@ -2179,46 +2238,6 @@ function createNestedRepositoriesWorkspace(): Workspace {
   return workspace;
 }
 
-function createWorkspaceWithBackgroundEntry(): Workspace {
-  const workspace = createWorkspace(3);
-  const entry = workspace.entries[0];
-  const group = entry?.groups[0];
-  const selected = group?.targets[0];
-  const selectedEntryTarget = group?.targets[1];
-  const backgroundTarget = group?.targets[2];
-  if (
-    !entry ||
-    !group ||
-    !selected ||
-    !selectedEntryTarget ||
-    !backgroundTarget
-  ) {
-    throw new Error("Workspace fixture is incomplete.");
-  }
-
-  group.targets = [selected, selectedEntryTarget];
-  workspace.entries.push({
-    id: "entry-background",
-    displayName: "Background",
-    path: "C:\\background",
-    canonicalPath: "c:\\background",
-    excludes: [],
-    order: 1,
-    kind: "workspace-directory",
-    groups: [
-      {
-        id: "group-background",
-        name: "后台仓库",
-        targets: [backgroundTarget],
-        collapsed: false
-      }
-    ],
-    scanIssues: [],
-    lastScannedAt: "2026-09-20T11:00:00.000Z"
-  });
-  return workspace;
-}
-
 function repositoryTargetsMatch(
   left: RepositoryTarget,
   right: RepositoryTarget
@@ -2232,17 +2251,16 @@ function repositoryTargetsMatch(
 function addLinkedWorktree(workspace: Workspace): Workspace {
   const copy = structuredClone(workspace);
   const repository = copy.repositories[0];
-  const entry = copy.entries[0];
   const target: RepositoryTarget = {
     repositoryId: "repository-0",
     worktreeId: "worktree-linked"
   };
 
-  if (!repository || !entry) {
+  if (!repository) {
     throw new Error("Workspace fixture is incomplete.");
   }
   repository.worktreeIds.push(target.worktreeId);
-  entry.groups[0]?.targets.push(target);
+  copy.groups[0]?.targets.push(target);
   copy.worktrees.push({
     id: target.worktreeId,
     repositoryId: target.repositoryId,

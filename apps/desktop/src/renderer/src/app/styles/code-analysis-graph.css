@@ -657,10 +657,10 @@
 
 .analysis-node-source-line > span {
   padding: 0 var(--space-2) 0 var(--space-1);
-  color: var(--muted);
+  color: var(--color-code-line-number);
   background: color-mix(
     in srgb,
-    var(--surface-2) 56%,
+    var(--color-code-current-line) 36%,
     var(--color-code-bg)
   );
   border-right: 1px solid var(--border-soft);
@@ -674,46 +674,54 @@
   min-width: max-content;
   min-height: 20px;
   padding: 0 var(--space-3);
-  color: var(--text-soft);
+  color: var(--color-code-foreground);
   background: var(--color-code-bg);
   white-space: pre;
   tab-size: 2;
 }
 
 .analysis-node-source-line .analysis-source-token.is-comment {
-  color: color-mix(in srgb, var(--green) 62%, var(--muted));
-  font-style: italic;
+  color: var(--color-code-comment);
 }
 
-.analysis-node-source-line .analysis-source-token.is-keyword,
+.analysis-node-source-line .analysis-source-token.is-keyword {
+  color: var(--color-code-keyword);
+}
+
 .analysis-node-source-line .analysis-source-token.is-annotation {
-  color: color-mix(in srgb, var(--purple) 84%, var(--text));
+  color: var(--color-code-annotation);
 }
 
 .analysis-node-source-line .analysis-source-token.is-string {
-  color: color-mix(in srgb, var(--green) 82%, var(--text));
+  color: var(--color-code-string);
 }
 
-.analysis-node-source-line .analysis-source-token.is-number,
+.analysis-node-source-line .analysis-source-token.is-number {
+  color: var(--color-code-number);
+}
+
 .analysis-node-source-line .analysis-source-token.is-literal {
-  color: color-mix(in srgb, var(--yellow) 78%, var(--text));
+  color: var(--color-code-literal);
 }
 
-.analysis-node-source-line .analysis-source-token.is-type,
+.analysis-node-source-line .analysis-source-token.is-type {
+  color: var(--color-code-type);
+}
+
 .analysis-node-source-line .analysis-source-token.is-tag {
-  color: color-mix(in srgb, var(--blue) 82%, var(--text));
+  color: var(--color-code-tag);
 }
 
 .analysis-node-source-line .analysis-source-token.is-function {
-  color: color-mix(in srgb, var(--yellow) 88%, var(--text-soft));
+  color: var(--color-code-function);
 }
 
 .analysis-node-source-line .analysis-source-token.is-property {
-  color: color-mix(in srgb, var(--blue) 64%, var(--text-soft));
+  color: var(--color-code-property);
 }
 
 .analysis-node-source-line .analysis-source-token.is-operator {
-  color: color-mix(in srgb, var(--accent) 62%, var(--text-soft));
+  color: var(--color-code-operator);
 }
 
 .analysis-node-source-line
@@ -732,15 +740,20 @@
   inset: 0;
   pointer-events: none;
   content: "";
-  background: color-mix(
-    in srgb,
-    var(--accent) 10%,
-    transparent
-  );
+  background: transparent;
   box-shadow:
     inset 3px 0 0 var(--accent),
     inset 0 0 0 1px
       color-mix(in srgb, var(--accent) 54%, transparent);
+}
+
+.analysis-node-source-line.focus-target > code,
+.analysis-node-source-line.focus-target > span {
+  background: var(--color-code-current-line);
+}
+
+.analysis-node-source-line.focus-target > span {
+  color: var(--color-code-line-number-active);
 }
 
 .analysis-node-source-truncated {

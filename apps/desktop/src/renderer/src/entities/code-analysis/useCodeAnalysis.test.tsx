@@ -134,9 +134,7 @@ describe("useCodeAnalysis snapshot synchronization", () => {
       listener?.({
         state: "idle",
         snapshotAvailable: false,
-        workspaceId: "workspace-b",
-        entryId: "entry-b",
-        entryName: "Entry B"
+        workspaceId: "workspace-b"
       });
       pending.resolve({
         ok: true as const,
@@ -180,6 +178,47 @@ describe("useCodeAnalysis snapshot synchronization", () => {
       "快照与当前 Workspace 状态不匹配"
     );
   });
+
+  it("reports a scoped snapshot cache miss without leaving an action pending", async () => {
+    const restoreSnapshot = vi.fn(async () => ({
+      ok: true as const,
+      value: false
+    }));
+    installBridge({
+      getState: vi.fn(async () => ({
+        ok: true as const,
+        value: {
+          state: "idle" as const,
+          snapshotAvailable: false
+        }
+      })),
+      getSnapshot: vi.fn(async () => ({
+        ok: true as const,
+        value: null
+      })),
+      restoreSnapshot,
+      onStateChanged: vi.fn(() => vi.fn())
+    });
+
+    await act(async () => {
+      root.render(<Harness onChange={(value) => (controller = value)} />);
+      await flushAsyncWork();
+    });
+
+    let restored = true;
+    await act(async () => {
+      restored =
+        (await controller?.restoreSnapshot("changed")) ??
+        true;
+      await flushAsyncWork();
+    });
+
+    expect(restored).toBe(false);
+    expect(restoreSnapshot).toHaveBeenCalledWith({
+      scope: "changed"
+    });
+    expect(controller?.action).toBeNull();
+  });
 });
 
 function Harness({
@@ -200,8 +239,6 @@ function readyState(
     snapshotAvailable: true,
     analysisId,
     workspaceId: "workspace",
-    entryId: "entry",
-    entryName: "Entry",
     scope: "workspace",
     generatedAt
   };
@@ -214,8 +251,6 @@ function snapshotFor(
     schemaVersion: 1,
     analysisId: state.analysisId ?? "",
     workspaceId: state.workspaceId ?? "",
-    entryId: state.entryId ?? "",
-    entryName: state.entryName ?? "",
     scope: state.scope ?? "workspace",
     generatedAt: state.generatedAt ?? "",
     roots: [],
@@ -262,7 +297,13 @@ function installBridge(
   codeAnalysis: Pick<
     GitNestBridge["codeAnalysis"],
     "getState" | "getSnapshot" | "onStateChanged"
-  >
+  > &
+    Partial<
+      Pick<
+        GitNestBridge["codeAnalysis"],
+        "restoreSnapshot"
+      >
+    >
 ) {
   Object.defineProperty(window, "gitnest", {
     configurable: true,
@@ -270,6 +311,8 @@ function installBridge(
       codeAnalysis: {
         ...codeAnalysis,
         start: vi.fn(),
+        restoreSnapshot:
+          codeAnalysis.restoreSnapshot ?? vi.fn(),
         cancel: vi.fn(),
         installLanguageServer: vi.fn()
       }

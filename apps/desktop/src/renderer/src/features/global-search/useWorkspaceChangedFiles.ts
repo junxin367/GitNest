@@ -46,7 +46,8 @@ export function useWorkspaceChangedFiles(
   enabled: boolean
 ): WorkspaceChangedFilesIndex {
   const [state, setState] =
-    useState<WorkspaceChangedFilesIndex>({
+    useState<WorkspaceChangedFilesIndex & { scopeKey: string }>({
+      scopeKey: "",
       changes: [],
       failedTargetCount: 0,
       loading: false
@@ -92,6 +93,7 @@ export function useWorkspaceChangedFiles(
         .join("\u0001"),
     [plans]
   );
+  const scopeKey = JSON.stringify([workspace?.id ?? "", planSignature]);
 
   useEffect(() => {
     const generation = ++generationRef.current;
@@ -134,6 +136,7 @@ export function useWorkspaceChangedFiles(
         return;
       }
       setState({
+        scopeKey,
         changes: plans.flatMap((plan) => {
           const cached = cacheRef.current.get(plan.key);
           return cached?.revision === plan.revision &&
@@ -238,7 +241,13 @@ export function useWorkspaceChangedFiles(
     };
   }, [enabled, planSignature, workspace?.id]);
 
-  return state;
+  return state.scopeKey === scopeKey
+    ? state
+    : {
+        changes: [],
+        failedTargetCount: 0,
+        loading: enabled && Boolean(workspace)
+      };
 }
 
 function targetKey(target: RepositoryTargetDto): string {

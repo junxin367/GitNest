@@ -74,19 +74,6 @@
     flex-direction: column;
   }
 
-  .command-dialog-footer {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .command-dialog-footer p {
-    max-width: none;
-  }
-
-  .command-dialog-footer > div {
-    justify-content: flex-end;
-  }
-
   .analysis-workbench {
     grid-template-columns: minmax(220px, 270px) minmax(0, 1fr);
   }
@@ -97,6 +84,27 @@
 }
 
 @media (max-width: 760px) {
+  .version-dialog-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .version-dialog-progress {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .version-dialog-section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .version-dialog-section-heading > .gn-button {
+    align-self: flex-start;
+  }
+
+  .version-dialog-update-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .settings-page-scroll {
     padding: var(--page-safe-margin-narrow);
   }

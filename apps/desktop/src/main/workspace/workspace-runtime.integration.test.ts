@@ -54,16 +54,16 @@ describe("WorkspaceRuntimeService integration", () => {
       "default.snapshots.json"
     );
     const watcher = new PassiveWatcher();
+    await createWorkspaceService(
+      workspacePath
+    ).configureRoot(fixture.metaRootPath);
     const runtime = createRuntime(
       workspacePath,
       snapshotPath,
       watcher
     );
 
-    await runtime.addEntry({
-      path: fixture.metaRootPath,
-      source: "manual"
-    });
+    await runtime.rescan();
     const refreshed = await waitForState(
       runtime,
       (state) =>
@@ -77,10 +77,8 @@ describe("WorkspaceRuntimeService integration", () => {
     const directWorktree = refreshed.workspace.worktrees.find(
       (worktree) => worktree.path === fixture.directRepositoryPath
     );
-    const directTarget = refreshed.workspace.entries
-      .flatMap((entry) =>
-        entry.groups.flatMap((group) => group.targets)
-      )
+    const directTarget = refreshed.workspace.groups
+      .flatMap((group) => group.targets)
       .find(
         (target) => target.worktreeId === directWorktree?.id
       );
@@ -151,11 +149,7 @@ function createRuntime(
 ): WorkspaceRuntimeService {
   const gitClient = new GitCliClient();
   return new WorkspaceRuntimeService(
-    new WorkspaceService(
-      gitClient,
-      new NodeWorkspaceFileSystem(),
-      new JsonWorkspaceStore(workspacePath)
-    ),
+    createWorkspaceService(workspacePath),
     gitClient,
     new JsonRepositorySnapshotStore(snapshotPath),
     watcher,
@@ -166,6 +160,16 @@ function createRuntime(
       currentTargetMinIntervalMs: 10,
       backgroundTargetMinIntervalMs: 20
     }
+  );
+}
+
+function createWorkspaceService(
+  workspacePath: string
+): WorkspaceService {
+  return new WorkspaceService(
+    new GitCliClient(),
+    new NodeWorkspaceFileSystem(),
+    new JsonWorkspaceStore(workspacePath)
   );
 }
 

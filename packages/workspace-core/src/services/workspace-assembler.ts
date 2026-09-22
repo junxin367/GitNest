@@ -2,9 +2,8 @@ import type {
   RepositoryGroup,
   RepositoryTarget,
   Workspace,
-  WorkspaceEntry,
   WorkspaceRepository,
-  WorkspaceRootDefinition,
+  WorkspaceRoot,
   WorkspaceWorktree
 } from "../domain/workspace";
 import type { WorkspaceFileSystem } from "../ports/workspace-filesystem";
@@ -14,8 +13,7 @@ import type {
 } from "../discovery/workspace-scanner";
 import { createPathIdentity } from "./path-identity";
 import {
-  getEntryDefaultTarget,
-  listEntryTargets,
+  getWorkspaceDefaultTarget,
   listWorkspaceTargets,
   repositoryTargetKey
 } from "./workspace-targets";
@@ -23,20 +21,9 @@ import {
 export const DEFAULT_ROOT_REPOSITORY_GROUP_NAME = "原/根仓库";
 const LEGACY_ROOT_REPOSITORY_GROUP_NAME = "根目录仓库";
 
-interface OwnedRepository {
-  rootId: string;
-  discovery: DiscoveredRepository;
-}
-
-interface DiscoveryOccurrence {
-  rootId: string;
-  discovery: DiscoveredRepository;
-}
-
 export interface AssembleWorkspaceInput {
   current: Workspace;
-  roots: WorkspaceRootDefinition[];
-  scans: WorkspaceRootScan[];
+  scan: WorkspaceRootScan;
   updatedAt: string;
 }
 
@@ -49,21 +36,27 @@ export class WorkspaceAssembler {
 
   assemble({
     current,
-    roots,
-    scans,
+    scan,
     updatedAt
   }: AssembleWorkspaceInput): Workspace {
-    const scansByRoot = new Map(
-      scans.map((scan) => [scan.root.id, scan])
-    );
-    const previousEntries = new Map(
-      current.entries.map((entry) => [entry.id, entry])
-    );
-    const ownedRepositories = selectOwnedRepositories(
-      roots,
-      scans,
-      this.#fileSystem
-    );
+    const root = scan.root;
+
+    if (
+      scan.repositories.length === 0 &&
+      scan.issues.length > 0 &&
+      current.path
+    ) {
+      return {
+        ...current,
+        path: root.path,
+        canonicalPath: root.canonicalPath,
+        excludes: [...root.excludes],
+        scanIssues: scan.issues,
+        lastScannedAt: scan.scannedAt,
+        updatedAt
+      };
+    }
+
     const repositoryRegistry = new Map<
       string,
       WorkspaceRepository
@@ -74,125 +67,32 @@ export class WorkspaceAssembler {
       RepositoryTarget
     >();
 
-    for (const owned of ownedRepositories) {
-      const target = registerRepository(
-        owned.discovery,
-        this.#fileSystem,
-        repositoryRegistry,
-        worktreeRegistry
-      );
-      targetByDiscovery.set(owned.discovery, target);
-    }
-
-    const entries: WorkspaceEntry[] = [];
-
-    for (const root of [...roots].sort(compareRootOrder)) {
-      const scan = scansByRoot.get(root.id);
-      const previous = previousEntries.get(root.id);
-
-      if (!scan) {
-        if (previous) {
-          entries.push(previous);
-          registerPreviousEntryData(
-            previous,
-            current,
-            repositoryRegistry,
-            worktreeRegistry
-          );
-        }
-        continue;
-      }
-
-      const owned = ownedRepositories.filter(
-        (candidate) => candidate.rootId === root.id
-      );
-
-      if (
-        scan.repositories.length === 0 &&
-        scan.issues.length > 0 &&
-        previous
-      ) {
-        entries.push({
-          ...previous,
-          scanIssues: scan.issues,
-          lastScannedAt: scan.scannedAt
-        });
-        registerPreviousEntryData(
-          previous,
-          current,
+    for (const discovery of scan.repositories) {
+      targetByDiscovery.set(
+        discovery,
+        registerRepository(
+          discovery,
+          this.#fileSystem,
           repositoryRegistry,
           worktreeRegistry
-        );
-        continue;
-      }
-
-      const rootRepository = owned.find(
-        ({ discovery }) =>
-          discovery.canonicalPath === root.canonicalPath
+        )
       );
-      const descendants = owned.filter(
-        ({ discovery }) =>
-          discovery.canonicalPath !== root.canonicalPath
-      );
-      const groupedRepositories =
-        rootRepository && descendants.length > 0
-          ? [rootRepository, ...descendants]
-          : descendants;
-      const groups = createGroups(
-        root,
-        groupedRepositories,
-        targetByDiscovery,
-        previous?.groups ?? []
-      );
-      const base = {
-        id: root.id,
-        displayName: root.displayName,
-        path: root.path,
-        canonicalPath: root.canonicalPath,
-        excludes: [...root.excludes],
-        order: root.order,
-        groups,
-        scanIssues: scan.issues,
-        lastScannedAt: scan.scannedAt
-      };
-
-      if (rootRepository && descendants.length > 0) {
-        entries.push({
-          ...base,
-          kind: "workspace-meta-repository",
-          rootTarget: targetByDiscovery.get(
-            rootRepository.discovery
-          ) as RepositoryTarget
-        });
-      } else if (rootRepository) {
-        entries.push({
-          ...base,
-          kind: "standalone-repository",
-          target: targetByDiscovery.get(
-            rootRepository.discovery
-          ) as RepositoryTarget
-        });
-      } else {
-        entries.push({
-          ...base,
-          kind: "workspace-directory"
-        });
-      }
     }
 
-    const sortedEntries = entries
-      .sort(compareRootOrder)
-      .map((entry, order) => ({ ...entry, order }));
-    const selectedEntryId =
-      current.selectedEntryId &&
-      sortedEntries.some(
-        (entry) => entry.id === current.selectedEntryId
-      )
-        ? current.selectedEntryId
-        : sortedEntries[0]?.id;
+    const groups = createGroups(
+      root,
+      scan.repositories,
+      targetByDiscovery,
+      current.groups
+    );
     const provisionalWorkspace: Workspace = {
       ...current,
-      entries: sortedEntries,
+      path: root.path,
+      canonicalPath: root.canonicalPath,
+      excludes: [...root.excludes],
+      groups,
+      scanIssues: scan.issues,
+      lastScannedAt: scan.scannedAt,
       repositories: [...repositoryRegistry.values()],
       worktrees: [...worktreeRegistry.values()],
       updatedAt
@@ -206,89 +106,29 @@ export class WorkspaceAssembler {
       current.selectedTarget &&
       availableTargets.has(repositoryTargetKey(current.selectedTarget))
         ? current.selectedTarget
-        : getEntryDefaultTarget(
-            sortedEntries.find(
-              (entry) => entry.id === selectedEntryId
-            )
-          );
+        : getWorkspaceDefaultTarget(provisionalWorkspace);
     const {
-      selectedEntryId: _previousSelectedEntryId,
       selectedTarget: _previousSelectedTarget,
       ...workspaceBase
-    } = current;
+    } = provisionalWorkspace;
 
     return {
       ...workspaceBase,
-      entries: sortedEntries,
-      repositories: [...repositoryRegistry.values()].sort((left, right) =>
-        left.name.localeCompare(right.name, undefined, {
-          sensitivity: "base"
-        })
+      repositories: [...repositoryRegistry.values()].sort(
+        (left, right) =>
+          left.name.localeCompare(right.name, undefined, {
+            sensitivity: "base"
+          })
       ),
-      worktrees: [...worktreeRegistry.values()].sort((left, right) =>
-        left.path.localeCompare(right.path, undefined, {
-          sensitivity: "base"
-        })
+      worktrees: [...worktreeRegistry.values()].sort(
+        (left, right) =>
+          left.path.localeCompare(right.path, undefined, {
+            sensitivity: "base"
+          })
       ),
-      ...(selectedEntryId ? { selectedEntryId } : {}),
-      ...(selectedTarget ? { selectedTarget } : {}),
-      updatedAt
+      ...(selectedTarget ? { selectedTarget } : {})
     };
   }
-}
-
-function selectOwnedRepositories(
-  roots: WorkspaceRootDefinition[],
-  scans: WorkspaceRootScan[],
-  fileSystem: WorkspaceFileSystem
-): OwnedRepository[] {
-  const occurrences = new Map<string, DiscoveryOccurrence[]>();
-  for (const scan of scans) {
-    for (const discovery of scan.repositories) {
-      const matches =
-        occurrences.get(discovery.canonicalPath) ?? [];
-      matches.push({
-        rootId: scan.root.id,
-        discovery
-      });
-      occurrences.set(discovery.canonicalPath, matches);
-    }
-  }
-
-  return [...occurrences.values()].map((matches) => {
-    const first = matches[0] as DiscoveryOccurrence;
-    const owner = selectMostSpecificRoot(
-      roots,
-      first.discovery.path,
-      fileSystem
-    );
-    const ownedOccurrence =
-      matches.find((match) => match.rootId === owner.id) ?? first;
-
-    return {
-      rootId: owner.id,
-      discovery: ownedOccurrence.discovery
-    };
-  });
-}
-
-function selectMostSpecificRoot(
-  roots: WorkspaceRootDefinition[],
-  repositoryPath: string,
-  fileSystem: WorkspaceFileSystem
-): WorkspaceRootDefinition {
-  const candidates = roots
-    .filter((root) =>
-      fileSystem.isWithin(root.path, repositoryPath)
-    )
-    .sort((left, right) => {
-      const depth =
-        fileSystem.pathDepth(right.path) -
-        fileSystem.pathDepth(left.path);
-      return depth || compareRootOrder(left, right);
-    });
-
-  return candidates[0] as WorkspaceRootDefinition;
 }
 
 function registerRepository(
@@ -390,17 +230,13 @@ function registerRepository(
     }
   }
 
-  const uniqueWorktreeIds = [...new Set(worktreeIds)];
   const existingRepository = repositories.get(repositoryId);
-  const identityName = fileSystem.basename(normalizedIdentityPath.path);
   const repository: WorkspaceRepository = {
     id: repositoryId,
-    // 共享同一 Git common directory 的多个 Worktree 会归入同一仓库实例，
-    // 仓库名只能由主 Worktree 决定，否则会被后处理的 linked Worktree 覆盖。
     name:
       primaryWorktreeName ??
       existingRepository?.name ??
-      identityName,
+      fileSystem.basename(normalizedIdentityPath.path),
     commonDir: normalizedCommonDir.path,
     canonicalCommonDir: normalizedCommonDir.canonicalPath,
     ...(primaryWorktreeId
@@ -414,7 +250,7 @@ function registerRepository(
     worktreeIds: [
       ...new Set([
         ...(existingRepository?.worktreeIds ?? []),
-        ...uniqueWorktreeIds
+        ...worktreeIds
       ])
     ]
   };
@@ -430,8 +266,8 @@ function registerRepository(
 }
 
 function createGroups(
-  root: WorkspaceRootDefinition,
-  repositories: OwnedRepository[],
+  root: WorkspaceRoot,
+  repositories: DiscoveredRepository[],
   targets: Map<DiscoveredRepository, RepositoryTarget>,
   previousGroups: RepositoryGroup[]
 ): RepositoryGroup[] {
@@ -443,12 +279,11 @@ function createGroups(
     { name: string; targets: RepositoryTarget[] }
   >();
 
-  for (const { discovery } of repositories) {
-    const relativeSegments = discovery.relativeSegments;
+  for (const discovery of repositories) {
     const groupName =
-      relativeSegments.length <= 1
+      discovery.relativeSegments.length <= 1
         ? DEFAULT_ROOT_REPOSITORY_GROUP_NAME
-        : (relativeSegments[0] as string);
+        : (discovery.relativeSegments[0] as string);
     const groupKey = groupName.toLocaleLowerCase();
     const group = grouped.get(groupKey) ?? {
       name: groupName,
@@ -460,8 +295,8 @@ function createGroups(
       target &&
       !group.targets.some(
         (existing) =>
-          existing.repositoryId === target.repositoryId &&
-          existing.worktreeId === target.worktreeId
+          repositoryTargetKey(existing) ===
+          repositoryTargetKey(target)
       )
     ) {
       group.targets.push(target);
@@ -504,44 +339,4 @@ function createGroups(
           false
       };
     });
-}
-
-function registerPreviousEntryData(
-  entry: WorkspaceEntry,
-  current: Workspace,
-  repositories: Map<string, WorkspaceRepository>,
-  worktrees: Map<string, WorkspaceWorktree>
-): void {
-  const targets = listEntryTargets(entry);
-
-  for (const target of targets) {
-    const repository = current.repositories.find(
-      (candidate) => candidate.id === target.repositoryId
-    );
-
-    if (repository) {
-      repositories.set(repository.id, repository);
-
-      for (const worktreeId of repository.worktreeIds) {
-        const worktree = current.worktrees.find(
-          (candidate) => candidate.id === worktreeId
-        );
-        if (worktree) {
-          worktrees.set(worktree.id, worktree);
-        }
-      }
-    }
-  }
-}
-
-function compareRootOrder(
-  left: Pick<WorkspaceRootDefinition, "order" | "path">,
-  right: Pick<WorkspaceRootDefinition, "order" | "path">
-): number {
-  return (
-    left.order - right.order ||
-    left.path.localeCompare(right.path, undefined, {
-      sensitivity: "base"
-    })
-  );
 }

@@ -50,13 +50,11 @@ const legacyVersion = "0.9.0";
 const setupName = `GitNest-Setup-${version}-x64.exe`;
 const portableName =
   `GitNest-Portable-${version}-x64.exe`;
-const zipName = `GitNest-${version}-x64.zip`;
 const setupPath = join(releaseDirectory, setupName);
 const portablePath = join(
   releaseDirectory,
   portableName
 );
-const zipPath = join(releaseDirectory, zipName);
 const unpackedExecutable = join(
   releaseDirectory,
   "win-unpacked",
@@ -112,10 +110,6 @@ try {
     fixtureRoot,
     "installed-GitNest-测试"
   );
-  const zipDirectory = join(
-    fixtureRoot,
-    "zip package 测试"
-  );
   const installedUserData = join(
     fixtureRoot,
     "installed-user-data"
@@ -128,8 +122,6 @@ try {
   await mkdir(screenshotDirectory, {
     recursive: true
   });
-  await extractReleaseZip(zipDirectory);
-
   const launchEvidence = [];
   launchEvidence.push(
     await runLaunchScenario({
@@ -139,17 +131,6 @@ try {
         fixtureRoot,
         "unpacked-user-data"
       ),
-      expectedVersion: version
-    })
-  );
-  launchEvidence.push(
-    await runLaunchScenario({
-      label: "zip",
-      executable: join(
-        zipDirectory,
-        "GitNest.exe"
-      ),
-      userData: join(fixtureRoot, "zip-user-data"),
       expectedVersion: version
     })
   );
@@ -273,8 +254,7 @@ try {
         version,
         artifacts: {
           setup: setupName,
-          portable: portableName,
-          zip: zipName
+          portable: portableName
         },
         launchEvidence,
         upgrade: `${legacyVersion} -> ${version}`,
@@ -368,8 +348,8 @@ async function verifyReleaseArtifacts() {
     "Release architecture mismatch."
   );
   assert(
-    manifest.autoUpdateEnabled === false,
-    "Release unexpectedly enables automatic updates."
+    manifest.autoUpdateEnabled === true,
+    "Release does not enable automatic updates."
   );
   assert(
     manifest.packageAudit?.asar === true &&
@@ -397,7 +377,6 @@ async function verifyReleaseArtifacts() {
   for (const name of [
     setupName,
     portableName,
-    zipName,
     "win-unpacked/GitNest.exe"
   ]) {
     const record = requiredRecords.get(name);
@@ -438,6 +417,47 @@ async function verifyReleaseArtifacts() {
         signature.status === expectedSignatureStatus
     ),
     "Release signature observations do not match the configured signing state."
+  );
+  const updateManifest = JSON.parse(
+    await readFile(
+      join(releaseDirectory, "latest.json"),
+      "utf8"
+    )
+  );
+  assertEqual(
+    updateManifest.schemaVersion,
+    1,
+    "Update manifest schema mismatch."
+  );
+  assertEqual(
+    updateManifest.product,
+    "GitNest",
+    "Update manifest product mismatch."
+  );
+  assertEqual(
+    updateManifest.version,
+    version,
+    "Update manifest version mismatch."
+  );
+  assertEqual(
+    updateManifest.tag,
+    `v${version}`,
+    "Update manifest tag mismatch."
+  );
+  assertEqual(
+    updateManifest.asset?.name,
+    setupName,
+    "Update manifest installer mismatch."
+  );
+  assertEqual(
+    updateManifest.asset?.sizeBytes,
+    requiredRecords.get(setupName)?.size,
+    "Update manifest installer size mismatch."
+  );
+  assertEqual(
+    String(updateManifest.asset?.sha256).toUpperCase(),
+    requiredRecords.get(setupName)?.sha256,
+    "Update manifest installer checksum mismatch."
   );
   return manifest;
 }
@@ -546,37 +566,6 @@ async function assertHostIsClean(folders) {
   assert(
     !(await pathExists(folders.startMenuShortcut)),
     `An existing GitNest Start Menu shortcut was found: ${folders.startMenuShortcut}`
-  );
-}
-
-async function extractReleaseZip(destination) {
-  await mkdir(destination, { recursive: true });
-  const listing = await runProcess(
-    "tar.exe",
-    ["-tf", zipPath],
-    { timeoutMs: 60_000 }
-  );
-  for (const entry of listing.stdout
-    .split(/\r?\n/)
-    .filter(Boolean)) {
-    const normalized = entry.replace(/\\/g, "/");
-    assert(
-      !normalized.startsWith("/") &&
-        !/^[A-Za-z]:/.test(normalized) &&
-        !normalized
-          .split("/")
-          .some((segment) => segment === ".."),
-      `ZIP contains an unsafe path: ${entry}`
-    );
-  }
-  await runProcess(
-    "tar.exe",
-    ["-xf", zipPath, "-C", destination],
-    { timeoutMs: 180_000 }
-  );
-  await assertFile(
-    join(destination, "GitNest.exe"),
-    "Extracted ZIP is missing GitNest.exe."
   );
 }
 
@@ -812,6 +801,57 @@ async function runLaunchScenario(options) {
       ),
       `${options.label} startup page has horizontal overflow.`
     );
+    const versionDialog = await launch.cdp.evaluate(`(async () => {
+      const waitForRender = () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() =>
+            requestAnimationFrame(resolve)
+          )
+        );
+      const helpButton = document.querySelector(
+        ".titlebar-help-menu > button"
+      );
+      helpButton?.click();
+      await waitForRender();
+      const versionItem = [...document.querySelectorAll(
+        '[role="menuitem"]'
+      )].find((element) =>
+        element.textContent?.trim().startsWith("版本 v")
+      );
+      versionItem?.click();
+      await waitForRender();
+      const title = document.querySelector(
+        "#version-dialog-title"
+      )?.textContent?.trim() ?? "";
+      const updateBridgeReady =
+        typeof window.gitnest.update?.getState === "function" &&
+        typeof window.gitnest.update?.check === "function";
+      const closeButton = [...document.querySelectorAll(
+        ".version-dialog button"
+      )].find(
+        (element) =>
+          element.textContent?.trim() === "关闭"
+      );
+      closeButton?.click();
+      return {
+        title,
+        updateBridgeReady,
+        opened: Boolean(versionItem && title)
+      };
+    })()`);
+    assert(
+      versionDialog.opened,
+      `${options.label} version dialog did not open from the Help menu.`
+    );
+    assertEqual(
+      versionDialog.title,
+      `版本 v${options.expectedVersion}`,
+      `${options.label} version dialog title mismatch.`
+    );
+    assert(
+      versionDialog.updateBridgeReady,
+      `${options.label} update bridge is unavailable.`
+    );
     if (options.screenshotPath) {
       await setWindowSize(launch.cdp, 1440, 900);
       await capture(
@@ -825,7 +865,8 @@ async function runLaunchScenario(options) {
       electronVersion:
         runtimeInfo.electronVersion,
       startupMs: launch.startupMs,
-      rendererNodeGlobals: false
+      rendererNodeGlobals: false,
+      versionDialog: true
     };
   } finally {
     await closeApplication(launch);
@@ -855,7 +896,8 @@ async function launchApplication({
       cwd: dirname(executable),
       env: {
         ...process.env,
-        ELECTRON_RENDERER_URL: ""
+        ELECTRON_RENDERER_URL: "",
+        GITNEST_DISABLE_UPDATE_CHECK: "1"
       },
       shell: false,
       windowsHide: true,

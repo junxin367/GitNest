@@ -1,10 +1,5 @@
-export const WORKSPACE_SCHEMA_VERSION = 1;
-export const WORKSPACE_CATALOG_SCHEMA_VERSION = 2;
-
-export type WorkspaceEntryKind =
-  | "workspace-meta-repository"
-  | "workspace-directory"
-  | "standalone-repository";
+export const WORKSPACE_SCHEMA_VERSION = 2;
+export const WORKSPACE_CATALOG_SCHEMA_VERSION = 3;
 
 export interface RepositoryTarget {
   repositoryId: string;
@@ -58,48 +53,24 @@ export interface RepositoryGroup {
   collapsed: boolean;
 }
 
-interface WorkspaceEntryBase {
-  id: string;
-  displayName: string;
+export interface WorkspaceRoot {
   path: string;
   canonicalPath: string;
   excludes: string[];
-  order: number;
-  groups: RepositoryGroup[];
-  scanIssues: WorkspaceScanIssue[];
-  lastScannedAt: string;
 }
-
-export interface AggregateWorkspaceEntry
-  extends WorkspaceEntryBase {
-  kind: "workspace-meta-repository";
-  rootTarget: RepositoryTarget;
-}
-
-export interface DirectoryWorkspaceEntry
-  extends WorkspaceEntryBase {
-  kind: "workspace-directory";
-}
-
-export interface StandaloneRepositoryEntry
-  extends WorkspaceEntryBase {
-  kind: "standalone-repository";
-  target: RepositoryTarget;
-}
-
-export type WorkspaceEntry =
-  | AggregateWorkspaceEntry
-  | DirectoryWorkspaceEntry
-  | StandaloneRepositoryEntry;
 
 export interface Workspace {
   schemaVersion: typeof WORKSPACE_SCHEMA_VERSION;
   id: string;
   name: string;
-  entries: WorkspaceEntry[];
+  path?: string;
+  canonicalPath?: string;
+  excludes: string[];
+  groups: RepositoryGroup[];
+  scanIssues: WorkspaceScanIssue[];
+  lastScannedAt?: string;
   repositories: WorkspaceRepository[];
   worktrees: WorkspaceWorktree[];
-  selectedEntryId?: string;
   selectedTarget?: RepositoryTarget;
   updatedAt: string;
 }
@@ -117,15 +88,6 @@ export interface WorkspaceCatalog {
   updatedAt: string;
 }
 
-export interface WorkspaceRootDefinition {
-  id: string;
-  displayName: string;
-  path: string;
-  canonicalPath: string;
-  excludes: string[];
-  order: number;
-}
-
 export function createEmptyWorkspace(
   now = new Date().toISOString()
 ): Workspace {
@@ -133,7 +95,9 @@ export function createEmptyWorkspace(
     schemaVersion: WORKSPACE_SCHEMA_VERSION,
     id: "default",
     name: "GitNest Workspace",
-    entries: [],
+    excludes: [],
+    groups: [],
+    scanIssues: [],
     repositories: [],
     worktrees: [],
     updatedAt: now

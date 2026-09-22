@@ -6,7 +6,7 @@ import type {
   WorkspaceFileSystem
 } from "../ports/workspace-filesystem";
 import type {
-  WorkspaceRootDefinition,
+  WorkspaceRoot,
   WorkspaceScanIssue
 } from "../domain/workspace";
 import { WorkspaceError } from "../errors/workspace-error";
@@ -39,7 +39,7 @@ export interface DiscoveredRepository {
 }
 
 export interface WorkspaceRootScan {
-  root: WorkspaceRootDefinition;
+  root: WorkspaceRoot;
   repositories: DiscoveredRepository[];
   issues: WorkspaceScanIssue[];
   scannedAt: string;
@@ -63,13 +63,13 @@ export class WorkspaceScanner {
   }
 
   async scanRoot(
-    root: WorkspaceRootDefinition,
+    root: WorkspaceRoot,
     options: WorkspaceScanOptions = {}
   ): Promise<WorkspaceRootScan> {
     assertNotCancelled(options.signal);
 
     const normalizedRoot = this.#fileSystem.normalizePath(root.path);
-    const normalizedDefinition: WorkspaceRootDefinition = {
+    const normalizedDefinition: WorkspaceRoot = {
       ...root,
       path: normalizedRoot.path,
       canonicalPath: normalizedRoot.canonicalPath
@@ -99,21 +99,17 @@ export class WorkspaceScanner {
     const normalizedRootRealPath =
       this.#fileSystem.normalizePath(rootRealPath);
     const excludedNames = new Set<string>();
-    const excludedRelativePaths = new Set<string>();
-    for (const value of [
-      ...DEFAULT_WORKSPACE_EXCLUDES,
-      ...root.excludes
-    ]) {
+    for (const value of DEFAULT_WORKSPACE_EXCLUDES) {
       const normalizedExclude = normalizeExclude(value);
-      if (!normalizedExclude) {
-        continue;
-      }
-      if (normalizedExclude.includes("/")) {
-        excludedRelativePaths.add(normalizedExclude);
-      } else {
+      if (normalizedExclude) {
         excludedNames.add(normalizedExclude);
       }
     }
+    const excludedRelativePaths = new Set(
+      root.excludes
+        .map(normalizeExclude)
+        .filter(Boolean)
+    );
 
     const visit = async (
       directoryPath: string,

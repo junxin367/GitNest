@@ -498,10 +498,27 @@ const commands: WorktreeCommandController = {
 };
 
 const workspace: WorkspaceDetailsDto = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   id: "workspace",
   name: "Workspace",
-  entries: [],
+  path: "C:\\repo",
+  canonicalPath: "c:\\repo",
+  excludes: [],
+  groups: [
+    {
+      id: "group",
+      name: "原/根仓库",
+      targets: [
+        {
+          repositoryId: "repository",
+          worktreeId: "worktree"
+        }
+      ],
+      collapsed: false
+    }
+  ],
+  scanIssues: [],
+  lastScannedAt: "2026-09-10T00:00:00.000Z",
   repositories: [
     {
       id: "repository",
@@ -537,10 +554,26 @@ const workspace: WorkspaceDetailsDto = {
 
 const workspaceWithTwoWorktrees: WorkspaceDetailsDto = {
   ...workspace,
-  entries: [],
   id: "workspace",
   name: "Workspace",
-  schemaVersion: 1,
+  schemaVersion: 2,
+  groups: [
+    {
+      id: "group",
+      name: "原/根仓库",
+      targets: [
+        {
+          repositoryId: "repository",
+          worktreeId: "worktree"
+        },
+        {
+          repositoryId: "repository",
+          worktreeId: "linked"
+        }
+      ],
+      collapsed: false
+    }
+  ],
   selectedTarget: {
     repositoryId: "repository",
     worktreeId: "worktree"

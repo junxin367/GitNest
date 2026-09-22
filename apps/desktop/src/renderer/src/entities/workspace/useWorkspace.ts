@@ -7,11 +7,8 @@ import {
 } from "react";
 
 import type {
-  AddWorkspaceEntryRequest,
-  RemoveWorkspaceEntryRequest,
   RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
-  UpdateWorkspaceEntryRequest,
   WorkspaceDetailsDto,
   WorkspaceErrorDto,
   WorkspaceMonitorStateDto,
@@ -19,8 +16,6 @@ import type {
   WorkspaceRuntimeStateDto,
   WorkspaceSummaryDto
 } from "@gitnest/contracts";
-
-import { addWorkspaceEntries } from "./addWorkspaceEntries";
 
 type WorkspaceOperation =
   | "loading"
@@ -38,6 +33,7 @@ export interface WorkspaceController {
   monitor: WorkspaceMonitorStateDto | null;
   error: WorkspaceErrorDto | null;
   notice: string | null;
+  cleanupWarning: string | null;
   operation: WorkspaceOperation;
   busy: boolean;
   createWorkspace(): Promise<boolean>;
@@ -47,23 +43,14 @@ export interface WorkspaceController {
     name: string
   ): Promise<boolean>;
   deleteWorkspace(workspaceId: string): Promise<boolean>;
-  chooseDirectory(): Promise<void>;
-  addManualPath(path: string): Promise<boolean>;
-  addDroppedFiles(files: File[]): Promise<void>;
   refresh(): Promise<void>;
   rescan(): Promise<boolean>;
-  removeEntry(
-    entryId: string,
-    target?: RepositoryTargetDto
-  ): Promise<boolean>;
-  selectEntry(entryId: string): Promise<void>;
+  removeRepository(target: RepositoryTargetDto): Promise<boolean>;
   selectTarget(target: RepositoryTargetDto): Promise<boolean>;
   setGroupCollapsed(
-    entryId: string,
     groupId: string,
     collapsed: boolean
   ): Promise<void>;
-  updateEntry(request: UpdateWorkspaceEntryRequest): Promise<boolean>;
   clearFeedback(): void;
 }
 
@@ -77,15 +64,43 @@ export function useWorkspace(): WorkspaceController {
     useState<WorkspaceOperation>("loading");
   const targetSelectionSequenceRef = useRef(0);
   const pendingTargetSelectionsRef = useRef(new Set<number>());
+  const workspaceTransitionSequenceRef = useRef(0);
+  const workspaceTransitionPendingRef = useRef(false);
+  const workspaceRequestSequenceRef = useRef(0);
+  const currentWorkspaceIdRef = useRef<string | undefined>(undefined);
   const workspace = runtimeState?.workspace ?? null;
+  const acceptRuntimeState = useCallback((state: WorkspaceRuntimeStateDto) => {
+    if (currentWorkspaceIdRef.current !== state.workspace.id) {
+      if (!workspaceTransitionPendingRef.current) {
+        setOperation(null);
+        setError(null);
+        setNotice(null);
+      }
+      currentWorkspaceIdRef.current = state.workspace.id;
+      workspaceRequestSequenceRef.current += 1;
+      targetSelectionSequenceRef.current += 1;
+      pendingTargetSelectionsRef.current.clear();
+    }
+    setRuntimeState(state);
+  }, []);
+  const captureRequestScope = useCallback(() => {
+    const workspaceId = workspace?.id;
+    const sequence = workspaceRequestSequenceRef.current;
+    return () =>
+      workspaceId === currentWorkspaceIdRef.current &&
+      sequence === workspaceRequestSequenceRef.current &&
+      !workspaceTransitionPendingRef.current;
+  }, [workspace?.id]);
   const setWorkspace = useCallback(
     (nextWorkspace: WorkspaceDetailsDto) => {
       setRuntimeState((current) =>
         current
-          ? {
-              ...current,
-              workspace: nextWorkspace
-            }
+          ? current.workspace.id !== nextWorkspace.id
+            ? current
+            : {
+                ...current,
+                workspace: nextWorkspace
+              }
           : {
               workspace: nextWorkspace,
               workspaces: [
@@ -120,15 +135,24 @@ export function useWorkspace(): WorkspaceController {
   }, []);
 
   const beginWorkspaceTransition = useCallback(() => {
+    const transitionId = ++workspaceTransitionSequenceRef.current;
+    workspaceRequestSequenceRef.current += 1;
+    workspaceTransitionPendingRef.current = true;
     targetSelectionSequenceRef.current += 1;
     pendingTargetSelectionsRef.current.clear();
     setOperation("switching");
     setError(null);
     setNotice(null);
+    return transitionId;
   }, []);
 
   const createWorkspace = useCallback(
     async (): Promise<boolean> => {
+      const isCurrent = captureRequestScope();
+      if (!isCurrent()) {
+        return false;
+      }
+      let transitionId: number | undefined;
       setOperation("selecting");
       setError(null);
       setNotice(null);
@@ -136,6 +160,9 @@ export function useWorkspace(): WorkspaceController {
       try {
         const selection =
           await window.gitnest.workspace.selectDirectory();
+        if (!isCurrent()) {
+          return false;
+        }
         if (!selection.ok) {
           setError(selection.error);
           return false;
@@ -144,138 +171,94 @@ export function useWorkspace(): WorkspaceController {
           return false;
         }
 
-        const previousWorkspaceId = workspace?.id;
-        const previousWorkspaceWasEmpty =
-          workspace?.entries.length === 0;
-        beginWorkspaceTransition();
+        transitionId = beginWorkspaceTransition();
+        setOperation("scanning");
         const created = await window.gitnest.workspace.create({
-          name: workspaceNameFromPath(selection.value.path)
+          name: workspaceNameFromPath(selection.value.path),
+          path: selection.value.path
         });
+        if (transitionId !== workspaceTransitionSequenceRef.current) {
+          return false;
+        }
         if (!created.ok) {
           setError(created.error);
           return false;
         }
 
-        setRuntimeState(created.value);
-        setOperation("scanning");
-        const added = await window.gitnest.workspace.addEntry({
-          path: selection.value.path,
-          source: "picker"
-        });
-        if (!added.ok) {
-          let restoredState: WorkspaceRuntimeStateDto | null =
-            null;
-          let rollbackFailure: unknown = null;
-
-          try {
-            const removed =
-              await window.gitnest.workspace.delete({
-                workspaceId: created.value.workspace.id
-              });
-            if (!removed.ok) {
-              rollbackFailure = removed.error;
-            } else {
-              restoredState = removed.value;
-              if (
-                previousWorkspaceId &&
-                restoredState.workspace.id !==
-                  previousWorkspaceId
-              ) {
-                const switched =
-                  await window.gitnest.workspace.switch({
-                    workspaceId: previousWorkspaceId
-                  });
-                if (switched.ok) {
-                  restoredState = switched.value;
-                } else {
-                  rollbackFailure = switched.error;
-                }
-              }
-            }
-          } catch (reason) {
-            rollbackFailure = reason;
-          }
-
-          if (restoredState) {
-            setRuntimeState(restoredState);
-          }
-          setError(
-            rollbackFailure
-              ? withRollbackFailure(
-                  added.error,
-                  rollbackFailure
-                )
-              : added.error
-          );
-          return false;
-        }
-
-        const createdWorkspace = added.value.workspace;
-        let finalState = replaceActiveWorkspace(
-          created.value,
-          createdWorkspace
-        );
-        if (
-          previousWorkspaceWasEmpty &&
-          previousWorkspaceId &&
-          previousWorkspaceId !== createdWorkspace.id
-        ) {
-          const removedPrevious =
-            await window.gitnest.workspace.delete({
-              workspaceId: previousWorkspaceId
-            });
-          if (!removedPrevious.ok) {
-            setRuntimeState(finalState);
-            setError(removedPrevious.error);
-            return true;
-          }
-          finalState = removedPrevious.value;
-        }
-        setRuntimeState(finalState);
+        const createdWorkspace = created.value.workspace;
+        acceptRuntimeState(created.value);
         setNotice(
-          `Workspace“${createdWorkspace.name}”已创建并完成目录扫描。`
+          `Workspace“${createdWorkspace.name}”已创建并完成目录扫描。` +
+          (created.value.cleanupWarning
+            ? ` ${created.value.cleanupWarning}`
+            : "")
         );
         return true;
       } catch (reason) {
-        setUnexpectedError(reason);
+        if (
+          transitionId === undefined
+            ? isCurrent()
+            : transitionId === workspaceTransitionSequenceRef.current
+        ) {
+          setUnexpectedError(reason);
+        }
         return false;
       } finally {
-        setOperation(null);
+        if (
+          transitionId === undefined
+            ? isCurrent()
+            : transitionId === workspaceTransitionSequenceRef.current
+        ) {
+          workspaceTransitionPendingRef.current = false;
+          setOperation(null);
+        }
       }
     },
     [
       beginWorkspaceTransition,
-      setUnexpectedError,
-      workspace?.entries.length,
-      workspace?.id
+      acceptRuntimeState,
+      captureRequestScope,
+      setUnexpectedError
     ]
   );
 
   const switchWorkspace = useCallback(
     async (workspaceId: string): Promise<boolean> => {
-      if (workspace?.id === workspaceId) {
+      if (
+        currentWorkspaceIdRef.current === workspaceId &&
+        !workspaceTransitionPendingRef.current
+      ) {
         return true;
       }
-      beginWorkspaceTransition();
+      const transitionId = beginWorkspaceTransition();
       try {
         const result = await window.gitnest.workspace.switch({
           workspaceId
         });
+        if (transitionId !== workspaceTransitionSequenceRef.current) {
+          return false;
+        }
         if (result.ok) {
-          setRuntimeState(result.value);
+          acceptRuntimeState(result.value);
           return true;
         }
         setError(result.error);
         return false;
       } catch (reason) {
-        setUnexpectedError(reason);
+        if (transitionId === workspaceTransitionSequenceRef.current) {
+          setUnexpectedError(reason);
+        }
         return false;
       } finally {
-        setOperation(null);
+        if (transitionId === workspaceTransitionSequenceRef.current) {
+          workspaceTransitionPendingRef.current = false;
+          setOperation(null);
+        }
       }
     },
     [
       beginWorkspaceTransition,
+      acceptRuntimeState,
       setUnexpectedError,
       workspace?.id
     ]
@@ -286,6 +269,10 @@ export function useWorkspace(): WorkspaceController {
       workspaceId: string,
       name: string
     ): Promise<boolean> => {
+      const isCurrent = captureRequestScope();
+      if (!isCurrent()) {
+        return false;
+      }
       setOperation("saving");
       setError(null);
       setNotice(null);
@@ -294,70 +281,95 @@ export function useWorkspace(): WorkspaceController {
           workspaceId,
           name
         });
+        if (!isCurrent()) {
+          return false;
+        }
         if (result.ok) {
-          setRuntimeState(result.value);
+          setRuntimeState((current) =>
+            current && current.workspace.id !== result.value.workspace.id
+              ? current
+              : result.value
+          );
           setNotice("Workspace 名称已更新。");
           return true;
         }
         setError(result.error);
         return false;
       } catch (reason) {
-        setUnexpectedError(reason);
+        if (isCurrent()) {
+          setUnexpectedError(reason);
+        }
         return false;
       } finally {
-        setOperation(null);
+        if (isCurrent()) {
+          setOperation(null);
+        }
       }
     },
-    [setUnexpectedError]
+    [captureRequestScope, setUnexpectedError]
   );
 
   const deleteWorkspace = useCallback(
     async (workspaceId: string): Promise<boolean> => {
-      beginWorkspaceTransition();
+      const transitionId = beginWorkspaceTransition();
       try {
         const result = await window.gitnest.workspace.delete({
           workspaceId
         });
+        if (transitionId !== workspaceTransitionSequenceRef.current) {
+          return false;
+        }
         if (result.ok) {
-          setRuntimeState(result.value);
+          acceptRuntimeState(result.value);
           setNotice(
-            "Workspace 已从 GitNest 中删除；磁盘上的仓库文件未被删除。"
+            "Workspace 已从 GitNest 中删除；磁盘上的仓库文件未被删除。" +
+            (result.value.cleanupWarning ? ` ${result.value.cleanupWarning}` : "")
           );
           return true;
         }
         setError(result.error);
         return false;
       } catch (reason) {
-        setUnexpectedError(reason);
+        if (transitionId === workspaceTransitionSequenceRef.current) {
+          setUnexpectedError(reason);
+        }
         return false;
       } finally {
-        setOperation(null);
+        if (transitionId === workspaceTransitionSequenceRef.current) {
+          workspaceTransitionPendingRef.current = false;
+          setOperation(null);
+        }
       }
     },
-    [beginWorkspaceTransition, setUnexpectedError]
+    [acceptRuntimeState, beginWorkspaceTransition, setUnexpectedError]
   );
 
   useEffect(() => {
     let active = true;
     let receivedStateEvent = false;
+    const requestSequence = workspaceRequestSequenceRef.current;
     const unsubscribe =
       window.gitnest.workspace.onStateChanged((state) => {
         if (active) {
           receivedStateEvent = true;
-          setRuntimeState(state);
+          acceptRuntimeState(state);
+          setOperation((current) => current === "loading" ? null : current);
         }
       });
 
     void window.gitnest.workspace
       .getState()
       .then((result) => {
-        if (!active) {
+        if (
+          !active ||
+          requestSequence !== workspaceRequestSequenceRef.current
+        ) {
           return;
         }
 
         if (result.ok) {
           if (!receivedStateEvent) {
-            setRuntimeState(result.value);
+            acceptRuntimeState(result.value);
           }
           setError(null);
         } else {
@@ -365,13 +377,13 @@ export function useWorkspace(): WorkspaceController {
         }
       })
       .catch((reason: unknown) => {
-        if (active) {
+        if (active && requestSequence === workspaceRequestSequenceRef.current) {
           setUnexpectedError(reason);
         }
       })
       .finally(() => {
         if (active) {
-          setOperation(null);
+          setOperation((current) => current === "loading" ? null : current);
         }
       });
 
@@ -379,133 +391,21 @@ export function useWorkspace(): WorkspaceController {
       active = false;
       unsubscribe();
     };
-  }, [setUnexpectedError]);
-
-  const addPaths = useCallback(
-    async (
-      paths: string[],
-      source: AddWorkspaceEntryRequest["source"]
-    ): Promise<boolean> => {
-      const uniquePaths = [...new Set(paths.filter(Boolean))];
-
-      if (uniquePaths.length === 0) {
-        setError({
-          code: "INVALID_REQUEST",
-          message: "没有可添加的目录路径。",
-          details: {}
-        });
-        return false;
-      }
-
-      setOperation("scanning");
-      setError(null);
-      setNotice(null);
-
-      try {
-        const result = await addWorkspaceEntries(
-          uniquePaths,
-          source,
-          workspace,
-          (request) =>
-            window.gitnest.workspace.addEntry(request)
-        );
-
-        if (result.workspace) {
-          setWorkspace(result.workspace);
-        }
-
-        if (result.failures.length > 0) {
-          const firstFailure = result.failures[0];
-          setError({
-            ...(firstFailure?.error ?? {
-              code: "SCAN_FAILED",
-              message: "部分目录未能添加。",
-              details: {}
-            }),
-            message:
-              result.added + result.duplicates > 0
-                ? `已处理 ${result.added + result.duplicates} 个目录，另有 ${result.failures.length} 个失败：${firstFailure?.error.message ?? "未知错误"}`
-                : firstFailure?.error.message ??
-                  "目录添加失败。",
-            details: {
-              ...(firstFailure?.error.details ?? {}),
-              failedCount: result.failures.length,
-              successfulCount: result.added,
-              duplicateCount: result.duplicates
-            }
-          });
-          return false;
-        }
-
-        setNotice(
-          result.duplicates === uniquePaths.length
-            ? "目录已存在，已定位到对应顶层条目。"
-            : result.duplicates > 0
-              ? `已添加 ${result.added} 个目录，另有 ${result.duplicates} 个重复目录已定位。`
-              : `已完成 ${uniquePaths.length} 个目录的只读扫描。`
-        );
-        return true;
-      } catch (reason) {
-        setUnexpectedError(reason);
-        return false;
-      } finally {
-        setOperation(null);
-      }
-    },
-    [setUnexpectedError, setWorkspace, workspace]
-  );
-
-  const chooseDirectory = useCallback(async () => {
-    setOperation("selecting");
-    setError(null);
-    setNotice(null);
-
-    try {
-      const result =
-        await window.gitnest.workspace.selectDirectory();
-
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-
-      if (!result.value.cancelled) {
-        await addPaths([result.value.path], "picker");
-      }
-    } catch (reason) {
-      setUnexpectedError(reason);
-    } finally {
-      setOperation((current) =>
-        current === "selecting" ? null : current
-      );
-    }
-  }, [addPaths, setUnexpectedError]);
-
-  const addManualPath = useCallback(
-    (path: string) => addPaths([path], "manual"),
-    [addPaths]
-  );
-
-  const addDroppedFiles = useCallback(
-    async (files: File[]) => {
-      try {
-        const paths = files.map((file) =>
-          window.gitnest.workspace.resolveDroppedPath(file)
-        );
-        await addPaths(paths, "drop");
-      } catch (reason) {
-        setUnexpectedError(reason);
-      }
-    },
-    [addPaths, setUnexpectedError]
-  );
+  }, [acceptRuntimeState, setUnexpectedError]);
 
   const refresh = useCallback(async () => {
+    const isCurrent = captureRequestScope();
+    if (!isCurrent()) {
+      return;
+    }
     setError(null);
     setNotice(null);
 
     try {
       const result = await window.gitnest.workspace.refresh();
+      if (!isCurrent()) {
+        return;
+      }
 
       if (result.ok) {
         setNotice("Workspace 刷新已加入操作中心。");
@@ -513,17 +413,26 @@ export function useWorkspace(): WorkspaceController {
         setError(result.error);
       }
     } catch (reason) {
-      setUnexpectedError(reason);
+      if (isCurrent()) {
+        setUnexpectedError(reason);
+      }
     }
-  }, [setUnexpectedError]);
+  }, [captureRequestScope, setUnexpectedError]);
 
   const rescan = useCallback(async (): Promise<boolean> => {
+    const isCurrent = captureRequestScope();
+    if (!isCurrent()) {
+      return false;
+    }
     setOperation("scanning");
     setError(null);
     setNotice(null);
 
     try {
       const result = await window.gitnest.workspace.rescan();
+      if (!isCurrent()) {
+        return false;
+      }
 
       if (result.ok) {
         setWorkspace(result.value);
@@ -534,30 +443,35 @@ export function useWorkspace(): WorkspaceController {
       setError(result.error);
       return false;
     } catch (reason) {
-      setUnexpectedError(reason);
+      if (isCurrent()) {
+        setUnexpectedError(reason);
+      }
       return false;
     } finally {
-      setOperation(null);
+      if (isCurrent()) {
+        setOperation(null);
+      }
     }
-  }, [setUnexpectedError, setWorkspace]);
+  }, [captureRequestScope, setUnexpectedError, setWorkspace]);
 
-  const removeEntry = useCallback(
-    async (
-      entryId: string,
-      target?: RepositoryTargetDto
-    ): Promise<boolean> => {
+  const removeRepository = useCallback(
+    async (target: RepositoryTargetDto): Promise<boolean> => {
+      const isCurrent = captureRequestScope();
+      if (!isCurrent()) {
+        return false;
+      }
       setOperation("saving");
       setError(null);
       setNotice(null);
 
-      const request: RemoveWorkspaceEntryRequest = {
-        entryId,
-        ...(target ? { target } : {})
-      };
-
       try {
         const result =
-          await window.gitnest.workspace.removeEntry(request);
+          await window.gitnest.workspace.removeRepository({
+            target
+          });
+        if (!isCurrent()) {
+          return false;
+        }
 
         if (result.ok) {
           setWorkspace(result.value);
@@ -570,39 +484,25 @@ export function useWorkspace(): WorkspaceController {
         setError(result.error);
         return false;
       } catch (reason) {
-        setUnexpectedError(reason);
+        if (isCurrent()) {
+          setUnexpectedError(reason);
+        }
         return false;
       } finally {
-        setOperation(null);
-      }
-    },
-    [setUnexpectedError, setWorkspace]
-  );
-
-  const selectEntry = useCallback(
-    async (entryId: string) => {
-      if (workspace?.selectedEntryId === entryId) {
-        return;
-      }
-
-      try {
-        const result = await window.gitnest.workspace.selectEntry({
-          entryId
-        });
-        if (result.ok) {
-          setWorkspace(result.value);
-        } else {
-          setError(result.error);
+        if (isCurrent()) {
+          setOperation(null);
         }
-      } catch (reason) {
-        setUnexpectedError(reason);
       }
     },
-    [setUnexpectedError, setWorkspace, workspace?.selectedEntryId]
+    [captureRequestScope, setUnexpectedError, setWorkspace]
   );
 
   const selectTarget = useCallback(
     async (target: RepositoryTargetDto) => {
+      const isCurrent = captureRequestScope();
+      if (!isCurrent()) {
+        return false;
+      }
       const requestId = ++targetSelectionSequenceRef.current;
       const selectionAlreadyPending =
         pendingTargetSelectionsRef.current.size > 0;
@@ -621,7 +521,7 @@ export function useWorkspace(): WorkspaceController {
         const result = await window.gitnest.workspace.selectTarget({
           target
         });
-        if (targetSelectionSequenceRef.current !== requestId) {
+        if (!isCurrent() || targetSelectionSequenceRef.current !== requestId) {
           return false;
         }
         if (result.ok) {
@@ -632,7 +532,7 @@ export function useWorkspace(): WorkspaceController {
           return false;
         }
       } catch (reason) {
-        if (targetSelectionSequenceRef.current === requestId) {
+        if (isCurrent() && targetSelectionSequenceRef.current === requestId) {
           setUnexpectedError(reason);
         }
         return false;
@@ -640,60 +540,39 @@ export function useWorkspace(): WorkspaceController {
         pendingTargetSelectionsRef.current.delete(requestId);
       }
     },
-    [setUnexpectedError, setWorkspace, workspace?.selectedTarget]
+    [captureRequestScope, setUnexpectedError, setWorkspace, workspace?.selectedTarget]
   );
 
   const setGroupCollapsed = useCallback(
     async (
-      entryId: string,
       groupId: string,
       collapsed: boolean
     ) => {
+      const isCurrent = captureRequestScope();
+      if (!isCurrent()) {
+        return;
+      }
       try {
         const result =
           await window.gitnest.workspace.setGroupCollapsed({
-            entryId,
             groupId,
             collapsed
           });
+        if (!isCurrent()) {
+          return;
+        }
         if (result.ok) {
           setWorkspace(result.value);
         } else {
           setError(result.error);
         }
       } catch (reason) {
-        setUnexpectedError(reason);
-      }
-    },
-    [setUnexpectedError, setWorkspace]
-  );
-
-  const updateEntry = useCallback(
-    async (
-      request: UpdateWorkspaceEntryRequest
-    ): Promise<boolean> => {
-      setOperation("saving");
-      setError(null);
-
-      try {
-        const result =
-          await window.gitnest.workspace.updateEntry(request);
-        if (result.ok) {
-          setWorkspace(result.value);
-          setNotice("顶层条目设置已保存。");
-          return true;
-        } else {
-          setError(result.error);
-          return false;
+        if (isCurrent()) {
+          setUnexpectedError(reason);
         }
-      } catch (reason) {
-        setUnexpectedError(reason);
-        return false;
-      } finally {
-        setOperation(null);
       }
     },
-    [setUnexpectedError, setWorkspace]
+    [captureRequestScope, setUnexpectedError, setWorkspace]
   );
 
   const clearFeedback = useCallback(() => {
@@ -710,22 +589,18 @@ export function useWorkspace(): WorkspaceController {
       monitor: runtimeState?.monitor ?? null,
       error,
       notice,
+      cleanupWarning: runtimeState?.cleanupWarning ?? null,
       operation,
       busy: operation !== null,
       createWorkspace,
       switchWorkspace,
       renameWorkspace,
       deleteWorkspace,
-      chooseDirectory,
-      addManualPath,
-      addDroppedFiles,
       refresh,
       rescan,
-      removeEntry,
-      selectEntry,
+      removeRepository,
       selectTarget,
       setGroupCollapsed,
-      updateEntry,
       clearFeedback
     }),
     [
@@ -734,6 +609,7 @@ export function useWorkspace(): WorkspaceController {
       runtimeState?.snapshots,
       runtimeState?.operations,
       runtimeState?.monitor,
+      runtimeState?.cleanupWarning,
       error,
       notice,
       operation,
@@ -741,16 +617,11 @@ export function useWorkspace(): WorkspaceController {
       switchWorkspace,
       renameWorkspace,
       deleteWorkspace,
-      chooseDirectory,
-      addManualPath,
-      addDroppedFiles,
       refresh,
       rescan,
-      removeEntry,
-      selectEntry,
+      removeRepository,
       selectTarget,
       setGroupCollapsed,
-      updateEntry,
       clearFeedback
     ]
   );
@@ -764,54 +635,4 @@ function workspaceNameFromPath(path: string): string {
     .at(-1);
 
   return (name || trimmed || "Workspace").slice(0, 120);
-}
-
-function replaceActiveWorkspace(
-  state: WorkspaceRuntimeStateDto,
-  workspace: WorkspaceDetailsDto
-): WorkspaceRuntimeStateDto {
-  const summary = {
-    id: workspace.id,
-    name: workspace.name,
-    updatedAt: workspace.updatedAt
-  };
-  const exists = state.workspaces.some(
-    (candidate) => candidate.id === workspace.id
-  );
-
-  return {
-    ...state,
-    workspace,
-    workspaces: exists
-      ? state.workspaces.map((candidate) =>
-          candidate.id === workspace.id
-            ? summary
-            : candidate
-        )
-      : [...state.workspaces, summary]
-  };
-}
-
-function withRollbackFailure(
-  error: WorkspaceErrorDto,
-  reason: unknown
-): WorkspaceErrorDto {
-  const rollbackMessage =
-    typeof reason === "object" &&
-    reason !== null &&
-    "message" in reason &&
-    typeof reason.message === "string"
-      ? reason.message
-      : reason instanceof Error
-        ? reason.message
-        : "无法恢复原 Workspace。";
-
-  return {
-    ...error,
-    message: `${error.message}；自动回滚失败：${rollbackMessage}`,
-    details: {
-      ...error.details,
-      rollbackFailure: rollbackMessage
-    }
-  };
 }

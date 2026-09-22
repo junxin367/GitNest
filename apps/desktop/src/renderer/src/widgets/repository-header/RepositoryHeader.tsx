@@ -14,8 +14,9 @@ import type {
 } from "../../app/navigation";
 import {
   findTargetSnapshot,
+  filterSnapshotsToTargets,
   getSnapshotChangeCount,
-  listActiveWorkspaceTargets,
+  listWorkspaceTargets,
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
 import { useRepositoryBranchOptions } from "../../entities/repository/useRepositoryBranchOptions";
@@ -38,7 +39,6 @@ interface RepositoryHeaderProps {
   commandCompletionVersion: number;
   commandLocked: boolean;
   workspaceCommandBusy: boolean;
-  workspaceRepositoryCount: number;
   onRefresh(): void;
   onFetch(): void;
   onFetchWorkspace(): void;
@@ -92,7 +92,6 @@ export function RepositoryHeader({
   commandCompletionVersion,
   commandLocked,
   workspaceCommandBusy,
-  workspaceRepositoryCount,
   onRefresh,
   onFetch,
   onFetchWorkspace,
@@ -122,22 +121,11 @@ export function RepositoryHeader({
     selected?.worktree?.name ??
     selected?.repository?.name ??
     "当前仓库";
-  const workspaceRootPath =
-    workspace?.entries.find(
-      (entry) => entry.kind === "workspace-meta-repository"
-    )?.path ??
-    workspace?.entries[0]?.path ??
-    "Workspace 根目录不可用";
-  const selectedWorkspaceEntry =
-    workspace?.entries.find(
-      (entry) => entry.id === workspace.selectedEntryId
-    ) ?? workspace?.entries[0];
   const workspaceContextName =
-    selectedWorkspaceEntry?.displayName ??
     workspace?.name ??
     "GitNest Workspace";
   const workspaceContextPath =
-    selectedWorkspaceEntry?.path ?? workspaceRootPath;
+    workspace?.path ?? "Workspace 根目录不可用";
   const contextName =
     view === "repository"
       ? repositoryName
@@ -192,9 +180,19 @@ export function RepositoryHeader({
     worktrees: selected?.repository?.worktreeIds.length ?? 0
   };
   const activeWorkspaceTargets =
-    listActiveWorkspaceTargets(workspace);
+    listWorkspaceTargets(workspace);
   const activeWorkspaceRepositoryCount = new Set(
     activeWorkspaceTargets.map((target) => target.repositoryId)
+  ).size;
+  const workspaceRepositoryCount = activeWorkspaceRepositoryCount;
+  const scopedSnapshots = filterSnapshotsToTargets(
+    snapshots,
+    activeWorkspaceTargets
+  );
+  const behindRepositoryCount = new Set(
+    scopedSnapshots
+      .filter((item) => !item.error && item.behind > 0)
+      .map((item) => item.repositoryId)
   ).size;
   const workspaceTabCounts: Partial<
     Record<WorkspaceTab, number>
@@ -282,7 +280,7 @@ export function RepositoryHeader({
           <Button variant="unstyled"
             aria-busy={refreshing}
             className="toolbar-button"
-            disabled={refreshing || !workspace?.entries.length}
+            disabled={refreshing || !workspace?.path}
             onClick={onRefresh}
             title="重扫 Workspace 并刷新仓库状态"
             type="button"
@@ -309,9 +307,13 @@ export function RepositoryHeader({
                     ? "预检中"
                     : "Pull"}
                 </span>
-                {workspaceRepositoryCount > 0 ? (
-                  <span className="toolbar-count">
-                    {workspaceRepositoryCount}
+                {behindRepositoryCount > 0 ? (
+                  <span
+                    className="toolbar-count"
+                    aria-label={`本地引用显示 ${behindRepositoryCount} 个仓库落后`}
+                    title="本地引用显示落后的仓库数；状态刷新不执行 Fetch"
+                  >
+                    {behindRepositoryCount}
                   </span>
                 ) : null}
               </Button>
@@ -560,10 +562,6 @@ export function RepositoryHeader({
               setBranchDialogOpen(false);
               onSwitchBranch(branch);
             }}
-            repositoryName={repositoryName}
-            repositoryPath={
-              selected?.worktree?.path ?? "工作目录不可用"
-            }
           />
         )}
       {externalApplications.error && (

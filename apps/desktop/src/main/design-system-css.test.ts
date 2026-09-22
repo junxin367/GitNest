@@ -45,6 +45,40 @@ const sharedSelectSource = readFileSync(
   ),
   "utf8"
 );
+const sharedDialogSource = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../renderer/src/shared/ui/Dialog.tsx",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+const globalSearchDialogSource = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../renderer/src/features/global-search/GlobalSearchDialog.tsx",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+const standardDialogSources = [
+  "../renderer/src/widgets/workspace-sidebar/WorkspaceDialogs.tsx",
+  "../renderer/src/widgets/repository-header/BranchSwitchDialog.tsx",
+  "../renderer/src/widgets/diff-workspace/DiffDiscardConfirmationDialog.tsx",
+  "../renderer/src/features/application-update/VersionDialog.tsx",
+  "../renderer/src/features/repository-command/RepositoryCommandDialog.tsx",
+  "../renderer/src/features/worktree-command/WorktreeCommandDialog.tsx",
+  "../renderer/src/pages/repository/RepositoryStashActions.tsx",
+  "../renderer/src/pages/settings/SettingsPage.tsx",
+  "../renderer/src/pages/settings/ApplicationSettingsPage.tsx"
+].map((path) =>
+  readFileSync(
+    fileURLToPath(new URL(path, import.meta.url)),
+    "utf8"
+  )
+);
 const designTokensCss = readFileSync(
   fileURLToPath(
     new URL(
@@ -377,6 +411,63 @@ describe("renderer design-system guardrails", () => {
     );
     expect(prototypeMenuGalleryHtml).not.toContain(
       "Large · 48px"
+    );
+  });
+
+  it("keeps standard dialogs on the shared component while search stays specialized", () => {
+    expect(sharedButtonCss).toMatch(
+      /\.gn-dialog\s*\{[\s\S]*?grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto;[\s\S]*?max-height:\s*min\(680px,\s*calc\(100vh - 48px\)\);/
+    );
+    expect(sharedButtonCss).toMatch(
+      /\.gn-dialog\[data-size="compact"\]\s*\{[^}]*width:\s*min\(520px,/
+    );
+    expect(sharedButtonCss).toMatch(
+      /\.gn-dialog\[data-size="target"\]\s*\{[^}]*width:\s*min\(560px,/
+    );
+    expect(sharedButtonCss).toMatch(
+      /\.gn-dialog\[data-size="information"\]\s*\{[^}]*width:\s*min\(620px,/
+    );
+    expect(sharedButtonCss).toMatch(
+      /\.gn-dialog__header\s*\{[\s\S]*?min-height:\s*56px;[\s\S]*?padding:\s*var\(--space-3\)\s+var\(--space-5\);/
+    );
+    expect(sharedButtonCss).toMatch(
+      /\.gn-dialog__icon\s*\{[\s\S]*?width:\s*32px;[\s\S]*?height:\s*32px;/
+    );
+    expect(sharedButtonCss).toMatch(
+      /\.gn-dialog__footer\s*\{[\s\S]*?min-height:\s*56px;[\s\S]*?justify-content:\s*flex-end;/
+    );
+    expect(sharedButtonCss).toMatch(
+      /\.gn-dialog__close\.gn-button:hover:not\(:disabled\),[\s\S]*?background:\s*transparent;[\s\S]*?border-color:\s*transparent;/
+    );
+    expect(sharedDialogSource).toContain(
+      'className="gn-dialog__header"'
+    );
+    expect(sharedDialogSource).not.toContain(
+      "headerDescription"
+    );
+    expect(sharedDialogSource).not.toContain("footerNote");
+
+    for (const source of standardDialogSources) {
+      expect(source).toContain('shared/ui/Dialog"');
+      expect(source).not.toContain(
+        'className="command-dialog-backdrop"'
+      );
+      expect(source).not.toContain(
+        'className="command-dialog-header"'
+      );
+      expect(source).not.toContain(
+        'className="command-dialog-footer"'
+      );
+    }
+
+    expect(globalSearchDialogSource).not.toContain(
+      'shared/ui/Dialog"'
+    );
+    expect(globalSearchDialogSource).toContain(
+      'className="global-search-backdrop"'
+    );
+    expect(globalSearchDialogSource).toContain(
+      'className="global-search-dialog"'
     );
   });
 
@@ -912,9 +1003,39 @@ describe("renderer design-system guardrails", () => {
     expect(prototypeShellHtml).toContain("<h3>代码注释</h3>");
   });
 
-  it("uses scoped editor colors for code-analysis source without changing ordinary Diff rows", () => {
+  it("uses the shared editor palette for code-analysis source and neutral Diff rows", () => {
+    expect(designTokensCss).toContain(
+      "--color-code-bg: #1f1f1f;"
+    );
+    expect(designTokensCss).toContain(
+      "--color-code-keyword: #c586c0;"
+    );
+    expect(designTokensCss).toContain(
+      "--color-code-type: #4ec9b0;"
+    );
+    expect(designTokensCss).toContain(
+      "--color-code-function: #dcdcaa;"
+    );
+    expect(designTokensCss).toContain(
+      "--color-code-property: #9cdcfe;"
+    );
+    expect(designTokensCss).toContain(
+      "--color-code-string: #ce9178;"
+    );
+    expect(designTokensCss).toContain(
+      "--color-code-comment: #6a9955;"
+    );
     expect(css).toContain(
       ".analysis-node-source-line .analysis-source-token.is-keyword"
+    );
+    expect(css).toContain(
+      "color: var(--color-code-keyword);"
+    );
+    expect(css).toContain(
+      "color: var(--color-code-type);"
+    );
+    expect(css).toContain(
+      "color: var(--color-code-function);"
     );
     expect(css).toContain(
       ".diff-viewer-search-hit.current"

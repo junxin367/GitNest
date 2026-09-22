@@ -76,6 +76,7 @@ await rm(join(releaseDirectory, ".icon-ico"), {
   force: true
 });
 await import("./audit-windows-release.mjs");
+await import("./generate-update-manifest.mjs");
 
 function runPnpm(args, extraEnvironment = {}) {
   return new Promise((resolvePromise, rejectPromise) => {

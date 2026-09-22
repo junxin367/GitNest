@@ -43,6 +43,7 @@ import {
   LANGUAGE_SERVER_LANGUAGES,
   type AiCommitMessageDto,
   type AiConnectionTestResultDto,
+  type AcknowledgeApplicationUpdatePromptRequest,
   type AccountRemovalImpactRequest,
   type AppSettingsDto,
   type AppSettingsLoadDto,
@@ -63,7 +64,6 @@ import {
   type GitReadErrorDto,
   type GitReadResult,
   type GenerateAiCommitMessageRequest,
-  type AddWorkspaceEntryRequest,
   type InstallLanguageServerRequest,
   type InstallableLanguageServerDto,
   type LanguageServerInstallResultDto,
@@ -81,7 +81,7 @@ import {
   type OpenExternalApplicationRequest,
   type OpenExternalTerminalRequest,
   type OpenFileLocationRequest,
-  type RemoveWorkspaceEntryRequest,
+  type RemoveWorkspaceRepositoryRequest,
   type RemoveAccountRequest,
   type RenameWorkspaceRequest,
   type RepositoryInspectionRequest,
@@ -100,19 +100,18 @@ import {
   type RepositoryQueryRequest,
   type RepositoryTabDto,
   type ReadCodeAnalysisFileRequest,
+  type RestoreCodeAnalysisSnapshotRequest,
   type RuntimeInfo,
   type RuntimePlatform,
   type SaveAccountRequest,
   type StartCodeAnalysisRequest,
   type RepositoryTargetDto,
   type SelectRepositoryTargetRequest,
-  type SelectWorkspaceEntryRequest,
   type SetWorkspaceGroupCollapsedRequest,
   type SwitchWorkspaceRequest,
   type TestAccountRequest,
   type TestAiConnectionRequest,
   type UnbindAccountRequest,
-  type UpdateWorkspaceEntryRequest,
   type UpdateAppSettingsRequest,
   type LastContentViewDto,
   type WorkspaceTabDto,
@@ -145,6 +144,7 @@ const MAX_OPERATION_ID_LENGTH = 160;
 const MAX_REPOSITORY_TARGET_ID_LENGTH = 512;
 const MAX_WORKSPACE_ID_LENGTH = 160;
 const MAX_WORKSPACE_NAME_LENGTH = 120;
+const MAX_WORKSPACE_PATH_LENGTH = 32_767;
 const MAX_WORKTREE_PATH_LENGTH = 32_767;
 const EXTERNAL_TERMINAL_KINDS = new Set([
   "windows-terminal",
@@ -317,6 +317,21 @@ export function registerIpcHandlers(
   );
 
   registerHandler(
+    IPC_CHANNELS.codeAnalysisRestoreSnapshot,
+    (
+      _event,
+      request
+    ): Promise<GitReadResult<boolean>> =>
+      captureGitRead(() =>
+        services.codeAnalysis.restoreSnapshot(
+          validateRestoreCodeAnalysisSnapshotRequest(
+            request
+          ).scope
+        )
+      )
+  );
+
+  registerHandler(
     IPC_CHANNELS.codeAnalysisCancel,
     (
       _event,
@@ -379,6 +394,42 @@ export function registerIpcHandlers(
       nodeVersion: process.versions.node,
       platform: process.platform as RuntimePlatform
     })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.updateGetState,
+    () => services.applicationUpdate.getState()
+  );
+
+  registerHandler(
+    IPC_CHANNELS.updateCheck,
+    () => services.applicationUpdate.check("manual")
+  );
+
+  registerHandler(
+    IPC_CHANNELS.updateAcknowledgePrompt,
+    (_event, request) =>
+      services.applicationUpdate.acknowledgePrompt(
+        validateAcknowledgeApplicationUpdatePromptRequest(
+          request
+        ).version
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.updateDownloadAndInstall,
+    () =>
+      services.applicationUpdate.downloadAndInstall()
+  );
+
+  registerHandler(
+    IPC_CHANNELS.updateOpenProjectPage,
+    () => services.applicationUpdate.openProjectPage()
+  );
+
+  registerHandler(
+    IPC_CHANNELS.updateOpenReleasePage,
+    () => services.applicationUpdate.openReleasePage()
   );
 
   registerHandler(
@@ -605,6 +656,11 @@ export function registerIpcHandlers(
       })
   );
 
+  registerHandler(
+    IPC_CHANNELS.windowIsMaximized,
+    (event): boolean => getSenderWindow(event).isMaximized()
+  );
+
   registerHandler(IPC_CHANNELS.windowMinimize, (event): void => {
     getSenderWindow(event).minimize();
   });
@@ -710,36 +766,16 @@ export function registerIpcHandlers(
       )
   );
 
-  registerHandler(
-    IPC_CHANNELS.workspaceAddEntry,
-    (_event, request) =>
-      captureWorkspace(() =>
-        services.workspace.addEntry(
-          validateAddWorkspaceEntryRequest(request)
-        )
-      )
-  );
-
   registerHandler(IPC_CHANNELS.workspaceRescan, () =>
     captureWorkspace(() => services.workspace.rescan())
   );
 
   registerHandler(
-    IPC_CHANNELS.workspaceUpdateEntry,
+    IPC_CHANNELS.workspaceRemoveRepository,
     (_event, request) =>
       captureWorkspace(() =>
-        services.workspace.updateEntry(
-          validateUpdateWorkspaceEntryRequest(request)
-        )
-      )
-  );
-
-  registerHandler(
-    IPC_CHANNELS.workspaceRemoveEntry,
-    (_event, request) =>
-      captureWorkspace(() =>
-        services.workspace.removeEntry(
-          validateRemoveWorkspaceEntryRequest(request)
+        services.workspace.excludeRepository(
+          validateRemoveWorkspaceRepositoryRequest(request)
         )
       )
   );
@@ -750,16 +786,6 @@ export function registerIpcHandlers(
       captureWorkspace(() =>
         services.workspace.setGroupCollapsed(
           validateSetGroupCollapsedRequest(request)
-        )
-      )
-  );
-
-  registerHandler(
-    IPC_CHANNELS.workspaceSelectEntry,
-    (_event, request) =>
-      captureWorkspace(() =>
-        services.workspace.selectEntry(
-          validateSelectWorkspaceEntryRequest(request).entryId
         )
       )
   );
@@ -1687,6 +1713,36 @@ export function validateClearAiApiKeyRequest(
   return { confirmed: request.confirmed };
 }
 
+export function validateAcknowledgeApplicationUpdatePromptRequest(
+  value: unknown
+): AcknowledgeApplicationUpdatePromptRequest {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Update prompt acknowledgement is invalid."
+    );
+  }
+  const version = (
+    value as Record<string, unknown>
+  ).version;
+  if (
+    typeof version !== "string" ||
+    !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(
+      version
+    )
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Update prompt version is invalid."
+    );
+  }
+  return { version };
+}
+
 export function validateStartCodeAnalysisRequest(
   request: unknown
 ): StartCodeAnalysisRequest {
@@ -1694,6 +1750,22 @@ export function validateStartCodeAnalysisRequest(
     throw new GitError(
       "INVALID_REQUEST",
       "Starting code analysis requires a supported scope."
+    );
+  }
+  const scope = requireEnum(
+    request.scope,
+    CODE_ANALYSIS_SCOPES
+  ) as CodeAnalysisScopeDto;
+  return { scope };
+}
+
+export function validateRestoreCodeAnalysisSnapshotRequest(
+  request: unknown
+): RestoreCodeAnalysisSnapshotRequest {
+  if (!isRecord(request)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Restoring code analysis requires a supported scope."
     );
   }
   const scope = requireEnum(
@@ -1948,11 +2020,12 @@ function validateInspectionRequest(
   };
 }
 
-function validateCreateWorkspaceRequest(
+export function validateCreateWorkspaceRequest(
   request: unknown
 ): CreateWorkspaceRequest {
   return {
-    name: readWorkspaceName(request)
+    name: readWorkspaceName(request),
+    path: readWorkspacePath(request)
   };
 }
 
@@ -2020,158 +2093,101 @@ function readWorkspaceName(request: unknown): string {
   return name;
 }
 
-function validateAddWorkspaceEntryRequest(
-  request: unknown
-): AddWorkspaceEntryRequest {
+function readWorkspacePath(request: unknown): string {
   if (
     !request ||
     typeof request !== "object" ||
     !("path" in request) ||
     typeof request.path !== "string" ||
-    !("source" in request) ||
-    !["picker", "manual", "drop"].includes(
-      String(request.source)
-    )
+    !request.path ||
+    request.path.length > MAX_WORKSPACE_PATH_LENGTH ||
+    request.path.includes("\0") ||
+    /[\r\n]/.test(request.path) ||
+    !isAbsolute(request.path)
   ) {
     throw new WorkspaceError(
       "INVALID_REQUEST",
-      "Adding a Workspace entry requires a path and source."
+      `Workspace paths must be absolute single-line paths of at most ${MAX_WORKSPACE_PATH_LENGTH} characters.`
+    );
+  }
+
+  return normalize(resolve(request.path));
+}
+
+export function validateRemoveWorkspaceRepositoryRequest(
+  request: unknown
+): RemoveWorkspaceRepositoryRequest {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    !("target" in request)
+  ) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "Removing a repository requires a repository target."
     );
   }
 
   return {
-    path: request.path,
-    source: request.source as AddWorkspaceEntryRequest["source"]
+    target: readWorkspaceRepositoryTarget(request.target)
   };
 }
 
-function validateUpdateWorkspaceEntryRequest(
-  request: unknown
-): UpdateWorkspaceEntryRequest {
+function readWorkspaceRepositoryTarget(
+  target: unknown
+): RepositoryTargetDto {
   if (
-    !request ||
-    typeof request !== "object" ||
-    !("entryId" in request) ||
-    typeof request.entryId !== "string"
+    !target ||
+    typeof target !== "object" ||
+    !("repositoryId" in target) ||
+    typeof target.repositoryId !== "string" ||
+    !target.repositoryId ||
+    target.repositoryId.length >
+      MAX_REPOSITORY_TARGET_ID_LENGTH ||
+    target.repositoryId.includes("\0") ||
+    /[\r\n]/.test(target.repositoryId) ||
+    !("worktreeId" in target) ||
+    typeof target.worktreeId !== "string" ||
+    !target.worktreeId ||
+    target.worktreeId.length > MAX_REPOSITORY_TARGET_ID_LENGTH ||
+    target.worktreeId.includes("\0") ||
+    /[\r\n]/.test(target.worktreeId)
   ) {
     throw new WorkspaceError(
       "INVALID_REQUEST",
-      "Updating a Workspace entry requires an entry id."
-    );
-  }
-
-  const displayName =
-    "displayName" in request ? request.displayName : undefined;
-  const order = "order" in request ? request.order : undefined;
-
-  if (
-    displayName !== undefined &&
-    typeof displayName !== "string"
-  ) {
-    throw new WorkspaceError(
-      "INVALID_REQUEST",
-      "Display name must be a string."
-    );
-  }
-
-  if (order !== undefined && typeof order !== "number") {
-    throw new WorkspaceError(
-      "INVALID_REQUEST",
-      "Workspace entry order must be numeric."
+      "Repository targets require repository and worktree ids."
     );
   }
 
   return {
-    entryId: request.entryId,
-    ...(displayName === undefined ? {} : { displayName }),
-    ...(order === undefined ? {} : { order })
+    repositoryId: target.repositoryId,
+    worktreeId: target.worktreeId
   };
 }
 
-function validateRemoveWorkspaceEntryRequest(
-  request: unknown
-): RemoveWorkspaceEntryRequest {
-  if (
-    !request ||
-    typeof request !== "object" ||
-    !("entryId" in request) ||
-    typeof request.entryId !== "string"
-  ) {
-    throw new WorkspaceError(
-      "INVALID_REQUEST",
-      "Removing a Workspace entry requires an entry id."
-    );
-  }
-
-  if ("target" in request && request.target !== undefined) {
-    if (
-      !request.target ||
-      typeof request.target !== "object" ||
-      !("repositoryId" in request.target) ||
-      typeof request.target.repositoryId !== "string" ||
-      !("worktreeId" in request.target) ||
-      typeof request.target.worktreeId !== "string"
-    ) {
-      throw new WorkspaceError(
-        "INVALID_REQUEST",
-        "Removing a repository requires a repository and worktree id."
-      );
-    }
-
-    return {
-      entryId: request.entryId,
-      target: {
-        repositoryId: request.target.repositoryId,
-        worktreeId: request.target.worktreeId
-      } satisfies RepositoryTargetDto
-    };
-  }
-
-  return { entryId: request.entryId };
-}
-
-function validateSetGroupCollapsedRequest(
+export function validateSetGroupCollapsedRequest(
   request: unknown
 ): SetWorkspaceGroupCollapsedRequest {
   if (
     !request ||
     typeof request !== "object" ||
-    !("entryId" in request) ||
-    typeof request.entryId !== "string" ||
     !("groupId" in request) ||
     typeof request.groupId !== "string" ||
+    !request.groupId ||
+    request.groupId.length > MAX_WORKSPACE_ID_LENGTH ||
     !("collapsed" in request) ||
     typeof request.collapsed !== "boolean"
   ) {
     throw new WorkspaceError(
       "INVALID_REQUEST",
-      "Updating a group requires entry, group, and collapsed state."
+      "Updating a group requires a group id and collapsed state."
     );
   }
 
   return {
-    entryId: request.entryId,
     groupId: request.groupId,
     collapsed: request.collapsed
   };
-}
-
-function validateSelectWorkspaceEntryRequest(
-  request: unknown
-): SelectWorkspaceEntryRequest {
-  if (
-    !request ||
-    typeof request !== "object" ||
-    !("entryId" in request) ||
-    typeof request.entryId !== "string"
-  ) {
-    throw new WorkspaceError(
-      "INVALID_REQUEST",
-      "Selecting a Workspace entry requires an entry id."
-    );
-  }
-
-  return { entryId: request.entryId };
 }
 
 function validateSelectRepositoryTargetRequest(

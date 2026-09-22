@@ -38,6 +38,14 @@ export interface FilteredCodeNodes {
   truncated: boolean;
 }
 
+export interface CodeNodeSearchIndexEntry {
+  readonly node: CodeGraphNodeDto;
+  readonly index: number;
+  readonly normalizedName: string;
+  readonly normalizedQualifiedName: string;
+  readonly normalizedPath: string;
+}
+
 export function codeNodeDisplayName(
   node: Pick<
     CodeGraphNodeDto,
@@ -145,20 +153,51 @@ export function searchCodeNodesWithMetadata(
   query: string,
   limit = MAX_VISIBLE_CODE_NODES
 ): FilteredCodeNodes {
+  return searchCodeNodeIndexWithMetadata(
+    createCodeNodeSearchIndex(nodes),
+    query,
+    limit
+  );
+}
+
+export function createCodeNodeSearchIndex(
+  nodes: CodeGraphNodeDto[]
+): readonly CodeNodeSearchIndexEntry[] {
+  const index: CodeNodeSearchIndexEntry[] = [];
+
+  for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex += 1) {
+    const node = nodes[nodeIndex];
+    if (!node || !SEARCHABLE_NODE_KINDS.has(node.kind)) {
+      continue;
+    }
+    index.push({
+      node,
+      index: nodeIndex,
+      normalizedName: normalizeSearchText(node.name),
+      normalizedQualifiedName: normalizeSearchText(
+        node.qualifiedName
+      ),
+      normalizedPath: normalizeSearchText(node.location.path)
+    });
+  }
+
+  return index;
+}
+
+export function searchCodeNodeIndexWithMetadata(
+  searchIndex: readonly CodeNodeSearchIndexEntry[],
+  query: string,
+  limit = MAX_VISIBLE_CODE_NODES
+): FilteredCodeNodes {
   const normalized = normalizeSearchText(query);
   const safeLimit = Math.max(0, Math.floor(limit));
   const ranked: NodeSearchResult[] = [];
   let matchCount = 0;
 
-  for (let index = 0; index < nodes.length; index += 1) {
-    const node = nodes[index];
-    if (!node || !SEARCHABLE_NODE_KINDS.has(node.kind)) {
-      continue;
-    }
+  for (const entry of searchIndex) {
     const result = {
-      node,
-      index,
-      score: nodeSearchScore(node, normalized)
+      entry,
+      score: nodeSearchScore(entry, normalized)
     };
     if (result.score === Number.POSITIVE_INFINITY) {
       continue;
@@ -192,7 +231,7 @@ export function searchCodeNodesWithMetadata(
   }
 
   return {
-    nodes: ranked.map((result) => result.node),
+    nodes: ranked.map((result) => result.entry.node),
     truncated: matchCount > safeLimit
   };
 }
@@ -206,41 +245,35 @@ export function countSearchableCodeNodes(
 }
 
 function nodeSearchScore(
-  node: CodeGraphNodeDto,
+  entry: CodeNodeSearchIndexEntry,
   query: string
 ): number {
   if (!query) {
-    return node.changed ? 0 : 10;
+    return entry.node.changed ? 0 : 10;
   }
-  const name = normalizeSearchText(node.name);
-  const qualifiedName = normalizeSearchText(
-    node.qualifiedName
-  );
-  const path = normalizeSearchText(node.location.path);
-  if (name === query) {
+  if (entry.normalizedName === query) {
     return 0;
   }
-  if (name.startsWith(query)) {
+  if (entry.normalizedName.startsWith(query)) {
     return 1;
   }
-  if (name.includes(query)) {
+  if (entry.normalizedName.includes(query)) {
     return 2;
   }
-  if (qualifiedName.startsWith(query)) {
+  if (entry.normalizedQualifiedName.startsWith(query)) {
     return 3;
   }
-  if (qualifiedName.includes(query)) {
+  if (entry.normalizedQualifiedName.includes(query)) {
     return 4;
   }
-  if (path.includes(query)) {
+  if (entry.normalizedPath.includes(query)) {
     return 5;
   }
   return Number.POSITIVE_INFINITY;
 }
 
 interface NodeSearchResult {
-  node: CodeGraphNodeDto;
-  index: number;
+  entry: CodeNodeSearchIndexEntry;
   score: number;
 }
 
@@ -250,16 +283,21 @@ function compareNodeSearchResults(
 ): number {
   return (
     left.score - right.score ||
-    Number(right.node.changed) -
-      Number(left.node.changed) ||
-    nodeKindRank(left.node) - nodeKindRank(right.node) ||
-    left.node.name.localeCompare(right.node.name, "zh-CN") ||
-    left.node.location.path.localeCompare(
-      right.node.location.path,
+    Number(right.entry.node.changed) -
+      Number(left.entry.node.changed) ||
+    nodeKindRank(left.entry.node) -
+      nodeKindRank(right.entry.node) ||
+    left.entry.node.name.localeCompare(
+      right.entry.node.name,
       "zh-CN"
     ) ||
-    left.node.location.line - right.node.location.line ||
-    left.index - right.index
+    left.entry.node.location.path.localeCompare(
+      right.entry.node.location.path,
+      "zh-CN"
+    ) ||
+    left.entry.node.location.line -
+      right.entry.node.location.line ||
+    left.entry.index - right.entry.index
   );
 }
 

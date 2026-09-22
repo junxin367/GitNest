@@ -10,8 +10,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   WORKSPACE_CATALOG_SCHEMA_VERSION,
-  createEmptyWorkspace,
-  type Workspace
+  WORKSPACE_SCHEMA_VERSION,
+  createEmptyWorkspace
 } from "@gitnest/workspace-core";
 import {
   createTemporaryDirectoryFixture,
@@ -19,6 +19,7 @@ import {
 } from "@gitnest/testkit";
 
 import { AtomicJsonStore } from "./atomic-json-store";
+import { migrateWorkspaceDocumentSet } from "./migrations/workspace-document";
 import { JsonRepositorySnapshotStore } from "./repository-snapshot.repository";
 import { JsonWorkspaceCollectionStore } from "./workspace-collection.repository";
 import { JsonWorkspaceSnapshotCollectionStore } from "./workspace-runtime-stores";
@@ -62,6 +63,74 @@ describe("JsonWorkspaceStore", () => {
     );
   });
 
+  it.each([
+    {
+      path: "C:\\workspace"
+    },
+    {
+      path: "C:\\workspace",
+      canonicalPath: "c:\\workspace"
+    },
+    {
+      lastScannedAt: "2026-09-22T10:00:00.000Z"
+    }
+  ])(
+    "rejects a Workspace whose root path fields are only partially persisted",
+    async (partialRoot) => {
+      temporary =
+        await createTemporaryDirectoryFixture(
+          "workspace-partial-root"
+        );
+      const filePath = join(
+        temporary.path,
+        "default.workspace.json"
+      );
+      await new AtomicJsonStore(filePath).write({
+        ...createEmptyWorkspace(
+          "2026-09-22T10:00:00.000Z"
+        ),
+        ...partialRoot
+      });
+
+      await expect(
+        new JsonWorkspaceStore(filePath).load()
+      ).rejects.toMatchObject({
+        code: "INVALID_PERSISTED_DATA"
+      });
+    }
+  );
+
+  it("rejects an unconfigured Workspace that still contains topology", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture(
+        "workspace-rootless-topology"
+      );
+    const filePath = join(
+      temporary.path,
+      "default.workspace.json"
+    );
+    const workspace = migrateWorkspaceDocumentSet(
+      createLegacyWorkspaceDocument()
+    )[0];
+    if (!workspace) {
+      throw new Error("Expected a migrated Workspace fixture.");
+    }
+    const invalid = structuredClone(workspace) as unknown as Record<
+      string,
+      unknown
+    >;
+    delete invalid.path;
+    delete invalid.canonicalPath;
+    delete invalid.lastScannedAt;
+    await new AtomicJsonStore(filePath).write(invalid);
+
+    await expect(
+      new JsonWorkspaceStore(filePath).load()
+    ).rejects.toMatchObject({
+      code: "INVALID_PERSISTED_DATA"
+    });
+  });
+
   it("promotes each legacy top-level entry into an independent Workspace", async () => {
     temporary =
       await createTemporaryDirectoryFixture(
@@ -73,7 +142,7 @@ describe("JsonWorkspaceStore", () => {
       "default.workspace.json"
     );
     const legacy = createLegacyWorkspaceWithTwoEntries();
-    await new JsonWorkspaceStore(legacyPath).save(legacy);
+    await new AtomicJsonStore(legacyPath).write(legacy);
     const store = new JsonWorkspaceCollectionStore({
       catalogFilePath: join(
         temporary.path,
@@ -112,23 +181,41 @@ describe("JsonWorkspaceStore", () => {
     const promotedId = catalog?.workspaces[1]?.id;
     expect(promotedId).toBeTruthy();
     await expect(store.loadWorkspace("default")).resolves.toMatchObject({
+      schemaVersion: WORKSPACE_SCHEMA_VERSION,
       id: "default",
       name: "Python",
-      entries: [{ id: "entry" }],
+      path: "C:\\workspace",
+      groups: [{ id: "group" }],
       repositories: [{ id: "repository" }],
-      worktrees: [{ id: "worktree" }],
-      selectedEntryId: "entry"
+      worktrees: [
+        { id: "worktree" },
+        { id: "worktree-linked" }
+      ]
     });
     await expect(
       store.loadWorkspace(promotedId as string)
     ).resolves.toMatchObject({
+      schemaVersion: WORKSPACE_SCHEMA_VERSION,
       id: promotedId,
       name: "Web",
-      entries: [{ id: "entry_web" }],
+      path: "C:\\workspace\\web",
+      groups: [
+        {
+          name: "原/根仓库",
+          targets: [
+            {
+              repositoryId: "repository_web",
+              worktreeId: "worktree_web"
+            }
+          ]
+        }
+      ],
       repositories: [{ id: "repository_web" }],
-      worktrees: [{ id: "worktree_web" }],
-      selectedEntryId: "entry_web"
+      worktrees: [{ id: "worktree_web" }]
     });
+    expect(
+      await store.loadWorkspace("default")
+    ).not.toHaveProperty("entries");
     await expect(
       readdir(
         join(temporary.path, "workspaces", "items")
@@ -141,107 +228,147 @@ describe("JsonWorkspaceStore", () => {
     );
   });
 
-  it("repairs a v1 catalog that previously wrapped all legacy entries in one Workspace", async () => {
-    temporary =
-      await createTemporaryDirectoryFixture(
-        "workspace-catalog-v1-repair"
-      );
-    const workspaceDirectory = join(
-      temporary.path,
-      "workspaces"
-    );
-    const legacyPath = join(
-      workspaceDirectory,
-      "default.workspace.json"
-    );
-    const itemDirectory = join(
-      workspaceDirectory,
-      "items"
-    );
+  it("keeps the original Workspace id on the selected legacy Entry and generates stable ids for the others", () => {
     const legacy = createLegacyWorkspaceWithTwoEntries();
-    const current = structuredClone(legacy);
-    current.entries[0]!.displayName = "Python Current";
-    current.updatedAt = "2026-09-20T09:30:00.000Z";
-    const existing = {
-      ...createEmptyWorkspace(
-        "2026-09-20T09:45:00.000Z"
-      ),
-      id: "workspace_existing",
-      name: "Existing Workspace"
-    };
+    legacy.selectedEntryId = "entry_web";
 
-    await new JsonWorkspaceStore(legacyPath).save(legacy);
-    await new JsonWorkspaceStore(
-      join(itemDirectory, "default.workspace.json")
-    ).save(current);
-    await new JsonWorkspaceStore(
-      join(
-        itemDirectory,
-        "workspace_existing.workspace.json"
+    const firstMigration =
+      migrateWorkspaceDocumentSet(legacy);
+    const secondMigration =
+      migrateWorkspaceDocumentSet(legacy);
+
+    expect(secondMigration).toEqual(firstMigration);
+    expect(firstMigration).toHaveLength(2);
+    expect(
+      firstMigration.find(
+        (workspace) => workspace.id === "default"
       )
-    ).save(existing);
-    await new AtomicJsonStore(
-      join(workspaceDirectory, "catalog.json")
-    ).write({
-      schemaVersion: 1,
-      activeWorkspaceId: existing.id,
-      workspaces: [
-        {
-          id: current.id,
-          name: current.name,
-          updatedAt: current.updatedAt
-        },
-        {
-          id: existing.id,
-          name: existing.name,
-          updatedAt: existing.updatedAt
-        }
-      ],
-      updatedAt: "2026-09-20T09:45:00.000Z"
+    ).toMatchObject({
+      id: "default",
+      name: "Web",
+      path: "C:\\workspace\\web"
     });
 
-    const store = new JsonWorkspaceCollectionStore({
-      catalogFilePath: join(
-        workspaceDirectory,
-        "catalog.json"
+    const promoted = firstMigration.find(
+      (workspace) => workspace.id !== "default"
+    );
+    expect(promoted).toMatchObject({
+      id: expect.stringMatching(
+        /^workspace_[a-f0-9]{32}$/
       ),
-      workspaceDirectory: itemDirectory,
-      legacyWorkspaceFilePath: legacyPath,
-      clock: () => "2026-09-20T10:00:00.000Z"
+      name: "Python",
+      worktrees: [
+        { id: "worktree" },
+        { id: "worktree-linked" }
+      ]
     });
-    const catalog = await store.loadCatalog();
-
-    expect(catalog).toMatchObject({
-      schemaVersion: WORKSPACE_CATALOG_SCHEMA_VERSION,
-      activeWorkspaceId: existing.id,
-      workspaces: [
-        {
-          id: "default",
-          name: "Python Current",
-          updatedAt: current.updatedAt
-        },
-        {
-          name: "Web",
-          updatedAt: current.updatedAt
-        },
-        {
-          id: existing.id,
-          name: existing.name,
-          updatedAt: existing.updatedAt
-        }
-      ],
-      updatedAt: "2026-09-20T10:00:00.000Z"
-    });
-    await expect(
-      store.loadWorkspace("default")
-    ).resolves.toMatchObject({
-      name: "Python Current",
-      entries: [{ id: "entry" }]
-    });
-    await expect(
-      store.loadWorkspace(existing.id)
-    ).resolves.toEqual(existing);
   });
+
+  it.each([1, 2] as const)(
+    "migrates a v%s catalog and splits every legacy multi-entry Workspace",
+    async (catalogSchemaVersion) => {
+      temporary =
+        await createTemporaryDirectoryFixture(
+          "workspace-catalog-v1-repair"
+        );
+      const workspaceDirectory = join(
+        temporary.path,
+        "workspaces"
+      );
+      const legacyPath = join(
+        workspaceDirectory,
+        "default.workspace.json"
+      );
+      const itemDirectory = join(
+        workspaceDirectory,
+        "items"
+      );
+      const legacy = createLegacyWorkspaceWithTwoEntries();
+      const current = structuredClone(legacy);
+      current.entries[0]!.displayName = "Python Current";
+      current.updatedAt = "2026-09-20T09:30:00.000Z";
+      const existing = {
+        ...createEmptyWorkspace(
+          "2026-09-20T09:45:00.000Z"
+        ),
+        id: "workspace_existing",
+        name: "Existing Workspace"
+      };
+
+      await new AtomicJsonStore(legacyPath).write(legacy);
+      await new AtomicJsonStore(
+        join(itemDirectory, "default.workspace.json")
+      ).write(current);
+      await new JsonWorkspaceStore(
+        join(
+          itemDirectory,
+          "workspace_existing.workspace.json"
+        )
+      ).save(existing);
+      await new AtomicJsonStore(
+        join(workspaceDirectory, "catalog.json")
+      ).write({
+        schemaVersion: catalogSchemaVersion,
+        activeWorkspaceId: existing.id,
+        workspaces: [
+          {
+            id: current.id,
+            name: current.name,
+            updatedAt: current.updatedAt
+          },
+          {
+            id: existing.id,
+            name: existing.name,
+            updatedAt: existing.updatedAt
+          }
+        ],
+        updatedAt: "2026-09-20T09:45:00.000Z"
+      });
+
+      const store = new JsonWorkspaceCollectionStore({
+        catalogFilePath: join(
+          workspaceDirectory,
+          "catalog.json"
+        ),
+        workspaceDirectory: itemDirectory,
+        legacyWorkspaceFilePath: legacyPath,
+        clock: () => "2026-09-20T10:00:00.000Z"
+      });
+      const catalog = await store.loadCatalog();
+
+      expect(catalog).toMatchObject({
+        schemaVersion: WORKSPACE_CATALOG_SCHEMA_VERSION,
+        activeWorkspaceId: existing.id,
+        workspaces: [
+          {
+            id: "default",
+            name: "Python Current",
+            updatedAt: current.updatedAt
+          },
+          {
+            name: "Web",
+            updatedAt: current.updatedAt
+          },
+          {
+            id: existing.id,
+            name: existing.name,
+            updatedAt: existing.updatedAt
+          }
+        ],
+        updatedAt: "2026-09-20T10:00:00.000Z"
+      });
+      await expect(
+        store.loadWorkspace("default")
+      ).resolves.toMatchObject({
+        name: "Python Current",
+        path: "C:\\workspace",
+        groups: [{ id: "group" }]
+      });
+      await expect(
+        store.loadWorkspace(existing.id)
+      ).resolves.toEqual(existing);
+    }
+  );
 
   it("rejects an unsupported persisted schema", async () => {
     temporary =
@@ -398,7 +525,7 @@ describe("JsonWorkspaceStore", () => {
     ]);
   });
 
-  it("migrates a supported v0 Workspace, persists v1 atomically, and drops unknown fields", async () => {
+  it("migrates a supported v0 Workspace directly to v2 and drops unknown fields", async () => {
     temporary =
       await createTemporaryDirectoryFixture(
         "workspace-migration"
@@ -415,13 +542,15 @@ describe("JsonWorkspaceStore", () => {
       filePath
     ).load();
     expect(migrated).toMatchObject({
-      schemaVersion: 1,
-      entries: [
+      schemaVersion: WORKSPACE_SCHEMA_VERSION,
+      path: "C:\\workspace",
+      groups: [
         {
-          scanIssues: [],
-          groups: [{ collapsed: false }]
+          name: "原/根仓库",
+          collapsed: false
         }
       ],
+      scanIssues: [],
       worktrees: [
         {
           isDetached: false,
@@ -433,11 +562,14 @@ describe("JsonWorkspaceStore", () => {
     const persisted = JSON.parse(
       await readFile(filePath, "utf8")
     );
-    expect(persisted.schemaVersion).toBe(1);
+    expect(persisted.schemaVersion).toBe(
+      WORKSPACE_SCHEMA_VERSION
+    );
+    expect(persisted.entries).toBeUndefined();
     expect(persisted.unknownLegacyField).toBeUndefined();
   });
 
-  it("normalizes grouped root repositories and removes the standalone default group", async () => {
+  it("normalizes root and standalone targets into the default Workspace group", async () => {
     temporary =
       await createTemporaryDirectoryFixture(
         "workspace-root-group-normalization"
@@ -467,8 +599,8 @@ describe("JsonWorkspaceStore", () => {
     const migrated = await new JsonWorkspaceStore(
       filePath
     ).load();
-    expect(migrated?.entries[0]).toMatchObject({
-      kind: "workspace-meta-repository",
+    expect(migrated).toMatchObject({
+      path: "C:\\workspace",
       groups: [
         {
           name: "原/根仓库",
@@ -476,18 +608,14 @@ describe("JsonWorkspaceStore", () => {
         }
       ]
     });
-    expect(migrated?.entries[1]).toMatchObject({
-      kind: "standalone-repository",
-      groups: []
-    });
     const persisted = JSON.parse(
       await readFile(filePath, "utf8")
     );
-    expect(persisted.entries[0].groups[0]).toMatchObject({
+    expect(persisted.groups[0]).toMatchObject({
       name: "原/根仓库",
       targets: [target]
     });
-    expect(persisted.entries[1].groups).toEqual([]);
+    expect(persisted.entries).toBeUndefined();
   });
 
   it("rejects semantically inconsistent Repository and selected-target relationships", async () => {
@@ -667,7 +795,25 @@ describe("JsonWorkspaceStore", () => {
   });
 });
 
-function createLegacyWorkspaceDocument(): unknown {
+interface MutableLegacyWorkspaceEntry
+  extends Record<string, unknown> {
+  id: string;
+  displayName: string;
+}
+
+interface MutableLegacyWorkspaceDocument
+  extends Record<string, unknown> {
+  schemaVersion: number;
+  id: string;
+  name: string;
+  entries: MutableLegacyWorkspaceEntry[];
+  repositories: Array<Record<string, unknown>>;
+  worktrees: Array<Record<string, unknown>>;
+  selectedEntryId?: string;
+  updatedAt: string;
+}
+
+function createLegacyWorkspaceDocument(): MutableLegacyWorkspaceDocument {
   return {
     schemaVersion: 0,
     id: "workspace",
@@ -731,10 +877,10 @@ function createLegacyWorkspaceDocument(): unknown {
   };
 }
 
-function createCurrentWorkspaceDocument(): unknown {
+function createCurrentWorkspaceDocument(): MutableLegacyWorkspaceDocument {
   const document = structuredClone(
     createLegacyWorkspaceDocument()
-  ) as Record<string, unknown>;
+  );
   document.schemaVersion = 1;
   delete document.unknownLegacyField;
   const entries = document.entries as Array<
@@ -759,9 +905,8 @@ function createCurrentWorkspaceDocument(): unknown {
   return document;
 }
 
-function createLegacyWorkspaceWithTwoEntries(): Workspace {
-  const workspace =
-    createCurrentWorkspaceDocument() as Workspace;
+function createLegacyWorkspaceWithTwoEntries(): MutableLegacyWorkspaceDocument {
+  const workspace = createCurrentWorkspaceDocument();
   workspace.id = "default";
   workspace.name = "GitNest Workspace";
   workspace.updatedAt = "2026-09-20T09:00:00.000Z";
@@ -800,6 +945,29 @@ function createLegacyWorkspaceWithTwoEntries(): Workspace {
     head: "def456",
     branch: "main",
     isPrimary: true,
+    isBare: false,
+    isDetached: false,
+    isLocked: false,
+    isPrunable: false
+  });
+  const rootRepository = workspace.repositories[0];
+  if (!rootRepository) {
+    throw new Error("Legacy Workspace fixture is incomplete.");
+  }
+  (rootRepository.worktreeIds as string[]).push(
+    "worktree-linked"
+  );
+  workspace.worktrees.push({
+    id: "worktree-linked",
+    repositoryId: "repository",
+    name: "repository-linked",
+    path: "D:\\linked\\repository",
+    canonicalPath: "d:\\linked\\repository",
+    gitDir:
+      "C:\\workspace\\repository\\.git\\worktrees\\repository-linked",
+    head: "abc456",
+    branch: "feature/linked",
+    isPrimary: false,
     isBare: false,
     isDetached: false,
     isLocked: false,

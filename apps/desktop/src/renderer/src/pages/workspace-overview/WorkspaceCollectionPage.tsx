@@ -18,7 +18,7 @@ import type { WorkspaceTab } from "../../app/navigation";
 import {
   filterSnapshotsToTargets,
   getSnapshotChangeCount,
-  listActiveWorkspaceTargets
+  listWorkspaceTargets
 } from "../../entities/workspace/model";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
@@ -51,7 +51,7 @@ interface WorkspaceCollectionPageProps {
   snapshots: RepositoryStatusSnapshotDto[];
   tab: CollectionTab;
   workspace: WorkspaceDetailsDto | null;
-  onAddDirectory(): void;
+  onCreateWorkspace(): Promise<boolean>;
   onSelectTarget(target: RepositoryTargetDto): void;
 }
 
@@ -68,10 +68,10 @@ export function WorkspaceCollectionPage({
   snapshots,
   tab,
   workspace,
-  onAddDirectory,
+  onCreateWorkspace,
   onSelectTarget
 }: WorkspaceCollectionPageProps) {
-  if (!workspace) {
+  if (!workspace?.path) {
     return (
       <SkeletonBoundary
         fallback={<WorkspaceCollectionSkeleton />}
@@ -83,7 +83,6 @@ export function WorkspaceCollectionPage({
         <div className="page-scroll">
           <section className="page-heading">
             <div>
-              <span className="eyebrow">多仓库工作区</span>
               <h1>Workspace</h1>
               <p>当前没有可展示的 Workspace 数据。</p>
             </div>
@@ -93,16 +92,17 @@ export function WorkspaceCollectionPage({
               <Icon name="folder" size={20} />
             </span>
             <div>
-              <strong>尚未添加本地目录</strong>
-              <p>添加目录后即可查看仓库和 Worktree。</p>
+              <strong>尚未创建 Workspace</strong>
+              <p>创建 Workspace 并选择根目录后即可查看仓库和 Worktree。</p>
               <Button
-                onClick={onAddDirectory}
+                disabled={busy}
+                onClick={() => void onCreateWorkspace()}
                 size="small"
                 type="button"
                 variant="primary"
               >
                 <Icon name="plus" />
-                添加目录
+                创建 Workspace
               </Button>
             </div>
           </div>
@@ -111,21 +111,9 @@ export function WorkspaceCollectionPage({
     );
   }
 
-  const activeTargets = listActiveWorkspaceTargets(workspace);
-  const activeTargetKeys = new Set(
-    activeTargets.map(
-      (target) => `${target.repositoryId}:${target.worktreeId}`
-    )
-  );
-  const activeRepositoryIds = new Set(
-    activeTargets.map((target) => target.repositoryId)
-  );
-  const activeRepositories = workspace.repositories.filter(
-    (repository) => activeRepositoryIds.has(repository.id)
-  );
-  const activeWorktrees = workspace.worktrees.filter((worktree) =>
-    activeTargetKeys.has(`${worktree.repositoryId}:${worktree.id}`)
-  );
+  const activeTargets = listWorkspaceTargets(workspace);
+  const activeRepositories = workspace.repositories;
+  const activeWorktrees = workspace.worktrees;
   const activeSnapshots = filterSnapshotsToTargets(
     snapshots,
     activeTargets
@@ -161,7 +149,9 @@ export function WorkspaceCollectionPage({
         <WorkspacePageHeading
           title="仓库管理"
           description="统一查看实际仓库路径、当前分支、工作区状态与本地远程跟踪引用差异。"
+          workspacePath={workspace.path}
         />
+        <WorkspaceCollectionSummary workspace={workspace} />
         <section className="panel">
           <header className="panel-header">
             <div className="panel-title">
@@ -172,15 +162,6 @@ export function WorkspaceCollectionPage({
               {activeRepositories.length} 个仓库 ·{" "}
               {activeWorktrees.length} 个 Worktree
             </span>
-            <Button variant="unstyled"
-              className="panel-action"
-              disabled={busy}
-              onClick={onAddDirectory}
-              type="button"
-            >
-              <Icon name="plus" size={13} />
-              添加仓库
-            </Button>
           </header>
           {repositoryRows.length > 0 ? (
             <RepositoryTable
@@ -188,10 +169,7 @@ export function WorkspaceCollectionPage({
               onSelectTarget={onSelectTarget}
             />
           ) : (
-            <WorkspaceEmptyState
-              busy={busy}
-              onAddDirectory={onAddDirectory}
-            />
+            <WorkspaceEmptyState />
           )}
         </section>
       </div>
@@ -204,10 +182,10 @@ export function WorkspaceCollectionPage({
         <WorkspacePageHeading
           title="Workspace 活动"
           description="按本次只读快照汇总各仓库当前 HEAD、分支与远程同步状态。"
+          workspacePath={workspace.path}
         />
+        <WorkspaceCollectionSummary workspace={workspace} />
         <WorkspaceActivityPanel
-          busy={busy}
-          onAddDirectory={onAddDirectory}
           onSelectTarget={onSelectTarget}
           rows={repositoryRows}
         />
@@ -220,10 +198,10 @@ export function WorkspaceCollectionPage({
       <WorkspacePageHeading
         title="跨仓 Worktrees"
         description={`聚合仓库实际登记 ${activeWorktrees.length} 个 Worktree；其中 ${activeWorktrees.filter((worktree) => worktree.isPrunable).length} 个记录指向不存在的目录。`}
+        workspacePath={workspace.path}
       />
+      <WorkspaceCollectionSummary workspace={workspace} />
       <WorkspaceWorktreesPanel
-        busy={busy}
-        onAddDirectory={onAddDirectory}
         onSelectTarget={onSelectTarget}
         repositories={activeRepositories}
         snapshots={activeSnapshots}
@@ -263,15 +241,11 @@ function WorkspaceCollectionSkeleton() {
 }
 
 function WorkspaceWorktreesPanel({
-  busy,
-  onAddDirectory,
   onSelectTarget,
   repositories,
   snapshots,
   worktrees
 }: {
-  busy: boolean;
-  onAddDirectory(): void;
   onSelectTarget(target: RepositoryTargetDto): void;
   repositories: WorkspaceRepositoryDto[];
   snapshots: RepositoryStatusSnapshotDto[];
@@ -415,10 +389,7 @@ function WorkspaceWorktreesPanel({
   if (worktrees.length === 0) {
     return (
       <section className="panel">
-        <WorkspaceEmptyState
-          busy={busy}
-          onAddDirectory={onAddDirectory}
-        />
+        <WorkspaceEmptyState />
       </section>
     );
   }
@@ -659,29 +630,100 @@ function WorkspaceWorktreesPanel({
 
 function WorkspacePageHeading({
   title,
-  description
+  description,
+  workspacePath
 }: {
   title: string;
   description: string;
+  workspacePath: string | undefined;
 }) {
   return (
     <section className="page-heading">
       <div>
         <h1>{title}</h1>
         <p>{description}</p>
+        <small title={workspacePath}>
+          根目录：{workspacePath ?? "尚未设置"}
+        </small>
       </div>
     </section>
   );
 }
 
+function WorkspaceCollectionSummary({
+  workspace
+}: {
+  workspace: WorkspaceDetailsDto;
+}) {
+  const metrics: Array<{
+    label: string;
+    value: number;
+    icon: "repository" | "worktree" | "folder" | "warning";
+    tone: "blue" | "purple" | "accent" | "yellow";
+    foot: string;
+  }> = [
+    {
+      label: "仓库",
+      value: workspace.repositories.length,
+      icon: "repository",
+      tone: "blue",
+      foot: "Workspace 已发现仓库"
+    },
+    {
+      label: "Worktrees",
+      value: workspace.worktrees.length,
+      icon: "worktree",
+      tone: "purple",
+      foot: "Git 已登记工作目录"
+    },
+    {
+      label: "分组",
+      value: workspace.groups.length,
+      icon: "folder",
+      tone: "accent",
+      foot: "侧栏仓库分组"
+    },
+    {
+      label: "扫描问题",
+      value: workspace.scanIssues.length,
+      icon: "warning",
+      tone: "yellow",
+      foot: workspace.lastScannedAt
+        ? `最近扫描 ${formatWorkspaceTimestamp(
+            workspace.lastScannedAt
+          )}`
+        : "尚未执行扫描"
+    }
+  ];
+
+  return (
+    <section
+      aria-label="Workspace 详情"
+      className="metric-grid"
+    >
+      {metrics.map((metric) => (
+        <article
+          className={`metric-card tone-${metric.tone}`}
+          key={metric.label}
+        >
+          <div className="metric-label">
+            <span>{metric.label}</span>
+            <span className="metric-icon">
+              <Icon name={metric.icon} />
+            </span>
+          </div>
+          <strong className="metric-value">{metric.value}</strong>
+          <span className="metric-foot">{metric.foot}</span>
+        </article>
+      ))}
+    </section>
+  );
+}
+
 function WorkspaceActivityPanel({
-  busy,
-  onAddDirectory,
   onSelectTarget,
   rows
 }: {
-  busy: boolean;
-  onAddDirectory(): void;
   onSelectTarget(target: RepositoryTargetDto): void;
   rows: WorkspaceRepositoryRow[];
 }) {
@@ -801,10 +843,7 @@ function WorkspaceActivityPanel({
           );
         })}
         {activityRows.length === 0 && (
-          <WorkspaceEmptyState
-            busy={busy}
-            onAddDirectory={onAddDirectory}
-          />
+          <WorkspaceEmptyState />
         )}
         {activityRows.length > 0 && visibleRows.length === 0 && (
           <div className="workspace-activity-filter-empty">
@@ -1002,29 +1041,15 @@ function WorkspaceWorktreeCard({
   );
 }
 
-function WorkspaceEmptyState({
-  busy,
-  onAddDirectory
-}: {
-  busy: boolean;
-  onAddDirectory(): void;
-}) {
+function WorkspaceEmptyState() {
   return (
     <div className="empty-state workspace-empty-state">
       <span className="empty-state-icon">
         <Icon name="folder" size={20} />
       </span>
       <div>
-        <strong>尚未添加本地目录</strong>
-        <p>使用目录选择器添加 Workspace 后，这里会显示对应内容。</p>
-        <Button size="small" variant="primary"
-          disabled={busy}
-          onClick={onAddDirectory}
-          type="button"
-        >
-          <Icon name="plus" />
-          添加目录
-        </Button>
+        <strong>当前 Workspace 暂无扫描结果</strong>
+        <p>请确认根目录可访问，并重新扫描 Workspace。</p>
       </div>
     </div>
   );

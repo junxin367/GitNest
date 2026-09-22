@@ -10,6 +10,7 @@ import type {
 import { Icon } from "../../shared/ui/Icon";
 
 interface StatusBarProps {
+  cleanupWarning?: string | null;
   gitEnvironment: GitEnvironmentDto | null;
   gitError: GitReadErrorDto | null;
   workspace: WorkspaceDetailsDto | null;
@@ -26,6 +27,7 @@ interface StatusBarProps {
 }
 
 export function StatusBar({
+  cleanupWarning,
   gitEnvironment,
   gitError,
   workspace,
@@ -76,7 +78,7 @@ export function StatusBar({
           : operation === "scanning"
             ? "正在扫描 Workspace…"
           : workspace
-            ? `${workspace.entries.length} 个顶层条目 · ${workspace.repositories.length} 个仓库 · ${changedRepositories} 个有变更`
+            ? `${workspace.repositories.length} 个仓库 · ${workspace.worktrees.length} 个 Worktree · ${changedRepositories} 个有变更`
             : "正在恢复 Workspace…"}
       </span>
       <span
@@ -99,7 +101,13 @@ export function StatusBar({
               : "监听未启动"}
       </span>
       <span className="status-bar-spacer" />
-      <span>v1.0.0</span>
+      {cleanupWarning && (
+        <span className="status-error" title={cleanupWarning} role="status">
+          <Icon name="warning" size={12} />
+          Workspace 清理未完成
+        </span>
+      )}
+      <span>v0.0.1</span>
     </footer>
   );
 }

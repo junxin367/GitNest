@@ -1,7 +1,8 @@
 import {
   describe,
   expect,
-  it
+  it,
+  vi
 } from "vitest";
 
 import type { CodeGraphNodeDto } from "@gitnest/contracts";
@@ -9,9 +10,11 @@ import type { CodeGraphNodeDto } from "@gitnest/contracts";
 import {
   codeNodeDisplayName,
   countSearchableCodeNodes,
+  createCodeNodeSearchIndex,
   filterChains,
   filterChainsWithMetadata,
   MAX_VISIBLE_CODE_NODES,
+  searchCodeNodeIndexWithMetadata,
   searchCodeNodes,
   searchCodeNodesWithMetadata
 } from "./codeAnalysisNavigation";
@@ -63,6 +66,31 @@ describe("code analysis node search", () => {
     expect(
       searchCodeNodes(nodes, "resourcecontroller")[0]?.id
     ).toBe("endpoint");
+  });
+
+  it("reuses precomputed normalized node text while the query changes", () => {
+    const searchIndex = createCodeNodeSearchIndex(nodes);
+    const normalizeSpy = vi.spyOn(
+      String.prototype,
+      "toLocaleLowerCase"
+    );
+    normalizeSpy.mockClear();
+    let resultId: string | undefined;
+    let normalizationCalls = 0;
+    try {
+      const result = searchCodeNodeIndexWithMetadata(
+        searchIndex,
+        "resourcecontroller"
+      );
+      resultId = result.nodes[0]?.id;
+      normalizationCalls = normalizeSpy.mock.calls.length;
+    } finally {
+      normalizeSpy.mockRestore();
+    }
+
+    expect(searchIndex).toHaveLength(nodes.length);
+    expect(resultId).toBe("endpoint");
+    expect(normalizationCalls).toBe(1);
   });
 
   it("includes every supported node kind in code-node results", () => {

@@ -439,7 +439,7 @@ describe("DiffWorkspace", () => {
     ).toBe(commitActions);
     expect(
       findButton(container, "提交已暂存变更").dataset.fullWidth
-    ).toBe("false");
+    ).toBe("true");
 
     act(() => {
       aiGenerateButton?.click();
@@ -984,10 +984,16 @@ describe("DiffWorkspace", () => {
     });
 
     expect(onDiscardFile).not.toHaveBeenCalled();
+    const discardDialog =
+      document.body.querySelector<HTMLElement>(
+        '[role="alertdialog"]'
+      );
     expect(
-      document.body.querySelector('[role="alertdialog"]')
-        ?.textContent
-    ).toContain("放弃对“src/components/Button.tsx”的更改？");
+      discardDialog?.querySelector("h2")?.textContent
+    ).toBe("放弃文件更改？");
+    expect(discardDialog?.textContent).toContain(
+      "src/components/Button.tsx"
+    );
     expect(document.activeElement?.textContent?.trim()).toBe(
       "取消"
     );

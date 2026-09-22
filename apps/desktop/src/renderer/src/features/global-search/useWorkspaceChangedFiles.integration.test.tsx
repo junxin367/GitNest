@@ -232,19 +232,65 @@ describe("useWorkspaceChangedFiles", () => {
     ).toBe("src/second.ts");
     expect(latest?.failedTargetCount).toBe(0);
   });
+
+  it("never publishes the previous Workspace cache during a switch, even for a shared target", async () => {
+    getChanges.mockResolvedValueOnce({
+      ok: true,
+      value: createChanges(TARGET_A, "old-workspace.ts")
+    });
+    const snapshots = [
+      createSnapshot(TARGET_A, { unstaged: 1 }),
+      createSnapshot(TARGET_B)
+    ];
+    await act(async () => {
+      root.render(
+        <Harness enabled snapshots={snapshots} onChange={() => {}} />
+      );
+      await flushPromises();
+    });
+    let resolveNew!: (value: unknown) => void;
+    getChanges.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveNew = resolve;
+    }));
+    const observed: WorkspaceChangedFilesIndex[] = [];
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled
+          workspace={{ ...WORKSPACE, id: "workspace-second" }}
+          snapshots={snapshots}
+          onChange={(value) => observed.push(value)}
+        />
+      );
+      await flushPromises();
+    });
+    expect(observed.length).toBeGreaterThan(0);
+    expect(observed.every((value) => value.changes.length === 0)).toBe(true);
+    await act(async () => {
+      resolveNew({
+        ok: true,
+        value: createChanges(TARGET_A, "new-workspace.ts")
+      });
+      await flushPromises();
+    });
+    expect(observed.at(-1)?.changes[0]?.snapshot.changes[0]?.path)
+      .toBe("new-workspace.ts");
+  });
 });
 
 function Harness({
   enabled,
+  workspace = WORKSPACE,
   snapshots,
   onChange
 }: {
   enabled: boolean;
+  workspace?: WorkspaceDetailsDto;
   snapshots: RepositoryStatusSnapshotDto[];
   onChange(value: WorkspaceChangedFilesIndex): void;
 }) {
   const value = useWorkspaceChangedFiles(
-    WORKSPACE,
+    workspace,
     snapshots,
     enabled
   );
@@ -262,30 +308,22 @@ const TARGET_B: RepositoryTargetDto = {
 };
 
 const WORKSPACE: WorkspaceDetailsDto = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   id: "workspace",
   name: "Workspace",
-  entries: [
+  path: "C:\\workspace",
+  canonicalPath: "c:\\workspace",
+  excludes: [],
+  groups: [
     {
-      id: "entry",
-      kind: "workspace-directory",
-      displayName: "Workspace",
-      path: "C:\\workspace",
-      canonicalPath: "c:\\workspace",
-      excludes: [],
-      order: 0,
-      groups: [
-        {
-          id: "group",
-          name: "Group",
-          collapsed: false,
-          targets: [TARGET_A, TARGET_B]
-        }
-      ],
-      scanIssues: [],
-      lastScannedAt: "2026-09-16T12:00:00.000Z"
+      id: "group",
+      name: "Group",
+      collapsed: false,
+      targets: [TARGET_A, TARGET_B]
     }
   ],
+  scanIssues: [],
+  lastScannedAt: "2026-09-16T12:00:00.000Z",
   repositories: [
     {
       id: TARGET_A.repositoryId,

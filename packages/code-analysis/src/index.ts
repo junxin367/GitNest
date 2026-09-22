@@ -1,8 +1,11 @@
-export { CodeAnalysisEngine } from "./code-analysis-engine";
+export {
+  CodeAnalysisEngine,
+  type CodeAnalysisEngineOptions
+} from "./code-analysis-engine";
 export {
   AnalysisSnapshotCache,
   assertCodeAnalysisSnapshotPayloadSize,
-  codeAnalysisCacheEntryDirectory,
+  codeAnalysisWorkspaceCacheDirectory,
   codeAnalysisSnapshotConfigurationKey,
   MAX_ANALYSIS_SNAPSHOT_PAYLOAD_BYTES,
   type AnalysisSnapshotCacheOptions,

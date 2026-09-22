@@ -363,8 +363,6 @@ function createInput(
   return {
     analysisId,
     workspaceId: "workspace",
-    entryId: "entry",
-    entryName: "Workspace",
     workspaceRootPath: "C:\\workspace",
     roots: [
       {
@@ -425,8 +423,6 @@ function createSnapshot(
     schemaVersion: 1,
     analysisId,
     workspaceId: "workspace",
-    entryId: "entry",
-    entryName: "Workspace",
     scope: "workspace",
     generatedAt: "2026-09-19T00:00:00.000Z",
     roots: createInput(analysisId).roots,

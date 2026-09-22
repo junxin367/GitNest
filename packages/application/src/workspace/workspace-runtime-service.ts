@@ -5,7 +5,6 @@ import type {
   RepositorySnapshot
 } from "@gitnest/git-core";
 import {
-  findTargetEntry,
   listWorkspaceTargets,
   repositoryTargetKey,
   repositoryTargetsEqual,
@@ -28,11 +27,8 @@ import type {
   RenameWorkspaceInput
 } from "./workspace-collection-service";
 import type {
-  AddWorkspaceEntryInput,
-  RemoveWorkspaceEntryInput,
-  SetWorkspaceGroupCollapsedInput,
-  UpdateWorkspaceEntryInput,
-  WorkspaceMutationResult
+  ExcludeWorkspaceRepositoryInput,
+  SetWorkspaceGroupCollapsedInput
 } from "./workspace-service";
 import {
   WorkspaceRefreshScheduler,
@@ -104,6 +100,7 @@ export interface WorkspaceRuntimeState {
   snapshots: RepositoryStatusSnapshot[];
   operations: WorkspaceOperation[];
   monitor: WorkspaceMonitorState;
+  cleanupWarning?: string;
 }
 
 export interface WorkspaceOperationStore {
@@ -155,6 +152,7 @@ export interface RepositoryOperationAccepted {
 
 export interface RepositoryOperationOptions {
   refreshTopology?: boolean;
+  expectedWorkspaceId?: string;
 }
 
 export interface WorkspaceRuntimeOptions {
@@ -165,7 +163,6 @@ export interface WorkspaceRuntimeOptions {
   backgroundTargetMinIntervalMs?: number;
   pollingIntervalMs?: number;
   selectedTargetPollingIntervalMs?: number;
-  selectedEntryPollingIntervalMs?: number;
   backgroundPollingIntervalMs?: number;
   selectedTargetHeartbeatIntervalMs?: number;
   staleAfterMs?: number;
@@ -179,6 +176,7 @@ export interface WorkspaceRuntimeOptions {
 }
 
 export interface WorkspaceConfigurationService {
+  consumeCleanupWarning?(): string | undefined;
   getCurrent(): Promise<Workspace>;
   listWorkspaces?(): Promise<WorkspaceSummary[]>;
   createWorkspace?(
@@ -189,20 +187,13 @@ export interface WorkspaceConfigurationService {
     input: RenameWorkspaceInput
   ): Promise<Workspace>;
   deleteWorkspace?(workspaceId: string): Promise<Workspace>;
-  addEntry(
-    input: AddWorkspaceEntryInput
-  ): Promise<WorkspaceMutationResult>;
   rescan(signal?: AbortSignal): Promise<Workspace>;
-  updateEntry(
-    input: UpdateWorkspaceEntryInput
-  ): Promise<Workspace>;
-  removeEntry(
-    input: RemoveWorkspaceEntryInput
+  excludeRepository(
+    input: ExcludeWorkspaceRepositoryInput
   ): Promise<Workspace>;
   setGroupCollapsed(
     input: SetWorkspaceGroupCollapsedInput
   ): Promise<Workspace>;
-  selectEntry(entryId: string): Promise<Workspace>;
   selectTarget(target: RepositoryTarget): Promise<Workspace>;
 }
 
@@ -215,8 +206,7 @@ const DEFAULT_BACKGROUND_DEBOUNCE_MS = 2_000;
 const DEFAULT_CURRENT_MIN_INTERVAL_MS = 1_000;
 const DEFAULT_BACKGROUND_MIN_INTERVAL_MS = 5_000;
 const DEFAULT_SELECTED_TARGET_POLLING_INTERVAL_MS = 15_000;
-const DEFAULT_SELECTED_ENTRY_POLLING_INTERVAL_MS = 60_000;
-const DEFAULT_BACKGROUND_POLLING_INTERVAL_MS = 180_000;
+const DEFAULT_BACKGROUND_POLLING_INTERVAL_MS = 60_000;
 const DEFAULT_SELECTED_TARGET_HEARTBEAT_INTERVAL_MS = 60_000;
 const DEFAULT_STALE_AFTER_MS = 30_000;
 const DEFAULT_WATCHER_REGISTRATION_LIMIT = 96;
@@ -276,6 +266,7 @@ export class WorkspaceRuntimeService {
   >();
   #workspace: Workspace | undefined;
   #workspaces: WorkspaceSummary[] = [];
+  #cleanupWarning: string | undefined;
   #operations: WorkspaceOperation[] = [];
   #monitor: WorkspaceMonitorState = {
     mode: "inactive",
@@ -343,10 +334,6 @@ export class WorkspaceRuntimeService {
         selectedPollingIntervalMs:
           options.selectedTargetPollingIntervalMs ??
           DEFAULT_SELECTED_TARGET_POLLING_INTERVAL_MS,
-        selectedEntryPollingIntervalMs:
-          options.selectedEntryPollingIntervalMs ??
-          compatibilityPollingInterval ??
-          DEFAULT_SELECTED_ENTRY_POLLING_INTERVAL_MS,
         backgroundPollingIntervalMs:
           options.backgroundPollingIntervalMs ??
           compatibilityPollingInterval ??
@@ -380,7 +367,7 @@ export class WorkspaceRuntimeService {
     if (
       this.#autoRefresh &&
       !this.#startupRequested &&
-      (this.#workspace?.entries.length ?? 0) > 0
+      Boolean(this.#workspace?.path)
     ) {
       this.#startupRequested = true;
       this.#beginWorkspaceRefresh("startup");
@@ -405,10 +392,6 @@ export class WorkspaceRuntimeService {
     workspaceId: string
   ): Promise<WorkspaceRuntimeState> {
     await this.#ensureInitialized();
-    if (this.#workspace?.id === workspaceId) {
-      await this.#workspaceTransitionTail;
-      return this.#createState();
-    }
     if (!this.#configuration.switchWorkspace) {
       throw multiWorkspaceUnavailable();
     }
@@ -422,15 +405,16 @@ export class WorkspaceRuntimeService {
   async renameWorkspace(
     input: RenameWorkspaceInput
   ): Promise<WorkspaceRuntimeState> {
-    await this.#ensureReady();
-    if (!this.#configuration.renameWorkspace) {
-      throw multiWorkspaceUnavailable();
-    }
-    const workspace =
-      await this.#configuration.renameWorkspace(input);
-    await this.#refreshWorkspaceSummaries(workspace);
-    this.#acceptWorkspace(workspace);
-    return this.#createState();
+    return this.#queueWorkspaceUpdate(async () => {
+      if (!this.#configuration.renameWorkspace) {
+        throw multiWorkspaceUnavailable();
+      }
+      const workspace =
+        await this.#configuration.renameWorkspace(input);
+      await this.#refreshWorkspaceSummaries(workspace);
+      this.#acceptWorkspace(workspace);
+      return this.#createState();
+    });
   }
 
   async deleteWorkspace(
@@ -449,81 +433,50 @@ export class WorkspaceRuntimeService {
     );
   }
 
-  async addEntry(
-    input: AddWorkspaceEntryInput
-  ): Promise<WorkspaceMutationResult> {
-    await this.#ensureReady();
-    const result = await this.#configuration.addEntry(input);
-    await this.#refreshWorkspaceSummaries(result.workspace);
-    this.#acceptWorkspace(result.workspace);
-    this.#startMonitoringAndRefresh("workspace-change");
-    return result;
-  }
-
   async rescan(): Promise<Workspace> {
-    await this.#ensureReady();
-    const workspace = await this.#configuration.rescan();
-    await this.#refreshWorkspaceSummaries(workspace);
-    this.#acceptWorkspace(workspace);
-    this.#startMonitoringAndRefresh("workspace-change");
-    return workspace;
+    return this.#queueWorkspaceUpdate(async () => {
+      const workspace = await this.#configuration.rescan();
+      await this.#refreshWorkspaceSummaries(workspace);
+      this.#acceptWorkspace(workspace);
+      this.#startMonitoringAndRefresh("workspace-change");
+      return workspace;
+    });
   }
 
-  async updateEntry(
-    input: UpdateWorkspaceEntryInput
+  async excludeRepository(
+    input: ExcludeWorkspaceRepositoryInput
   ): Promise<Workspace> {
-    await this.#ensureReady();
-    const workspace = await this.#configuration.updateEntry(input);
-    await this.#refreshWorkspaceSummaries(workspace);
-    this.#acceptWorkspace(workspace);
-    return workspace;
-  }
-
-  async removeEntry(
-    input: RemoveWorkspaceEntryInput
-  ): Promise<Workspace> {
-    await this.#ensureReady();
-    const workspace =
-      await this.#configuration.removeEntry(input);
-    await this.#refreshWorkspaceSummaries(workspace);
-    this.#acceptWorkspace(workspace);
-    this.#startMonitoringAndRefresh("workspace-change");
-    return workspace;
+    return this.#queueWorkspaceUpdate(async () => {
+      const workspace =
+        await this.#configuration.excludeRepository(input);
+      await this.#refreshWorkspaceSummaries(workspace);
+      this.#acceptWorkspace(workspace);
+      this.#startMonitoringAndRefresh("workspace-change");
+      return workspace;
+    });
   }
 
   async setGroupCollapsed(
     input: SetWorkspaceGroupCollapsedInput
   ): Promise<Workspace> {
-    await this.#ensureReady();
-    const workspace =
-      await this.#configuration.setGroupCollapsed(input);
-    await this.#refreshWorkspaceSummaries(workspace);
-    this.#acceptWorkspace(workspace);
-    return workspace;
-  }
-
-  async selectEntry(entryId: string): Promise<Workspace> {
-    await this.#ensureReady();
-    const workspace =
-      await this.#configuration.selectEntry(entryId);
-    await this.#refreshWorkspaceSummaries(workspace);
-    this.#acceptWorkspace(workspace);
-    this.#refreshScheduler.requestSelectedIfStale(
-      "workspace-change"
-    );
-    return workspace;
+    return this.#queueWorkspaceUpdate(async () => {
+      const workspace =
+        await this.#configuration.setGroupCollapsed(input);
+      await this.#refreshWorkspaceSummaries(workspace);
+      this.#acceptWorkspace(workspace);
+      return workspace;
+    });
   }
 
   async selectTarget(target: RepositoryTarget): Promise<Workspace> {
-    await this.#ensureReady();
-    const workspace =
-      await this.#configuration.selectTarget(target);
-    await this.#refreshWorkspaceSummaries(workspace);
-    this.#acceptWorkspace(workspace);
-    this.#refreshScheduler.requestSelectedIfStale(
-      "workspace-change"
-    );
-    return workspace;
+    return this.#queueWorkspaceUpdate(async () => {
+      const workspace =
+        await this.#configuration.selectTarget(target);
+      await this.#refreshWorkspaceSummaries(workspace);
+      this.#acceptWorkspace(workspace);
+      this.#refreshScheduler.requestSelectedIfStale("workspace-change");
+      return workspace;
+    });
   }
 
   async requestWorkspaceRefresh(
@@ -614,6 +567,15 @@ export class WorkspaceRuntimeService {
     options: RepositoryOperationOptions = {}
   ): Promise<RepositoryOperationAccepted> {
     await this.#ensureReady();
+    if (
+      options.expectedWorkspaceId &&
+      this.#workspace?.id !== options.expectedWorkspaceId
+    ) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The active Workspace changed. Run the operation again."
+      );
+    }
     this.#resolveMutationWorktreePath(target);
 
     const repositoryTargets =
@@ -848,6 +810,7 @@ export class WorkspaceRuntimeService {
       new AbortController();
     this.#workspaceGeneration += 1;
     this.#workspace = workspace;
+    this.#cleanupWarning = undefined;
     this.#refreshScheduler.updateWorkspace(workspace);
     this.#snapshots.clear();
     this.#snapshotContentSignatures.clear();
@@ -911,6 +874,28 @@ export class WorkspaceRuntimeService {
     }
   }
 
+  async #queueWorkspaceUpdate<Result>(
+    action: () => Promise<Result>
+  ): Promise<Result> {
+    await this.#ensureInitialized();
+    const expectedWorkspaceId = this.#workspace?.id;
+    const run = () => {
+      if (this.#workspace?.id !== expectedWorkspaceId) {
+        throw new WorkspaceError(
+          "INVALID_REQUEST",
+          "The active Workspace changed. Retry in the current Workspace."
+        );
+      }
+      return action();
+    };
+    const result = this.#workspaceTransitionTail.then(run, run);
+    this.#workspaceTransitionTail = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
   #queueWorkspaceTransition(
     action: () => Promise<Workspace>,
     deletedWorkspaceId?: string
@@ -971,6 +956,8 @@ export class WorkspaceRuntimeService {
       await this.#restartMonitoring();
       throw error;
     }
+    const configurationCleanupWarning =
+      this.#configuration.consumeCleanupWarning?.();
 
     const cleanupFailures = deletedWorkspaceId
       ? (
@@ -999,14 +986,20 @@ export class WorkspaceRuntimeService {
     await this.#loadRuntimeWorkspace(workspace);
 
     await this.#restartMonitoring();
-    if (cleanupFailures.length > 0) {
+    const cleanupWarnings = [
+      ...(configurationCleanupWarning ? [configurationCleanupWarning] : []),
+      ...(cleanupFailures.length > 0
+        ? ["Workspace 的快照或操作历史未能完全清理。"]
+        : [])
+    ];
+    if (cleanupWarnings.length > 0) {
+      this.#cleanupWarning = cleanupWarnings.join(" ");
       this.#monitor = {
         ...this.#monitor,
-        message:
-          "Workspace 已切换，但旧的运行时缓存未能完全清理。"
+        message: this.#cleanupWarning
       };
     }
-    if (this.#autoRefresh && workspace.entries.length > 0) {
+    if (this.#autoRefresh && workspace.path) {
       this.#refreshScheduler.request(
         listWorkspaceTargets(workspace),
         "workspace-change",
@@ -2542,7 +2535,8 @@ export class WorkspaceRuntimeService {
       workspaces: this.#workspaces,
       snapshots: this.#orderedSnapshots(),
       operations: this.#operations,
-      monitor: this.#monitor
+      monitor: this.#monitor,
+      ...(this.#cleanupWarning ? { cleanupWarning: this.#cleanupWarning } : {})
     });
   }
 
@@ -2732,10 +2726,7 @@ function targetPriorityWeight(
   if (repositoryTargetsEqual(target, workspace.selectedTarget)) {
     return 0;
   }
-  return findTargetEntry(workspace, target)?.id ===
-    workspace.selectedEntryId
-    ? 1
-    : 2;
+  return 1;
 }
 
 function emptyRefreshBatchResult(): BackgroundRefreshBatchResult {

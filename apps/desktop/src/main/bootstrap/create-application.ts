@@ -14,18 +14,19 @@ export async function createApplication(): Promise<void> {
     services.windowState,
     services.diagnostics
   );
+  const updateCheckTimer =
+    app.isPackaged &&
+    process.env.GITNEST_DISABLE_UPDATE_CHECK !== "1"
+    ? setTimeout(() => {
+        void services.applicationUpdate.check("startup");
+      }, 10_000)
+    : undefined;
   void services.workspace
     .getCurrent()
     .then((workspace) =>
       runCodeAnalysisCacheMaintenance({
         registry: services.dataRegistry,
-        workspaceId: workspace.id,
-        activeEntryIds: [
-          workspace.selectedEntryId ??
-            workspace.entries[0]?.id
-        ].filter((entryId): entryId is string =>
-          Boolean(entryId)
-        )
+        workspaceId: workspace.id
       })
     )
     .then((result) =>
@@ -87,6 +88,10 @@ export async function createApplication(): Promise<void> {
       return;
     }
     shutdownStarted = true;
+    if (updateCheckTimer) {
+      clearTimeout(updateCheckTimer);
+    }
+    services.applicationUpdate.dispose();
     void (async () => {
       try {
         const [codeAnalysisResult, workspaceResult] =

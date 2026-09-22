@@ -110,7 +110,8 @@ export interface RepositoryCommandRuntime {
     action: (
       worktreePath: string,
       signal: AbortSignal
-    ) => Promise<void>
+    ) => Promise<void>,
+    options?: { expectedWorkspaceId?: string }
   ): Promise<RepositoryOperationAccepted>;
   cancelOperation(operationId: string): Promise<void>;
 }
@@ -145,6 +146,7 @@ interface CommandTargetPlan {
 }
 
 interface BuiltPreflight {
+  workspaceId: string;
   command: RepositoryCommand;
   targetSummary: string;
   impacts: CommandImpact[];
@@ -285,7 +287,8 @@ export class RepositoryCommandService {
               worktreePath,
               signal
             );
-          }
+          },
+          { expectedWorkspaceId: stored.workspaceId }
         );
       operationIds.push(accepted.operationId);
     }
@@ -319,7 +322,15 @@ export class RepositoryCommandService {
     const confirmationRequired =
       command.type !== "fetch";
 
+    if ((await this.#runtime.getCurrent()).id !== workspace.id) {
+      throw new GitError(
+        "PREFLIGHT_CHANGED",
+        "The active Workspace changed. Run preflight again."
+      );
+    }
+
     return {
+      workspaceId: workspace.id,
       command,
       targetSummary:
         targets.length === 1
@@ -330,6 +341,7 @@ export class RepositoryCommandService {
       confirmationRequired,
       plans,
       comparisonKey: JSON.stringify({
+        workspaceId: workspace.id,
         command: commandKey(command),
         plans: plans.map((plan) => ({
           target: repositoryTargetKey(plan.target),

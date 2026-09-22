@@ -2,8 +2,10 @@ import {
   app,
   BrowserWindow,
   safeStorage,
+  shell,
   utilityProcess
 } from "electron";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   normalize,
@@ -57,10 +59,15 @@ import {
   type GitNestDataRegistry
 } from "../storage/data-registry";
 import { JsonWindowStateStore } from "../windows/window-state";
+import {
+  ApplicationUpdateService,
+  detectApplicationUpdateDistribution
+} from "../update/application-update-service";
 
 export interface ApplicationServices {
   accounts: AccountService;
   aiCommitMessages: AiCommitMessageService;
+  applicationUpdate: ApplicationUpdateService;
   codeAnalysis: CodeAnalysisService;
   dataRegistry: GitNestDataRegistry;
   diagnostics: RotatingDiagnosticLogger;
@@ -99,6 +106,42 @@ export function registerServices(): ApplicationServices {
       ]
     }
   );
+  const applicationUpdate = new ApplicationUpdateService({
+    currentVersion: app.getVersion(),
+    distribution:
+      detectApplicationUpdateDistribution(app.isPackaged),
+    platform: process.platform,
+    architecture: process.arch,
+    stateFilePath:
+      dataRegistry.paths.applicationUpdateState,
+    downloadDirectory:
+      dataRegistry.paths.applicationUpdateDownloads,
+    launchInstaller: (path) =>
+      new Promise<void>((resolvePromise, rejectPromise) => {
+        const child = spawn(path, [], {
+          detached: true,
+          shell: false,
+          stdio: "ignore",
+          windowsHide: false
+        });
+        child.once("error", rejectPromise);
+        child.once("spawn", () => {
+          child.unref();
+          resolvePromise();
+        });
+      }),
+    openExternal: (url) => shell.openExternal(url),
+    requestQuit: () => {
+      setImmediate(() => app.quit());
+    },
+    onDiagnostic: ({ level, name, context }) => {
+      void (
+        level === "warning"
+          ? diagnostics.warning(name, context)
+          : diagnostics.info(name, context)
+      ).catch(() => undefined);
+    }
+  });
   const windowState = new JsonWindowStateStore(
     dataRegistry.paths.windowState
   );
@@ -380,6 +423,16 @@ export function registerServices(): ApplicationServices {
       }
     }
   });
+  applicationUpdate.subscribe((state) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) {
+        window.webContents.send(
+          IPC_EVENTS.applicationUpdateStateChanged,
+          state
+        );
+      }
+    }
+  });
   return {
     accounts,
     aiCommitMessages: new AiCommitMessageService(
@@ -387,6 +440,7 @@ export function registerServices(): ApplicationServices {
       workspace,
       gitClient
     ),
+    applicationUpdate,
     codeAnalysis,
     dataRegistry,
     diagnostics,

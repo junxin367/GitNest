@@ -33,6 +33,7 @@ export type IconName =
   | "plus"
   | "refresh"
   | "repository"
+  | "restore"
   | "search"
   | "settings"
   | "sparkle"
@@ -230,6 +231,13 @@ function renderIcon(name: IconName): ReactNode {
       );
     case "maximize":
       return <rect height="12" rx="1" width="12" x="6" y="6" />;
+    case "restore":
+      return (
+        <>
+          <rect height="10" rx="1" width="10" x="5" y="9" />
+          <path d="M9 9V6a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-3" />
+        </>
+      );
     case "minimize":
       return <path d="M6 12h12" />;
     case "minus":

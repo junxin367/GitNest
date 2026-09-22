@@ -19,6 +19,7 @@ import type {
   InstallLanguageServerRequest,
   LanguageServerInstallResultDto,
   ReadCodeAnalysisFileRequest,
+  RestoreCodeAnalysisSnapshotRequest,
   StartCodeAnalysisRequest
 } from "./analysis.contracts";
 import type {
@@ -67,20 +68,16 @@ import type {
   RepositoryQueryRequest
 } from "./repository.contracts";
 import type {
-  AddWorkspaceEntryRequest,
   CreateWorkspaceRequest,
   DeleteWorkspaceRequest,
-  RemoveWorkspaceEntryRequest,
+  RemoveWorkspaceRepositoryRequest,
   RenameWorkspaceRequest,
   RepositoryTargetDto,
   SelectRepositoryTargetRequest,
-  SelectWorkspaceEntryRequest,
   SetWorkspaceGroupCollapsedRequest,
   SwitchWorkspaceRequest,
-  UpdateWorkspaceEntryRequest,
   WorkspaceDetailsDto,
   WorkspaceDirectorySelectionDto,
-  WorkspaceMutationResultDto,
   WorkspaceRefreshAcceptedDto,
   WorkspaceRuntimeStateDto,
   WorkspaceResult
@@ -101,6 +98,10 @@ import type {
   TestAiConnectionRequest,
   UpdateAppSettingsRequest
 } from "./settings.contracts";
+import type {
+  AcknowledgeApplicationUpdatePromptRequest,
+  ApplicationUpdateStateDto
+} from "./update.contracts";
 
 export interface OpenDirectoryRequest {
   target: RepositoryTargetDto;
@@ -139,11 +140,27 @@ export interface RuntimeInfo {
 }
 
 export interface GitNestBridge {
+  update: {
+    getState(): Promise<ApplicationUpdateStateDto>;
+    check(): Promise<ApplicationUpdateStateDto>;
+    acknowledgePrompt(
+      request: AcknowledgeApplicationUpdatePromptRequest
+    ): Promise<ApplicationUpdateStateDto>;
+    downloadAndInstall(): Promise<ApplicationUpdateStateDto>;
+    openProjectPage(): Promise<ApplicationUpdateStateDto>;
+    openReleasePage(): Promise<ApplicationUpdateStateDto>;
+    onStateChanged(
+      listener: (state: ApplicationUpdateStateDto) => void
+    ): () => void;
+  };
   codeAnalysis: {
     getState(): Promise<GitReadResult<CodeAnalysisStateDto>>;
     start(
       request: StartCodeAnalysisRequest
     ): Promise<GitReadResult<CodeAnalysisAcceptedDto>>;
+    restoreSnapshot(
+      request: RestoreCodeAnalysisSnapshotRequest
+    ): Promise<GitReadResult<boolean>>;
     cancel(
       request: CancelCodeAnalysisRequest
     ): Promise<GitReadResult<void>>;
@@ -246,21 +263,12 @@ export interface GitNestBridge {
     selectDirectory(): Promise<
       WorkspaceResult<WorkspaceDirectorySelectionDto>
     >;
-    addEntry(
-      request: AddWorkspaceEntryRequest
-    ): Promise<WorkspaceResult<WorkspaceMutationResultDto>>;
     rescan(): Promise<WorkspaceResult<WorkspaceDetailsDto>>;
-    updateEntry(
-      request: UpdateWorkspaceEntryRequest
-    ): Promise<WorkspaceResult<WorkspaceDetailsDto>>;
-    removeEntry(
-      request: RemoveWorkspaceEntryRequest
+    removeRepository(
+      request: RemoveWorkspaceRepositoryRequest
     ): Promise<WorkspaceResult<WorkspaceDetailsDto>>;
     setGroupCollapsed(
       request: SetWorkspaceGroupCollapsedRequest
-    ): Promise<WorkspaceResult<WorkspaceDetailsDto>>;
-    selectEntry(
-      request: SelectWorkspaceEntryRequest
     ): Promise<WorkspaceResult<WorkspaceDetailsDto>>;
     selectTarget(
       request: SelectRepositoryTargetRequest
@@ -271,7 +279,6 @@ export interface GitNestBridge {
     onStateChanged(
       listener: (state: WorkspaceRuntimeStateDto) => void
     ): () => void;
-    resolveDroppedPath(file: unknown): string;
   };
   repository: {
     getChanges(
@@ -341,8 +348,12 @@ export interface GitNestBridge {
     ): Promise<GitReadResult<WorktreeCommandExecutionDto>>;
   };
   window: {
+    isMaximized(): Promise<boolean>;
     minimize(): Promise<void>;
     toggleMaximize(): Promise<boolean>;
+    onMaximizedChanged(
+      listener: (maximized: boolean) => void
+    ): () => void;
     close(): Promise<void>;
     openDiffViewer(request: OpenDiffViewerRequest): Promise<void>;
   };

@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import { codeAnalysisCacheEntryDirectory } from "@gitnest/code-analysis";
+import { codeAnalysisWorkspaceCacheDirectory } from "@gitnest/code-analysis";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runCodeAnalysisCacheMaintenance } from "./cache-maintenance";
@@ -27,21 +27,19 @@ describe("runCodeAnalysisCacheMaintenance", () => {
     );
   });
 
-  it("removes expired inactive entries and preserves active entries", async () => {
+  it("removes expired inactive Workspaces and preserves the active Workspace", async () => {
     const root = await mkdtemp(
       join(tmpdir(), "gitnest-cache-maintenance-")
     );
     temporaryPaths.push(root);
     const registry = createDataRegistry(root);
-    const activePath = codeAnalysisCacheEntryDirectory(
+    const activePath = codeAnalysisWorkspaceCacheDirectory(
       registry.paths.codeAnalysisIndex,
-      "default",
-      "active-entry"
+      "default"
     );
-    const stalePath = codeAnalysisCacheEntryDirectory(
+    const stalePath = codeAnalysisWorkspaceCacheDirectory(
       registry.paths.codeAnalysisIndex,
-      "default",
-      "stale-entry"
+      "stale-workspace"
     );
     await writeCacheFile(activePath, "active");
     await writeCacheFile(stalePath, "stale");
@@ -52,7 +50,6 @@ describe("runCodeAnalysisCacheMaintenance", () => {
     const result = await runCodeAnalysisCacheMaintenance({
       registry,
       workspaceId: "default",
-      activeEntryIds: ["active-entry"],
       now: Date.parse("2026-09-19T00:00:00.000Z")
     });
 
@@ -81,7 +78,6 @@ describe("runCodeAnalysisCacheMaintenance", () => {
     const result = await runCodeAnalysisCacheMaintenance({
       registry,
       workspaceId: "default",
-      activeEntryIds: [],
       now: Date.parse("2026-09-19T00:00:00.000Z")
     });
 
@@ -97,10 +93,9 @@ describe("runCodeAnalysisCacheMaintenance", () => {
     );
     temporaryPaths.push(root);
     const registry = createDataRegistry(root);
-    const entryPath = codeAnalysisCacheEntryDirectory(
+    const entryPath = codeAnalysisWorkspaceCacheDirectory(
       registry.paths.codeAnalysisIndex,
-      "default",
-      "active-entry"
+      "default"
     );
     await writeCacheFile(entryPath, "active");
     const temporaryPath = join(
@@ -114,7 +109,6 @@ describe("runCodeAnalysisCacheMaintenance", () => {
     const result = await runCodeAnalysisCacheMaintenance({
       registry,
       workspaceId: "default",
-      activeEntryIds: ["active-entry"],
       now: Date.parse("2026-09-19T00:00:00.000Z")
     });
 
@@ -136,10 +130,9 @@ describe("runCodeAnalysisCacheMaintenance", () => {
     );
     temporaryPaths.push(root);
     const registry = createDataRegistry(root);
-    const activePath = codeAnalysisCacheEntryDirectory(
+    const activePath = codeAnalysisWorkspaceCacheDirectory(
       registry.paths.codeAnalysisIndex,
-      "default",
-      "active-entry"
+      "default"
     );
     await writeCacheFile(activePath, "larger-than-test-quota");
     const descriptors = registry.descriptors.map((descriptor) =>
@@ -157,8 +150,7 @@ describe("runCodeAnalysisCacheMaintenance", () => {
 
     const result = await runCodeAnalysisCacheMaintenance({
       registry: { ...registry, descriptors },
-      workspaceId: "default",
-      activeEntryIds: ["active-entry"]
+      workspaceId: "default"
     });
 
     await expect(

@@ -1,6 +1,6 @@
 {
   "name": "gitnest",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "A local-first multi-repository Git workspace for Windows.",
   "type": "module",
@@ -23,6 +23,8 @@
     "assets:open-in-icons": "pnpm --filter @gitnest/desktop exec electron ../../scripts/generate-open-in-icons.cjs",
     "dist:win": "node scripts/build-windows-release.mjs",
     "audit:win": "node scripts/audit-windows-release.mjs",
+    "manifest:update": "node scripts/generate-update-manifest.mjs",
+    "validate:release-version": "node scripts/validate-release-version.mjs",
     "smoke:m3-03": "node scripts/gn-m3-03-package-smoke.mjs"
   },
   "devDependencies": {

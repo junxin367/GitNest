@@ -47,6 +47,21 @@ const LINKED_PATH = "C:\\workspace\\linked";
 const LOCAL_HEAD = "a".repeat(40);
 
 describe("WorktreeCommandService", () => {
+  it("rejects confirmation after switching to another Workspace with the same repository", async () => {
+    const fixture = createFixture();
+    const preflight = await fixture.service.preflight({
+      type: "lock",
+      worktreeId: LINKED_TARGET.worktreeId
+    });
+    fixture.runtime.workspace.id = "another-workspace";
+    await expect(fixture.service.execute(
+      preflight.command,
+      preflight.preflightId,
+      true
+    )).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
+    expect(fixture.runtime.queued).toHaveLength(0);
+  });
+
   it("creates a new branch Worktree through a bound two-phase plan", async () => {
     const fixture = createFixture();
     const preflight = await fixture.service.preflight({
@@ -1003,30 +1018,22 @@ function createPrunableWorktree(
 
 function createWorkspace(): Workspace {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "workspace",
     name: "Workspace",
-    entries: [
+    path: "C:\\workspace",
+    canonicalPath: "c:\\workspace",
+    excludes: [],
+    groups: [
       {
-        id: "entry",
-        displayName: "Workspace root",
-        path: "C:\\workspace",
-        canonicalPath: "c:\\workspace",
-        excludes: [],
-        order: 0,
-        kind: "workspace-directory",
-        groups: [
-          {
-            id: "group",
-            name: "Repositories",
-            targets: [PRIMARY_TARGET, LINKED_TARGET],
-            collapsed: false
-          }
-        ],
-        scanIssues: [],
-        lastScannedAt: "2026-09-04T12:00:00.000Z"
+        id: "group",
+        name: "Repositories",
+        targets: [PRIMARY_TARGET, LINKED_TARGET],
+        collapsed: false
       }
     ],
+    scanIssues: [],
+    lastScannedAt: "2026-09-04T12:00:00.000Z",
     repositories: [
       {
         id: "repository-1",
@@ -1076,7 +1083,6 @@ function createWorkspace(): Workspace {
         isPrunable: false
       }
     ],
-    selectedEntryId: "entry",
     selectedTarget: PRIMARY_TARGET,
     updatedAt: "2026-09-04T12:00:00.000Z"
   };

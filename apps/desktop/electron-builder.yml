@@ -42,9 +42,6 @@ win:
     - target: portable
       arch:
         - x64
-    - target: zip
-      arch:
-        - x64
 
 nsis:
   artifactName: GitNest-Setup-${version}-${arch}.${ext}

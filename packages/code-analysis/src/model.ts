@@ -350,8 +350,6 @@ export interface CodeAnalysisSnapshot {
   schemaVersion: 1;
   analysisId: string;
   workspaceId: string;
-  entryId: string;
-  entryName: string;
   scope: CodeAnalysisScope;
   generatedAt: string;
   roots: AnalysisRoot[];
@@ -368,8 +366,6 @@ export interface CodeAnalysisSnapshot {
 export interface CodeAnalysisInput {
   analysisId: string;
   workspaceId: string;
-  entryId: string;
-  entryName: string;
   workspaceRootPath: string;
   roots: AnalysisRoot[];
   scope: CodeAnalysisScope;

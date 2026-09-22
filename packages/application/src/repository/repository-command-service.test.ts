@@ -43,6 +43,23 @@ const LOCAL_HEAD = "a".repeat(40);
 const REMOTE_HEAD = "b".repeat(40);
 
 describe("RepositoryCommandService", () => {
+  it("rejects a preflight from another Workspace even when both contain the same repository", async () => {
+    const runtime = new FakeRuntime();
+    const client = new FakeRepositoryClient();
+    const service = createService(runtime, client);
+    const preflight = await service.preflight({
+      type: "pull",
+      targets: [TARGET],
+      strategy: "ff-only"
+    });
+    runtime.workspace.id = "workspace-second";
+
+    await expect(
+      service.execute(preflight.command, preflight.preflightId, true)
+    ).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
+    expect(runtime.queued).toHaveLength(0);
+  });
+
   it("normalizes the command and binds execution to its exact preflight parameters", async () => {
     const client = new FakeRepositoryClient();
     const runtime = new FakeRuntime();
@@ -759,30 +776,22 @@ function createWorkspace(targetCount = 1): Workspace {
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "workspace",
     name: "Workspace",
-    entries: [
+    path: "C:\\workspace",
+    canonicalPath: "c:\\workspace",
+    excludes: [],
+    groups: [
       {
-        id: "entry",
-        displayName: "Workspace",
-        path: "C:\\workspace",
-        canonicalPath: "c:\\workspace",
-        excludes: [],
-        order: 0,
-        groups: [
-          {
-            id: "group",
-            name: "Repositories",
-            targets,
-            collapsed: false
-          }
-        ],
-        scanIssues: [],
-        lastScannedAt: "2026-09-04T12:00:00.000Z",
-        kind: "workspace-directory"
+        id: "group",
+        name: "Repositories",
+        targets,
+        collapsed: false
       }
     ],
+    scanIssues: [],
+    lastScannedAt: "2026-09-04T12:00:00.000Z",
     repositories: targets.map((target, index) => ({
       id: target.repositoryId,
       name: `repository-${index + 1}`,
@@ -808,7 +817,6 @@ function createWorkspace(targetCount = 1): Workspace {
       isLocked: false,
       isPrunable: false
     })),
-    selectedEntryId: "entry",
     selectedTarget,
     updatedAt: "2026-09-04T12:00:00.000Z"
   };

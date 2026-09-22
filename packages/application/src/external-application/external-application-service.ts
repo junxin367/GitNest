@@ -128,20 +128,13 @@ function resolveLaunchTarget(
   context: ExternalApplicationContext
 ): ExternalApplicationLaunchTarget {
   if (context.scope === "workspace") {
-    const root =
-      workspace.entries.find(
-        (entry) => entry.id === workspace.selectedEntryId
-      ) ??
-      workspace.entries.find(
-        (entry) => entry.kind === "workspace-meta-repository"
-      ) ?? workspace.entries[0];
-    if (!root) {
+    if (!workspace.path) {
       throw new GitError(
         "DIRECTORY_UNAVAILABLE",
         "The current Workspace root directory is unavailable."
       );
     }
-    return { workingDirectory: root.path };
+    return { workingDirectory: workspace.path };
   }
 
   const target = validateTarget(context.target);

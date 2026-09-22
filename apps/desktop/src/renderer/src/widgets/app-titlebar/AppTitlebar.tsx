@@ -2,7 +2,7 @@ import { Button } from "../../shared/ui/Button";
 import type { RuntimeInfo } from "@gitnest/contracts";
 import { useEffect, useRef, useState } from "react";
 
-import type { AppView } from "../../app/navigation";
+import { useWindowMaximized } from "../../shared/lib/useWindowMaximized";
 import { Icon } from "../../shared/ui/Icon";
 import {
   MenuItem,
@@ -14,8 +14,8 @@ interface AppTitlebarProps {
   searchOpen: boolean;
   runtimeInfo: RuntimeInfo | null;
   onCreateWorkspace(): void;
-  onNavigate(view: AppView): void;
   onOpenSearch(): void;
+  onOpenVersion(): void;
 }
 
 type OpenMenu = "file" | "help" | null;
@@ -24,17 +24,19 @@ export function AppTitlebar({
   searchOpen,
   runtimeInfo,
   onCreateWorkspace,
-  onNavigate,
   onOpenSearch,
+  onOpenVersion,
 }: AppTitlebarProps) {
   const [openMenu, setOpenMenu] =
     useState<OpenMenu>(null);
+  const { isMaximized, toggleMaximize } =
+    useWindowMaximized();
   const fileMenuRef = useRef<HTMLDivElement>(null);
   const helpMenuRef = useRef<HTMLDivElement>(null);
   const fileTriggerRef = useRef<HTMLButtonElement>(null);
   const helpTriggerRef = useRef<HTMLButtonElement>(null);
   const menuSurfaceRef = useRef<HTMLDivElement>(null);
-  const appVersion = runtimeInfo?.appVersion ?? "1.0.0";
+  const appVersion = runtimeInfo?.appVersion ?? "0.0.1";
   const toggleMenu = (menu: Exclude<OpenMenu, null>) =>
     setOpenMenu((current) =>
       current === menu ? null : menu
@@ -79,7 +81,7 @@ export function AppTitlebar({
         </span>
         <span className="brand-name">GitNest</span>
         <span className="build-pill">
-          v{runtimeInfo?.appVersion ?? "1.0.0"}
+          v{runtimeInfo?.appVersion ?? "0.0.1"}
         </span>
       </div>
 
@@ -143,17 +145,14 @@ export function AppTitlebar({
               >
                 快捷键与命令面板
               </MenuItem>
+              <MenuSeparator />
               <MenuItem
-                leading={<Icon name="activity" size={14} />}
+                leading={<Icon name="sparkle" size={14} />}
                 onClick={() => {
                   closeMenu();
-                  onNavigate("settings");
+                  onOpenVersion();
                 }}
               >
-                诊断信息
-              </MenuItem>
-              <MenuSeparator />
-              <MenuItem disabled leading={<Icon name="sparkle" size={14} />}>
                 版本 v{appVersion}
               </MenuItem>
             </MenuPopover>
@@ -196,13 +195,16 @@ export function AppTitlebar({
           <Icon name="minimize" />
         </Button>
         <Button variant="unstyled"
-          aria-label="最大化或还原"
+          aria-label={isMaximized ? "还原" : "最大化"}
           className="window-button"
-          onClick={() => void window.gitnest.window.toggleMaximize()}
-          title="最大化或还原"
+          onClick={toggleMaximize}
+          title={isMaximized ? "还原" : "最大化"}
           type="button"
         >
-          <Icon name="maximize" size={14} />
+          <Icon
+            name={isMaximized ? "restore" : "maximize"}
+            size={14}
+          />
         </Button>
         <Button variant="unstyled"
           aria-label="关闭"

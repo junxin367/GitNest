@@ -16,7 +16,6 @@ const TARGET: RepositoryTarget = {
   worktreeId: "worktree"
 };
 const WORKSPACE_PATH = "C:\\workspace";
-const SECOND_WORKSPACE_PATH = "D:\\code\\sc\\sc_code";
 const WORKTREE_PATH = "C:\\workspace\\repository";
 
 describe("ExternalApplicationService", () => {
@@ -57,26 +56,6 @@ describe("ExternalApplicationService", () => {
       {
         profile: applications.profiles[1],
         workingDirectory: WORKTREE_PATH
-      }
-    ]);
-  });
-
-  it("opens the selected Workspace entry when multiple directories exist", async () => {
-    const applications = new FakeApplicationPort();
-    const service = new ExternalApplicationService(
-      {
-        getCurrent: async () =>
-          createWorkspaceWithSelectedEntry()
-      },
-      applications
-    );
-
-    await service.open({ scope: "workspace" }, "vscode");
-
-    expect(applications.launches).toEqual([
-      {
-        profile: applications.profiles[0],
-        workingDirectory: SECOND_WORKSPACE_PATH
       }
     ]);
   });
@@ -194,24 +173,22 @@ class FakeApplicationPort implements ExternalApplicationPort {
 
 function createWorkspace(): Workspace {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "workspace",
     name: "Workspace",
-    entries: [
+    path: WORKSPACE_PATH,
+    canonicalPath: "c:\\workspace",
+    excludes: [],
+    groups: [
       {
-        id: "workspace-root",
-        displayName: "Workspace",
-        path: WORKSPACE_PATH,
-        canonicalPath: "c:\\workspace",
-        excludes: [],
-        order: 0,
-        groups: [],
-        scanIssues: [],
-        lastScannedAt: "2026-09-08T00:00:00.000Z",
-        kind: "workspace-meta-repository",
-        rootTarget: TARGET
+        id: "group",
+        name: "原/根仓库",
+        targets: [TARGET],
+        collapsed: false
       }
     ],
+    scanIssues: [],
+    lastScannedAt: "2026-09-08T00:00:00.000Z",
     repositories: [
       {
         id: TARGET.repositoryId,
@@ -240,26 +217,7 @@ function createWorkspace(): Workspace {
         isPrunable: false
       }
     ],
-    selectedEntryId: "workspace-root",
     selectedTarget: TARGET,
     updatedAt: "2026-09-08T00:00:00.000Z"
-  };
-}
-
-function createWorkspaceWithSelectedEntry(): Workspace {
-  const workspace = createWorkspace();
-  const selectedEntry = {
-    ...workspace.entries[0]!,
-    id: "workspace-second",
-    displayName: "sc_code 原仓库",
-    path: SECOND_WORKSPACE_PATH,
-    canonicalPath: SECOND_WORKSPACE_PATH.toLocaleLowerCase(),
-    order: 1
-  };
-
-  return {
-    ...workspace,
-    entries: [workspace.entries[0]!, selectedEntry],
-    selectedEntryId: selectedEntry.id
   };
 }

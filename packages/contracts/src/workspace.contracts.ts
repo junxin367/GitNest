@@ -1,13 +1,7 @@
-export type WorkspaceEntryKindDto =
-  | "workspace-meta-repository"
-  | "workspace-directory"
-  | "standalone-repository";
-
 export type WorkspaceErrorCode =
   | "INVALID_REQUEST"
   | "DIRECTORY_UNAVAILABLE"
   | "NO_REPOSITORIES_FOUND"
-  | "ENTRY_NOT_FOUND"
   | "GROUP_NOT_FOUND"
   | "SCAN_CANCELLED"
   | "SCAN_FAILED"
@@ -80,48 +74,18 @@ export interface RepositoryGroupDto {
   collapsed: boolean;
 }
 
-interface WorkspaceEntryBaseDto {
-  id: string;
-  displayName: string;
-  path: string;
-  canonicalPath: string;
-  excludes: string[];
-  order: number;
-  groups: RepositoryGroupDto[];
-  scanIssues: WorkspaceScanIssueDto[];
-  lastScannedAt: string;
-}
-
-export interface AggregateWorkspaceEntryDto
-  extends WorkspaceEntryBaseDto {
-  kind: "workspace-meta-repository";
-  rootTarget: RepositoryTargetDto;
-}
-
-export interface DirectoryWorkspaceEntryDto
-  extends WorkspaceEntryBaseDto {
-  kind: "workspace-directory";
-}
-
-export interface StandaloneRepositoryEntryDto
-  extends WorkspaceEntryBaseDto {
-  kind: "standalone-repository";
-  target: RepositoryTargetDto;
-}
-
-export type WorkspaceEntryDto =
-  | AggregateWorkspaceEntryDto
-  | DirectoryWorkspaceEntryDto
-  | StandaloneRepositoryEntryDto;
-
 export interface WorkspaceDetailsDto {
-  schemaVersion: 1;
+  schemaVersion: 2;
   id: string;
   name: string;
-  entries: WorkspaceEntryDto[];
+  path?: string;
+  canonicalPath?: string;
+  excludes: string[];
+  groups: RepositoryGroupDto[];
+  scanIssues: WorkspaceScanIssueDto[];
+  lastScannedAt?: string;
   repositories: WorkspaceRepositoryDto[];
   worktrees: WorkspaceWorktreeDto[];
-  selectedEntryId?: string;
   selectedTarget?: RepositoryTargetDto;
   updatedAt: string;
 }
@@ -134,6 +98,7 @@ export interface WorkspaceSummaryDto {
 
 export interface CreateWorkspaceRequest {
   name: string;
+  path: string;
 }
 
 export interface SwitchWorkspaceRequest {
@@ -149,30 +114,13 @@ export interface DeleteWorkspaceRequest {
   workspaceId: string;
 }
 
-export interface AddWorkspaceEntryRequest {
-  path: string;
-  source: "picker" | "manual" | "drop";
-}
-
-export interface UpdateWorkspaceEntryRequest {
-  entryId: string;
-  displayName?: string;
-  order?: number;
-}
-
-export interface RemoveWorkspaceEntryRequest {
-  entryId: string;
-  target?: RepositoryTargetDto;
+export interface RemoveWorkspaceRepositoryRequest {
+  target: RepositoryTargetDto;
 }
 
 export interface SetWorkspaceGroupCollapsedRequest {
-  entryId: string;
   groupId: string;
   collapsed: boolean;
-}
-
-export interface SelectWorkspaceEntryRequest {
-  entryId: string;
 }
 
 export interface SelectRepositoryTargetRequest {
@@ -263,16 +211,11 @@ export interface WorkspaceRuntimeStateDto {
   snapshots: RepositoryStatusSnapshotDto[];
   operations: WorkspaceOperationDto[];
   monitor: WorkspaceMonitorStateDto;
+  cleanupWarning?: string;
 }
 
 export interface WorkspaceRefreshAcceptedDto {
   operationId: string;
-}
-
-export interface WorkspaceMutationResultDto {
-  workspace: WorkspaceDetailsDto;
-  focusedEntryId: string;
-  duplicate: boolean;
 }
 
 export type WorkspaceDirectorySelectionDto =

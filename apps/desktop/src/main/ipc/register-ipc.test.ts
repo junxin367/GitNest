@@ -31,10 +31,12 @@ import {
   captureAppSettingsMutation,
   formatLanguageServerLaunchApprovalDetail,
   isTrustedSenderUrl,
+  validateAcknowledgeApplicationUpdatePromptRequest,
   validateAccountRemovalImpactRequest,
   validateBindAccountRequest,
   validateCancelRepositoryOperationRequest,
   validateClearAiApiKeyRequest,
+  validateCreateWorkspaceRequest,
   validateGenerateAiCommitMessageRequest,
   validateInstallLanguageServerRequest,
   validateOpenDirectoryRequest,
@@ -43,6 +45,8 @@ import {
   validateOpenExternalTerminalRequest,
   validateOpenFileLocationRequest,
   validateReadCodeAnalysisFileRequest,
+  validateRemoveWorkspaceRepositoryRequest,
+  validateRestoreCodeAnalysisSnapshotRequest,
   validateRemoveAccountRequest,
   validateRepositoryCommandExecuteRequest,
   validateRepositoryCommandPreflightRequest,
@@ -54,6 +58,7 @@ import {
   validateRepositoryStashRequest,
   validateRepositoryStashesRequest,
   validateSaveAccountRequest,
+  validateSetGroupCollapsedRequest,
   validateTestAiConnectionRequest,
   validateTestAccountRequest,
   validateUnbindAccountRequest,
@@ -61,6 +66,96 @@ import {
   validateWorktreeCommandExecuteRequest,
   validateWorktreeCommandPreflightRequest
 } from "./register-ipc";
+
+describe("Workspace IPC validation", () => {
+  it("validates Workspace creation without Entry request reuse", () => {
+    expect(
+      validateCreateWorkspaceRequest({
+        name: "  GitNest  ",
+        path: "C:\\workspace"
+      })
+    ).toEqual({
+      name: "GitNest",
+      path: "C:\\workspace"
+    });
+
+    expect(() =>
+      validateCreateWorkspaceRequest({
+        name: "GitNest",
+        path: "relative\\workspace"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+
+  it("validates repository removal by target only", () => {
+    expect(
+      validateRemoveWorkspaceRepositoryRequest({
+        target: {
+          repositoryId: "repository",
+          worktreeId: "worktree"
+        }
+      })
+    ).toEqual({
+      target: {
+        repositoryId: "repository",
+        worktreeId: "worktree"
+      }
+    });
+
+    expect(() =>
+      validateRemoveWorkspaceRepositoryRequest({})
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+
+  it("updates group collapse state without an Entry id", () => {
+    expect(
+      validateSetGroupCollapsedRequest({
+        groupId: "group",
+        collapsed: true
+      })
+    ).toEqual({
+      groupId: "group",
+      collapsed: true
+    });
+
+    expect(() =>
+      validateSetGroupCollapsedRequest({
+        collapsed: true
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+});
+
+describe("application update IPC validation", () => {
+  it("accepts only stable semantic versions for prompt acknowledgement", () => {
+    expect(
+      validateAcknowledgeApplicationUpdatePromptRequest({
+        version: "1.2.3"
+      })
+    ).toEqual({ version: "1.2.3" });
+
+    for (const version of [
+      "v1.2.3",
+      "1.2",
+      "1.2.3-beta.1",
+      "../1.2.3"
+    ]) {
+      expect(() =>
+        validateAcknowledgeApplicationUpdatePromptRequest({
+          version
+        })
+      ).toThrowError(
+        expect.objectContaining({ code: "INVALID_REQUEST" })
+      );
+    }
+  });
+});
 
 describe("application settings IPC events", () => {
   it("publishes settings only after a successful mutation", async () => {
@@ -573,6 +668,21 @@ describe("Language Server installation IPC validation", () => {
 });
 
 describe("code analysis file IPC validation", () => {
+  it("accepts only supported snapshot scopes", () => {
+    expect(
+      validateRestoreCodeAnalysisSnapshotRequest({
+        scope: "changed"
+      })
+    ).toEqual({ scope: "changed" });
+    expect(() =>
+      validateRestoreCodeAnalysisSnapshotRequest({
+        scope: "repository"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+
   it("accepts only a bounded non-empty node id", () => {
     expect(
       validateReadCodeAnalysisFileRequest({

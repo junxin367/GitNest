@@ -2,15 +2,8 @@ import type {
   RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
   WorkspaceDetailsDto,
-  WorkspaceEntryDto,
   WorkspaceErrorDto
 } from "@gitnest/contracts";
-
-export const WORKSPACE_ENTRY_LABELS = {
-  "workspace-meta-repository": "Workspace 元仓库",
-  "workspace-directory": "Workspace 目录",
-  "standalone-repository": "普通仓库"
-} as const;
 
 export function resolveWorkspaceTarget(
   workspace: WorkspaceDetailsDto,
@@ -67,39 +60,6 @@ export function repositoryTargetSelected(
   );
 }
 
-function workspaceEntryContainsTarget(
-  entry: WorkspaceEntryDto,
-  target: RepositoryTargetDto
-): boolean {
-  const targets = [
-    ...entry.groups.flatMap((group) => group.targets),
-    ...(entry.kind === "workspace-meta-repository"
-      ? [entry.rootTarget]
-      : entry.kind === "standalone-repository"
-        ? [entry.target]
-        : [])
-  ];
-
-  return targets.some(
-    (candidate) =>
-      candidate.repositoryId === target.repositoryId &&
-      candidate.worktreeId === target.worktreeId
-  );
-}
-
-export function findWorkspaceEntryForTarget(
-  workspace: WorkspaceDetailsDto | null,
-  target: RepositoryTargetDto | undefined
-): WorkspaceEntryDto | undefined {
-  if (!workspace || !target) {
-    return undefined;
-  }
-
-  return workspace.entries.find((entry) =>
-    workspaceEntryContainsTarget(entry, target)
-  );
-}
-
 export function getSnapshotChangeCount(
   snapshot: RepositoryStatusSnapshotDto | undefined
 ): number {
@@ -135,75 +95,15 @@ export function getSnapshotContentRevision(
   ].join("|");
 }
 
-export function getEntryRepositoryCount(
-  entry: WorkspaceEntryDto
-): number {
-  const targets = [
-    ...entry.groups.flatMap((group) => group.targets),
-    ...(entry.kind === "workspace-meta-repository"
-      ? [entry.rootTarget]
-      : entry.kind === "standalone-repository"
-        ? [entry.target]
-        : [])
-  ];
-
-  return new Set(
-    targets.map((target) => target.repositoryId)
-  ).size;
-}
-
-export function getActiveWorkspaceEntry(
-  workspace: WorkspaceDetailsDto | null
-): WorkspaceEntryDto | undefined {
-  if (!workspace) {
-    return undefined;
-  }
-
-  const activeEntryId =
-    workspace.selectedEntryId ?? workspace.entries[0]?.id;
-  return workspace.entries.find(
-    (entry) => entry.id === activeEntryId
-  );
-}
-
-export function listActiveWorkspaceTargets(
+export function listWorkspaceTargets(
   workspace: WorkspaceDetailsDto | null
 ): RepositoryTargetDto[] {
-  const entry = getActiveWorkspaceEntry(workspace);
-  if (!entry) {
+  if (!workspace) {
     return [];
   }
-
-  const targets = [
-    ...entry.groups.flatMap((group) => group.targets),
-    ...(entry.kind === "workspace-meta-repository"
-      ? [entry.rootTarget]
-      : entry.kind === "standalone-repository"
-        ? [entry.target]
-        : [])
-  ];
-
-  return [
-    ...new Map(
-      targets.map((target) => [
-        `${target.repositoryId}:${target.worktreeId}`,
-        target
-      ])
-    ).values()
-  ];
-}
-
-export function listWorkspaceTargets(
-  workspace: WorkspaceDetailsDto
-): RepositoryTargetDto[] {
-  const targets = workspace.entries.flatMap((entry) => [
-    ...entry.groups.flatMap((group) => group.targets),
-    ...(entry.kind === "workspace-meta-repository"
-      ? [entry.rootTarget]
-      : entry.kind === "standalone-repository"
-        ? [entry.target]
-        : [])
-  ]);
+  const targets = workspace.groups.flatMap(
+    (group) => group.targets
+  );
 
   return [
     ...new Map(

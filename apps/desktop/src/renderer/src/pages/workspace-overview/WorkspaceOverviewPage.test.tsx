@@ -17,9 +17,8 @@ import { WorkspaceCollectionPage } from "./WorkspaceCollectionPage";
 import { WorkspaceOverviewPage } from "./WorkspaceOverviewPage";
 import {
   filterSnapshotsToTargets,
-  getActiveWorkspaceEntry,
   isWorkspaceDataBlocked,
-  listActiveWorkspaceTargets
+  listWorkspaceTargets
 } from "../../entities/workspace/model";
 
 describe("Workspace overview state", () => {
@@ -37,38 +36,46 @@ describe("Workspace overview state", () => {
     ).toBe(true);
   });
 
-  it("limits overview targets to the currently selected Workspace entry", () => {
+  it("includes every group target in the current Workspace and excludes foreign snapshots", () => {
     const workspace = createWorkspace();
 
-    expect(getActiveWorkspaceEntry(workspace)?.id).toBe("entry-a");
-    expect(listActiveWorkspaceTargets(workspace)).toEqual([
+    expect(listWorkspaceTargets(workspace)).toEqual([
       {
         repositoryId: "repository-a",
         worktreeId: "worktree-a"
+      },
+      {
+        repositoryId: "repository-b",
+        worktreeId: "worktree-b"
       }
     ]);
     expect(
       filterSnapshotsToTargets(
         [
           createSnapshot("repository-a", "worktree-a"),
-          createSnapshot("repository-b", "worktree-b")
+          createSnapshot("repository-b", "worktree-b"),
+          createSnapshot("foreign-repository", "foreign-worktree")
         ],
-        listActiveWorkspaceTargets(workspace)
+        listWorkspaceTargets(workspace)
       ).map((snapshot) => snapshot.repositoryId)
-    ).toEqual(["repository-a"]);
+    ).toEqual(["repository-a", "repository-b"]);
   });
 
-  it("falls back to the first Workspace entry when no entry is selected", () => {
+  it("deduplicates targets repeated across Workspace groups", () => {
     const workspace = createWorkspace();
-    delete workspace.selectedEntryId;
+    workspace.groups.push({
+      id: "group-duplicate",
+      name: "Duplicate",
+      collapsed: false,
+      targets: [
+        {
+          repositoryId: "repository-a",
+          worktreeId: "worktree-a"
+        }
+      ]
+    });
 
-    expect(getActiveWorkspaceEntry(workspace)?.id).toBe("entry-a");
-    expect(listActiveWorkspaceTargets(workspace)).toEqual([
-      {
-        repositoryId: "repository-a",
-        worktreeId: "worktree-a"
-      }
-    ]);
+    expect(listWorkspaceTargets(workspace)).toHaveLength(2);
   });
 });
 
@@ -112,9 +119,8 @@ describe("Workspace overview interactions", () => {
           busy={false}
           error={null}
           notice={null}
-          onAddDirectory={() => undefined}
-          onAddManualPath={async () => false}
           onClearFeedback={() => undefined}
+          onCreateWorkspace={async () => false}
           onSelectTarget={() => undefined}
           operation={null}
           snapshots={[]}
@@ -161,9 +167,8 @@ describe("Workspace overview interactions", () => {
           busy
           error={null}
           notice={null}
-          onAddDirectory={() => undefined}
-          onAddManualPath={async () => false}
           onClearFeedback={() => undefined}
+          onCreateWorkspace={async () => false}
           onSelectTarget={() => undefined}
           operation="loading"
           snapshots={[]}
@@ -183,7 +188,69 @@ describe("Workspace overview interactions", () => {
     expect(container.textContent).not.toContain("正在恢复 Workspace");
   });
 
-  it("limits collection pages and counts to the selected Workspace entry", () => {
+  it("creates a Workspace from the empty state instead of adding another directory", () => {
+    const onCreateWorkspace = vi.fn(async () => true);
+
+    act(() => {
+      root.render(
+        <WorkspaceCollectionPage
+          busy={false}
+          loading={false}
+          onCreateWorkspace={onCreateWorkspace}
+          onSelectTarget={() => undefined}
+          snapshots={[]}
+          tab="repositories"
+          workspace={null}
+        />
+      );
+    });
+
+    const createButton = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent?.includes("创建 Workspace")
+    );
+    expect(createButton).toBeDefined();
+    expect(container.textContent).not.toContain("添加目录");
+
+    act(() => {
+      createButton?.click();
+    });
+
+    expect(onCreateWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the Workspace root path and root-level scan counts", () => {
+    const workspace = createWorktreeWorkspace();
+    workspace.scanIssues = [
+      {
+        path: "C:\\workspace\\unavailable",
+        code: "DIRECTORY_UNAVAILABLE",
+        message: "Unavailable"
+      }
+    ];
+
+    act(() => {
+      root.render(
+        <WorkspaceOverviewPage
+          busy={false}
+          error={null}
+          notice={null}
+          onClearFeedback={() => undefined}
+          onCreateWorkspace={async () => false}
+          onSelectTarget={() => undefined}
+          operation={null}
+          snapshots={[]}
+          workspace={workspace}
+        />
+      );
+    });
+
+    expect(container.textContent).toContain(
+      "根目录：C:\\workspace"
+    );
+    expect(container.textContent).toContain("扫描问题");
+  });
+
+  it("includes all current Workspace repositories in collection pages and counts", () => {
     const workspace = createWorktreeWorkspace();
     const snapshots = [
       createSnapshot("repository-a", "worktree-a"),
@@ -198,7 +265,7 @@ describe("Workspace overview interactions", () => {
           <WorkspaceCollectionPage
             busy={false}
             loading={false}
-            onAddDirectory={() => undefined}
+            onCreateWorkspace={async () => false}
             onSelectTarget={onSelectTarget}
             snapshots={snapshots}
             tab={tab}
@@ -214,12 +281,12 @@ describe("Workspace overview interactions", () => {
       container.querySelectorAll(
         '[aria-label="Workspace 全部仓库"] [role="listitem"]'
       )
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(
       container.querySelector(".panel-caption")?.textContent
-    ).toContain("1 个仓库 · 1 个 Worktree");
+    ).toContain("2 个仓库 · 2 个 Worktree");
     expect(container.textContent).toContain("Repository A");
-    expect(container.textContent).not.toContain("Repository B");
+    expect(container.textContent).toContain("Repository B");
 
     act(() => {
       container
@@ -237,26 +304,26 @@ describe("Workspace overview interactions", () => {
 
     expect(
       container.querySelectorAll(".workspace-activity-row")
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(
       container.querySelector(".panel-caption")?.textContent
-    ).toContain("1 条");
+    ).toContain("2 条");
     expect(container.textContent).toContain("Repository A");
-    expect(container.textContent).not.toContain("Repository B");
+    expect(container.textContent).toContain("Repository B");
 
     renderCollection("worktrees");
 
     expect(
       container.querySelectorAll(".worktree-summary-card")
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(
       container.querySelector(".page-heading p")?.textContent
-    ).toContain("实际登记 1 个 Worktree");
+    ).toContain("实际登记 2 个 Worktree");
     expect(
       container.querySelector(".worktree-toolbar-count")?.textContent
-    ).toContain("共 1 个");
+    ).toContain("共 2 个");
     expect(container.textContent).toContain("Repository A");
-    expect(container.textContent).not.toContain("Repository B");
+    expect(container.textContent).toContain("Repository B");
   });
 
   it("keeps the repository menu open for internal scrolling and closes it for page scrolling", () => {
@@ -265,11 +332,11 @@ describe("Workspace overview interactions", () => {
         <WorkspaceCollectionPage
           busy={false}
           loading={false}
-          onAddDirectory={() => undefined}
+          onCreateWorkspace={async () => false}
           onSelectTarget={() => undefined}
           snapshots={[]}
           tab="worktrees"
-          workspace={createMultiRepositoryEntryWorkspace()}
+          workspace={createMultiRepositoryWorkspace()}
         />
       );
     });
@@ -314,11 +381,11 @@ describe("Workspace overview interactions", () => {
         <WorkspaceCollectionPage
           busy={false}
           loading={false}
-          onAddDirectory={() => undefined}
+          onCreateWorkspace={async () => false}
           onSelectTarget={() => undefined}
           snapshots={[]}
           tab="worktrees"
-          workspace={createMultiRepositoryEntryWorkspace()}
+          workspace={createMultiRepositoryWorkspace()}
         />
       );
     });
@@ -364,46 +431,33 @@ describe("Workspace overview interactions", () => {
 
 function createWorkspace(): WorkspaceDetailsDto {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "workspace",
     name: "Test Workspace",
-    entries: [
+    path: "C:\\workspace",
+    canonicalPath: "c:\\workspace",
+    excludes: [],
+    groups: [
       {
-        id: "entry-a",
-        displayName: "Workspace A",
-        path: "C:\\workspace-a",
-        canonicalPath: "c:\\workspace-a",
-        excludes: [],
-        order: 0,
-        groups: [],
-        scanIssues: [],
-        lastScannedAt: "2026-09-11T00:00:00.000Z",
-        kind: "standalone-repository",
-        target: {
-          repositoryId: "repository-a",
-          worktreeId: "worktree-a"
-        }
-      },
-      {
-        id: "entry-b",
-        displayName: "Workspace B",
-        path: "C:\\workspace-b",
-        canonicalPath: "c:\\workspace-b",
-        excludes: [],
-        order: 1,
-        groups: [],
-        scanIssues: [],
-        lastScannedAt: "2026-09-11T00:00:00.000Z",
-        kind: "standalone-repository",
-        target: {
-          repositoryId: "repository-b",
-          worktreeId: "worktree-b"
-        }
+        id: "group-all",
+        name: "All",
+        collapsed: false,
+        targets: [
+          {
+            repositoryId: "repository-a",
+            worktreeId: "worktree-a"
+          },
+          {
+            repositoryId: "repository-b",
+            worktreeId: "worktree-b"
+          }
+        ]
       }
     ],
+    scanIssues: [],
+    lastScannedAt: "2026-09-11T00:00:00.000Z",
     repositories: [],
     worktrees: [],
-    selectedEntryId: "entry-a",
     updatedAt: "2026-09-11T00:00:00.000Z"
   };
 }
@@ -462,40 +516,26 @@ function createWorktreeWorkspace(): WorkspaceDetailsDto {
   };
 }
 
-function createMultiRepositoryEntryWorkspace(): WorkspaceDetailsDto {
+function createMultiRepositoryWorkspace(): WorkspaceDetailsDto {
   return {
     ...createWorktreeWorkspace(),
-    entries: [
+    groups: [
       {
-        id: "entry-all",
-        displayName: "Workspace All",
-        path: "C:\\workspace-all",
-        canonicalPath: "c:\\workspace-all",
-        excludes: [],
-        order: 0,
-        groups: [
+        id: "group-all",
+        name: "All",
+        collapsed: false,
+        targets: [
           {
-            id: "group-all",
-            name: "All",
-            collapsed: false,
-            targets: [
-              {
-                repositoryId: "repository-a",
-                worktreeId: "worktree-a"
-              },
-              {
-                repositoryId: "repository-b",
-                worktreeId: "worktree-b"
-              }
-            ]
+            repositoryId: "repository-a",
+            worktreeId: "worktree-a"
+          },
+          {
+            repositoryId: "repository-b",
+            worktreeId: "worktree-b"
           }
-        ],
-        scanIssues: [],
-        lastScannedAt: "2026-09-11T00:00:00.000Z",
-        kind: "workspace-directory"
+        ]
       }
-    ],
-    selectedEntryId: "entry-all"
+    ]
   };
 }
 

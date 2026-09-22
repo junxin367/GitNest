@@ -94,12 +94,8 @@ export {
 export { GitRepositoryProbe } from "./workspace/git-repository-probe";
 export {
   WorkspaceService,
-  type AddWorkspaceEntryInput,
-  type AddWorkspaceEntrySource,
-  type RemoveWorkspaceEntryInput,
+  type ExcludeWorkspaceRepositoryInput,
   type SetWorkspaceGroupCollapsedInput,
-  type UpdateWorkspaceEntryInput,
-  type WorkspaceMutationResult
 } from "./workspace/workspace-service";
 export {
   WorkspaceCollectionService,

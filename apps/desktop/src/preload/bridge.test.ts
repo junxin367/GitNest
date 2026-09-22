@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   IPC_CHANNELS,
+  type ApplicationUpdateStateDto,
   type AppSettingsDto,
   type CodeAnalysisStateDto,
   type IpcInvoke,
@@ -66,9 +67,14 @@ describe("createGitNestBridge", () => {
     let settingsListener:
       | ((settings: AppSettingsDto) => void)
       | undefined;
+    let updateStateListener:
+      | ((state: ApplicationUpdateStateDto) => void)
+      | undefined;
+    let windowMaximizedListener:
+      | ((maximized: boolean) => void)
+      | undefined;
     const bridge = createGitNestBridge(
       invoke,
-      () => "C:\\workspace",
       (listener) => {
         stateListener = listener;
         return () => {
@@ -86,12 +92,40 @@ describe("createGitNestBridge", () => {
         return () => {
           settingsListener = undefined;
         };
+      },
+      (listener) => {
+        updateStateListener = listener;
+        return () => {
+          updateStateListener = undefined;
+        };
+      },
+      (listener) => {
+        windowMaximizedListener = listener;
+        return () => {
+          windowMaximizedListener = undefined;
+        };
       }
     );
 
+    await bridge.update.getState();
+    await bridge.update.check();
+    await bridge.update.acknowledgePrompt({
+      version: "1.1.0"
+    });
+    await bridge.update.downloadAndInstall();
+    await bridge.update.openProjectPage();
+    await bridge.update.openReleasePage();
+    const unsubscribeUpdate =
+      bridge.update.onStateChanged(() => undefined);
+    expect(updateStateListener).toBeDefined();
+    unsubscribeUpdate();
+    expect(updateStateListener).toBeUndefined();
     await bridge.codeAnalysis.getState();
     await bridge.codeAnalysis.start({
       scope: "changed"
+    });
+    await bridge.codeAnalysis.restoreSnapshot({
+      scope: "workspace"
     });
     await bridge.codeAnalysis.cancel({
       analysisId: "analysis-1"
@@ -358,7 +392,8 @@ describe("createGitNestBridge", () => {
     await bridge.workspace.getCurrent();
     await bridge.workspace.getState();
     await bridge.workspace.create({
-      name: "Second Workspace"
+      name: "Second Workspace",
+      path: "C:\\second-workspace"
     });
     await bridge.workspace.switch({
       workspaceId: "workspace_2"
@@ -371,25 +406,16 @@ describe("createGitNestBridge", () => {
       workspaceId: "workspace_2"
     });
     await bridge.workspace.selectDirectory();
-    await bridge.workspace.addEntry({
-      path: "C:\\workspace",
-      source: "drop"
-    });
     await bridge.workspace.rescan();
-    await bridge.workspace.updateEntry({
-      entryId: "entry",
-      displayName: "Workspace"
-    });
-    await bridge.workspace.removeEntry({
-      entryId: "entry"
+    await bridge.workspace.removeRepository({
+      target: {
+        repositoryId: "repository",
+        worktreeId: "worktree"
+      }
     });
     await bridge.workspace.setGroupCollapsed({
-      entryId: "entry",
       groupId: "group",
       collapsed: true
-    });
-    await bridge.workspace.selectEntry({
-      entryId: "entry"
     });
     await bridge.workspace.selectTarget({
       target: {
@@ -402,9 +428,12 @@ describe("createGitNestBridge", () => {
     expect(stateListener).toBeDefined();
     unsubscribe();
     expect(stateListener).toBeUndefined();
-    expect(bridge.workspace.resolveDroppedPath({})).toBe(
-      "C:\\workspace"
-    );
+    await bridge.window.isMaximized();
+    const unsubscribeWindowMaximized =
+      bridge.window.onMaximizedChanged(() => undefined);
+    expect(windowMaximizedListener).toBeDefined();
+    unsubscribeWindowMaximized();
+    expect(windowMaximizedListener).toBeUndefined();
     await bridge.window.minimize();
     await bridge.window.toggleMaximize();
     await bridge.window.openDiffViewer({
@@ -418,6 +447,7 @@ describe("createGitNestBridge", () => {
     await bridge.window.close();
 
     expect(Object.keys(bridge)).toEqual([
+      "update",
       "codeAnalysis",
       "settings",
       "ai",
@@ -431,12 +461,41 @@ describe("createGitNestBridge", () => {
     ]);
     expect(calls).toEqual([
       {
+        channel: IPC_CHANNELS.updateGetState,
+        args: []
+      },
+      {
+        channel: IPC_CHANNELS.updateCheck,
+        args: []
+      },
+      {
+        channel: IPC_CHANNELS.updateAcknowledgePrompt,
+        args: [{ version: "1.1.0" }]
+      },
+      {
+        channel: IPC_CHANNELS.updateDownloadAndInstall,
+        args: []
+      },
+      {
+        channel: IPC_CHANNELS.updateOpenProjectPage,
+        args: []
+      },
+      {
+        channel: IPC_CHANNELS.updateOpenReleasePage,
+        args: []
+      },
+      {
         channel: IPC_CHANNELS.codeAnalysisGetState,
         args: []
       },
       {
         channel: IPC_CHANNELS.codeAnalysisStart,
         args: [{ scope: "changed" }]
+      },
+      {
+        channel:
+          IPC_CHANNELS.codeAnalysisRestoreSnapshot,
+        args: [{ scope: "workspace" }]
       },
       {
         channel: IPC_CHANNELS.codeAnalysisCancel,
@@ -878,7 +937,10 @@ describe("createGitNestBridge", () => {
       },
       {
         channel: IPC_CHANNELS.workspaceCreate,
-        args: [{ name: "Second Workspace" }]
+        args: [{
+          name: "Second Workspace",
+          path: "C:\\second-workspace"
+        }]
       },
       {
         channel: IPC_CHANNELS.workspaceSwitch,
@@ -902,34 +964,26 @@ describe("createGitNestBridge", () => {
         args: []
       },
       {
-        channel: IPC_CHANNELS.workspaceAddEntry,
-        args: [{ path: "C:\\workspace", source: "drop" }]
-      },
-      {
         channel: IPC_CHANNELS.workspaceRescan,
         args: []
       },
       {
-        channel: IPC_CHANNELS.workspaceUpdateEntry,
-        args: [{ entryId: "entry", displayName: "Workspace" }]
-      },
-      {
-        channel: IPC_CHANNELS.workspaceRemoveEntry,
-        args: [{ entryId: "entry" }]
+        channel: IPC_CHANNELS.workspaceRemoveRepository,
+        args: [{
+          target: {
+            repositoryId: "repository",
+            worktreeId: "worktree"
+          }
+        }]
       },
       {
         channel: IPC_CHANNELS.workspaceSetGroupCollapsed,
         args: [
           {
-            entryId: "entry",
             groupId: "group",
             collapsed: true
           }
         ]
-      },
-      {
-        channel: IPC_CHANNELS.workspaceSelectEntry,
-        args: [{ entryId: "entry" }]
       },
       {
         channel: IPC_CHANNELS.workspaceSelectTarget,
@@ -944,6 +998,10 @@ describe("createGitNestBridge", () => {
       },
       {
         channel: IPC_CHANNELS.workspaceRefresh,
+        args: []
+      },
+      {
+        channel: IPC_CHANNELS.windowIsMaximized,
         args: []
       },
       {

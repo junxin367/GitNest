@@ -37,9 +37,9 @@ import {
 import type { AccountController } from "../../features/account-manage/useAccounts";
 import type { AppSettingsController } from "../../features/settings/useAppSettings";
 import { Button } from "../../shared/ui/Button";
+import { Dialog } from "../../shared/ui/Dialog";
 import { Icon, type IconName } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
-import { LayerPortal } from "../../shared/ui/LayerPortal";
 import { Select } from "../../shared/ui/Select";
 import {
   Skeleton,
@@ -47,7 +47,6 @@ import {
 } from "../../shared/ui/Skeleton";
 import { Textarea } from "../../shared/ui/Textarea";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
-import { useModalFocusTrap } from "../../shared/ui/useModalFocusTrap";
 import { SettingsPage as AccountAuthSettings } from "./SettingsPage";
 
 export type ApplicationSettingsSection =
@@ -932,7 +931,7 @@ export function ApplicationSettingsPage({
                       <span className="settings-switch-thumb" />
                     </button>
                   }
-                  description="分析当前选中的 Workspace 条目，不在项目目录写入索引或配置。"
+                  description="分析当前 Workspace，不在项目目录写入索引或配置。"
                   title="代码分析"
                 >
                   <div className="settings-option-grid">
@@ -1838,70 +1837,52 @@ function ClearAiKeyDialog({
   onCancel(): void;
   onConfirm(): void | Promise<void>;
 }) {
-  const dialogRef = useRef<HTMLElement>(null);
-  useModalFocusTrap(dialogRef);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) {
-        onCancel();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, onCancel]);
-
   return (
-    <LayerPortal>
-      <div className="command-dialog-backdrop">
-        <section
-          aria-describedby="clear-ai-key-description"
-          aria-labelledby="clear-ai-key-title"
-          aria-modal="true"
-          className="command-dialog danger"
-          ref={dialogRef}
-          role="dialog"
-        >
-          <header className="command-dialog-header">
-            <span className="command-dialog-icon danger">
-              <Icon name="warning" size={20} />
-            </span>
-            <div>
-              <span className="eyebrow">清空凭据</span>
-              <h2 id="clear-ai-key-title">清空 AI API Key？</h2>
-              <p id="clear-ai-key-description">
-                生成和连接测试将不可用，直到再次保存 Key。
-              </p>
-            </div>
-          </header>
-          <footer className="command-dialog-footer">
-            <p>API URL、模型和提示词不会被删除。</p>
-            <div>
-              <Button
-                data-modal-initial-focus
-                disabled={busy}
-                onClick={onCancel}
-                size="small"
-                type="button"
-              >
-                取消
-              </Button>
-              <Button
-                aria-busy={busy}
-                disabled={busy}
-                emphasis="strong"
-                onClick={() => void onConfirm()}
-                size="small"
-                type="button"
-                variant="danger"
-              >
-                确认清空 Key
-              </Button>
-            </div>
-          </footer>
-        </section>
+    <Dialog
+      ariaDescribedBy="clear-ai-key-description"
+      dismissDisabled={busy}
+      footer={
+        <>
+          <Button
+            data-modal-initial-focus
+            disabled={busy}
+            onClick={onCancel}
+            size="small"
+            type="button"
+          >
+            取消
+          </Button>
+          <Button
+            aria-busy={busy}
+            disabled={busy}
+            emphasis="strong"
+            onClick={() => void onConfirm()}
+            size="small"
+            type="button"
+            variant="danger"
+          >
+            确认清空 Key
+          </Button>
+        </>
+      }
+      icon="warning"
+      onDismiss={onCancel}
+      role="alertdialog"
+      size="compact"
+      title="清空 AI API Key？"
+      tone="danger"
+    >
+      <div
+        className="command-warning danger"
+        id="clear-ai-key-description"
+      >
+        <Icon name="warning" size={15} />
+        <span>
+          清空后，AI 生成和连接测试将不可用，直到再次保存
+          Key。API URL、模型和提示词不会被删除。
+        </span>
       </div>
-    </LayerPortal>
+    </Dialog>
   );
 }
 

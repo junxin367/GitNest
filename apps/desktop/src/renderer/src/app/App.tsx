@@ -5,8 +5,7 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
-  type DragEvent
+  useState
 } from "react";
 
 import type {
@@ -24,7 +23,6 @@ import {
   type WorkspaceTab
 } from "./navigation";
 import {
-  listActiveWorkspaceTargets,
   listWorkspaceTargets
 } from "../entities/workspace/model";
 import { useWorkspace } from "../entities/workspace/useWorkspace";
@@ -35,6 +33,8 @@ import type {
 import { useAccounts } from "../features/account-manage/useAccounts";
 import { useExternalApplications } from "../features/external-application/useExternalApplications";
 import { useExternalTerminals } from "../features/external-terminal/useExternalTerminals";
+import { VersionDialog } from "../features/application-update/VersionDialog";
+import { useApplicationUpdate } from "../features/application-update/useApplicationUpdate";
 import { GlobalSearchDialog } from "../features/global-search/GlobalSearchDialog";
 import { useWorkspaceChangedFiles } from "../features/global-search/useWorkspaceChangedFiles";
 import { RepositoryCommandDialog } from "../features/repository-command/RepositoryCommandDialog";
@@ -54,7 +54,6 @@ import type {
 } from "../pages/settings/ApplicationSettingsPage";
 import { WorkspaceCollectionPage } from "../pages/workspace-overview/WorkspaceCollectionPage";
 import { WorkspaceOverviewPage } from "../pages/workspace-overview/WorkspaceOverviewPage";
-import { Icon } from "../shared/ui/Icon";
 import { Skeleton } from "../shared/ui/Skeleton";
 import { ActivityRail } from "../widgets/activity-rail/ActivityRail";
 import { AppTitlebar } from "../widgets/app-titlebar/AppTitlebar";
@@ -88,13 +87,14 @@ export function App() {
     useState<GitEnvironmentDto | null>(null);
   const [gitError, setGitError] =
     useState<GitReadErrorDto | null>(null);
-  const [dragActive, setDragActive] = useState(false);
   const [view, setView] = useState<AppView>("workspace");
   const [sidebarCollapsed, setSidebarCollapsed] =
     useState(false);
   const [workspaceTab, setWorkspaceTab] =
     useState<WorkspaceTab>("overview");
   const [globalSearchOpen, setGlobalSearchOpen] =
+    useState(false);
+  const [versionDialogOpen, setVersionDialogOpen] =
     useState(false);
   const [repositoryTab, setRepositoryTab] =
     useState<RepositoryTab>("overview");
@@ -108,7 +108,9 @@ export function App() {
     setPendingChangeNavigation
   ] = useState<RepositoryChangeSelectionRequest | null>(null);
   const changeNavigationSequence = useRef(0);
+  const promptedUpdateVersions = useRef(new Set<string>());
   const appSettings = useAppSettings();
+  const applicationUpdate = useApplicationUpdate();
   const theme = appSettings.settings.appearance.theme;
   const workspace = useWorkspace();
   const workspaceChangedFiles = useWorkspaceChangedFiles(
@@ -118,7 +120,8 @@ export function App() {
   );
   const repositoryCommands = useRepositoryCommands(
     workspace.workspace?.selectedTarget,
-    workspace.operations
+    workspace.operations,
+    workspace.workspace?.id
   );
   const externalTerminals = useExternalTerminals(
     workspace.workspace?.selectedTarget
@@ -144,15 +147,8 @@ export function App() {
       operation.state === "cancelling"
   );
   const activeWorkspaceTargets = useMemo(
-    () => listActiveWorkspaceTargets(workspace.workspace),
+    () => listWorkspaceTargets(workspace.workspace),
     [workspace.workspace]
-  );
-  const activeWorkspaceRepositoryCount = useMemo(
-    () =>
-      new Set(
-        activeWorkspaceTargets.map((target) => target.repositoryId)
-      ).size,
-    [activeWorkspaceTargets]
   );
   const operationAttentionCount = workspace.operations.filter(
     (operation) =>
@@ -175,6 +171,7 @@ export function App() {
       operation.targetIds.includes(selectedTargetKey)
   );
   const repositoryCommandLocked =
+    workspace.busy ||
     repositoryCommands.active !== null ||
     repositoryCommands.preflight !== null ||
     selectedRepositoryBusy;
@@ -219,6 +216,13 @@ export function App() {
       setSelectedCommit(null);
     }
   }, [view]);
+
+  useEffect(() => {
+    changeNavigationSequence.current += 1;
+    setSelectedCommit(null);
+    setPendingChangeNavigation(null);
+    setGlobalSearchOpen(false);
+  }, [workspace.workspace?.id]);
 
   useEffect(() => {
     let active = true;
@@ -367,6 +371,28 @@ export function App() {
       );
   }, [repositoryCommands.preflight]);
 
+  useEffect(() => {
+    const version =
+      applicationUpdate.state?.promptPending &&
+      applicationUpdate.state.latestVersion
+        ? applicationUpdate.state.latestVersion
+        : null;
+    if (
+      version &&
+      !globalSearchOpen &&
+      !repositoryCommands.preflight &&
+      !promptedUpdateVersions.current.has(version)
+    ) {
+      promptedUpdateVersions.current.add(version);
+      setVersionDialogOpen(true);
+    }
+  }, [
+    applicationUpdate.state?.latestVersion,
+    applicationUpdate.state?.promptPending,
+    globalSearchOpen,
+    repositoryCommands.preflight
+  ]);
+
   const openRepositoryTarget = (target: RepositoryTargetDto) => {
     changeNavigationSequence.current += 1;
     setPendingChangeNavigation(null);
@@ -480,19 +506,7 @@ export function App() {
   };
 
   return (
-    <div
-      className={`app-shell${dragActive ? " dragging-files" : ""}`}
-      onDragEnter={(event) => handleDragEnter(event, setDragActive)}
-      onDragLeave={(event) => handleDragLeave(event, setDragActive)}
-      onDragOver={(event) => event.preventDefault()}
-      onDrop={(event) => {
-        event.preventDefault();
-        setDragActive(false);
-        void workspace.addDroppedFiles(
-          Array.from(event.dataTransfer.files)
-        );
-      }}
-    >
+    <div className="app-shell">
       <a className="skip-link" href="#main-content">
         跳到主内容
       </a>
@@ -500,8 +514,11 @@ export function App() {
         onCreateWorkspace={() =>
           void workspace.createWorkspace()
         }
-        onNavigate={navigate}
         onOpenSearch={() => setGlobalSearchOpen(true)}
+        onOpenVersion={() => {
+          setGlobalSearchOpen(false);
+          setVersionDialogOpen(true);
+        }}
         runtimeInfo={runtimeInfo}
         searchOpen={globalSearchOpen}
       />
@@ -554,27 +571,13 @@ export function App() {
           onCreateWorkspace={workspace.createWorkspace}
           onSwitchWorkspace={workspace.switchWorkspace}
           onDeleteWorkspace={workspace.deleteWorkspace}
-          onAddDirectory={() => void workspace.chooseDirectory()}
-          onRemoveEntry={workspace.removeEntry}
+          onOpenWorkspace={() => navigate("workspace")}
+          onRenameWorkspace={workspace.renameWorkspace}
+          onRefresh={workspace.refresh}
+          onRemoveRepository={workspace.removeRepository}
           onRescan={workspace.rescan}
-          onSelectEntry={(entryId) =>
-            void workspace.selectEntry(entryId).then(() =>
-              navigate("workspace")
-            )
-          }
           onSelectTarget={openRepositoryTarget}
-          onUpdateEntry={workspace.updateEntry}
-          onSetGroupCollapsed={(
-            entryId,
-            groupId,
-            collapsed
-          ) =>
-            workspace.setGroupCollapsed(
-              entryId,
-              groupId,
-              collapsed
-            )
-          }
+          onSetGroupCollapsed={workspace.setGroupCollapsed}
           workspace={workspace.workspace}
         />
         <div
@@ -586,9 +589,10 @@ export function App() {
         >
           {!fullPageView && (
             <RepositoryHeader
+              key={workspace.workspace?.id}
               inspectorOpen={inspectorOpen}
               refreshing={
-                workspace.operation === "scanning" ||
+                workspace.busy ||
                 runtimeRefreshing
               }
               repositoryTab={repositoryTab}
@@ -603,10 +607,9 @@ export function App() {
               }
               commandLocked={repositoryCommandLocked}
               workspaceCommandBusy={
-                repositoryCommands.busy || runtimeRefreshing
-              }
-              workspaceRepositoryCount={
-                activeWorkspaceRepositoryCount
+                workspace.busy ||
+                repositoryCommands.busy ||
+                runtimeRefreshing
               }
               onFetch={() => {
                 if (selectedTarget) {
@@ -696,26 +699,23 @@ export function App() {
                 {view === "workspace" &&
                 workspaceTab === "overview" ? (
                   <WorkspaceOverviewPage
+                    key={workspace.workspace?.id}
                     busy={workspace.busy}
                     error={workspace.error}
                     notice={workspace.notice}
                     operation={workspace.operation}
                     snapshots={workspace.snapshots}
                     workspace={workspace.workspace}
-                    onAddDirectory={() =>
-                      void workspace.chooseDirectory()
-                    }
-                    onAddManualPath={workspace.addManualPath}
                     onClearFeedback={workspace.clearFeedback}
+                    onCreateWorkspace={workspace.createWorkspace}
                     onSelectTarget={openRepositoryTarget}
                   />
                 ) : view === "workspace" ? (
                   <WorkspaceCollectionPage
+                    key={workspace.workspace?.id}
                     busy={workspace.busy}
                     loading={workspace.operation === "loading"}
-                    onAddDirectory={() =>
-                      void workspace.chooseDirectory()
-                    }
+                    onCreateWorkspace={workspace.createWorkspace}
                     onSelectTarget={openRepositoryTarget}
                     snapshots={workspace.snapshots}
                     tab={
@@ -727,6 +727,7 @@ export function App() {
                   />
                 ) : view === "repository" ? (
                   <RepositoryPage
+                    key={workspace.workspace?.id}
                     appSettings={appSettings}
                     changeSelectionRequest={
                       pendingChangeNavigation
@@ -793,13 +794,14 @@ export function App() {
                 runtimeInfo={runtimeInfo}
                 snapshots={workspace.snapshots}
                 workspace={workspace.workspace}
-                onUpdateEntry={workspace.updateEntry}
+                onRenameWorkspace={workspace.renameWorkspace}
               />
             )}
           </div>
         </div>
       </div>
       <StatusBar
+        cleanupWarning={workspace.cleanupWarning}
         gitEnvironment={gitEnvironment}
         gitError={gitError}
         operation={workspace.operation}
@@ -808,15 +810,6 @@ export function App() {
         snapshots={workspace.snapshots}
         workspace={workspace.workspace}
       />
-      {dragActive && (
-        <div className="drop-overlay" aria-hidden="true">
-          <span>
-            <Icon name="folder" size={24} />
-          </span>
-          <strong>放下目录以加入 Workspace</strong>
-          <small>目录将进入只读发现与分类管线</small>
-        </div>
-      )}
       {globalSearchOpen && (
         <GlobalSearchDialog
           changes={workspaceChangedFiles.changes}
@@ -845,6 +838,40 @@ export function App() {
           onToggleTheme={toggleTheme}
           snapshots={workspace.snapshots}
           workspace={workspace.workspace}
+        />
+      )}
+      {versionDialogOpen && (
+        <VersionDialog
+          fallbackVersion={
+            runtimeInfo?.appVersion ?? "0.0.1"
+          }
+          state={applicationUpdate.state}
+          onAcknowledgePrompt={(version) =>
+            void applicationUpdate
+              .acknowledgePrompt(version)
+              .catch(() => undefined)
+          }
+          onCheck={() =>
+            void applicationUpdate
+              .check()
+              .catch(() => undefined)
+          }
+          onClose={() => setVersionDialogOpen(false)}
+          onDownloadAndInstall={() =>
+            void applicationUpdate
+              .downloadAndInstall()
+              .catch(() => undefined)
+          }
+          onOpenProjectPage={() =>
+            void applicationUpdate
+              .openProjectPage()
+              .catch(() => undefined)
+          }
+          onOpenReleasePage={() =>
+            void applicationUpdate
+              .openReleasePage()
+              .catch(() => undefined)
+          }
         />
       )}
       {repositoryCommands.preflight && (
@@ -892,29 +919,4 @@ function AppPageLoadingFallback() {
       </div>
     </div>
   );
-}
-
-function handleDragEnter(
-  event: DragEvent<HTMLDivElement>,
-  setDragActive: (active: boolean) => void
-): void {
-  if (event.dataTransfer.types.includes("Files")) {
-    event.preventDefault();
-    setDragActive(true);
-  }
-}
-
-function handleDragLeave(
-  event: DragEvent<HTMLDivElement>,
-  setDragActive: (active: boolean) => void
-): void {
-  const relatedTarget = event.relatedTarget;
-
-  if (
-    !relatedTarget ||
-    !(relatedTarget instanceof Node) ||
-    !event.currentTarget.contains(relatedTarget)
-  ) {
-    setDragActive(false);
-  }
 }

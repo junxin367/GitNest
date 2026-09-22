@@ -487,11 +487,6 @@ html[data-theme="light"] .settings-switch.active .settings-switch-thumb {
   gap: var(--space-2);
 }
 
-.settings-ai-actions-buttons .gn-button {
-  width: 120px;
-  min-width: 120px;
-}
-
 .settings-option-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -821,8 +816,4 @@ html[data-theme="light"] .settings-switch.active .settings-switch-thumb {
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--font-size-caption);
-}
-
-.account-removal-dialog {
-  width: min(620px, calc(100vw - 48px));
 }

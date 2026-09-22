@@ -10,31 +10,23 @@ export type PreferenceStorage = RendererPreferenceStorage;
 export { getRendererPreferenceStorage };
 
 export function changedRepositoriesOnlyPreferenceKey(
-  workspaceId: string,
-  entryId: string
+  workspaceId: string
 ): string {
-  return rendererPreferenceKeys.changedRepositoriesOnly(
-    workspaceId,
-    entryId
-  );
+  return rendererPreferenceKeys.changedRepositoriesOnly(workspaceId);
 }
 
 export function readChangedRepositoriesOnlyPreference(
   storage: PreferenceStorage | undefined,
-  workspaceId: string | undefined,
-  entryId: string | undefined
+  workspaceId: string | undefined
 ): boolean {
-  if (!storage || !workspaceId || !entryId) {
+  if (!storage || !workspaceId) {
     return false;
   }
 
   return (
     readRendererPreference(
       storage,
-      changedRepositoriesOnlyPreferenceKey(
-        workspaceId,
-        entryId
-      )
+      changedRepositoriesOnlyPreferenceKey(workspaceId)
     ) === "true"
   );
 }
@@ -42,19 +34,15 @@ export function readChangedRepositoriesOnlyPreference(
 export function writeChangedRepositoriesOnlyPreference(
   storage: PreferenceStorage | undefined,
   workspaceId: string | undefined,
-  entryId: string | undefined,
   enabled: boolean
 ): void {
-  if (!storage || !workspaceId || !entryId) {
+  if (!storage || !workspaceId) {
     return;
   }
 
   writeRendererPreference(
     storage,
-    changedRepositoriesOnlyPreferenceKey(
-      workspaceId,
-      entryId
-    ),
+    changedRepositoriesOnlyPreferenceKey(workspaceId),
     String(enabled)
   );
 }

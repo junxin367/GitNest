@@ -20,47 +20,34 @@ class MemoryStorage implements PreferenceStorage {
 }
 
 describe("workspace sidebar preferences", () => {
-  it("keeps the changed-repositories filter separate per Workspace entry", () => {
+  it("keeps the changed-repositories filter separate per Workspace", () => {
     const storage = new MemoryStorage();
 
     writeChangedRepositoriesOnlyPreference(
       storage,
       "workspace-a",
-      "entry-a",
       true
     );
 
     expect(
       readChangedRepositoriesOnlyPreference(
         storage,
-        "workspace-a",
-        "entry-a"
+        "workspace-a"
       )
     ).toBe(true);
     expect(
       readChangedRepositoriesOnlyPreference(
         storage,
-        "workspace-a",
-        "entry-b"
-      )
-    ).toBe(false);
-    expect(
-      readChangedRepositoriesOnlyPreference(
-        storage,
         "workspace-b",
-        "entry-a"
       )
     ).toBe(false);
   });
 
   it("uses a stable, scoped preference key", () => {
     expect(
-      changedRepositoriesOnlyPreferenceKey(
-        "workspace-a",
-        "entry-a"
-      )
+      changedRepositoriesOnlyPreferenceKey("workspace-a")
     ).toBe(
-      "gitnest.workspace.sidebar.changed-repositories-only:workspace-a:entry-a"
+      "gitnest.workspace.sidebar.changed-repositories-only:workspace-a"
     );
   });
 });

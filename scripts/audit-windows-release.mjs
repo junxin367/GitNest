@@ -33,8 +33,7 @@ const desktopPackage = JSON.parse(
 const version = desktopPackage.version;
 const requiredArtifacts = [
   `GitNest-Setup-${version}-x64.exe`,
-  `GitNest-Portable-${version}-x64.exe`,
-  `GitNest-${version}-x64.zip`
+  `GitNest-Portable-${version}-x64.exe`
 ];
 const unpackedExecutable = join(
   releaseDirectory,
@@ -67,7 +66,8 @@ const allowedReleaseEntries = new Set([
   ...requiredArtifacts,
   "win-unpacked",
   "SHA256SUMS.txt",
-  "release-manifest.json"
+  "release-manifest.json",
+  "latest.json"
 ]);
 const unexpectedReleaseEntries = releaseEntries.filter(
   (name) => !allowedReleaseEntries.has(name)
@@ -248,7 +248,7 @@ const manifest = {
   platform: "win32",
   architecture: "x64",
   generatedAt: new Date().toISOString(),
-  autoUpdateEnabled: false,
+  autoUpdateEnabled: true,
   signing: {
     configured: signingConfigured,
     expectedStatus: signingConfigured

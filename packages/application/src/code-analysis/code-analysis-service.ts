@@ -25,10 +25,9 @@ import type {
 } from "@gitnest/git-core";
 import {
   WorkspaceError,
-  listEntryTargets,
+  listWorkspaceTargets,
   repositoryTargetKey,
   type Workspace,
-  type WorkspaceEntry,
   type WorkspaceWorktree
 } from "@gitnest/workspace-core";
 
@@ -48,8 +47,6 @@ export interface CodeAnalysisState {
   snapshotAvailable: boolean;
   analysisId?: string;
   workspaceId?: string;
-  entryId?: string;
-  entryName?: string;
   scope?: CodeAnalysisScope;
   startedAt?: string;
   progress?: CodeAnalysisProgress;
@@ -133,6 +130,7 @@ export class CodeAnalysisService {
   #runQueue: Promise<void> = Promise.resolve();
   #selectionKey = "";
   #selectionGeneration = 0;
+  #scopeRestoreGeneration = 0;
   #hydratedCacheKey = "";
   #restore:
     | {
@@ -144,7 +142,7 @@ export class CodeAnalysisService {
   #active:
     | {
         analysisId: string;
-        entryKey: string;
+        selectionKey: string;
         controller: AbortController;
       }
     | undefined;
@@ -202,6 +200,7 @@ export class CodeAnalysisService {
     scope: CodeAnalysisScope
   ): Promise<CodeAnalysisAccepted> {
     this.#assertNotDisposed();
+    this.#scopeRestoreGeneration += 1;
     const settings = await this.#settingsProvider();
     this.#assertNotDisposed();
     if (!settings.enabled) {
@@ -238,18 +237,16 @@ export class CodeAnalysisService {
     const controller = new AbortController();
     this.#active = {
       analysisId,
-      entryKey: selectionKey,
+      selectionKey,
       controller
     };
     this.#setState({
       state: "running",
       snapshotAvailable:
         this.#snapshot?.workspaceId === workspace.id &&
-        this.#snapshot.entryId === context.entry.id,
+        this.#snapshot.scope === scope,
       analysisId,
       workspaceId: workspace.id,
-      entryId: context.entry.id,
-      entryName: context.entry.displayName,
       scope,
       startedAt: this.#clock(),
       progress: {
@@ -279,6 +276,111 @@ export class CodeAnalysisService {
     this.#runQueue = queuedRun;
     void queuedRun;
     return { analysisId };
+  }
+
+  async restoreSnapshot(
+    scope: CodeAnalysisScope
+  ): Promise<boolean> {
+    this.#assertNotDisposed();
+    if (this.#active) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "Wait for the running code analysis to finish before switching cached scopes."
+      );
+    }
+    const restoreGeneration =
+      ++this.#scopeRestoreGeneration;
+    const [workspace, settings] = await Promise.all([
+      this.#workspace.getCurrent(),
+      this.#settingsProvider()
+    ]);
+    this.#assertNotDisposed();
+    if (
+      restoreGeneration !==
+      this.#scopeRestoreGeneration
+    ) {
+      return false;
+    }
+    const context = resolveAnalysisContext(workspace);
+    await this.#ensureSnapshotHydrated(
+      workspace,
+      settings,
+      context
+    );
+    this.#assertNotDisposed();
+    if (
+      restoreGeneration !==
+      this.#scopeRestoreGeneration
+    ) {
+      return false;
+    }
+    if (this.#active) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "Wait for the running code analysis to finish before switching cached scopes."
+      );
+    }
+
+    const selectionKey = analysisSelectionKey(
+      workspace,
+      context
+    );
+    const configurationKey =
+      codeAnalysisSnapshotConfigurationKey(
+        settings,
+        context.roots
+      );
+    if (
+      this.#snapshot?.scope === scope &&
+      (this.#snapshotConfigurationKey === configurationKey ||
+        this.#snapshotInputConfigurationKey ===
+          configurationKey) &&
+      snapshotMatchesContext(
+        this.#snapshot,
+        workspace,
+        context
+      )
+    ) {
+      this.#setState(stateFromSnapshot(this.#snapshot));
+      return true;
+    }
+
+    const generation = this.#selectionGeneration;
+    let snapshot: CodeAnalysisSnapshot | null = null;
+    try {
+      snapshot = await this.#snapshotStore.load(
+        workspace.id,
+        settings,
+        context.roots,
+        scope
+      );
+    } catch {
+      return false;
+    }
+    if (
+      this.#disposed ||
+      this.#active !== undefined ||
+      restoreGeneration !==
+        this.#scopeRestoreGeneration ||
+      generation !== this.#selectionGeneration ||
+      selectionKey !== this.#selectionKey ||
+      !snapshot ||
+      snapshot.scope !== scope ||
+      !snapshotMatchesContext(
+        snapshot,
+        workspace,
+        context
+      )
+    ) {
+      return false;
+    }
+
+    this.#snapshot = snapshot;
+    this.#snapshotConfigurationKey = configurationKey;
+    this.#snapshotInputConfigurationKey = "";
+    this.#hydratedCacheKey = `${selectionKey}\0${configurationKey}`;
+    this.#setState(stateFromSnapshot(snapshot));
+    return true;
   }
 
   cancel(analysisId: string): void {
@@ -452,19 +554,15 @@ export class CodeAnalysisService {
     workspace: Workspace,
     context: AnalysisContext | null
   ): void {
-    const entryId =
-      context?.entry.id ??
-      workspace.selectedEntryId ??
-      workspace.entries[0]?.id;
     const selectionKey = context
       ? analysisSelectionKey(workspace, context)
-      : `${workspace.id}\0${entryId ?? ""}\0unavailable`;
+      : `${workspace.id}\0unavailable`;
     const selectionChanged =
       selectionKey !== this.#selectionKey;
 
     if (
       this.#active &&
-      selectionKey !== this.#active.entryKey
+      selectionKey !== this.#active.selectionKey
     ) {
       const active = this.#active;
       this.#active = undefined;
@@ -544,7 +642,7 @@ export class CodeAnalysisService {
     }
 
     if (
-      this.#active?.entryKey === selectionKey ||
+      this.#active?.selectionKey === selectionKey ||
       this.#hydratedCacheKey === cacheKey
     ) {
       return;
@@ -568,7 +666,6 @@ export class CodeAnalysisService {
       try {
         snapshot = await this.#snapshotStore.load(
           workspace.id,
-          context.entry.id,
           settings,
           context.roots
         );
@@ -599,7 +696,7 @@ export class CodeAnalysisService {
       this.#snapshot = snapshot;
       this.#snapshotConfigurationKey = configurationKey;
       this.#snapshotInputConfigurationKey = "";
-      if (this.#active?.entryKey === selectionKey) {
+      if (this.#active?.selectionKey === selectionKey) {
         this.#setState({
           ...this.#state,
           snapshotAvailable: true
@@ -623,32 +720,19 @@ export class CodeAnalysisService {
 
   #setIdleState(
     workspace: Workspace,
-    context: AnalysisContext | null
+    _context: AnalysisContext | null
   ): void {
-    const entry =
-      context?.entry ??
-      workspace.entries.find(
-        (candidate) =>
-          candidate.id ===
-          (workspace.selectedEntryId ??
-            workspace.entries[0]?.id)
-      );
     this.#setState({
       state: "idle",
       snapshotAvailable: false,
-      workspaceId: workspace.id,
-      ...(entry
-        ? {
-            entryId: entry.id,
-            entryName: entry.displayName
-          }
-        : {})
+      workspaceId: workspace.id
     });
   }
 
   async dispose(): Promise<void> {
     this.#disposed = true;
     this.#selectionGeneration += 1;
+    this.#scopeRestoreGeneration += 1;
     const active = this.#active;
     this.#active = undefined;
     active?.controller.abort(
@@ -689,9 +773,7 @@ export class CodeAnalysisService {
       const snapshot = await this.#runner.analyze({
         analysisId: input.analysisId,
         workspaceId: input.workspace.id,
-        entryId: input.context.entry.id,
-        entryName: input.context.entry.displayName,
-        workspaceRootPath: input.context.entry.path,
+        workspaceRootPath: input.context.workspaceRootPath,
         roots: input.context.roots.map((root) => ({
           repositoryId: root.repositoryId,
           worktreeId: root.worktreeId,
@@ -758,8 +840,6 @@ export class CodeAnalysisService {
         snapshotAvailable: true,
         analysisId: input.analysisId,
         workspaceId: input.workspace.id,
-        entryId: input.context.entry.id,
-        entryName: input.context.entry.displayName,
         scope: input.scope,
         generatedAt: completedSnapshot.generatedAt,
         stats: completedSnapshot.stats
@@ -777,11 +857,9 @@ export class CodeAnalysisService {
           state: "cancelled",
           snapshotAvailable:
             this.#snapshot?.workspaceId === input.workspace.id &&
-            this.#snapshot.entryId === input.context.entry.id,
+            this.#snapshot.scope === input.scope,
           analysisId: input.analysisId,
           workspaceId: input.workspace.id,
-          entryId: input.context.entry.id,
-          entryName: input.context.entry.displayName,
           scope: input.scope,
           error: {
             code: "COMMAND_CANCELLED",
@@ -798,11 +876,9 @@ export class CodeAnalysisService {
         state: "failed",
         snapshotAvailable:
           this.#snapshot?.workspaceId === input.workspace.id &&
-          this.#snapshot.entryId === input.context.entry.id,
+          this.#snapshot.scope === input.scope,
         analysisId: input.analysisId,
         workspaceId: input.workspace.id,
-        entryId: input.context.entry.id,
-        entryName: input.context.entry.displayName,
         scope: input.scope,
         error: {
           code: errorCode(error),
@@ -869,7 +945,7 @@ interface AnalysisRootContext {
 }
 
 interface AnalysisContext {
-  entry: WorkspaceEntry;
+  workspaceRootPath: string;
   roots: AnalysisRootContext[];
 }
 
@@ -886,15 +962,10 @@ function tryResolveAnalysisContext(
 function resolveAnalysisContext(
   workspace: Workspace
 ): AnalysisContext {
-  const entryId =
-    workspace.selectedEntryId ?? workspace.entries[0]?.id;
-  const entry = workspace.entries.find(
-    (candidate) => candidate.id === entryId
-  );
-  if (!entry) {
+  if (!workspace.path) {
     throw new WorkspaceError(
       "INVALID_REQUEST",
-      "Select a Workspace entry before starting code analysis."
+      "Configure a Workspace root before starting code analysis."
     );
   }
   const repositories = new Map(
@@ -912,7 +983,7 @@ function resolveAnalysisContext(
       worktree
     ])
   );
-  const roots = listEntryTargets(entry).flatMap((target) => {
+  const roots = listWorkspaceTargets(workspace).flatMap((target) => {
     const worktree = worktrees.get(repositoryTargetKey(target));
     if (!worktree || worktree.isBare) {
       return [];
@@ -933,11 +1004,11 @@ function resolveAnalysisContext(
   if (unique.size === 0) {
     throw new WorkspaceError(
       "DIRECTORY_UNAVAILABLE",
-      "The selected Workspace entry has no readable Worktree."
+      "The current Workspace has no readable Worktree."
     );
   }
   return {
-    entry,
+    workspaceRootPath: workspace.path,
     roots: [...unique.values()]
   };
 }
@@ -948,7 +1019,6 @@ function analysisSelectionKey(
 ): string {
   return [
     workspace.id,
-    context.entry.id,
     ...context.roots
       .map(
         (root) =>
@@ -966,8 +1036,7 @@ function snapshotMatchesContext(
   context: AnalysisContext
 ): boolean {
   if (
-    snapshot.workspaceId !== workspace.id ||
-    snapshot.entryId !== context.entry.id
+    snapshot.workspaceId !== workspace.id
   ) {
     return false;
   }
@@ -1003,8 +1072,6 @@ function stateFromSnapshot(
     snapshotAvailable: true,
     analysisId: snapshot.analysisId,
     workspaceId: snapshot.workspaceId,
-    entryId: snapshot.entryId,
-    entryName: snapshot.entryName,
     scope: snapshot.scope,
     generatedAt: snapshot.generatedAt,
     stats: snapshot.stats

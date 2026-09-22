@@ -314,6 +314,7 @@ export function DiffCommitComposer({
             aria-busy={submitting}
             className="diff-workspace-commit-submit"
             disabled={!canCommit}
+            fullWidth
             size="small"
             type="submit"
             variant="primary"

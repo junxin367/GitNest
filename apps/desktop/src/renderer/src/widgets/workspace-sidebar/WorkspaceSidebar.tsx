@@ -1,6 +1,7 @@
 import { Button } from "../../shared/ui/Button";
 import {
   memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -13,14 +14,11 @@ import type {
   RepositoryGroupDto,
   RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
-  UpdateWorkspaceEntryRequest,
   WorkspaceDetailsDto,
-  WorkspaceEntryDto,
   WorkspaceSummaryDto
 } from "@gitnest/contracts";
 
 import {
-  WORKSPACE_ENTRY_LABELS,
   findTargetSnapshot,
   getSnapshotChangeCount,
   repositoryTargetSelected,
@@ -42,12 +40,12 @@ import {
   MenuSeparator
 } from "../../shared/ui/Menu";
 import {
-  WorkspaceGroupRenameDialog,
   WorkspaceDeleteDialog,
-  WorkspaceEntryTapdKeywordDialog,
-  WorkspaceEntryRemoveDialog,
-  WorkspaceEntryRenameDialog
-} from "./WorkspaceEntryDialogs";
+  WorkspaceGroupRenameDialog,
+  WorkspaceRepositoryRemoveDialog,
+  WorkspaceRenameDialog,
+  WorkspaceTapdKeywordDialog
+} from "./WorkspaceDialogs";
 import {
   changedRepositoriesOnlyPreferenceKey,
   getRendererPreferenceStorage,
@@ -58,8 +56,9 @@ import {
   readTapdKeywordPreference,
   writeTapdKeywordPreference
 } from "./tapdKeywordPreferences";
+import "./workspace-sidebar.css";
 
-interface WorkspaceSidebarProps {
+export interface WorkspaceSidebarProps {
   activeView: AppView;
   sidebarHidden: boolean;
   workspace: WorkspaceDetailsDto | null;
@@ -69,52 +68,59 @@ interface WorkspaceSidebarProps {
   onCreateWorkspace(): Promise<boolean>;
   onSwitchWorkspace(workspaceId: string): Promise<boolean>;
   onDeleteWorkspace(workspaceId: string): Promise<boolean>;
-  onAddDirectory(): void;
-  onRemoveEntry(
-    entryId: string,
-    target?: RepositoryTargetDto
+  onOpenWorkspace(): void;
+  onRenameWorkspace(
+    workspaceId: string,
+    name: string
+  ): Promise<boolean>;
+  onRefresh(): Promise<void> | void;
+  onRemoveRepository(
+    target: RepositoryTargetDto
   ): Promise<boolean>;
   onRescan(): Promise<boolean>;
-  onSelectEntry(entryId: string): void;
   onSelectTarget(target: RepositoryTargetDto): void;
-  onUpdateEntry(
-    request: UpdateWorkspaceEntryRequest
-  ): Promise<boolean>;
   onSetGroupCollapsed(
-    entryId: string,
     groupId: string,
     collapsed: boolean
   ): Promise<void>;
 }
 
-interface VisibleEntry {
-  entry: WorkspaceEntryDto;
-  ungroupedTargets: RepositoryTargetDto[];
-  groups: Array<{
-    group: RepositoryGroupDto;
-    targets: RepositoryTargetDto[];
-  }>;
+interface VisibleGroup {
+  group: RepositoryGroupDto;
+  displayName: string;
+  targets: RepositoryTargetDto[];
 }
 
-interface ContextMenuState {
-  entryId: string;
-  groupId?: string;
-  targetName?: string;
-  target?: RepositoryTargetDto;
-  x: number;
-  y: number;
-}
+type ContextMenuState =
+  | {
+      kind: "workspace";
+      x: number;
+      y: number;
+    }
+  | {
+      kind: "group";
+      groupId: string;
+      x: number;
+      y: number;
+    }
+  | {
+      kind: "repository";
+      target: RepositoryTargetDto;
+      targetName: string;
+      x: number;
+      y: number;
+    };
 
 interface GroupRenameState {
-  entryId: string;
   groupId: string;
   automaticName: string;
   displayName: string;
 }
 
-interface TapdKeywordState {
-  entryId: string;
-  keyword: string;
+interface GroupDragState {
+  groupId: string;
+  overGroupId?: string;
+  position?: "before" | "after";
 }
 
 function getWorkspaceContextMenuPosition(
@@ -152,37 +158,48 @@ export function WorkspaceSidebar({
   onCreateWorkspace,
   onSwitchWorkspace,
   onDeleteWorkspace,
-  onAddDirectory,
-  onRemoveEntry,
+  onOpenWorkspace,
+  onRenameWorkspace,
+  onRefresh,
+  onRemoveRepository,
   onRescan,
-  onSelectEntry,
   onSelectTarget,
-  onSetGroupCollapsed,
-  onUpdateEntry
+  onSetGroupCollapsed
 }: WorkspaceSidebarProps) {
   const [query, setQuery] = useState("");
+  const [workspaceRootCollapsed, setWorkspaceRootCollapsed] =
+    useState(false);
   const [bulkCollapsing, setBulkCollapsing] = useState(false);
-  const [groupOrderByEntry, setGroupOrderByEntry] =
-    useState<Record<string, string[]>>({});
-  const [groupDragState, setGroupDragState] = useState<{
-    entryId: string;
-    groupId: string;
-    overGroupId?: string;
-    position?: "before" | "after";
-  } | null>(null);
+  const [groupOrder, setGroupOrder] = useState<string[]>([]);
+  const [groupDragState, setGroupDragState] =
+    useState<GroupDragState | null>(null);
   const suppressGroupClickUntil = useRef(0);
-  const [collapsedEntryIds, setCollapsedEntryIds] =
-    useState<Set<string>>(() => new Set());
   const [contextMenu, setContextMenu] =
     useState<ContextMenuState | null>(null);
   const [groupNameOverrides, setGroupNameOverrides] =
     useState<Record<string, string>>({});
-  const [removedEmptyGroupKeys, setRemovedEmptyGroupKeys] =
-    useState<Set<string>>(() => new Set());
   const [renameGroup, setRenameGroup] =
     useState<GroupRenameState | null>(null);
+  const [renameWorkspaceOpen, setRenameWorkspaceOpen] =
+    useState(false);
+  const [
+    renameWorkspaceSubmitting,
+    setRenameWorkspaceSubmitting
+  ] = useState(false);
+  const [deleteWorkspaceOpen, setDeleteWorkspaceOpen] =
+    useState(false);
+  const [
+    deleteWorkspaceSubmitting,
+    setDeleteWorkspaceSubmitting
+  ] = useState(false);
   const [tapdKeyword, setTapdKeyword] =
-    useState<TapdKeywordState | null>(null);
+    useState<string | null>(null);
+  const [tapdKeywordSubmitting, setTapdKeywordSubmitting] =
+    useState(false);
+  const [removeTarget, setRemoveTarget] =
+    useState<RepositoryTargetDto | null>(null);
+  const [removeSubmitting, setRemoveSubmitting] =
+    useState(false);
   const [repositoryMenuOpen, setRepositoryMenuOpen] =
     useState(false);
   const [
@@ -192,26 +209,6 @@ export function WorkspaceSidebar({
     key: string | undefined;
     enabled: boolean;
   }>({ key: undefined, enabled: false });
-  const [renameEntryId, setRenameEntryId] =
-    useState<string | null>(null);
-  const [renameSubmitting, setRenameSubmitting] =
-    useState(false);
-  const [removeEntryId, setRemoveEntryId] =
-    useState<string | null>(null);
-  const [removeTarget, setRemoveTarget] =
-    useState<RepositoryTargetDto | null>(null);
-  const [removeSubmitting, setRemoveSubmitting] =
-    useState(false);
-  const [
-    deleteWorkspaceFromEntry,
-    setDeleteWorkspaceFromEntry
-  ] = useState(false);
-  const [
-    deleteWorkspaceSubmitting,
-    setDeleteWorkspaceSubmitting
-  ] = useState(false);
-  const [tapdKeywordSubmitting, setTapdKeywordSubmitting] =
-    useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const repositoryMenuRef = useRef<HTMLDivElement>(null);
   const repositoryMenuTriggerRef =
@@ -220,14 +217,9 @@ export function WorkspaceSidebar({
     useRef<HTMLDivElement>(null);
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const workspaceId = workspace?.id;
-  const activeEntryId =
-    workspace?.selectedEntryId ?? workspace?.entries[0]?.id;
   const changedRepositoriesPreferenceKey =
-    workspaceId && activeEntryId
-      ? changedRepositoriesOnlyPreferenceKey(
-          workspaceId,
-          activeEntryId
-        )
+    workspaceId
+      ? changedRepositoriesOnlyPreferenceKey(workspaceId)
       : undefined;
   const showChangedRepositoriesOnly =
     changedRepositoriesPreference.key ===
@@ -235,47 +227,66 @@ export function WorkspaceSidebar({
       ? changedRepositoriesPreference.enabled
       : readChangedRepositoriesOnlyPreference(
           getRendererPreferenceStorage(),
-          workspaceId,
-          activeEntryId
+          workspaceId
         );
-  const entries = useMemo(
+  const visibleGroups = useMemo(
     () =>
-      getVisibleEntries(
+      getVisibleGroups(
         workspace,
         snapshots,
         normalizedQuery,
-        activeEntryId,
         groupNameOverrides,
-        showChangedRepositoriesOnly,
-        removedEmptyGroupKeys
+        showChangedRepositoriesOnly
       ),
     [
-      activeEntryId,
       groupNameOverrides,
       normalizedQuery,
-      removedEmptyGroupKeys,
       showChangedRepositoriesOnly,
       snapshots,
       workspace
     ]
   );
-  const allGroups = useMemo(
-    () =>
-      entries.flatMap(({ entry }) =>
-        entry.groups.map((group) => ({
-          entryId: entry.id,
-          groupId: group.id,
-          collapsed: group.collapsed
-        }))
-      ),
-    [entries]
+  const orderedVisibleGroups = useMemo(
+    () => orderGroups(visibleGroups, groupOrder),
+    [groupOrder, visibleGroups]
   );
-  const allGroupsHaveExpanded = allGroups.some(
-    ({ collapsed }) => !collapsed
+  const allGroupsHaveExpanded = visibleGroups.some(
+    ({ group }) => !group.collapsed
   );
   const allGroupsActionLabel = allGroupsHaveExpanded
     ? "收起所有仓库分组"
     : "展开所有仓库分组";
+  const contextGroup =
+    contextMenu?.kind === "group"
+      ? workspace?.groups.find(
+          (group) => group.id === contextMenu.groupId
+        )
+      : undefined;
+  const contextRepository =
+    contextMenu?.kind === "repository" && workspace
+      ? resolveWorkspaceTarget(workspace, contextMenu.target)
+      : null;
+  const workspaceCanonicalPath = workspace?.canonicalPath;
+  const contextRepositoryCanonicalPath =
+    contextRepository?.worktree?.canonicalPath;
+  const contextRepositoryIsRoot =
+    workspaceCanonicalPath !== undefined &&
+    contextRepositoryCanonicalPath !== undefined &&
+    workspaceCanonicalPath.toLocaleLowerCase() ===
+      contextRepositoryCanonicalPath.toLocaleLowerCase();
+  const removeTargetDetails =
+    removeTarget && workspace
+      ? resolveWorkspaceTarget(workspace, removeTarget)
+      : null;
+  const removeTargetName =
+    removeTargetDetails?.repository?.name ??
+    removeTargetDetails?.worktree?.name ??
+    "未知仓库";
+  const removeTargetPath = removeTargetDetails?.worktree?.path;
+  const directoryPath =
+    workspace?.path ??
+    workspace?.canonicalPath ??
+    "Workspace 根目录不可用";
 
   const toggleChangedRepositoriesOnly = () => {
     const next = !showChangedRepositoriesOnly;
@@ -286,59 +297,26 @@ export function WorkspaceSidebar({
     writeChangedRepositoriesOnlyPreference(
       getRendererPreferenceStorage(),
       workspaceId,
-      activeEntryId,
       next
     );
-  };
-  const orderedGroups = (
-    entryId: string,
-    groups: VisibleEntry["groups"]
-  ): VisibleEntry["groups"] => {
-    const savedOrder = groupOrderByEntry[entryId];
-    if (!savedOrder) {
-      return groups;
-    }
-
-    const used = new Set<string>();
-    const savedGroups = savedOrder.flatMap((groupId) => {
-      const match = groups.find(
-        ({ group }) => group.id === groupId
-      );
-      if (!match) {
-        return [];
-      }
-      used.add(groupId);
-      return [match];
-    });
-
-    return [
-      ...savedGroups,
-      ...groups.filter(({ group }) => !used.has(group.id))
-    ];
   };
 
   const handleGroupDragStart = (
     event: DragEvent<HTMLButtonElement>,
-    entryId: string,
     groupId: string
   ) => {
     event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData(
-      "text/plain",
-      `${entryId}:${groupId}`
-    );
+    event.dataTransfer.setData("text/plain", groupId);
     suppressGroupClickUntil.current = Date.now() + 800;
-    setGroupDragState({ entryId, groupId });
+    setGroupDragState({ groupId });
   };
 
   const handleGroupDragOver = (
     event: DragEvent<HTMLButtonElement>,
-    entryId: string,
     groupId: string
   ) => {
     if (
       !groupDragState ||
-      groupDragState.entryId !== entryId ||
       groupDragState.groupId === groupId
     ) {
       return;
@@ -352,9 +330,7 @@ export function WorkspaceSidebar({
         ? "before"
         : "after";
     setGroupDragState((current) =>
-      current &&
-      current.entryId === entryId &&
-      current.groupId !== groupId
+      current && current.groupId !== groupId
         ? {
             ...current,
             overGroupId: groupId,
@@ -366,31 +342,22 @@ export function WorkspaceSidebar({
 
   const handleGroupDrop = (
     event: DragEvent<HTMLButtonElement>,
-    entryId: string,
     groupId: string
   ) => {
     event.preventDefault();
     const drag = groupDragState;
-    if (
-      !drag ||
-      drag.entryId !== entryId ||
-      drag.groupId === groupId
-    ) {
+    if (!drag || drag.groupId === groupId || !workspace) {
       setGroupDragState(null);
       return;
     }
 
-    const entry = workspace?.entries.find(
-      ({ id }) => id === entryId
+    const allGroupIds = workspace.groups.map(
+      (group) => group.id
     );
-    if (!entry) {
-      setGroupDragState(null);
-      return;
-    }
-
-    const currentOrder =
-      groupOrderByEntry[entryId] ??
-      entry.groups.map(({ id }) => id);
+    const currentOrder = [
+      ...groupOrder.filter((id) => allGroupIds.includes(id)),
+      ...allGroupIds.filter((id) => !groupOrder.includes(id))
+    ];
     const nextOrder = currentOrder.filter(
       (currentId) => currentId !== drag.groupId
     );
@@ -403,30 +370,22 @@ export function WorkspaceSidebar({
     const insertIndex =
       targetIndex + (drag.position === "after" ? 1 : 0);
     nextOrder.splice(insertIndex, 0, drag.groupId);
-    setGroupOrderByEntry((current) => ({
-      ...current,
-      [entryId]: nextOrder
-    }));
-    setGroupDragState(null);
-  };
-
-  const handleGroupDragEnd = () => {
+    setGroupOrder(nextOrder);
     setGroupDragState(null);
   };
 
   const toggleAllGroups = async () => {
-    if (!allGroups.length || bulkCollapsing) {
+    if (!visibleGroups.length || bulkCollapsing) {
       return;
     }
 
     const nextCollapsed = allGroupsHaveExpanded;
     setBulkCollapsing(true);
     try {
-      for (const group of allGroups) {
+      for (const { group } of visibleGroups) {
         if (group.collapsed !== nextCollapsed) {
           await onSetGroupCollapsed(
-            group.entryId,
-            group.groupId,
+            group.id,
             nextCollapsed
           );
         }
@@ -436,112 +395,41 @@ export function WorkspaceSidebar({
     }
   };
 
-  const toggleEntry = (entryId: string) => {
-    onSelectEntry(entryId);
-    setCollapsedEntryIds((current) => {
-      const next = new Set(current);
-      if (next.has(entryId)) {
-        next.delete(entryId);
-      } else {
-        next.add(entryId);
-      }
-      return next;
-    });
-  };
-
-  const contextEntry = workspace?.entries.find(
-    (entry) => entry.id === contextMenu?.entryId
-  );
-  const contextGroup =
-    contextEntry && contextMenu?.groupId
-      ? contextEntry.groups.find(
-          (group) => group.id === contextMenu.groupId
-        )
-      : undefined;
-  const contextGroupCanBeDeleted =
-    contextGroup?.targets.length === 0;
-  const contextRemovalDeletesWorkspace = Boolean(
-    contextEntry &&
-      workspace?.entries.length === 1 &&
-      (!contextMenu?.target ||
-        contextEntry.kind === "standalone-repository")
-  );
-  const contextTargetIsRootRepository = Boolean(
-    contextMenu?.target &&
-      contextEntry?.kind === "workspace-meta-repository" &&
-      repositoryTargetSelected(
-        contextEntry.rootTarget,
-        contextMenu.target
-      )
-  );
-  const renameEntry = workspace?.entries.find(
-    (entry) => entry.id === renameEntryId
-  );
-  const removeEntry = workspace?.entries.find(
-    (entry) => entry.id === removeEntryId
-  );
-  const removeTargetDetails =
-    removeTarget && workspace
-      ? resolveWorkspaceTarget(workspace, removeTarget)
-      : null;
-  const removeTargetName =
-    removeTargetDetails?.worktree?.name ??
-    removeTargetDetails?.repository?.name;
-  const removeTargetPath = removeTargetDetails?.worktree?.path;
-  const tapdKeywordEntry = workspace?.entries.find(
-    (entry) => entry.id === tapdKeyword?.entryId
-  );
-
   useEffect(() => {
     setChangedRepositoriesPreference({
       key: changedRepositoriesPreferenceKey,
       enabled: readChangedRepositoriesOnlyPreference(
         getRendererPreferenceStorage(),
-        workspaceId,
-        activeEntryId
+        workspaceId
       )
     });
-  }, [
-    activeEntryId,
-    changedRepositoriesPreferenceKey,
-    workspaceId
-  ]);
+  }, [changedRepositoriesPreferenceKey, workspaceId]);
 
   useEffect(() => {
     setQuery("");
-    setGroupOrderByEntry({});
-    setCollapsedEntryIds(new Set());
+    setWorkspaceRootCollapsed(false);
+    setGroupOrder([]);
+    setGroupDragState(null);
     setContextMenu(null);
     setGroupNameOverrides({});
-    setRemovedEmptyGroupKeys(new Set());
     setRenameGroup(null);
-    setTapdKeyword(null);
-    setRenameEntryId(null);
-    setRemoveEntryId(null);
-    setRemoveTarget(null);
-    setDeleteWorkspaceFromEntry(false);
+    setRenameWorkspaceOpen(false);
+    setRenameWorkspaceSubmitting(false);
+    setDeleteWorkspaceOpen(false);
     setDeleteWorkspaceSubmitting(false);
+    setTapdKeyword(null);
+    setRemoveTarget(null);
     setRepositoryMenuOpen(false);
   }, [workspaceId]);
-
-  useEffect(() => {
-    if (
-      contextMenu &&
-      (!workspace?.entries.some(
-        (entry) => entry.id === contextMenu.entryId
-      ) ||
-        (contextMenu.groupId && !contextGroup))
-    ) {
-      setContextMenu(null);
-    }
-  }, [contextGroup, contextMenu, workspace]);
 
   useEffect(() => {
     if (!contextMenu) {
       return;
     }
 
-    const closeFromOutside = (event: globalThis.PointerEvent) => {
+    const closeFromOutside = (
+      event: globalThis.PointerEvent
+    ) => {
       const target = event.target;
       if (
         target instanceof Node &&
@@ -551,7 +439,9 @@ export function WorkspaceSidebar({
       }
       setContextMenu(null);
     };
-    const closeFromKeyboard = (event: globalThis.KeyboardEvent) => {
+    const closeFromKeyboard = (
+      event: globalThis.KeyboardEvent
+    ) => {
       if (event.key === "Escape") {
         event.preventDefault();
         setContextMenu(null);
@@ -580,7 +470,9 @@ export function WorkspaceSidebar({
       return;
     }
 
-    const closeFromOutside = (event: globalThis.PointerEvent) => {
+    const closeFromOutside = (
+      event: globalThis.PointerEvent
+    ) => {
       const target = event.target;
       if (
         target instanceof Node &&
@@ -591,7 +483,9 @@ export function WorkspaceSidebar({
       }
       setRepositoryMenuOpen(false);
     };
-    const closeFromKeyboard = (event: globalThis.KeyboardEvent) => {
+    const closeFromKeyboard = (
+      event: globalThis.KeyboardEvent
+    ) => {
       if (event.key === "Escape") {
         event.preventDefault();
         setRepositoryMenuOpen(false);
@@ -618,128 +512,84 @@ export function WorkspaceSidebar({
   useEffect(() => {
     if (sidebarHidden) {
       setRepositoryMenuOpen(false);
+      setContextMenu(null);
     }
   }, [sidebarHidden]);
 
-  const openContextMenu = (
-    event: MouseEvent<HTMLButtonElement>,
-    entryId: string,
-    targetName?: string,
-    target?: RepositoryTargetDto
+  const openWorkspaceContextMenu = (
+    event: MouseEvent<HTMLButtonElement>
   ) => {
     event.preventDefault();
     event.stopPropagation();
-
-    const menuWidth = 222;
-    const menuHeight =
-      target || workspace?.entries.find((entry) => entry.id === entryId)
-        ?.kind !== "workspace-meta-repository"
-        ? 136
-        : 176;
     const position = getWorkspaceContextMenuPosition(
       event.clientX,
       event.clientY,
-      menuWidth,
-      menuHeight
+      222,
+      184
     );
     setContextMenu({
-      entryId,
-      ...(targetName ? { targetName } : {}),
-      ...(target ? { target } : {}),
+      kind: "workspace",
+      ...position
+    });
+  };
+
+  const toggleWorkspaceRoot = () => {
+    onOpenWorkspace();
+    setWorkspaceRootCollapsed((collapsed) => !collapsed);
+  };
+
+  const openRepositoryContextMenu = (
+    event: MouseEvent<HTMLButtonElement>,
+    target: RepositoryTargetDto,
+    targetName: string
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const position = getWorkspaceContextMenuPosition(
+      event.clientX,
+      event.clientY,
+      222,
+      56
+    );
+    setContextMenu({
+      kind: "repository",
+      target,
+      targetName,
       ...position
     });
   };
 
   const openGroupContextMenu = (
     event: MouseEvent<HTMLButtonElement>,
-    entryId: string,
     group: RepositoryGroupDto
   ) => {
     event.preventDefault();
     event.stopPropagation();
-
-    const menuWidth = 222;
-    const menuHeight = 104;
     const position = getWorkspaceContextMenuPosition(
       event.clientX,
       event.clientY,
-      menuWidth,
-      menuHeight
+      222,
+      56
     );
     setContextMenu({
-      entryId,
+      kind: "group",
       groupId: group.id,
       ...position
     });
   };
 
-  const startRename = () => {
-    if (!contextEntry || contextGroup) {
-      return;
-    }
-    setContextMenu(null);
-    setRenameSubmitting(false);
-    setRenameEntryId(contextEntry.id);
-  };
-
-  const startTapdKeyword = () => {
-    if (
-      !contextEntry ||
-      contextGroup ||
-      contextMenu?.target ||
-      contextEntry.kind !== "workspace-meta-repository" ||
-      !workspaceId
-    ) {
-      return;
-    }
-
-    setContextMenu(null);
-    setTapdKeywordSubmitting(false);
-    setTapdKeyword({
-      entryId: contextEntry.id,
-      keyword: readTapdKeywordPreference(
-        getRendererPreferenceStorage(),
-        workspaceId,
-        contextEntry.id
-      )
-    });
-  };
-
-  const confirmTapdKeyword = async (
-    keyword: string
-  ): Promise<boolean> => {
-    if (!tapdKeyword || !workspaceId) {
-      return false;
-    }
-
-    setTapdKeywordSubmitting(true);
-    try {
-      writeTapdKeywordPreference(
-        getRendererPreferenceStorage(),
-        workspaceId,
-        tapdKeyword.entryId,
-        keyword
-      );
-      return true;
-    } finally {
-      setTapdKeywordSubmitting(false);
-    }
-  };
-
   const startGroupRename = () => {
-    if (!contextEntry || !contextGroup) {
+    if (!contextGroup) {
       return;
     }
-
     setContextMenu(null);
     setRenameGroup({
-      entryId: contextEntry.id,
       groupId: contextGroup.id,
       automaticName: contextGroup.name,
-      displayName:
-        groupNameOverrides[
-          groupNameKey(contextEntry.id, contextGroup.id)
-        ] ?? contextGroup.name
+      displayName: getGroupDisplayName(
+        groupNameOverrides,
+        contextGroup
+      )
     });
   };
 
@@ -749,115 +599,46 @@ export function WorkspaceSidebar({
     if (!renameGroup) {
       return false;
     }
-
     setGroupNameOverrides((current) => ({
       ...current,
-      [groupNameKey(renameGroup.entryId, renameGroup.groupId)]:
-        displayName
+      [renameGroup.groupId]: displayName
     }));
     return true;
   };
 
-  const removeContextGroup = () => {
-    if (
-      !contextEntry ||
-      !contextGroup ||
-      contextGroup.targets.length > 0
-    ) {
-      return;
-    }
-
-    const key = groupNameKey(
-      contextEntry.id,
-      contextGroup.id
-    );
-    setRemovedEmptyGroupKeys((current) => {
-      const next = new Set(current);
-      next.add(key);
-      return next;
-    });
-    setGroupNameOverrides((current) => {
-      if (!(key in current)) {
-        return current;
-      }
-
-      const next = { ...current };
-      delete next[key];
-      return next;
-    });
-    setGroupOrderByEntry((current) => {
-      const order = current[contextEntry.id];
-      if (!order?.includes(contextGroup.id)) {
-        return current;
-      }
-
-      const nextOrder = order.filter(
-        (groupId) => groupId !== contextGroup.id
-      );
-      if (nextOrder.length > 0) {
-        return {
-          ...current,
-          [contextEntry.id]: nextOrder
-        };
-      }
-
-      const {
-        [contextEntry.id]: _removedOrder,
-        ...remainingOrders
-      } = current;
-      return remainingOrders;
-    });
-    setContextMenu(null);
-  };
-
-  const startRemove = () => {
-    if (!contextEntry) {
+  const startWorkspaceRename = () => {
+    if (!workspace) {
       return;
     }
     setContextMenu(null);
-    if (contextRemovalDeletesWorkspace) {
-      setDeleteWorkspaceSubmitting(false);
-      setDeleteWorkspaceFromEntry(true);
-      return;
-    }
-    setRemoveSubmitting(false);
-    setRemoveTarget(contextMenu?.target ?? null);
-    setRemoveEntryId(contextEntry.id);
+    setRenameWorkspaceSubmitting(false);
+    setRenameWorkspaceOpen(true);
   };
 
-  const confirmRename = async (
-    displayName: string
+  const confirmWorkspaceRename = async (
+    name: string
   ): Promise<boolean> => {
-    if (!renameEntry || renameSubmitting) {
+    if (!workspace || renameWorkspaceSubmitting) {
       return false;
     }
-    setRenameSubmitting(true);
+    setRenameWorkspaceSubmitting(true);
     try {
-      return await onUpdateEntry({
-        entryId: renameEntry.id,
-        displayName
-      });
+      return await onRenameWorkspace(workspace.id, name);
     } finally {
-      setRenameSubmitting(false);
+      setRenameWorkspaceSubmitting(false);
     }
   };
 
-  const confirmRemove = async (): Promise<boolean> => {
-    if (!removeEntry || removeSubmitting) {
-      return false;
+  const startWorkspaceDelete = () => {
+    if (!workspace || workspaces.length <= 1) {
+      return;
     }
-    setRemoveSubmitting(true);
-    try {
-      return await onRemoveEntry(
-        removeEntry.id,
-        removeTarget ?? undefined
-      );
-    } finally {
-      setRemoveSubmitting(false);
-    }
+    setContextMenu(null);
+    setDeleteWorkspaceSubmitting(false);
+    setDeleteWorkspaceOpen(true);
   };
 
-  const confirmDeleteWorkspaceFromEntry =
+  const confirmWorkspaceDelete =
     async (): Promise<boolean> => {
       if (
         !workspace ||
@@ -874,8 +655,62 @@ export function WorkspaceSidebar({
       }
     };
 
+  const startTapdKeyword = useCallback(() => {
+    if (!workspaceId) {
+      return;
+    }
+    setContextMenu(null);
+    setTapdKeywordSubmitting(false);
+    setTapdKeyword(
+      readTapdKeywordPreference(
+        getRendererPreferenceStorage(),
+        workspaceId
+      )
+    );
+  }, [workspaceId]);
+
+  const confirmTapdKeyword = async (
+    keyword: string
+  ): Promise<boolean> => {
+    if (tapdKeyword === null || !workspaceId) {
+      return false;
+    }
+    setTapdKeywordSubmitting(true);
+    try {
+      writeTapdKeywordPreference(
+        getRendererPreferenceStorage(),
+        workspaceId,
+        keyword
+      );
+      return true;
+    } finally {
+      setTapdKeywordSubmitting(false);
+    }
+  };
+
+  const startRemoveRepository = () => {
+    if (contextMenu?.kind !== "repository") {
+      return;
+    }
+    setRemoveSubmitting(false);
+    setRemoveTarget(contextMenu.target);
+    setContextMenu(null);
+  };
+
+  const confirmRemoveRepository =
+    async (): Promise<boolean> => {
+      if (!removeTarget || removeSubmitting) {
+        return false;
+      }
+      setRemoveSubmitting(true);
+      try {
+        return await onRemoveRepository(removeTarget);
+      } finally {
+        setRemoveSubmitting(false);
+      }
+    };
+
   const renderRepositoryRow = (
-    entry: WorkspaceEntryDto,
     target: RepositoryTargetDto
   ) => {
     if (!workspace) {
@@ -901,21 +736,17 @@ export function WorkspaceSidebar({
     const status = snapshotStatus(snapshot);
 
     return (
-      <Button variant="unstyled"
+      <Button
+        variant="unstyled"
         aria-current={selected ? "true" : undefined}
         aria-haspopup="menu"
         className={`repository-row${
           selected ? " selected" : ""
         }`}
-        key={`${entry.id}:${target.repositoryId}:${target.worktreeId}`}
+        key={`${target.repositoryId}:${target.worktreeId}`}
         onClick={() => onSelectTarget(target)}
         onContextMenu={(event) =>
-          openContextMenu(
-            event,
-            entry.id,
-            name,
-            target
-          )
+          openRepositoryContextMenu(event, target, name)
         }
         title={resolved.worktree?.path}
         type="button"
@@ -961,42 +792,35 @@ export function WorkspaceSidebar({
 
       <div className="sidebar-search-wrap">
         <div className="sidebar-search-field">
-          <span className="sidebar-search-icon">
-            <Icon name="search" size={15} />
-          </span>
           <Input
-            appearance="unstyled"
             aria-label="筛选仓库"
             autoComplete="off"
-            className={query ? "has-value" : undefined}
+            clearLabel="清除仓库筛选"
+            fullWidth
+            leading={<Icon name="search" size={14} />}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="筛选仓库…"
+            size="small"
             spellCheck={false}
-            type="search"
             value={query}
+            {...(query
+              ? { onClear: () => setQuery("") }
+              : {})}
           />
-          {query && (
-            <Button variant="unstyled"
-              aria-label="清除仓库筛选"
-              className="sidebar-search-clear"
-              onClick={() => setQuery("")}
-              title="清除筛选"
-              type="button"
-            >
-              <Icon name="close" size={14} />
-            </Button>
-          )}
         </div>
         <div
           className="sidebar-repository-menu-wrap"
           ref={repositoryMenuRef}
         >
-          <Button variant="unstyled"
+          <Button
+            variant="unstyled"
             aria-expanded={repositoryMenuOpen}
             aria-haspopup="menu"
             aria-label="仓库筛选菜单"
             className="sidebar-repository-menu-trigger"
-            onClick={() => setRepositoryMenuOpen((open) => !open)}
+            onClick={() =>
+              setRepositoryMenuOpen((open) => !open)
+            }
             ref={repositoryMenuTriggerRef}
             title="仓库筛选菜单"
             type="button"
@@ -1032,7 +856,7 @@ export function WorkspaceSidebar({
                   ? "全部仓库"
                   : "变更仓库"}
               </MenuItem>
-              {allGroups.length > 0 && (
+              {visibleGroups.length > 0 && (
                 <MenuItem
                   aria-label={allGroupsActionLabel}
                   disabled={bulkCollapsing}
@@ -1066,211 +890,162 @@ export function WorkspaceSidebar({
         aria-label="Workspace 仓库"
         className="repository-list"
       >
-        {entries.length > 0 && workspace ? (
-          entries.map(({ entry, groups, ungroupedTargets }) => (
-            <section
-              className={`workspace-root${
-                workspace.selectedEntryId === entry.id
-                  ? " selected"
-                  : ""
-              }${
-                collapsedEntryIds.has(entry.id)
-                  ? " collapsed"
-                  : ""
-              }`}
-              key={entry.id}
+        {workspace ? (
+          <section
+            className={`workspace-root${
+              activeView === "workspace" ? " selected" : ""
+            }${
+              workspaceRootCollapsed ? " collapsed" : ""
+            }`}
+          >
+            <Button
+              variant="unstyled"
+              aria-controls="workspace-root-body"
+              aria-current={
+                activeView === "workspace" ? "page" : undefined
+              }
+              aria-expanded={!workspaceRootCollapsed}
+              aria-label={`打开 ${workspace.name} 概览`}
+              aria-haspopup="menu"
+              className="workspace-root-heading"
+              onClick={toggleWorkspaceRoot}
+              onContextMenu={openWorkspaceContextMenu}
+              title="打开 Workspace 概览"
+              type="button"
             >
-              <Button variant="unstyled"
-                aria-current={
-                  workspace.selectedEntryId === entry.id
-                    ? "true"
-                    : undefined
-                }
-                aria-controls={`workspace-root-body-${entry.id}`}
-                aria-expanded={!collapsedEntryIds.has(entry.id)}
-                aria-haspopup="menu"
-                className="workspace-root-heading"
-                onClick={() => toggleEntry(entry.id)}
-                onContextMenu={(event) =>
-                  openContextMenu(event, entry.id)
-                }
-                type="button"
+              <span className="workspace-root-icon">
+                <Icon name="folder" size={15} />
+              </span>
+              <span className="workspace-root-copy">
+                <strong>{workspace.name}</strong>
+                <small title={directoryPath}>
+                  {directoryPath}
+                </small>
+              </span>
+              <span
+                aria-hidden="true"
+                className="workspace-root-toggle"
               >
-                <span className="workspace-root-icon">
-                  <Icon
-                    name={
-                      entry.kind === "standalone-repository"
-                        ? "repository"
-                        : "folder"
-                    }
-                    size={15}
-                  />
-                </span>
-                <span className="workspace-root-copy">
-                  <strong>{entry.displayName}</strong>
-                  {entry.kind !== "workspace-meta-repository" &&
-                  entry.kind !== "standalone-repository" && (
-                    <span>{WORKSPACE_ENTRY_LABELS[entry.kind]}</span>
-                  )}
-                  <small title={entry.path}>{entry.path}</small>
-                </span>
-                <span
-                  aria-hidden="true"
-                  className="workspace-root-toggle"
-                >
-                  <Icon
-                    name={
-                      collapsedEntryIds.has(entry.id)
-                        ? "collapse"
-                        : "chevron"
-                    }
-                    size={14}
-                  />
-                </span>
-                {entry.scanIssues.length > 0 && (
-                  <span
-                    className="root-issue-count"
-                    title={`${entry.scanIssues.length} 个局部扫描问题`}
-                  >
-                    {entry.scanIssues.length}
-                  </span>
-                )}
-              </Button>
+                <Icon
+                  name={
+                    workspaceRootCollapsed
+                      ? "collapse"
+                      : "chevron"
+                  }
+                  size={14}
+                />
+              </span>
+            </Button>
 
-              <div
-                aria-hidden={collapsedEntryIds.has(entry.id)}
-                className={`workspace-root-body${
-                  collapsedEntryIds.has(entry.id)
-                    ? " collapsed"
-                    : ""
-                }`}
-                id={`workspace-root-body-${entry.id}`}
-                inert={collapsedEntryIds.has(entry.id)}
-              >
-                <div className="workspace-root-body-inner">
-                  {ungroupedTargets.length > 0 && (
-                    <div className="workspace-standalone-body">
-                      {ungroupedTargets.map((target) =>
-                        renderRepositoryRow(entry, target)
-                      )}
-                    </div>
-                  )}
-                  {orderedGroups(entry.id, groups).map(
-                    ({ group, targets }) => (
-                    <div
-                      className={`repository-group${
-                        group.collapsed ? " collapsed" : ""
-                      }`}
-                      key={group.id}
-                  >
-                  <Button variant="unstyled"
-                    aria-expanded={!group.collapsed}
-                    className={`group-header${
-                      groupDragState?.entryId === entry.id &&
-                      groupDragState.groupId === group.id
-                        ? " dragging"
-                        : ""
-                    }${
-                      groupDragState?.entryId === entry.id &&
-                      groupDragState.overGroupId === group.id &&
-                      groupDragState.position === "before"
-                        ? " drag-over-before"
-                        : ""
-                    }${
-                      groupDragState?.entryId === entry.id &&
-                      groupDragState.overGroupId === group.id &&
-                      groupDragState.position === "after"
-                        ? " drag-over-after"
-                        : ""
-                    }`}
-                    disabled={bulkCollapsing}
-                    draggable={!bulkCollapsing}
-                    onClick={(event) => {
-                      if (
-                        Date.now() <
-                        suppressGroupClickUntil.current
-                      ) {
-                        event.preventDefault();
-                        suppressGroupClickUntil.current = 0;
-                        return;
-                      }
-                      void onSetGroupCollapsed(
-                        entry.id,
-                        group.id,
-                        !group.collapsed
-                      );
-                    }}
-                    onDragEnd={handleGroupDragEnd}
-                    onDragOver={(event) =>
-                      handleGroupDragOver(
-                        event,
-                        entry.id,
-                        group.id
-                      )
-                    }
-                    onDragStart={(event) =>
-                      handleGroupDragStart(
-                        event,
-                        entry.id,
-                        group.id
-                      )
-                    }
-                    onDrop={(event) =>
-                      handleGroupDrop(
-                        event,
-                        entry.id,
-                        group.id
-                      )
-                    }
-                    onContextMenu={(event) =>
-                      openGroupContextMenu(
-                        event,
-                        entry.id,
-                        group
-                      )
-                    }
-                    type="button"
-                  >
-                    <Icon
-                      className="group-chevron"
-                      name="collapse"
-                      size={13}
-                    />
-                    <span>
-                      {getGroupDisplayName(
-                        groupNameOverrides,
-                        entry.id,
-                        group
-                      )}
-                    </span>
-                    <span className="group-count">
-                      {targets.length}
-                    </span>
-                  </Button>
-                  {!group.collapsed && (
-                    <div className="group-body">
-                      {targets.length === 0 ? (
-                        <div className="repository-group-empty">
-                          暂无仓库
-                        </div>
-                      ) : (
-                        targets.map((target) =>
-                          renderRepositoryRow(entry, target)
-                        )
-                      )}
-                    </div>
-                  )}
-                </div>
+            <div
+              aria-hidden={workspaceRootCollapsed}
+              className="workspace-root-body"
+              id="workspace-root-body"
+              inert={workspaceRootCollapsed}
+            >
+              <div className="workspace-root-body-inner">
+                {orderedVisibleGroups.length > 0 ? (
+                  orderedVisibleGroups.map(
+                    ({ group, displayName, targets }) => (
+                      <div
+                        className={`repository-group${
+                          group.collapsed ? " collapsed" : ""
+                        }`}
+                        key={group.id}
+                      >
+                        <Button
+                          variant="unstyled"
+                          aria-expanded={!group.collapsed}
+                          aria-label={displayName}
+                          className={`group-header${
+                            groupDragState?.groupId === group.id
+                              ? " dragging"
+                              : ""
+                          }${
+                            groupDragState?.overGroupId === group.id &&
+                            groupDragState.position === "before"
+                              ? " drag-over-before"
+                              : ""
+                          }${
+                            groupDragState?.overGroupId === group.id &&
+                            groupDragState.position === "after"
+                              ? " drag-over-after"
+                              : ""
+                          }`}
+                          disabled={bulkCollapsing}
+                          draggable={!bulkCollapsing}
+                          onClick={(event) => {
+                            if (
+                              Date.now() <
+                              suppressGroupClickUntil.current
+                            ) {
+                              event.preventDefault();
+                              suppressGroupClickUntil.current = 0;
+                              return;
+                            }
+                            void onSetGroupCollapsed(
+                              group.id,
+                              !group.collapsed
+                            );
+                          }}
+                          onContextMenu={(event) =>
+                            openGroupContextMenu(event, group)
+                          }
+                          onDragEnd={() =>
+                            setGroupDragState(null)
+                          }
+                          onDragOver={(event) =>
+                            handleGroupDragOver(event, group.id)
+                          }
+                          onDragStart={(event) =>
+                            handleGroupDragStart(event, group.id)
+                          }
+                          onDrop={(event) =>
+                            handleGroupDrop(event, group.id)
+                          }
+                          type="button"
+                        >
+                          <Icon
+                            className="group-chevron"
+                            name="collapse"
+                            size={13}
+                          />
+                          <span>{displayName}</span>
+                          <span className="group-count">
+                            {targets.length}
+                          </span>
+                        </Button>
+                        {!group.collapsed && (
+                          <div className="group-body">
+                            {targets.length === 0 ? (
+                              <div className="repository-group-empty">
+                                暂无仓库
+                              </div>
+                            ) : (
+                              targets.map(renderRepositoryRow)
+                            )}
+                          </div>
+                        )}
+                      </div>
                     )
-                  )}
-                </div>
+                  )
+                ) : (
+                  <SidebarEmpty
+                    busy={busy}
+                    hasRepositories={Boolean(
+                      workspace.repositories.length
+                    )}
+                    onClearQuery={() => setQuery("")}
+                    query={normalizedQuery}
+                  />
+                )}
               </div>
-            </section>
-          ))
+            </div>
+          </section>
         ) : (
           <SidebarEmpty
             busy={busy}
-            hasEntries={Boolean(workspace?.entries.length)}
+            hasRepositories={false}
             onClearQuery={() => setQuery("")}
             query={normalizedQuery}
           />
@@ -1278,23 +1053,31 @@ export function WorkspaceSidebar({
       </nav>
 
       <div className="sidebar-footer">
-        <Button variant="unstyled"
-          className="sidebar-add-directory"
-          disabled={busy}
-          onClick={onAddDirectory}
+        <div
+          className="workspace-directory"
+          data-workspace-directory
+          title={directoryPath}
+        >
+          <Icon name="folder" size={14} />
+          <span>{directoryPath}</span>
+        </div>
+        <Button
+          variant="unstyled"
+          aria-label="刷新 Workspace 状态"
+          className="icon-button"
+          disabled={busy || !workspace}
+          onClick={() => void onRefresh()}
+          title="刷新 Workspace 状态"
           type="button"
         >
-          <Icon
-            name="plus"
-            size={14}
-          />
-          添加目录
+          <Icon name="activity" size={14} />
         </Button>
-        <Button variant="unstyled"
+        <Button
+          variant="unstyled"
           aria-busy={busy}
           aria-label="重新扫描 Workspace"
           className="icon-button"
-          disabled={busy}
+          disabled={busy || !workspace}
           onClick={() => void onRescan()}
           title="重新扫描 Workspace"
           type="button"
@@ -1302,10 +1085,20 @@ export function WorkspaceSidebar({
           <Icon name="refresh" size={14} />
         </Button>
       </div>
-      {contextMenu && contextEntry && (
+
+      {contextMenu && (
         <LayerPortal>
           <Menu
-            aria-label={`${contextGroup ? getGroupDisplayName(groupNameOverrides, contextEntry.id, contextGroup) : contextMenu.targetName ?? contextEntry.displayName} 操作`}
+            aria-label={
+              contextMenu.kind === "workspace"
+                ? `${workspace?.name ?? "Workspace"} 操作`
+                : contextMenu.kind === "group"
+                ? `${getGroupDisplayName(
+                    groupNameOverrides,
+                    contextGroup
+                  )} 操作`
+                : `${contextMenu.targetName} 操作`
+            }
             className="workspace-context-menu"
             ref={contextMenuRef}
             style={{
@@ -1313,48 +1106,24 @@ export function WorkspaceSidebar({
               top: contextMenu.y
             }}
           >
-            {contextGroup ? (
-              <>
-                  <MenuItem
-                    leading={<Icon name="tag" size={14} />}
-                  onClick={startGroupRename}
-                >
-                  重命名分组
-                </MenuItem>
-                <MenuSeparator />
-                <MenuItem
-                  disabled={!contextGroupCanBeDeleted}
-                  leading={<Icon name="warning" size={14} />}
-                  onClick={removeContextGroup}
-                  title={
-                    contextGroupCanBeDeleted
-                      ? "删除空分组"
-                      : "分组中仍有仓库，无法删除"
-                  }
-                  tone="danger"
-                >
-                  删除分组
-                </MenuItem>
-              </>
-            ) : (
+            {contextMenu.kind === "workspace" ? (
               <>
                 <MenuItem
+                  disabled={!workspace || busy}
                   leading={<Icon name="settings" size={14} />}
-                  onClick={startRename}
+                  onClick={startWorkspaceRename}
                 >
                   修改显示名称
                 </MenuItem>
-                {!contextMenu.target &&
-                  contextEntry.kind === "workspace-meta-repository" && (
-                    <MenuItem
-                      leading={<Icon name="tag" size={14} />}
-                      onClick={startTapdKeyword}
-                    >
-                      设置 TAPD 关键字
-                    </MenuItem>
-                  )}
                 <MenuItem
-                  disabled={busy}
+                  disabled={!workspace}
+                  leading={<Icon name="tag" size={14} />}
+                  onClick={startTapdKeyword}
+                >
+                  设置 TAPD 关键字
+                </MenuItem>
+                <MenuItem
+                  disabled={!workspace || busy}
                   leading={<Icon name="refresh" size={14} />}
                   onClick={() => {
                     setContextMenu(null);
@@ -1366,83 +1135,89 @@ export function WorkspaceSidebar({
                 <MenuSeparator />
                 <MenuItem
                   disabled={
+                    !workspace ||
                     busy ||
-                    contextTargetIsRootRepository ||
-                    (contextRemovalDeletesWorkspace &&
-                      workspaces.length <= 1)
+                    workspaces.length <= 1
                   }
                   leading={<Icon name="warning" size={14} />}
-                  onClick={startRemove}
+                  onClick={startWorkspaceDelete}
                   title={
-                    contextTargetIsRootRepository
-                      ? "根仓库不能单独移出；可从条目菜单删除整个 Workspace"
-                      : contextRemovalDeletesWorkspace &&
-                          workspaces.length <= 1
+                    workspaces.length <= 1
                       ? "至少需要保留一个 Workspace"
                       : undefined
                   }
                   tone="danger"
                 >
-                  {contextRemovalDeletesWorkspace
-                    ? "删除 Workspace"
-                    : "移出 Workspace"}
+                  删除 Workspace
                 </MenuItem>
               </>
+            ) : contextMenu.kind === "group" ? (
+              <MenuItem
+                disabled={!contextGroup}
+                leading={<Icon name="tag" size={14} />}
+                onClick={startGroupRename}
+              >
+                重命名分组
+              </MenuItem>
+            ) : (
+              <MenuItem
+                disabled={busy || contextRepositoryIsRoot}
+                leading={<Icon name="warning" size={14} />}
+                onClick={startRemoveRepository}
+                tone="danger"
+              >
+                {contextRepositoryIsRoot
+                  ? "Workspace 根仓库"
+                  : "移出 Workspace"}
+              </MenuItem>
             )}
           </Menu>
         </LayerPortal>
       )}
+
       {renameGroup && (
         <WorkspaceGroupRenameDialog
-          automaticName={renameGroup.automaticName}
           busy={false}
           displayName={renameGroup.displayName}
           onCancel={() => setRenameGroup(null)}
           onConfirm={confirmGroupRename}
         />
       )}
-      {renameEntry && (
-        <WorkspaceEntryRenameDialog
-          busy={renameSubmitting || busy}
-          entry={renameEntry}
-          onCancel={() => setRenameEntryId(null)}
-          onConfirm={confirmRename}
+      {renameWorkspaceOpen && workspace && (
+        <WorkspaceRenameDialog
+          busy={renameWorkspaceSubmitting || busy}
+          initialName={workspace.name}
+          {...(workspace.path ? { path: workspace.path } : {})}
+          onCancel={() => setRenameWorkspaceOpen(false)}
+          onConfirm={confirmWorkspaceRename}
         />
       )}
-      {tapdKeyword && tapdKeywordEntry && (
-        <WorkspaceEntryTapdKeywordDialog
+      {tapdKeyword !== null && workspace && (
+        <WorkspaceTapdKeywordDialog
           busy={tapdKeywordSubmitting}
-          entry={tapdKeywordEntry}
-          initialKeyword={tapdKeyword.keyword}
+          initialKeyword={tapdKeyword}
+          workspaceName={workspace.name}
           onCancel={() => setTapdKeyword(null)}
           onConfirm={confirmTapdKeyword}
         />
       )}
-      {removeEntry && (
-        <WorkspaceEntryRemoveDialog
-          busy={removeSubmitting || busy}
-          entry={removeEntry}
-          {...(removeTargetName
-            ? { targetName: removeTargetName }
-            : {})}
-          {...(removeTargetPath
-            ? { targetPath: removeTargetPath }
-            : {})}
-          onCancel={() => {
-            setRemoveEntryId(null);
-            setRemoveTarget(null);
-          }}
-          onConfirm={confirmRemove}
-        />
-      )}
-      {deleteWorkspaceFromEntry && workspace && (
+      {deleteWorkspaceOpen && workspace && (
         <WorkspaceDeleteDialog
           busy={deleteWorkspaceSubmitting || busy}
           name={workspace.name}
-          onCancel={() =>
-            setDeleteWorkspaceFromEntry(false)
-          }
-          onConfirm={confirmDeleteWorkspaceFromEntry}
+          onCancel={() => setDeleteWorkspaceOpen(false)}
+          onConfirm={confirmWorkspaceDelete}
+        />
+      )}
+      {removeTarget && (
+        <WorkspaceRepositoryRemoveDialog
+          busy={removeSubmitting || busy}
+          name={removeTargetName}
+          {...(removeTargetPath
+            ? { path: removeTargetPath }
+            : {})}
+          onCancel={() => setRemoveTarget(null)}
+          onConfirm={confirmRemoveRepository}
         />
       )}
     </aside>
@@ -1544,7 +1319,8 @@ const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
   return (
     <>
       <div className="workspace-switcher-wrap" ref={wrapRef}>
-        <Button variant="unstyled"
+        <Button
+          variant="unstyled"
           aria-expanded={open}
           aria-haspopup="menu"
           aria-label="切换 Workspace"
@@ -1588,6 +1364,12 @@ const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
             <MenuHeading>Workspace</MenuHeading>
             {workspaces.map((candidate) => (
               <MenuItem
+                aria-checked={candidate.id === workspace?.id}
+                className={
+                  candidate.id === workspace?.id
+                    ? "is-selected"
+                    : undefined
+                }
                 disabled={busy}
                 key={candidate.id}
                 leading={<Icon name="layers" size={15} />}
@@ -1595,11 +1377,7 @@ const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
                   setOpen(false);
                   void onSwitchWorkspace(candidate.id);
                 }}
-                trailing={
-                  candidate.id === workspace?.id ? (
-                    <Icon name="check" size={14} />
-                  ) : undefined
-                }
+                role="menuitemradio"
               >
                 {candidate.name}
               </MenuItem>
@@ -1758,111 +1536,82 @@ function snapshotStatus(
   };
 }
 
-function getVisibleEntries(
+function getVisibleGroups(
   workspace: WorkspaceDetailsDto | null,
   snapshots: RepositoryStatusSnapshotDto[],
   query: string,
-  activeEntryId?: string,
   groupNameOverrides: Record<string, string> = {},
-  showChangedRepositoriesOnly = false,
-  removedEmptyGroupKeys: ReadonlySet<string> = new Set()
-): VisibleEntry[] {
+  showChangedRepositoriesOnly = false
+): VisibleGroup[] {
   if (!workspace) {
     return [];
   }
 
-  return workspace.entries
-    .filter(
-      (entry) => !activeEntryId || entry.id === activeEntryId
-    )
-    .map((entry) => {
-      const entryMatches =
+  return workspace.groups
+    .map((group) => {
+      const displayName = getGroupDisplayName(
+        groupNameOverrides,
+        group
+      );
+      const groupMatches =
         !query ||
-        entry.displayName.toLocaleLowerCase().includes(query) ||
-        entry.path.toLocaleLowerCase().includes(query) ||
-        WORKSPACE_ENTRY_LABELS[entry.kind]
-          .toLocaleLowerCase()
-          .includes(query);
-      const ungroupedTargets =
-        entry.kind === "standalone-repository" &&
-        (!showChangedRepositoriesOnly ||
-          targetHasLocalChanges(snapshots, entry.target)) &&
-        (entryMatches ||
+        displayName.toLocaleLowerCase().includes(query);
+      const targets = group.targets.filter((target) => {
+        if (
+          showChangedRepositoriesOnly &&
+          !targetHasLocalChanges(snapshots, target)
+        ) {
+          return false;
+        }
+        return (
+          groupMatches ||
           workspaceTargetMatchesQuery(
             workspace,
-            entry.target,
+            target,
             query
-          ))
-          ? [entry.target]
-          : [];
-      const groups = entry.groups
-        .map((group) => ({
-          group,
-          targets: group.targets.filter((target) => {
-            if (
-              showChangedRepositoriesOnly &&
-              !targetHasLocalChanges(snapshots, target)
-            ) {
-              return false;
-            }
-
-            if (entryMatches) {
-              return true;
-            }
-
-            const resolved = resolveWorkspaceTarget(
-              workspace,
-              target
-            );
-            return [
-              getGroupDisplayName(
-                groupNameOverrides,
-                entry.id,
-                group
-              ),
-              resolved.repository?.name,
-              resolved.worktree?.name,
-              resolved.worktree?.path,
-              resolved.worktree?.branch
-            ]
-              .filter(Boolean)
-              .some((value) =>
-                String(value).toLocaleLowerCase().includes(query)
-              );
-          })
-        }))
-        .filter(
-          ({ group, targets }) =>
-            !removedEmptyGroupKeys.has(
-              groupNameKey(entry.id, group.id)
-            ) &&
-            (targets.length > 0 ||
-              (!query &&
-                !showChangedRepositoriesOnly &&
-                group.targets.length === 0))
+          )
         );
+      });
 
       return {
-        entry,
-        ungroupedTargets,
-        groups
+        group,
+        displayName,
+        targets
       };
     })
     .filter(
-      ({ entry, groups, ungroupedTargets }) =>
-        showChangedRepositoriesOnly
-          ? groups.length > 0 || ungroupedTargets.length > 0
-          : !query ||
-            entry.displayName
-              .toLocaleLowerCase()
-              .includes(query) ||
-            entry.path.toLocaleLowerCase().includes(query) ||
-            WORKSPACE_ENTRY_LABELS[entry.kind]
-              .toLocaleLowerCase()
-              .includes(query) ||
-            groups.length > 0 ||
-            ungroupedTargets.length > 0
+      ({ group, targets }) =>
+        targets.length > 0 ||
+        (!query &&
+          !showChangedRepositoriesOnly &&
+          group.targets.length === 0)
     );
+}
+
+function orderGroups(
+  groups: VisibleGroup[],
+  order: string[]
+): VisibleGroup[] {
+  if (!order.length) {
+    return groups;
+  }
+
+  const used = new Set<string>();
+  const ordered = order.flatMap((groupId) => {
+    const match = groups.find(
+      ({ group }) => group.id === groupId
+    );
+    if (!match) {
+      return [];
+    }
+    used.add(groupId);
+    return [match];
+  });
+
+  return [
+    ...ordered,
+    ...groups.filter(({ group }) => !used.has(group.id))
+  ];
 }
 
 function workspaceTargetMatchesQuery(
@@ -1876,6 +1625,7 @@ function workspaceTargetMatchesQuery(
   const resolved = resolveWorkspaceTarget(workspace, target);
   return [
     resolved.repository?.name,
+    resolved.repository?.commonDir,
     resolved.worktree?.name,
     resolved.worktree?.path,
     resolved.worktree?.branch
@@ -1891,40 +1641,37 @@ function targetHasLocalChanges(
   target: RepositoryTargetDto
 ): boolean {
   const snapshot = findTargetSnapshot(snapshots, target);
-  return Boolean(snapshot?.conflicted) ||
-    getSnapshotChangeCount(snapshot) > 0;
-}
-
-function groupNameKey(entryId: string, groupId: string): string {
-  return `${entryId}:${groupId}`;
+  return (
+    Boolean(snapshot?.conflicted) ||
+    getSnapshotChangeCount(snapshot) > 0
+  );
 }
 
 function getGroupDisplayName(
   overrides: Record<string, string>,
-  entryId: string,
-  group: RepositoryGroupDto
+  group: RepositoryGroupDto | undefined
 ): string {
-  return (
-    overrides[groupNameKey(entryId, group.id)] ??
-    group.name
-  );
+  if (!group) {
+    return "仓库分组";
+  }
+  return overrides[group.id] ?? group.name;
 }
 
 function SidebarEmpty({
   busy,
-  hasEntries,
+  hasRepositories,
   query,
   onClearQuery
 }: {
   busy: boolean;
-  hasEntries: boolean;
+  hasRepositories: boolean;
   query: string;
   onClearQuery(): void;
 }) {
   return (
     <SkeletonBoundary
       fallback={<SidebarSkeleton />}
-      hasContent={hasEntries}
+      hasContent={hasRepositories}
       label="正在读取 Workspace 仓库"
       loading={busy}
       surfaceClassName="sidebar-skeleton"
@@ -1932,7 +1679,8 @@ function SidebarEmpty({
       {query ? (
         <div className="sidebar-empty">
           <span>当前筛选条件没有匹配的仓库。</span>
-          <Button size="small"
+          <Button
+            size="small"
             onClick={onClearQuery}
             type="button"
           >
@@ -1941,7 +1689,7 @@ function SidebarEmpty({
         </div>
       ) : (
         <div className="sidebar-empty">
-          尚未添加目录。可通过选择器、手动路径或拖拽开始。
+          Workspace 根目录中尚未发现仓库，可尝试重新扫描。
         </div>
       )}
     </SkeletonBoundary>

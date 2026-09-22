@@ -1,12 +1,12 @@
 import {
   contextBridge,
   ipcRenderer,
-  webUtils,
   type IpcRendererEvent
 } from "electron";
 
 import { IPC_EVENTS } from "@gitnest/contracts";
 import type {
+  ApplicationUpdateStateDto,
   AppSettingsDto,
   CodeAnalysisStateDto,
   IpcInvoke,
@@ -22,7 +22,6 @@ const invoke = ((
 
 const bridge = createGitNestBridge(
   invoke,
-  (file) => webUtils.getPathForFile(file as never),
   (listener) => {
     const handler = (
       _event: IpcRendererEvent,
@@ -67,6 +66,42 @@ const bridge = createGitNestBridge(
     return () => {
       ipcRenderer.removeListener(
         IPC_EVENTS.settingsChanged,
+        handler
+      );
+    };
+  },
+  (listener) => {
+    const handler = (
+      _event: IpcRendererEvent,
+      state: ApplicationUpdateStateDto
+    ) => {
+      listener(state);
+    };
+    ipcRenderer.on(
+      IPC_EVENTS.applicationUpdateStateChanged,
+      handler
+    );
+    return () => {
+      ipcRenderer.removeListener(
+        IPC_EVENTS.applicationUpdateStateChanged,
+        handler
+      );
+    };
+  },
+  (listener) => {
+    const handler = (
+      _event: IpcRendererEvent,
+      maximized: boolean
+    ) => {
+      listener(maximized);
+    };
+    ipcRenderer.on(
+      IPC_EVENTS.windowMaximizedChanged,
+      handler
+    );
+    return () => {
+      ipcRenderer.removeListener(
+        IPC_EVENTS.windowMaximizedChanged,
         handler
       );
     };

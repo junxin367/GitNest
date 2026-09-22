@@ -23,6 +23,30 @@ import {
 import type { LspDocumentSymbol } from "./model";
 
 describe("CodeAnalysisEngine", () => {
+  it("uses the Workspace identity for LSP sessions and snapshots", async () => {
+    const fixture = await createFixture();
+    const lspPool = new SessionCapturingLanguageServerPool();
+    const engine = new CodeAnalysisEngine(lspPool);
+    try {
+      const snapshot = await engine.analyze(
+        analysisInput(fixture, {
+          analysisId: "workspace-identity",
+          scope: "workspace",
+          changedPaths: []
+        })
+      );
+
+      expect(lspPool.sessionPrefixes).toEqual(["workspace"]);
+      expect(snapshot).toMatchObject({
+        workspaceId: "workspace",
+        scope: "workspace"
+      });
+    } finally {
+      await engine.dispose();
+      await fixture.dispose();
+    }
+  });
+
   it("reuses a complete index for changed request chains and invalidates it when roots change", async () => {
     const fixture = await createFixture();
     const engine = new CodeAnalysisEngine();
@@ -239,6 +263,54 @@ describe("CodeAnalysisEngine", () => {
       expect(snapshot.stats.truncated).toBe(true);
       expect(snapshot.warnings).toContain(
         "关系图达到安全上限（节点 2、边 123、调用链 456），本次结果已截断。"
+      );
+    } finally {
+      await engine.dispose();
+      await fixture.dispose();
+    }
+  });
+
+  it("compacts an oversized live snapshot instead of failing the completed analysis", async () => {
+    const fixture = await createFixture();
+    const settings = defaultSettings();
+    settings.typescript.enabled = true;
+    const maximumSnapshotPayloadBytes = 20 * 1_024;
+    const engine = new CodeAnalysisEngine(
+      new OversizedDocumentationLanguageServerPool(),
+      { maximumSnapshotPayloadBytes }
+    );
+
+    try {
+      const snapshot = await engine.analyze({
+        ...analysisInput(fixture, {
+          analysisId: "oversized-live-snapshot",
+          scope: "workspace",
+          changedPaths: []
+        }),
+        settings
+      });
+
+      expect(
+        Buffer.byteLength(JSON.stringify(snapshot), "utf8")
+      ).toBeLessThanOrEqual(maximumSnapshotPayloadBytes);
+      expect(snapshot.requestChains).toHaveLength(1);
+      expect(snapshot.nodes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "client-request"
+          }),
+          expect.objectContaining({
+            kind: "server-endpoint"
+          })
+        ])
+      );
+      expect(snapshot.stats.truncated).toBe(true);
+      expect(snapshot.indexStatus).toMatchObject({
+        resultCompleteness: "partial",
+        impactCoverage: "possible-omissions"
+      });
+      expect(snapshot.warnings).toContainEqual(
+        expect.stringContaining("已自动精简")
       );
     } finally {
       await engine.dispose();
@@ -697,8 +769,6 @@ describe("CodeAnalysisEngine", () => {
       const snapshot = await engine.analyze({
         analysisId: "fai-cli-rpc",
         workspaceId: "workspace",
-        entryId: "entry",
-        entryName: "RPC fixture",
         workspaceRootPath: directory,
         roots,
         scope: "workspace",
@@ -823,8 +893,6 @@ function analysisInput(
   return {
     ...overrides,
     workspaceId: "workspace",
-    entryId: "entry",
-    entryName: "Fixture",
     workspaceRootPath: fixture.directory,
     roots: [fixture.frontendRoot, fixture.backendRoot],
     cacheDirectory: fixture.cacheDirectory,
@@ -940,6 +1008,70 @@ class DocumentationLanguageServerPool extends ExternalLanguageServerPool {
           command: "test-language-server",
           message: "Connected",
           symbolCount: 2
+        },
+        {
+          language: "java" as const,
+          state: "disabled" as const,
+          command: "jdtls",
+          message: "Disabled",
+          symbolCount: 0
+        }
+      ],
+      warnings: []
+    };
+  }
+}
+
+class SessionCapturingLanguageServerPool extends ExternalLanguageServerPool {
+  readonly sessionPrefixes: string[] = [];
+
+  override async analyze(
+    input: Parameters<
+      ExternalLanguageServerPool["analyze"]
+    >[0]
+  ) {
+    this.sessionPrefixes.push(input.sessionPrefix);
+    return super.analyze(input);
+  }
+}
+
+class OversizedDocumentationLanguageServerPool extends ExternalLanguageServerPool {
+  override async analyze(
+    input: Parameters<
+      ExternalLanguageServerPool["analyze"]
+    >[0]
+  ) {
+    const symbolsByPath = new Map<
+      string,
+      LspDocumentSymbol[]
+    >();
+    for (const document of input.documents) {
+      if (document.file.language === "java") {
+        continue;
+      }
+      symbolsByPath.set(document.file.canonicalPath, [
+        {
+          name: "loadUser",
+          kind: 12,
+          line: 3,
+          character: 13,
+          endLine: 4,
+          documentation: "d".repeat(128 * 1_024),
+          children: [],
+          outgoingCalls: [],
+          incomingCalls: []
+        }
+      ]);
+    }
+    return {
+      symbolsByPath,
+      statuses: [
+        {
+          language: "typescript" as const,
+          state: "connected" as const,
+          command: "test-language-server",
+          message: "Connected",
+          symbolCount: 1
         },
         {
           language: "java" as const,

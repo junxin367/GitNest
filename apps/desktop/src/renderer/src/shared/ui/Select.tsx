@@ -217,11 +217,6 @@ export function Select<Value extends string>({
                   }}
                   role="menuitemradio"
                   title={option.title}
-                  trailing={
-                    selected ? (
-                      <Icon name="check" size={12} />
-                    ) : undefined
-                  }
                 >
                   {option.label}
                 </MenuItem>

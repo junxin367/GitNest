@@ -199,6 +199,7 @@ interface WorktreeCommandPlan {
 }
 
 interface BuiltPreflight {
+  workspaceId: string;
   command: WorktreeCommand;
   plan: WorktreeCommandPlan;
   comparisonKey: string;
@@ -363,7 +364,10 @@ export class WorktreeCommandService {
             signal
           );
         },
-        { refreshTopology: true }
+        {
+          refreshTopology: true,
+          expectedWorkspaceId: stored.workspaceId
+        }
       );
 
     return { operationId: accepted.operationId };
@@ -376,11 +380,20 @@ export class WorktreeCommandService {
   async #buildPreflight(
     command: WorktreeCommand
   ): Promise<BuiltPreflight> {
+    const workspace = await this.#runtime.getCurrent();
     const plan = await this.#buildPlan(command);
+    if ((await this.#runtime.getCurrent()).id !== workspace.id) {
+      throw new GitError(
+        "PREFLIGHT_CHANGED",
+        "The active Workspace changed. Run preflight again."
+      );
+    }
     return {
+      workspaceId: workspace.id,
       command,
       plan,
       comparisonKey: JSON.stringify({
+        workspaceId: workspace.id,
         command: commandKey(command),
         fingerprint: plan.fingerprint,
         impacts: plan.impacts,
@@ -1067,9 +1080,10 @@ export class WorktreeCommandService {
     workspace: Workspace,
     destination: WorktreePathInspection
   ): "workspace-root" | "selected" {
-    const inWorkspaceRoot = workspace.entries.some((entry) =>
-      this.#pathPolicy.isWithin(
-        entry.canonicalPath,
+    const inWorkspaceRoot = Boolean(
+      workspace.canonicalPath &&
+        this.#pathPolicy.isWithin(
+          workspace.canonicalPath,
         destination.canonicalPath
       )
     );

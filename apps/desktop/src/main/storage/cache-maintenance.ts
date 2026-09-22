@@ -14,7 +14,7 @@ import {
   resolve
 } from "node:path";
 
-import { codeAnalysisCacheEntryDirectory } from "@gitnest/code-analysis";
+import { codeAnalysisWorkspaceCacheDirectory } from "@gitnest/code-analysis";
 
 import type {
   DataSetDescriptor,
@@ -27,7 +27,6 @@ const TEMPORARY_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 export interface CodeAnalysisCacheMaintenanceInput {
   registry: GitNestDataRegistry;
   workspaceId: string;
-  activeEntryIds: readonly string[];
   now?: number;
 }
 
@@ -58,17 +57,14 @@ export async function runCodeAnalysisCacheMaintenance(
     warnings: []
   };
   const now = input.now ?? Date.now();
-  const protectedNames = new Set(
-    input.activeEntryIds.map((entryId) =>
-      basename(
-        codeAnalysisCacheEntryDirectory(
-          input.registry.paths.codeAnalysisIndex,
-          input.workspaceId,
-          entryId
-        )
+  const protectedNames = new Set([
+    basename(
+      codeAnalysisWorkspaceCacheDirectory(
+        input.registry.paths.codeAnalysisIndex,
+        input.workspaceId
       )
     )
-  );
+  ]);
   const targets = input.registry.descriptors.filter(
     (descriptor) =>
       descriptor.id === "code-analysis-index" ||

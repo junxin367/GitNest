@@ -1178,8 +1178,6 @@ function createSnapshot(
     schemaVersion: 1,
     analysisId: "analysis",
     workspaceId: "workspace",
-    entryId: "entry",
-    entryName: "Entry",
     scope: "workspace",
     generatedAt: "2026-09-17T00:00:00.000Z",
     roots: [],

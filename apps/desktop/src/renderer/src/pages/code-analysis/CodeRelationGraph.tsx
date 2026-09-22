@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useId,
@@ -88,7 +89,7 @@ type GraphDragState =
       moved: boolean;
     };
 
-export function CodeRelationGraph({
+export const CodeRelationGraph = memo(function CodeRelationGraph({
   snapshot,
   chain,
   focusNodeId,
@@ -751,7 +752,7 @@ export function CodeRelationGraph({
       )}
     </div>
   );
-}
+});
 
 export function buildRelationGraphLayout(
   snapshot: CodeAnalysisSnapshotDto,

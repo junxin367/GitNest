@@ -23,6 +23,7 @@ import {
 import { getSnapshotContentRevision } from "../../entities/workspace/model";
 import { useExternalApplications } from "../../features/external-application/useExternalApplications";
 import { useAppSettings } from "../../features/settings/useAppSettings";
+import { useWindowMaximized } from "../../shared/lib/useWindowMaximized";
 import {
   buildDiffViewerFiles,
   type DiffViewerFile,
@@ -65,6 +66,8 @@ function DiffViewer({
   request: OpenDiffViewerRequest;
 }) {
   const appSettings = useAppSettings();
+  const { isMaximized, toggleMaximize } =
+    useWindowMaximized();
   const externalApplications = useExternalApplications({
     scope: "repository",
     target: request.target
@@ -536,15 +539,16 @@ function DiffViewer({
             <Icon name="minimize" size={14} />
           </Button>
           <Button variant="unstyled"
-            aria-label="最大化或还原"
+            aria-label={isMaximized ? "还原" : "最大化"}
             className="window-button"
-            onClick={() =>
-              void window.gitnest.window.toggleMaximize()
-            }
-            title="最大化或还原"
+            onClick={toggleMaximize}
+            title={isMaximized ? "还原" : "最大化"}
             type="button"
           >
-            <Icon name="maximize" size={13} />
+            <Icon
+              name={isMaximized ? "restore" : "maximize"}
+              size={13}
+            />
           </Button>
           <Button variant="unstyled"
             aria-label="关闭"

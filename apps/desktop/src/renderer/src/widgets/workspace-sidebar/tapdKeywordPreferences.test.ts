@@ -21,33 +21,30 @@ class MemoryStorage implements PreferenceStorage {
 }
 
 describe("TAPD keyword preferences", () => {
-  it("persists the keyword per Workspace entry", () => {
+  it("persists the keyword per Workspace", () => {
     const storage = new MemoryStorage();
 
     writeTapdKeywordPreference(
       storage,
       "workspace-a",
-      "entry-a",
       " TAPD-12345 "
     );
 
     expect(
       readTapdKeywordPreference(
         storage,
-        "workspace-a",
-        "entry-a"
+        "workspace-a"
       )
     ).toBe("TAPD-12345");
     expect(
       readTapdKeywordPreference(
         storage,
-        "workspace-a",
-        "entry-b"
+        "workspace-b"
       )
     ).toBe("");
     expect(
-      tapdKeywordPreferenceKey("workspace-a", "entry-a")
-    ).toBe("gitnest.workspace.tapd-keyword:workspace-a:entry-a");
+      tapdKeywordPreferenceKey("workspace-a")
+    ).toBe("gitnest.workspace.tapd-keyword:workspace-a");
   });
 
   it("adds a non-empty keyword on the second line without duplicating it", () => {

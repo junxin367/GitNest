@@ -26,6 +26,9 @@ import { DiffViewerApp } from "./DiffViewerApp";
 let emitWorkspaceState:
   | ((state: unknown) => void)
   | undefined;
+let emitWindowMaximized:
+  | ((maximized: boolean) => void)
+  | undefined;
 
 describe("DiffViewerApp", () => {
   let container: HTMLDivElement;
@@ -33,6 +36,7 @@ describe("DiffViewerApp", () => {
 
   beforeEach(() => {
     emitWorkspaceState = undefined;
+    emitWindowMaximized = undefined;
     vi.stubGlobal("React", React);
     vi.stubGlobal(
       "requestAnimationFrame",
@@ -75,6 +79,32 @@ describe("DiffViewerApp", () => {
       .querySelectorAll(".menu-surface, .toast-viewport")
       .forEach((element) => element.remove());
     vi.unstubAllGlobals();
+  });
+
+  it("shows the restore icon while the window is maximized", async () => {
+    await renderDiffViewer(root);
+
+    const maximizeButton =
+      container.querySelector<HTMLButtonElement>(
+        'button[aria-label="最大化"]'
+      );
+    expect(maximizeButton).not.toBeNull();
+    expect(
+      maximizeButton?.querySelector("svg path")
+    ).toBeNull();
+
+    act(() => {
+      emitWindowMaximized?.(true);
+    });
+
+    const restoreButton =
+      container.querySelector<HTMLButtonElement>(
+        'button[aria-label="还原"]'
+      );
+    expect(restoreButton).not.toBeNull();
+    expect(
+      restoreButton?.querySelector("svg path")
+    ).not.toBeNull();
   });
 
   it("uses the prototype layout, shared search, filter, and compact tree", async () => {
@@ -775,8 +805,17 @@ function createBridge(): typeof window.gitnest {
     },
     window: {
       close: vi.fn().mockResolvedValue(undefined),
+      isMaximized: vi.fn().mockResolvedValue(false),
       minimize: vi.fn().mockResolvedValue(undefined),
-      toggleMaximize: vi.fn().mockResolvedValue(undefined)
+      onMaximizedChanged: vi.fn((listener) => {
+        emitWindowMaximized = listener;
+        return () => {
+          if (emitWindowMaximized === listener) {
+            emitWindowMaximized = undefined;
+          }
+        };
+      }),
+      toggleMaximize: vi.fn().mockResolvedValue(true)
     }
   } as unknown as typeof window.gitnest;
 }

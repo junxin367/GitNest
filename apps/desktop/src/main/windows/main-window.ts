@@ -4,6 +4,8 @@ import {
   screen
 } from "electron";
 
+import { IPC_EVENTS } from "@gitnest/contracts";
+
 import type { RotatingDiagnosticLogger } from "../adapters/diagnostic-logger.adapter";
 import { createWindowOptions } from "./window-options";
 import {
@@ -79,6 +81,15 @@ export async function createMainWindow(
       void persist(readState());
     }, 250);
   };
+  const handleMaximizedChange = () => {
+    schedulePersistence();
+    if (!window.webContents.isDestroyed()) {
+      window.webContents.send(
+        IPC_EVENTS.windowMaximizedChanged,
+        window.isMaximized()
+      );
+    }
+  };
 
   window.once("ready-to-show", () => {
     if (clamped?.maximized) {
@@ -88,8 +99,8 @@ export async function createMainWindow(
   });
   window.on("move", schedulePersistence);
   window.on("resize", schedulePersistence);
-  window.on("maximize", schedulePersistence);
-  window.on("unmaximize", schedulePersistence);
+  window.on("maximize", handleMaximizedChange);
+  window.on("unmaximize", handleMaximizedChange);
   window.on("close", (event) => {
     if (closing) {
       return;

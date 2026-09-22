@@ -8,6 +8,13 @@ export const IPC_CHANNELS = {
   systemOpenExternalTerminal: "system:open-external-terminal",
   systemOpenDirectory: "system:open-directory",
   systemOpenFileLocation: "system:open-file-location",
+  updateGetState: "update:get-state",
+  updateCheck: "update:check",
+  updateAcknowledgePrompt: "update:acknowledge-prompt",
+  updateDownloadAndInstall:
+    "update:download-and-install",
+  updateOpenProjectPage: "update:open-project-page",
+  updateOpenReleasePage: "update:open-release-page",
   accountList: "account:list",
   accountSave: "account:save",
   accountBind: "account:bind",
@@ -22,11 +29,14 @@ export const IPC_CHANNELS = {
   aiGenerateCommitMessage: "ai:generate-commit-message",
   codeAnalysisGetState: "code-analysis:get-state",
   codeAnalysisStart: "code-analysis:start",
+  codeAnalysisRestoreSnapshot:
+    "code-analysis:restore-snapshot",
   codeAnalysisCancel: "code-analysis:cancel",
   codeAnalysisGetSnapshot: "code-analysis:get-snapshot",
   codeAnalysisReadFile: "code-analysis:read-file",
   codeAnalysisInstallLanguageServer:
     "code-analysis:install-language-server",
+  windowIsMaximized: "window:is-maximized",
   windowMinimize: "window:minimize",
   windowToggleMaximize: "window:toggle-maximize",
   windowClose: "window:close",
@@ -40,12 +50,9 @@ export const IPC_CHANNELS = {
   workspaceRename: "workspace:rename",
   workspaceDelete: "workspace:delete",
   workspaceSelectDirectory: "workspace:select-directory",
-  workspaceAddEntry: "workspace:add-entry",
   workspaceRescan: "workspace:rescan",
-  workspaceUpdateEntry: "workspace:update-entry",
-  workspaceRemoveEntry: "workspace:remove-entry",
+  workspaceRemoveRepository: "workspace:remove-repository",
   workspaceSetGroupCollapsed: "workspace:set-group-collapsed",
-  workspaceSelectEntry: "workspace:select-entry",
   workspaceSelectTarget: "workspace:select-target",
   workspaceRefresh: "workspace:refresh",
   repositoryGetChanges: "repository:get-changes",
@@ -74,5 +81,7 @@ export const IPC_CHANNELS = {
 export const IPC_EVENTS = {
   settingsChanged: "settings:changed",
   workspaceStateChanged: "workspace:state-changed",
-  codeAnalysisStateChanged: "code-analysis:state-changed"
+  codeAnalysisStateChanged: "code-analysis:state-changed",
+  applicationUpdateStateChanged: "update:state-changed",
+  windowMaximizedChanged: "window:maximized-changed"
 } as const;

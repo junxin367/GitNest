@@ -1,4 +1,6 @@
 import {
+  useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -41,12 +43,12 @@ import {
 import { repositoryDiffWorkspaceConfiguration } from "../../widgets/diff-workspace/diffWorkspaceConfiguration";
 import {
   codeNodeDisplayName,
-  countSearchableCodeNodes,
+  createCodeNodeSearchIndex,
   deduplicateRequestChains,
   filterChainsWithMetadata,
   MAX_VISIBLE_CODE_NODES,
   MAX_VISIBLE_REQUEST_CHAINS,
-  searchCodeNodesWithMetadata
+  searchCodeNodeIndexWithMetadata
 } from "./codeAnalysisNavigation";
 import { CodeRelationGraph } from "./CodeRelationGraph";
 import { NodeSourceViewer } from "./NodeSourceViewer";
@@ -113,6 +115,8 @@ export function CodeAnalysisPage({
     useState<AnalysisNavigationMode>("chains");
   const [chainQuery, setChainQuery] = useState("");
   const [nodeQuery, setNodeQuery] = useState("");
+  const deferredChainQuery = useDeferredValue(chainQuery);
+  const deferredNodeQuery = useDeferredValue(nodeQuery);
   const [method, setMethod] = useState("all");
   const chainFilterRef = useRef<HTMLInputElement>(null);
   const nodeFilterRef = useRef<HTMLInputElement>(null);
@@ -135,17 +139,15 @@ export function CodeAnalysisPage({
   } | null>(null);
   const [actionNotice, setActionNotice] =
     useState<AnalysisNotice | null>(null);
-  const selectedEntry =
-    workspace?.entries.find(
-      (entry) => entry.id === workspace.selectedEntryId
-    ) ??
-    workspace?.entries[0];
+  const scopeWorkspaceId =
+    workspace?.id ?? analysis.state.workspaceId ?? "";
+  const scopeResetKey = `${scopeWorkspaceId}\0${settings.codeAnalysis.defaultScope}`;
+  const scopeResetKeyRef = useRef("");
   const availableSnapshot = analysis.snapshot;
   const snapshot =
     availableSnapshot?.scope === scope &&
     availableSnapshot.workspaceId ===
       analysis.state.workspaceId &&
-    availableSnapshot.entryId === analysis.state.entryId &&
     (
       analysis.state.state !== "ready" ||
       (
@@ -169,32 +171,33 @@ export function CodeAnalysisPage({
       filterChainsWithMetadata(
         requestChains,
         snapshot?.nodes ?? [],
-        chainQuery,
+        deferredChainQuery,
         method,
         MAX_VISIBLE_REQUEST_CHAINS
       ),
     [
-      chainQuery,
+      deferredChainQuery,
       method,
       requestChains,
       snapshot?.nodes
     ]
   );
   const chains = chainFilterResult.chains;
-  const nodeFilterResult = useMemo(
-    () =>
-      searchCodeNodesWithMetadata(
-        snapshot?.nodes ?? [],
-        nodeQuery,
-        MAX_VISIBLE_CODE_NODES
-      ),
-    [nodeQuery, snapshot?.nodes]
-  );
-  const nodeResults = nodeFilterResult.nodes;
-  const searchableNodeCount = useMemo(
-    () => countSearchableCodeNodes(snapshot?.nodes ?? []),
+  const nodeSearchIndex = useMemo(
+    () => createCodeNodeSearchIndex(snapshot?.nodes ?? []),
     [snapshot?.nodes]
   );
+  const nodeFilterResult = useMemo(
+    () =>
+      searchCodeNodeIndexWithMetadata(
+        nodeSearchIndex,
+        deferredNodeQuery,
+        MAX_VISIBLE_CODE_NODES
+      ),
+    [deferredNodeQuery, nodeSearchIndex]
+  );
+  const nodeResults = nodeFilterResult.nodes;
+  const searchableNodeCount = nodeSearchIndex.length;
   const selectedChain =
     graphFocus?.kind === "chain"
       ? requestChains.find(
@@ -244,17 +247,28 @@ export function CodeAnalysisPage({
   ]);
 
   useEffect(() => {
-    if (!availableSnapshot) {
+    if (scopeResetKeyRef.current === scopeResetKey) {
+      return;
+    }
+    scopeResetKeyRef.current = scopeResetKey;
+    if (
+      !availableSnapshot ||
+      availableSnapshot.workspaceId !==
+        scopeWorkspaceId
+    ) {
       setScope(settings.codeAnalysis.defaultScope);
     }
   }, [
     availableSnapshot,
+    scopeResetKey,
+    scopeWorkspaceId,
     settings.codeAnalysis.defaultScope
   ]);
 
   useEffect(() => {
     if (
       availableSnapshot &&
+      analysis.action === null &&
       analysis.state.state !== "running" &&
       (
         analysis.state.state !== "ready" ||
@@ -273,6 +287,7 @@ export function CodeAnalysisPage({
     analysis.state.state,
     analysis.state.analysisId,
     analysis.state.generatedAt,
+    analysis.action,
     availableSnapshot?.analysisId,
     availableSnapshot?.generatedAt,
     availableSnapshot?.scope
@@ -383,17 +398,20 @@ export function CodeAnalysisPage({
             : "准备中"
         }
       : null;
-  const focusChain = (chain: CodeRequestChainDto) => {
-    setNavigationMode("chains");
-    setGraphFocus({
-      kind: "chain",
-      id: chain.id
-    });
-    setGraphSelectionCleared(false);
-    setInspectedNodeId(null);
-    setNodeFileExpanded(false);
-  };
-  const focusNode = (nodeId: string) => {
+  const focusChain = useCallback(
+    (chain: CodeRequestChainDto) => {
+      setNavigationMode("chains");
+      setGraphFocus({
+        kind: "chain",
+        id: chain.id
+      });
+      setGraphSelectionCleared(false);
+      setInspectedNodeId(null);
+      setNodeFileExpanded(false);
+    },
+    []
+  );
+  const focusNode = useCallback((nodeId: string) => {
     setNavigationMode("symbols");
     setGraphFocus({
       kind: "node",
@@ -402,26 +420,29 @@ export function CodeAnalysisPage({
     setGraphSelectionCleared(false);
     setInspectedNodeId(nodeId);
     setNodeFileExpanded(false);
-  };
-  const inspectNode = (nodeId: string) => {
-    if (nodeId !== inspectedNodeId) {
-      setNodeFileExpanded(false);
-    }
-    setGraphSelectionCleared(false);
-    setInspectedNodeId(nodeId);
-  };
-  const clearNodeInspection = () => {
+  }, []);
+  const inspectNode = useCallback(
+    (nodeId: string) => {
+      if (nodeId !== inspectedNodeId) {
+        setNodeFileExpanded(false);
+      }
+      setGraphSelectionCleared(false);
+      setInspectedNodeId(nodeId);
+    },
+    [inspectedNodeId]
+  );
+  const clearNodeInspection = useCallback(() => {
     setGraphSelectionCleared(true);
     setInspectedNodeId(null);
     setNodeFileExpanded(false);
-  };
+  }, []);
   const changeScope = async (
     nextScope: CodeAnalysisScopeDto
   ) => {
     if (
       nextScope === scope ||
       running ||
-      analysis.action === "starting"
+      analysis.action !== null
     ) {
       return;
     }
@@ -438,13 +459,22 @@ export function CodeAnalysisPage({
     setNodeFileExpanded(false);
     setGraphFullscreen(false);
 
-    if (
-      !availableSnapshot ||
-      availableSnapshot.scope === nextScope
-    ) {
+    if (!workspace?.path && !availableSnapshot) {
       return;
     }
 
+    const startOnCacheMiss = Boolean(
+      availableSnapshot &&
+        availableSnapshot.scope !== nextScope
+    );
+    const restored =
+      await analysis.restoreSnapshot(nextScope);
+    if (restored) {
+      return;
+    }
+    if (!startOnCacheMiss) {
+      return;
+    }
     const started = await analysis.start(nextScope);
     if (!started) {
       setScope(previousScope);
@@ -468,7 +498,7 @@ export function CodeAnalysisPage({
     await onReloadSettings();
   };
   const buildFullIndex = async () => {
-    if (running || analysis.action === "starting") {
+    if (running || analysis.action !== null) {
       return;
     }
     const previousScope = scope;
@@ -554,7 +584,7 @@ export function CodeAnalysisPage({
                 aria-pressed={scope === "changed"}
                 className={scope === "changed" ? "active" : ""}
                 disabled={
-                  running || analysis.action === "starting"
+                  running || analysis.action !== null
                 }
                 onClick={() => void changeScope("changed")}
                 type="button"
@@ -565,7 +595,7 @@ export function CodeAnalysisPage({
                 aria-pressed={scope === "workspace"}
                 className={scope === "workspace" ? "active" : ""}
                 disabled={
-                  running || analysis.action === "starting"
+                  running || analysis.action !== null
                 }
                 onClick={() => void changeScope("workspace")}
                 type="button"
@@ -597,9 +627,9 @@ export function CodeAnalysisPage({
             ) : (
               <Button
                 disabled={
-                  !selectedEntry ||
+                  !workspace?.path ||
                   !settings.codeAnalysis.enabled ||
-                  analysis.action === "starting"
+                  analysis.action !== null
                 }
                 onClick={() => void analysis.start(scope)}
                 size="small"
@@ -609,18 +639,25 @@ export function CodeAnalysisPage({
                 <Icon name="refresh" />
                 {analysis.action === "starting"
                   ? "正在启动…"
-                  : snapshot
-                    ? "重新分析"
-                    : "开始分析"}
+                  : analysis.action === "restoring"
+                    ? "正在切换…"
+                    : snapshot
+                      ? "重新分析"
+                      : "开始分析"}
               </Button>
             )}
           </div>
         </div>
-        <p>
-          {selectedEntry
-            ? `当前范围：${selectedEntry.displayName}`
-            : "请先在 Workspace 中选择一个项目条目。"}
-        </p>
+        {workspace?.path ? (
+          <p>
+            当前范围：
+            <span className="analysis-scope-name">
+              {workspace.name}
+            </span>
+          </p>
+        ) : (
+          <p>请先创建并配置 Workspace 根目录。</p>
+        )}
       </header>
 
       {!settings.codeAnalysis.enabled && (
@@ -782,7 +819,7 @@ export function CodeAnalysisPage({
               <AnalysisIndexStatusMenu
                 disabled={
                   running ||
-                  analysis.action === "starting"
+                  analysis.action !== null
                 }
                 onBuildFullIndex={() =>
                   void buildFullIndex()
@@ -964,12 +1001,19 @@ export function CodeAnalysisPage({
                         }
                       : {})}
                     onKeyDown={(event) => {
-                      if (
-                        event.key === "Enter" &&
-                        nodeResults[0]
-                      ) {
-                        event.preventDefault();
-                        focusNode(nodeResults[0].id);
+                      if (event.key === "Enter") {
+                        const firstResult =
+                          deferredNodeQuery === nodeQuery
+                            ? nodeResults[0]
+                            : searchCodeNodeIndexWithMetadata(
+                                nodeSearchIndex,
+                                nodeQuery,
+                                1
+                              ).nodes[0];
+                        if (firstResult) {
+                          event.preventDefault();
+                          focusNode(firstResult.id);
+                        }
                       }
                     }}
                     placeholder="搜索节点名称、限定名或文件路径"

@@ -18,6 +18,10 @@ import type {
 import { discoverSourceFiles } from "./source-inventory";
 import { parseSourceFile } from "./source-parser";
 import { readBoundedSourceFile } from "./source-reader";
+import {
+  compactCodeAnalysisSnapshotPayload,
+  TARGET_ANALYSIS_SNAPSHOT_PAYLOAD_BYTES
+} from "./snapshot-compaction";
 
 interface SourceDocument {
   file: ParsedSourceFile["file"];
@@ -26,14 +30,26 @@ interface SourceDocument {
 
 const MAX_SNAPSHOT_WARNINGS = 100;
 
+export interface CodeAnalysisEngineOptions {
+  maximumSnapshotPayloadBytes?: number;
+}
+
 export class CodeAnalysisEngine {
   readonly #lspPool: ExternalLanguageServerPool;
+  readonly #maximumSnapshotPayloadBytes: number;
 
   constructor(
     lspPool: ExternalLanguageServerPool =
-      new ExternalLanguageServerPool()
+      new ExternalLanguageServerPool(),
+    options: CodeAnalysisEngineOptions = {}
   ) {
     this.#lspPool = lspPool;
+    this.#maximumSnapshotPayloadBytes =
+      Math.min(
+        options.maximumSnapshotPayloadBytes ??
+          TARGET_ANALYSIS_SNAPSHOT_PAYLOAD_BYTES,
+        TARGET_ANALYSIS_SNAPSHOT_PAYLOAD_BYTES
+      );
   }
 
   async analyze(
@@ -66,8 +82,7 @@ export class CodeAnalysisEngine {
 
     const cache = new AnalysisCache(
       input.cacheDirectory,
-      input.workspaceId,
-      input.entryId
+      input.workspaceId
     );
     const cacheDocument = await cache.load(
       input.settings,
@@ -221,7 +236,7 @@ export class CodeAnalysisEngine {
         }
       );
       const lspResult = await this.#lspPool.analyze({
-        sessionPrefix: `${input.workspaceId}:${input.entryId}`,
+        sessionPrefix: input.workspaceId,
         workspaceRootPath: input.workspaceRootPath,
         workspaceFolders: input.roots.map((root) => root.path),
         lspDataDirectory: input.lspDataDirectory,
@@ -437,7 +452,7 @@ export class CodeAnalysisEngine {
         : cacheDocument.lastFullIndexAt;
     try {
       await cache.save({
-        schemaVersion: 2,
+        schemaVersion: 3,
         settingsKey: cacheDocument.settingsKey,
         fullIndexComplete: fullIndexAvailable,
         semanticIndexComplete:
@@ -506,54 +521,57 @@ export class CodeAnalysisEngine {
         relatedNodeIds: []
       });
     }
-    const snapshot: CodeAnalysisSnapshot = {
-      schemaVersion: 1,
-      analysisId: input.analysisId,
-      workspaceId: input.workspaceId,
-      entryId: input.entryId,
-      entryName: input.entryName,
-      scope: input.scope,
-      generatedAt,
-      roots: input.roots,
-      nodes: graph.nodes,
-      edges: graph.edges,
-      requestChains: graph.requestChains,
-      languageServers,
-      indexStatus: {
-        fullIndexAvailable,
-        resultCompleteness: resultComplete
-          ? "complete"
-          : "partial",
-        impactCoverage: resultComplete
-          ? "confirmed"
-          : "possible-omissions",
-        ...(lastFullIndexAt ? { lastFullIndexAt } : {}),
-        message: indexMessage
+    const snapshot = compactCodeAnalysisSnapshotPayload(
+      {
+        schemaVersion: 1,
+        analysisId: input.analysisId,
+        workspaceId: input.workspaceId,
+        scope: input.scope,
+        generatedAt,
+        roots: input.roots,
+        nodes: graph.nodes,
+        edges: graph.edges,
+        requestChains: graph.requestChains,
+        languageServers,
+        indexStatus: {
+          fullIndexAvailable,
+          resultCompleteness: resultComplete
+            ? "complete"
+            : "partial",
+          impactCoverage: resultComplete
+            ? "confirmed"
+            : "possible-omissions",
+          ...(lastFullIndexAt ? { lastFullIndexAt } : {}),
+          message: indexMessage
+        },
+        diagnostics,
+        warnings:
+          suppressedWarningCount > 0
+            ? [
+                ...warnings,
+                `另有 ${suppressedWarningCount} 条分析提示已折叠。`
+              ]
+            : warnings,
+        stats: {
+          discoveredFiles: inventory.files.length,
+          analyzedFiles: parsedByPath.size,
+          cachedFiles,
+          skippedFiles:
+            inventory.skippedFiles +
+            readFailurePaths.size,
+          symbolCount: graph.nodes.filter(
+            (node) => node.kind !== "file"
+          ).length,
+          edgeCount: graph.edges.length,
+          requestChainCount:
+            graph.requestChains.length,
+          truncated:
+            inventory.truncated || graph.truncated,
+          durationMs: Date.now() - startedAt
+        }
       },
-      diagnostics,
-      warnings:
-        suppressedWarningCount > 0
-          ? [
-              ...warnings,
-              `另有 ${suppressedWarningCount} 条分析提示已折叠。`
-            ]
-          : warnings,
-      stats: {
-        discoveredFiles: inventory.files.length,
-        analyzedFiles: parsedByPath.size,
-        cachedFiles,
-        skippedFiles:
-          inventory.skippedFiles + readFailurePaths.size,
-        symbolCount: graph.nodes.filter(
-          (node) => node.kind !== "file"
-        ).length,
-        edgeCount: graph.edges.length,
-        requestChainCount: graph.requestChains.length,
-        truncated:
-          inventory.truncated || graph.truncated,
-        durationMs: Date.now() - startedAt
-      }
-    };
+      this.#maximumSnapshotPayloadBytes
+    );
     assertCodeAnalysisSnapshotPayloadSize(snapshot);
     return snapshot;
   }

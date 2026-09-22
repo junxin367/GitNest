@@ -18,7 +18,7 @@ export class JsonWorkspaceStore implements WorkspaceStore {
   }
 
   async load(): Promise<Workspace | null> {
-    const value = await this.#store.read();
+    const value = await this.readRaw();
     if (value === null) {
       return null;
     }
@@ -39,8 +39,17 @@ export class JsonWorkspaceStore implements WorkspaceStore {
     }
   }
 
-  save(workspace: Workspace): Promise<void> {
-    return this.#store.write(workspace);
+  async save(workspace: Workspace): Promise<void> {
+    const validated = migrateWorkspaceDocument(workspace);
+    await this.#store.write(validated);
+  }
+
+  readRaw(): Promise<unknown | null> {
+    return this.#store.read();
+  }
+
+  blockWrites(reason: string): void {
+    this.#store.blockWrites(reason);
   }
 }
 

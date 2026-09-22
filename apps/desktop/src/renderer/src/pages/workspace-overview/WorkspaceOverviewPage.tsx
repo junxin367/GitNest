@@ -1,10 +1,5 @@
 import { Button } from "../../shared/ui/Button";
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type FormEvent
-} from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type {
   CommitSummaryDto,
@@ -19,14 +14,13 @@ import {
   findTargetSnapshot,
   getSnapshotChangeCount,
   isWorkspaceDataBlocked,
-  listActiveWorkspaceTargets,
+  listWorkspaceTargets,
   repositoryTargetSelected,
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
 import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
 import type { IconName } from "../../shared/ui/Icon";
 import { Icon } from "../../shared/ui/Icon";
-import { Input } from "../../shared/ui/Input";
 import {
   Skeleton,
   SkeletonBoundary
@@ -50,8 +44,7 @@ interface WorkspaceOverviewPageProps {
   notice: string | null;
   operation: LocalWorkspaceOperation;
   busy: boolean;
-  onAddDirectory(): void;
-  onAddManualPath(path: string): Promise<boolean>;
+  onCreateWorkspace(): Promise<boolean>;
   onSelectTarget(target: RepositoryTargetDto): void;
   onClearFeedback(): void;
 }
@@ -63,13 +56,10 @@ export function WorkspaceOverviewPage({
   notice,
   operation,
   busy,
-  onAddDirectory,
-  onAddManualPath,
+  onCreateWorkspace,
   onSelectTarget,
   onClearFeedback
 }: WorkspaceOverviewPageProps) {
-  const [manualPathOpen, setManualPathOpen] = useState(false);
-  const [manualPath, setManualPath] = useState("");
   const [recentCommits, setRecentCommits] = useState<
     Map<string, CommitSummaryDto>
   >(() => new Map());
@@ -82,7 +72,7 @@ export function WorkspaceOverviewPage({
     setRecentCommitsCollapsed
   ] = useState(false);
   const targets = useMemo(
-    () => listActiveWorkspaceTargets(workspace),
+    () => listWorkspaceTargets(workspace),
     [workspace]
   );
   const scopedSnapshots = useMemo(
@@ -212,42 +202,17 @@ export function WorkspaceOverviewPage({
           )
       );
   }, [statusRows]);
-  const dirtyRepositoryCount = scopedSnapshots.filter(
-    (snapshot) => getSnapshotChangeCount(snapshot) > 0
-  ).length;
-  const totalChangeCount = scopedSnapshots.reduce(
-    (total, snapshot) => total + getSnapshotChangeCount(snapshot),
-    0
-  );
-  const untrackedCount = scopedSnapshots.reduce(
-    (total, snapshot) => total + snapshot.untracked,
-    0
-  );
-  const behindRepositoryCount = scopedSnapshots.filter(
-    (snapshot) => snapshot.behind > 0
-  ).length;
-  const behindCommitCount = scopedSnapshots.reduce(
-    (total, snapshot) => total + snapshot.behind,
-    0
-  );
   const freshCount = scopedSnapshots.filter(
     (snapshot) => !snapshot.stale && !snapshot.error
   ).length;
-  const activeRepositoryCount = new Set(
-    targets.map((target) => target.repositoryId)
-  ).size;
-  const activeWorktrees = targets.flatMap((target) => {
-    const worktree = workspace?.worktrees.find(
-      (candidate) =>
-        candidate.id === target.worktreeId &&
-        candidate.repositoryId === target.repositoryId
-    );
-    return worktree ? [worktree] : [];
-  });
-  const prunableWorktreeCount = activeWorktrees.filter(
+  const repositories = workspace?.repositories ?? [];
+  const worktrees = workspace?.worktrees ?? [];
+  const groups = workspace?.groups ?? [];
+  const scanIssues = workspace?.scanIssues ?? [];
+  const prunableWorktreeCount = worktrees.filter(
     (worktree) => worktree.isPrunable
   ).length;
-  const detachedWorktreeCount = activeWorktrees.filter(
+  const detachedWorktreeCount = worktrees.filter(
     (worktree) => worktree.isDetached
   ).length;
   const metrics: Array<{
@@ -259,40 +224,39 @@ export function WorkspaceOverviewPage({
   }> = [
     {
       label: "仓库",
-      value: String(activeRepositoryCount),
+      value: String(repositories.length),
       foot:
         targets.length > 0
           ? `${freshCount}/${targets.length} 个状态已刷新`
-          : "添加目录后自动发现",
+          : "等待 Workspace 扫描",
       icon: "repository",
       tone: "blue"
     },
     {
-      label: "未提交变更",
-      value: String(totalChangeCount),
-      foot:
-        dirtyRepositoryCount > 0
-          ? `${dirtyRepositoryCount} 个仓库 · ${untrackedCount} 个未跟踪文件`
-          : "当前缓存中没有待处理变更",
-      icon: "fileCode",
-      tone: "yellow"
-    },
-    {
-      label: "本地引用显示落后",
-      value: String(behindRepositoryCount),
-      foot:
-        behindRepositoryCount > 0
-          ? `累计 ${behindCommitCount} 个提交 · 未 Fetch`
-          : "状态刷新不执行 Fetch",
-      icon: "arrowDown",
-      tone: "accent"
-    },
-    {
       label: "Worktrees",
-      value: String(activeWorktrees.length),
+      value: String(worktrees.length),
       foot: `${prunableWorktreeCount} 个可清理 · ${detachedWorktreeCount} 个游离 HEAD`,
       icon: "worktree",
       tone: "purple"
+    },
+    {
+      label: "分组",
+      value: String(groups.length),
+      foot: `${targets.length} 个仓库目标`,
+      icon: "folder",
+      tone: "accent"
+    },
+    {
+      label: "扫描问题",
+      value: String(scanIssues.length),
+      foot:
+        scanIssues.length > 0
+          ? "部分路径未能完成扫描"
+          : workspace?.lastScannedAt
+            ? "最近扫描已完成"
+            : "尚未执行扫描",
+      icon: scanIssues.length > 0 ? "warning" : "check",
+      tone: scanIssues.length > 0 ? "yellow" : "blue"
     }
   ];
   const blockingError = isWorkspaceDataBlocked(
@@ -301,27 +265,11 @@ export function WorkspaceOverviewPage({
     operation
   );
 
-  const submitManualPath = async (event: FormEvent) => {
-    event.preventDefault();
-    const path = manualPath.trim();
-
-    if (path) {
-      const added = await onAddManualPath(path);
-      if (added) {
-        setManualPath("");
-        setManualPathOpen(false);
-      }
-    }
-  };
-
   if (blockingError && error) {
     return (
       <div className="page-scroll">
         <section className="page-heading">
           <div>
-            <span className="eyebrow">
-              多仓库工作区
-            </span>
             <h1>Workspace 概览</h1>
             <p>
               本地 Workspace 配置存在问题，当前数据有效性无法确认。
@@ -358,56 +306,15 @@ export function WorkspaceOverviewPage({
       <div className="page-scroll">
       <section className="page-heading">
         <div>
-          <span className="eyebrow">多仓库工作区</span>
           <h1>Workspace 概览</h1>
           <p>
             集中查看仓库变更、同步状态和后台操作；只有在你明确执行操作时，GitNest 才会修改仓库。
           </p>
+          <small title={workspace?.path}>
+            根目录：{workspace?.path ?? "尚未设置"}
+          </small>
         </div>
       </section>
-
-      {manualPathOpen && (
-        <form
-          className="manual-path-form"
-          id="manual-path-form"
-          onSubmit={submitManualPath}
-        >
-          <label htmlFor="manual-workspace-path">
-            本地目录绝对路径
-          </label>
-          <div>
-            <Input
-              autoFocus
-              fieldClassName="manual-path-input"
-              fullWidth
-              id="manual-workspace-path"
-              onChange={(event) =>
-                setManualPath(event.target.value)
-              }
-              placeholder="例如 D:\code\sc\sc_code"
-              size="small"
-              spellCheck={false}
-              value={manualPath}
-            />
-            <Button size="small"
-              disabled={busy}
-              onClick={() => setManualPathOpen(false)}
-              type="button"
-            >
-              取消
-            </Button>
-            <Button size="small" variant="primary"
-              disabled={busy || !manualPath.trim()}
-              type="submit"
-            >
-              {operation === "scanning" ? "扫描中…" : "扫描并添加"}
-            </Button>
-          </div>
-          <small>
-            也可以把一个或多个目录直接拖入窗口。
-          </small>
-        </form>
-      )}
 
       <ToastViewport>
         {(error || notice) && (
@@ -463,7 +370,7 @@ export function WorkspaceOverviewPage({
                 {statusRows.length > 0
                   ? `${freshCount}/${statusRows.length} 已刷新`
                   : workspace
-                    ? `${workspace.entries.length} 个顶层条目`
+                    ? `${workspace.repositories.length} 个仓库`
                     : "正在恢复…"}
               </span>
               <Icon
@@ -579,19 +486,25 @@ export function WorkspaceOverviewPage({
                     <strong>
                       {operation === "loading"
                         ? "正在恢复 Workspace"
-                        : "尚未添加本地目录"}
+                        : workspace?.path
+                          ? "当前 Workspace 暂无扫描结果"
+                          : "尚未创建 Workspace"}
                     </strong>
                     <p>
-                      使用目录选择器、手动输入绝对路径，或把目录拖入窗口。
+                      {workspace?.path
+                        ? "请确认根目录可访问，并重新扫描 Workspace。"
+                        : "创建 Workspace 并选择根目录后，GitNest 会扫描其中的仓库和 Worktree。"}
                     </p>
-                    <Button size="small" variant="primary"
-                      disabled={busy}
-                      onClick={onAddDirectory}
-                      type="button"
-                    >
-                      <Icon name="plus" />
-                      添加第一个目录
-                    </Button>
+                    {!workspace?.path && (
+                      <Button size="small" variant="primary"
+                        disabled={busy}
+                        onClick={() => void onCreateWorkspace()}
+                        type="button"
+                      >
+                        <Icon name="plus" />
+                        创建 Workspace
+                      </Button>
+                    )}
                   </div>
                 </div>
               )}

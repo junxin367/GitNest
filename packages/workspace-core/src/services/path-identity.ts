@@ -4,7 +4,7 @@ const FNV_PRIME = 0x100000001b3n;
 const MASK_64 = 0xffffffffffffffffn;
 
 export function createPathIdentity(
-  prefix: "entry" | "group" | "repository" | "worktree",
+  prefix: "group" | "repository" | "worktree",
   value: string
 ): string {
   const first = hashString(value, FNV_OFFSET_A);

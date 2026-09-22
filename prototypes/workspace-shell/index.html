@@ -413,7 +413,9 @@
       background: var(--surface-hover);
     }
 
-    .menu-item.is-selected {
+    .menu-item.is-selected,
+    .menu-item.is-selected:hover:not(:disabled),
+    .menu-item.is-selected:focus-visible:not(:disabled) {
       color: var(--text);
       background: var(--accent-soft);
     }
@@ -681,6 +683,7 @@
 
     .workspace-switcher-wrap {
       position: relative;
+      min-width: 0;
     }
 
     .workspace-switcher {
@@ -688,6 +691,7 @@
       align-items: center;
       gap: var(--space-2);
       width: 100%;
+      max-width: 100%;
       min-height: 58px;
       padding: var(--space-2) var(--space-3);
       color: inherit;
@@ -774,6 +778,7 @@
       grid-template-columns: minmax(0, 1fr) var(--control-compact);
       align-items: center;
       gap: var(--space-1);
+      min-width: 0;
       margin: var(--space-2) var(--space-3);
     }
 
@@ -2279,11 +2284,6 @@
       gap: var(--space-2);
     }
 
-    .settings-ai-actions-buttons .gn-button {
-      width: 120px;
-      min-width: 120px;
-    }
-
     .settings-account-preview {
       display: flex;
       align-items: center;
@@ -3568,7 +3568,6 @@
     }
 
     .repo-hero-actions .gn-button {
-      width: 100%;
       min-width: 0;
       height: var(--control-compact);
       padding: 0 var(--space-2);
@@ -6082,7 +6081,6 @@
 
     .commit-submit-button.gn-button {
       flex: 1 1 auto;
-      width: auto;
       min-width: 0;
       min-height: var(--control-compact);
       height: var(--control-compact);
@@ -6610,7 +6608,7 @@
       transition:
         opacity var(--motion-exit) var(--ease-exit),
         visibility var(--motion-exit) var(--ease-exit);
-      backdrop-filter: blur(4px);
+      backdrop-filter: blur(7px);
     }
 
     .modal-overlay.open {
@@ -7105,6 +7103,239 @@
       padding: var(--space-4) var(--space-5);
       background: var(--surface-2);
       border-top: 1px solid var(--border-soft);
+    }
+
+    .version-dialog {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      width: min(620px, calc(100vw - 48px));
+      max-height: min(680px, calc(100vh - 48px));
+    }
+
+    .version-dialog-header {
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr);
+      align-items: center;
+      gap: var(--space-3);
+      min-height: 56px;
+      padding: var(--space-3) var(--space-5);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .version-dialog-header .confirm-dialog-icon {
+      width: 32px;
+      height: 32px;
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .version-dialog-header h2 {
+      min-width: 0;
+      overflow: hidden;
+      margin: 0;
+      color: var(--text);
+      font-size: var(--font-size-emphasis);
+      line-height: var(--line-height-title);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .version-dialog-content {
+      display: grid;
+      gap: var(--space-3);
+      min-height: 0;
+      padding: var(--space-4) var(--space-5);
+      overflow: auto;
+    }
+
+    .version-dialog-facts {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: var(--space-2);
+      margin: 0;
+    }
+
+    .version-dialog-facts > div {
+      display: grid;
+      gap: var(--space-1);
+      padding: var(--space-3);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .version-dialog-facts dt {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .version-dialog-facts dd {
+      margin: 0;
+      color: var(--text);
+      font-size: var(--font-size-body);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .version-dialog-information p {
+      margin: 0;
+      color: var(--text-soft);
+      font-size: var(--font-size-caption);
+      line-height: 1.55;
+    }
+
+    .version-dialog-progress {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-3);
+    }
+
+    .version-dialog-progress[hidden] {
+      display: none;
+    }
+
+    .version-dialog-progress progress {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    .version-dialog-progress span {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+      white-space: nowrap;
+    }
+
+    .version-dialog-information {
+      display: grid;
+      gap: var(--space-3);
+      padding: var(--space-3);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .version-dialog-section-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+    }
+
+    .version-dialog-section-heading > div {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--text-soft);
+    }
+
+    .version-dialog-section-heading h3 {
+      margin: 0;
+      color: var(--text);
+      font-size: var(--font-size-body);
+    }
+
+    .version-dialog-url {
+      display: flex;
+      align-items: baseline;
+      gap: var(--space-2);
+      min-width: 0;
+    }
+
+    .version-dialog-url > span {
+      flex: 0 0 auto;
+    }
+
+    .version-dialog-url > span,
+    .version-dialog-update-meta dt {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .version-dialog-url code {
+      min-width: 0;
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: var(--font-size-caption);
+      overflow-wrap: anywhere;
+    }
+
+    .version-dialog-update-meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--space-2);
+      margin: 0;
+    }
+
+    .version-dialog-update-meta > div {
+      display: flex;
+      min-width: 0;
+      align-items: baseline;
+      gap: var(--space-2);
+    }
+
+    .version-dialog-update-meta dt {
+      flex: 0 0 auto;
+    }
+
+    .version-dialog-update-meta dd {
+      min-width: 0;
+      margin: 0;
+      color: var(--text);
+      font-size: var(--font-size-caption);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .version-dialog-update-notes {
+      max-height: 180px;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+
+    .version-dialog-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: var(--space-4);
+      min-height: 56px;
+      padding: var(--space-3) var(--space-5);
+      background: var(--surface-2);
+      border-top: 1px solid var(--border-soft);
+    }
+
+    .version-dialog-actions {
+      display: flex;
+      flex: 0 0 auto;
+      gap: var(--space-2);
+    }
+
+    @media (max-width: 560px) {
+      .version-dialog-facts {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .version-dialog-progress {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .version-dialog-section-heading {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .version-dialog-section-heading > .gn-button,
+      .version-dialog-section-heading > span > .gn-button {
+        align-self: flex-start;
+      }
+
+      .version-dialog-update-meta {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .version-dialog-actions {
+        justify-content: flex-end;
+      }
     }
 
     .workspace-entry-dialog {
@@ -7685,6 +7916,10 @@
       font-size: var(--font-size-body);
     }
 
+    .analysis-scope-name {
+      color: var(--accent);
+    }
+
     .analysis-header-actions {
       display: flex;
       flex: 0 0 auto;
@@ -8096,6 +8331,10 @@
     .analysis-chain-filter .gn-input {
       background: var(--surface-2);
       border-color: var(--border-soft);
+    }
+
+    .analysis-chain-filter .gn-input__clear[hidden] {
+      display: none;
     }
 
     .analysis-method-menu {
@@ -8687,7 +8926,6 @@
     }
 
     .analysis-node-diff-trigger > button {
-      width: 100%;
       justify-content: center;
     }
 
@@ -9182,6 +9420,77 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="versionOverlay" aria-hidden="true" inert onpointerdown="rememberVersionBackdropPointer(event)" onpointerup="closeVersionFromBackdrop(event)">
+    <section class="confirm-dialog version-dialog" role="dialog" aria-modal="true" aria-labelledby="versionDialogTitle">
+      <header class="version-dialog-header">
+        <span class="confirm-dialog-icon" id="versionDialogIcon"></span>
+        <h2 id="versionDialogTitle">版本 v0.0.1</h2>
+      </header>
+      <div class="version-dialog-content">
+        <dl class="version-dialog-facts">
+          <div>
+            <dt>当前版本</dt>
+            <dd id="versionCurrentValue">v0.0.1</dd>
+          </div>
+          <div>
+            <dt>最新版本</dt>
+            <dd id="versionLatestValue">尚未检查</dd>
+          </div>
+          <div>
+            <dt>运行方式</dt>
+            <dd>安装版</dd>
+          </div>
+          <div>
+            <dt>检查时间</dt>
+            <dd id="versionCheckedAtValue">尚未检查</dd>
+          </div>
+        </dl>
+        <section class="version-dialog-information" aria-labelledby="versionProjectTitle">
+          <div class="version-dialog-section-heading">
+            <div>
+              <span id="versionProjectIcon"></span>
+              <h3 id="versionProjectTitle">项目信息</h3>
+            </div>
+            <span id="versionProjectAction"></span>
+          </div>
+          <div class="version-dialog-url">
+            <span>项目 URL</span>
+            <code id="versionProjectUrl"></code>
+          </div>
+        </section>
+        <section class="version-dialog-information version-dialog-update-information" id="versionNotes" aria-labelledby="versionUpdateTitle">
+          <div class="version-dialog-section-heading">
+            <div>
+              <span id="versionUpdateIcon"></span>
+              <h3 id="versionUpdateTitle">更新信息</h3>
+            </div>
+            <span id="versionReleaseAction"></span>
+          </div>
+          <dl class="version-dialog-update-meta">
+            <div>
+              <dt>目标版本</dt>
+              <dd id="versionTargetValue">尚未获取</dd>
+            </div>
+            <div>
+              <dt>发布时间</dt>
+              <dd id="versionPublishedAtValue">尚未获取</dd>
+            </div>
+          </dl>
+          <div class="version-dialog-progress" id="versionProgress" hidden>
+            <progress id="versionProgressBar" aria-label="更新下载进度" max="100" value="0"></progress>
+            <span id="versionProgressLabel">0%</span>
+          </div>
+        </section>
+      </div>
+      <footer class="version-dialog-footer">
+        <div class="version-dialog-actions">
+          <button type="button" class="gn-button" data-full-width="false" data-icon-only="false" data-size="small" data-variant="default" id="versionClose" onclick="closeVersionDialog()"><span class="gn-button__label">关闭</span></button>
+          <span id="versionPrimaryAction"></span>
+        </div>
+      </footer>
+    </section>
+  </div>
+
   <div class="modal-overlay" id="confirmOverlay" aria-hidden="true" inert onpointerdown="rememberConfirmBackdropPointer(event)" onpointerup="closeConfirmFromBackdrop(event)">
     <div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmDescription">
       <div class="confirm-dialog-body">
@@ -9332,6 +9641,18 @@
 
     const icon = (name, size = 16) =>
       `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">${iconPaths[name] || iconPaths.file}</svg>`;
+
+    const appVersion = "0.0.1";
+    const prototypeLatestVersion = "0.0.2";
+    const gitNestProjectUrl =
+      "https://github.com/junxin367/GitNest";
+    const gitNestReleasesUrl = `${gitNestProjectUrl}/releases`;
+    const prototypeReleaseUrl =
+      `${gitNestReleasesUrl}/tag/v${prototypeLatestVersion}`;
+    const prototypeReleasePublishedAt =
+      "2026-09-22T07:00:00.000Z";
+    const prototypeReleaseNotes =
+      "新增项目主页入口，并在版本弹窗中展示发布时间、Release 链接与完整更新说明。";
 
     const renderButton = (options = {}) =>
       window.GitNestButton.render(options);
@@ -11762,6 +12083,16 @@
       confirmAction: null,
       branchSwitchReturnFocus: null,
       branchSwitchPointerDownOnBackdrop: false,
+      versionPhase: "idle",
+      versionLatestVersion: "",
+      versionCheckedAt: null,
+      versionPublishedAt: null,
+      versionReleaseNotes: "",
+      versionReleaseUrl: "",
+      versionProgress: 0,
+      versionTimer: null,
+      versionReturnFocus: null,
+      versionPointerDownOnBackdrop: false,
       collapsedGroups: new Set(
         savedSidebarRepositoryPreferences.collapsedGroups
       ),
@@ -12186,16 +12517,11 @@
           leading: icon("search", 14),
           attributes: `onclick="closeTitlebarMenus(); openCommandPalette()"`
         }),
-        renderMenuItem({
-          label: "诊断信息",
-          leading: icon("activity", 14),
-          attributes: `onclick="closeTitlebarMenus(); openSettings()"`
-        }),
         `<div class="menu-separator" aria-hidden="true"></div>`,
         renderMenuItem({
-          label: "版本 v1.0.0",
+          label: `版本 v${appVersion}`,
           leading: icon("sparkle", 14),
-          disabled: true
+          attributes: `onclick="openVersionDialog(document.querySelector('.titlebar-help-menu > summary'))"`
         })
       ].join("");
       document.getElementById("sidebarRepositoryMenuButton").innerHTML = icon("more", 16);
@@ -14896,22 +15222,39 @@
       });
     }
 
-    function analysisAllNodesInCurrentScope() {
+    const analysisNodeSearchIndexByScope = new Map();
+
+    function analysisNodeSearchIndexForCurrentScope() {
+      const cached = analysisNodeSearchIndexByScope.get(state.analysisScope);
+      if (cached) return cached;
       const uniqueNodes = new Map();
       analysisChainsInCurrentScope().forEach((chain) => {
         chain.nodes.forEach((node) => uniqueNodes.set(node.id, node));
       });
-      return [...uniqueNodes.values()];
+      const nodes = [...uniqueNodes.values()];
+      const result = {
+        nodes,
+        entries: nodes.map((node) => ({
+          node,
+          searchText: `${node.name} ${node.qualifiedName} ${node.path} ${node.kindLabel}`
+            .toLocaleLowerCase("zh-CN")
+        }))
+      };
+      analysisNodeSearchIndexByScope.set(state.analysisScope, result);
+      return result;
+    }
+
+    function analysisAllNodesInCurrentScope() {
+      return analysisNodeSearchIndexForCurrentScope().nodes;
     }
 
     function analysisNodesForCurrentScope() {
       const normalizedFilter = state.analysisNodeFilter.trim().toLocaleLowerCase("zh-CN");
-      return analysisAllNodesInCurrentScope().filter((node) => {
-        if (!normalizedFilter) return true;
-        return `${node.name} ${node.qualifiedName} ${node.path} ${node.kindLabel}`
-          .toLocaleLowerCase("zh-CN")
-          .includes(normalizedFilter);
-      });
+      const searchIndex = analysisNodeSearchIndexForCurrentScope();
+      if (!normalizedFilter) return searchIndex.nodes;
+      return searchIndex.entries
+        .filter((entry) => entry.searchText.includes(normalizedFilter))
+        .map((entry) => entry.node);
     }
 
     function selectedAnalysisChain() {
@@ -14999,7 +15342,7 @@
         <header>
           <div>
             <strong>代码导航</strong>
-            <span>${chainsMode ? `${chains.length} 条请求链` : `${nodes.length}/${searchableNodeCount} 个节点`}</span>
+            <span data-analysis-navigation-meta="true">${chainsMode ? `${chains.length} 条请求链` : `${nodes.length}/${searchableNodeCount} 个节点`}</span>
           </div>
           <div class="analysis-navigation-tabs" role="tablist" aria-label="代码导航类型">
             <button
@@ -15035,16 +15378,14 @@
               autocomplete: "off",
               spellcheck: false,
               leadingIcon: icon("search", 14),
-              clearButton: state.analysisFilter
-                ? {
-                    icon: icon("x", 12),
-                    ariaLabel: "清空请求链筛选",
-                    title: "清空请求链筛选",
-                    attributes: "onclick=\"setAnalysisFilter('')\""
-                  }
-                : null,
+              clearButton: {
+                icon: icon("x", 12),
+                ariaLabel: "清空请求链筛选",
+                title: "清空请求链筛选",
+                attributes: `data-analysis-filter-clear="chains" onclick="setAnalysisFilter('')"${state.analysisFilter ? "" : " hidden disabled"}`
+              },
               fieldClassName: "analysis-chain-filter",
-              attributes: 'data-analysis-navigation-filter="true" oninput="setAnalysisFilter(this.value)"'
+              attributes: 'data-analysis-navigation-filter="true" data-analysis-filter-kind="chains" oninput="setAnalysisFilter(this.value)"'
             })}
             <details
               class="analysis-method-menu"
@@ -15086,20 +15427,18 @@
               autocomplete: "off",
               spellcheck: false,
               leadingIcon: icon("search", 14),
-              clearButton: state.analysisNodeFilter
-                ? {
-                    icon: icon("x", 12),
-                    ariaLabel: "清空函数或接口筛选",
-                    title: "清空函数或接口筛选",
-                    attributes: "onclick=\"setAnalysisNodeFilter('')\""
-                  }
-                : null,
+              clearButton: {
+                icon: icon("x", 12),
+                ariaLabel: "清空函数或接口筛选",
+                title: "清空函数或接口筛选",
+                attributes: `data-analysis-filter-clear="nodes" onclick="setAnalysisNodeFilter('')"${state.analysisNodeFilter ? "" : " hidden disabled"}`
+              },
               fieldClassName: "analysis-chain-filter",
-              attributes: 'data-analysis-navigation-filter="true" oninput="setAnalysisNodeFilter(this.value)"'
+              attributes: 'data-analysis-navigation-filter="true" data-analysis-filter-kind="nodes" oninput="setAnalysisNodeFilter(this.value)"'
             })}
           `}
         </header>
-        <div class="analysis-chain-list">
+        <div class="analysis-chain-list" data-analysis-navigation-results="true">
           ${chainsMode
             ? renderAnalysisChainList(chains, selectedChain)
             : renderAnalysisNodeList(nodes, selected)}
@@ -15326,13 +15665,14 @@
           </div>
         </div>
         <section class="analysis-node-diff-trigger">
-          ${renderButton({
-            label: state.analysisDiffExpanded
+              ${renderButton({
+                label: state.analysisDiffExpanded
               ? selectedNode.changed ? "收起文件 Diff" : "收起代码"
               : selectedNode.changed ? "查看文件 Diff" : "查看代码",
-            size: "small",
-            variant: "default",
-            icon: icon(
+                size: "small",
+                variant: "default",
+                fullWidth: true,
+                icon: icon(
               state.analysisDiffExpanded
                 ? "x"
                 : selectedNode.changed ? "fileCode" : "file"
@@ -15714,7 +16054,7 @@
                 ${runningButton}
               </div>
             </div>
-            <p>当前范围：${escapeHtml(currentWorkspaceSnapshot().name)}</p>
+            <p>当前范围：<span class="analysis-scope-name">${escapeHtml(currentWorkspaceSnapshot().name)}</span></p>
           </header>
 
           ${!state.analysisEnabled ? `
@@ -15948,32 +16288,68 @@
       if (input instanceof HTMLInputElement) input.focus();
     }
 
+    let analysisNavigationFilterFrame = 0;
+
+    function scheduleAnalysisNavigationFilterSync() {
+      if (analysisNavigationFilterFrame) return;
+      analysisNavigationFilterFrame = requestAnimationFrame(() => {
+        analysisNavigationFilterFrame = 0;
+        syncAnalysisNavigationFilterResults();
+      });
+    }
+
+    function syncAnalysisNavigationFilterResults() {
+      if (state.view !== "analysis" || state.analysisSelectedNode) return;
+      const panel = document.getElementById("analysisNavigationPanel");
+      const meta = panel?.querySelector('[data-analysis-navigation-meta="true"]');
+      const results = panel?.querySelector('[data-analysis-navigation-results="true"]');
+      if (!meta || !results) return;
+
+      const chainsMode = state.analysisNavigationMode === "chains";
+      const filterKind = chainsMode ? "chains" : "nodes";
+      const filterValue = chainsMode ? state.analysisFilter : state.analysisNodeFilter;
+      const clearButton = panel.querySelector(
+        `[data-analysis-filter-clear="${filterKind}"]`
+      );
+      if (clearButton instanceof HTMLButtonElement) {
+        clearButton.hidden = !filterValue;
+        clearButton.disabled = !filterValue;
+      }
+
+      if (chainsMode) {
+        const chains = analysisChainsForCurrentScope();
+        meta.textContent = `${chains.length} 条请求链`;
+        results.innerHTML = renderAnalysisChainList(chains, selectedAnalysisChain());
+        return;
+      }
+
+      const nodes = analysisNodesForCurrentScope();
+      meta.textContent = `${nodes.length}/${analysisAllNodesInCurrentScope().length} 个节点`;
+      results.innerHTML = renderAnalysisNodeList(
+        nodes,
+        analysisNodeById(state.analysisSelectedNode)?.node || null
+      );
+    }
+
+    function syncAnalysisNavigationFilterInput(kind, value) {
+      const input = document.querySelector(
+        `[data-analysis-navigation-filter="true"][data-analysis-filter-kind="${kind}"]`
+      );
+      if (!(input instanceof HTMLInputElement)) return;
+      if (input.value !== value) input.value = value;
+      if (document.activeElement !== input) input.focus();
+    }
+
     function setAnalysisFilter(value) {
       state.analysisFilter = value;
-      const input = document.activeElement;
-      const selectionStart = input instanceof HTMLInputElement ? input.selectionStart : null;
-      syncAnalysisNodeInspection();
-      const nextInput = document.querySelector('[data-analysis-navigation-filter="true"]');
-      if (nextInput instanceof HTMLInputElement) {
-        nextInput.focus();
-        if (selectionStart !== null) {
-          nextInput.setSelectionRange(selectionStart, selectionStart);
-        }
-      }
+      syncAnalysisNavigationFilterInput("chains", value);
+      scheduleAnalysisNavigationFilterSync();
     }
 
     function setAnalysisNodeFilter(value) {
       state.analysisNodeFilter = value;
-      const input = document.activeElement;
-      const selectionStart = input instanceof HTMLInputElement ? input.selectionStart : null;
-      syncAnalysisNodeInspection();
-      const nextInput = document.querySelector('[data-analysis-navigation-filter="true"]');
-      if (nextInput instanceof HTMLInputElement) {
-        nextInput.focus();
-        if (selectionStart !== null) {
-          nextInput.setSelectionRange(selectionStart, selectionStart);
-        }
-      }
+      syncAnalysisNavigationFilterInput("nodes", value);
+      scheduleAnalysisNavigationFilterSync();
     }
 
     function setAnalysisMethod(method) {
@@ -17546,6 +17922,7 @@
                 label: staged > 0 ? "提交已暂存变更" : "提交全部变更",
                 size: "small",
                 variant: "primary",
+                fullWidth: true,
                 disabled: !canCommit,
                 className: "commit-submit-button",
                 icon: icon("check"),
@@ -19370,6 +19747,301 @@
       }));
     }
 
+    function versionDialogBusy() {
+      return [
+        "checking",
+        "downloading",
+        "verifying",
+        "launching"
+      ].includes(state.versionPhase);
+    }
+
+    function versionDialogHasUpdate() {
+      return [
+        "available",
+        "downloading",
+        "verifying",
+        "launching"
+      ].includes(state.versionPhase);
+    }
+
+    function formatVersionCheckedAt(value) {
+      if (!value) return "尚未检查";
+      return new Date(value).toLocaleString("zh-CN", {
+        hour12: false
+      });
+    }
+
+    function formatVersionPublishedAt(value) {
+      if (!value) return "尚未获取";
+      return new Date(value).toLocaleString("zh-CN", {
+        hour12: false
+      });
+    }
+
+    function versionReleaseNotesText() {
+      if (state.versionReleaseNotes) {
+        return state.versionReleaseNotes;
+      }
+      if (state.versionPhase === "checking") {
+        return "正在读取最新正式版的发布时间和更新内容。";
+      }
+      return "";
+    }
+
+    function renderVersionDialog() {
+      const hasUpdate = versionDialogHasUpdate();
+      const busy = versionDialogBusy();
+      const progressVisible = [
+        "downloading",
+        "verifying"
+      ].includes(state.versionPhase);
+      const progressElement = document.getElementById("versionProgress");
+      const primaryAction = document.getElementById("versionPrimaryAction");
+
+      document.getElementById("versionDialogIcon").innerHTML =
+        icon("sparkle", 16);
+      document.getElementById("versionProjectIcon").innerHTML =
+        icon("repository", 16);
+      document.getElementById("versionUpdateIcon").innerHTML =
+        icon("download", 16);
+      document.getElementById("versionDialogTitle").textContent =
+        `版本 v${appVersion}`;
+      document.getElementById("versionCurrentValue").textContent =
+        `v${appVersion}`;
+      document.getElementById("versionLatestValue").textContent =
+        state.versionLatestVersion
+          ? `v${state.versionLatestVersion}`
+          : "尚未检查";
+      document.getElementById("versionCheckedAtValue").textContent =
+        formatVersionCheckedAt(state.versionCheckedAt);
+      const projectUrlElement =
+        document.getElementById("versionProjectUrl");
+      projectUrlElement.textContent = gitNestProjectUrl;
+      projectUrlElement.title = gitNestProjectUrl;
+      document.getElementById("versionProjectAction").innerHTML =
+        renderButton({
+          label: "打开项目",
+          size: "small",
+          icon: icon("external"),
+          ariaLabel: "在浏览器中打开 GitNest 项目",
+          attributes: 'onclick="openVersionProjectPage()"'
+        });
+      progressElement.hidden = !progressVisible;
+      document.getElementById("versionProgressBar").value =
+        state.versionProgress;
+      document.getElementById("versionProgressLabel").textContent =
+        state.versionPhase === "verifying"
+          ? "100% · 正在校验"
+          : `${state.versionProgress}%`;
+      document.getElementById("versionTargetValue").textContent =
+        state.versionLatestVersion
+          ? `v${state.versionLatestVersion}`
+          : "尚未获取";
+      document.getElementById(
+        "versionPublishedAtValue"
+      ).textContent = formatVersionPublishedAt(
+        state.versionPublishedAt
+      );
+      const notesText = versionReleaseNotesText();
+      let releaseNotesElement =
+        document.getElementById("versionReleaseNotes");
+      if (notesText) {
+        if (!releaseNotesElement) {
+          releaseNotesElement = document.createElement("p");
+          releaseNotesElement.id = "versionReleaseNotes";
+          releaseNotesElement.className =
+            "version-dialog-update-notes";
+          releaseNotesElement.setAttribute("aria-live", "polite");
+          document.getElementById("versionNotes")?.append(
+            releaseNotesElement
+          );
+        }
+        releaseNotesElement.textContent = notesText;
+      } else {
+        releaseNotesElement?.remove();
+      }
+      document.getElementById("versionReleaseAction").innerHTML =
+        renderButton({
+          label: state.versionReleaseUrl
+            ? "查看 Release"
+            : "打开 Releases",
+          size: "small",
+          icon: icon("external"),
+          ariaLabel: "在浏览器中查看 GitNest Release",
+          attributes: 'onclick="openVersionReleasePage()"'
+        });
+
+      const checking = state.versionPhase === "checking";
+      const downloading = state.versionPhase === "downloading";
+      const verifying = state.versionPhase === "verifying";
+      const launching = state.versionPhase === "launching";
+      primaryAction.innerHTML = renderButton({
+        label: checking
+          ? "正在检查"
+          : downloading
+            ? "正在下载"
+            : verifying
+              ? "正在校验"
+              : launching
+                ? "正在启动安装器"
+                : hasUpdate
+                  ? "下载并安装"
+                  : "检查更新",
+        size: "small",
+        variant: "primary",
+        icon: icon(hasUpdate ? "download" : "refresh"),
+        loading: busy,
+        disabled: busy,
+        attributes: 'onclick="runVersionPrimaryAction()"'
+      });
+    }
+
+    function openVersionDialog(returnFocus = null) {
+      const overlay = document.getElementById("versionOverlay");
+      if (!overlay) return;
+
+      state.versionReturnFocus =
+        returnFocus instanceof HTMLElement
+          ? returnFocus
+          : document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+      closeTitlebarMenus();
+      renderVersionDialog();
+      document.querySelector(".app-shell").inert = true;
+      overlay.inert = false;
+      overlay.classList.add("open");
+      overlay.setAttribute("aria-hidden", "false");
+      document.body.classList.add("modal-open");
+      focusAfterInertSettles(
+        document.getElementById("versionClose"),
+        state.versionReturnFocus
+      );
+    }
+
+    function closeVersionDialog({ restoreFocus = true } = {}) {
+      const overlay = document.getElementById("versionOverlay");
+      if (!overlay || !overlay.classList.contains("open")) return;
+
+      overlay.classList.remove("open");
+      overlay.setAttribute("aria-hidden", "true");
+      overlay.inert = true;
+      document.querySelector(".app-shell").inert = false;
+      document.body.classList.remove("modal-open");
+      const returnFocus = state.versionReturnFocus;
+      state.versionReturnFocus = null;
+      if (restoreFocus && returnFocus?.isConnected) returnFocus.focus();
+    }
+
+    function rememberVersionBackdropPointer(event) {
+      state.versionPointerDownOnBackdrop =
+        event.target === event.currentTarget;
+    }
+
+    function closeVersionFromBackdrop(event) {
+      const shouldClose =
+        state.versionPointerDownOnBackdrop &&
+        event.target === event.currentTarget;
+      state.versionPointerDownOnBackdrop = false;
+      if (shouldClose) closeVersionDialog();
+    }
+
+    function clearVersionTimer() {
+      if (state.versionTimer !== null) {
+        window.clearTimeout(state.versionTimer);
+        state.versionTimer = null;
+      }
+    }
+
+    function checkVersionUpdate() {
+      if (versionDialogBusy()) return;
+
+      clearVersionTimer();
+      state.versionPhase = "checking";
+      state.versionProgress = 0;
+      renderVersionDialog();
+      state.versionTimer = window.setTimeout(() => {
+        state.versionTimer = null;
+        state.versionPhase = "available";
+        state.versionLatestVersion = prototypeLatestVersion;
+        state.versionCheckedAt = new Date().toISOString();
+        state.versionPublishedAt =
+          prototypeReleasePublishedAt;
+        state.versionReleaseNotes = prototypeReleaseNotes;
+        state.versionReleaseUrl = prototypeReleaseUrl;
+        renderVersionDialog();
+      }, 900);
+    }
+
+    function downloadVersionUpdate() {
+      if (
+        state.versionPhase !== "available" ||
+        !state.versionLatestVersion
+      ) {
+        return;
+      }
+
+      clearVersionTimer();
+      state.versionPhase = "downloading";
+      state.versionProgress = 0;
+      renderVersionDialog();
+      state.versionTimer = window.setInterval(() => {
+        state.versionProgress = Math.min(
+          100,
+          state.versionProgress + 8
+        );
+        if (state.versionProgress < 100) {
+          renderVersionDialog();
+          return;
+        }
+
+        window.clearInterval(state.versionTimer);
+        state.versionTimer = null;
+        state.versionPhase = "verifying";
+        renderVersionDialog();
+        state.versionTimer = window.setTimeout(() => {
+          state.versionTimer = null;
+          state.versionPhase = "launching";
+          renderVersionDialog();
+          state.versionTimer = window.setTimeout(() => {
+            state.versionTimer = null;
+            state.versionPhase = "available";
+            renderVersionDialog();
+            showToast(
+              "安装器已准备",
+              "设计原型不会退出应用或启动真实安装程序。",
+              "download"
+            );
+          }, 800);
+        }, 700);
+      }, 120);
+    }
+
+    function runVersionPrimaryAction() {
+      if (versionDialogHasUpdate()) {
+        downloadVersionUpdate();
+        return;
+      }
+      checkVersionUpdate();
+    }
+
+    function openVersionProjectPage() {
+      window.open(
+        gitNestProjectUrl,
+        "_blank",
+        "noopener,noreferrer"
+      );
+    }
+
+    function openVersionReleasePage() {
+      window.open(
+        state.versionReleaseUrl || gitNestReleasesUrl,
+        "_blank",
+        "noopener,noreferrer"
+      );
+    }
+
     function renderBranchSwitchDialog() {
       const repo = currentRepo();
       const branches = branchSwitchOptions(repo);
@@ -19889,6 +20561,17 @@
       ) {
         event.preventDefault();
         closeSidebarRepositoryMenu();
+        return;
+      }
+      const versionOverlay = document.getElementById("versionOverlay");
+      const versionOpen = versionOverlay.classList.contains("open");
+      if (versionOpen) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeVersionDialog();
+        } else if (event.key === "Tab") {
+          trapFocusWithin(event, versionOverlay);
+        }
         return;
       }
       const branchSwitchOverlay = document.getElementById("branchSwitchOverlay");

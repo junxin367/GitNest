@@ -740,10 +740,10 @@
 
 .diff-viewer-line-number {
   padding: 0 var(--space-2) 0 var(--space-1);
-  color: var(--muted);
+  color: var(--color-code-line-number);
   background: color-mix(
     in srgb,
-    var(--surface-2) 56%,
+    var(--color-code-current-line) 36%,
     var(--color-code-bg)
   );
   border-right: 1px solid var(--border-soft);
@@ -766,7 +766,7 @@
 .diff-viewer-code-cell {
   min-width: 0;
   padding: 0 var(--space-3);
-  color: var(--text-soft);
+  color: var(--color-code-foreground);
   background: var(--color-code-bg);
   border-right: 1px solid var(--border-soft);
 }

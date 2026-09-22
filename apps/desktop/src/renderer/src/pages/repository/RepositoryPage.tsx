@@ -29,7 +29,6 @@ import { useWorktreeCommands } from "../../features/worktree-command/useWorktree
 import { useRepositoryMutations } from "../../entities/repository/useRepositoryMutations";
 import {
   findTargetSnapshot,
-  findWorkspaceEntryForTarget,
   getSnapshotContentRevision,
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
@@ -201,9 +200,7 @@ export function RepositoryPage({
       }
       const tapdKeyword = readTapdKeywordPreference(
         getRendererPreferenceStorage(),
-        workspace?.id,
-        findWorkspaceEntryForTarget(workspace, target)?.id ??
-          workspace?.selectedEntryId
+        workspace?.id
       );
       setCommitMessageForScope(
         requestCommitDraftScopeKey,

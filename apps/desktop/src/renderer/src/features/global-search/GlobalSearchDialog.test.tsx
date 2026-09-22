@@ -188,30 +188,22 @@ const TARGET = {
 } as const;
 
 const WORKSPACE: WorkspaceDetailsDto = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   id: "workspace",
   name: "Workspace",
-  entries: [
+  path: "C:\\workspace",
+  canonicalPath: "c:\\workspace",
+  excludes: [],
+  groups: [
     {
-      id: "entry",
-      kind: "workspace-directory",
-      displayName: "Workspace",
-      path: "C:\\workspace",
-      canonicalPath: "c:\\workspace",
-      excludes: [],
-      order: 0,
-      groups: [
-        {
-          id: "group",
-          name: "Group",
-          collapsed: false,
-          targets: [TARGET]
-        }
-      ],
-      scanIssues: [],
-      lastScannedAt: "2026-09-16T12:00:00.000Z"
+      id: "group",
+      name: "Group",
+      collapsed: false,
+      targets: [TARGET]
     }
   ],
+  scanIssues: [],
+  lastScannedAt: "2026-09-16T12:00:00.000Z",
   repositories: [
     {
       id: TARGET.repositoryId,

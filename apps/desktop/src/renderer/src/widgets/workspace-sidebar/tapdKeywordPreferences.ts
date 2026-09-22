@@ -6,28 +6,23 @@ import {
 } from "../../shared/lib/renderer-preferences";
 
 export function tapdKeywordPreferenceKey(
-  workspaceId: string,
-  entryId: string
+  workspaceId: string
 ): string {
-  return rendererPreferenceKeys.tapdKeyword(
-    workspaceId,
-    entryId
-  );
+  return rendererPreferenceKeys.tapdKeyword(workspaceId);
 }
 
 export function readTapdKeywordPreference(
   storage: PreferenceStorage | undefined,
-  workspaceId: string | undefined,
-  entryId: string | undefined
+  workspaceId: string | undefined
 ): string {
-  if (!storage || !workspaceId || !entryId) {
+  if (!storage || !workspaceId) {
     return "";
   }
 
   return normalizeTapdKeyword(
     readRendererPreference(
       storage,
-      tapdKeywordPreferenceKey(workspaceId, entryId)
+      tapdKeywordPreferenceKey(workspaceId)
     ) ?? ""
   );
 }
@@ -35,16 +30,15 @@ export function readTapdKeywordPreference(
 export function writeTapdKeywordPreference(
   storage: PreferenceStorage | undefined,
   workspaceId: string | undefined,
-  entryId: string | undefined,
   keyword: string
 ): void {
-  if (!storage || !workspaceId || !entryId) {
+  if (!storage || !workspaceId) {
     return;
   }
 
   writeRendererPreference(
     storage,
-    tapdKeywordPreferenceKey(workspaceId, entryId),
+    tapdKeywordPreferenceKey(workspaceId),
     normalizeTapdKeyword(keyword)
   );
 }

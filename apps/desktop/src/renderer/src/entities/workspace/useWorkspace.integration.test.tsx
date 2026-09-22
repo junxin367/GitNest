@@ -15,7 +15,8 @@ import type {
   GitNestBridge,
   RepositoryTargetDto,
   WorkspaceDetailsDto,
-  WorkspaceRuntimeStateDto
+  WorkspaceRuntimeStateDto,
+  WorkspaceSummaryDto
 } from "@gitnest/contracts";
 
 import {
@@ -23,7 +24,7 @@ import {
   type WorkspaceController
 } from "./useWorkspace";
 
-describe("useWorkspace target selection", () => {
+describe("useWorkspace integration", () => {
   let container: HTMLDivElement;
   let root: Root;
   let controller: WorkspaceController | undefined;
@@ -34,8 +35,9 @@ describe("useWorkspace target selection", () => {
         IS_REACT_ACT_ENVIRONMENT: boolean;
       }
     ).IS_REACT_ACT_ENVIRONMENT = true;
+    controller = undefined;
     container = document.createElement("div");
-    document.body.append(container);
+    document.body.appendChild(container);
     root = createRoot(container);
   });
 
@@ -62,7 +64,7 @@ describe("useWorkspace target selection", () => {
           ? targetB.promise
           : targetC.promise
     );
-    installBridge(selectTarget);
+    installBridge({ selectTarget });
 
     await renderHarness();
 
@@ -97,7 +99,7 @@ describe("useWorkspace target selection", () => {
     );
   });
 
-  it("reasserts the current target when another selection is pending", async () => {
+  it("reasserts the current target while another selection is pending", async () => {
     const targetB = deferred<
       Awaited<
         ReturnType<GitNestBridge["workspace"]["selectTarget"]>
@@ -114,7 +116,7 @@ describe("useWorkspace target selection", () => {
           ? targetB.promise
           : targetA.promise
     );
-    installBridge(selectTarget);
+    installBridge({ selectTarget });
 
     await renderHarness();
 
@@ -147,27 +149,18 @@ describe("useWorkspace target selection", () => {
     );
   });
 
-  it("creates a scanned Workspace from the selected directory", async () => {
-    const {
-      selectedEntryId: _selectedEntryId,
-      selectedTarget: _selectedTarget,
-      ...workspaceBase
-    } = workspaceWithTarget(TARGET_A);
-    const secondWorkspace = {
-      ...workspaceBase,
-      id: "workspace_second",
-      name: "Second Workspace",
-      entries: [],
-      repositories: [],
-      worktrees: [],
-      updatedAt: "2026-09-20T12:00:00.000Z"
-    } satisfies WorkspaceDetailsDto;
+  it("configures the first empty placeholder Workspace in place", async () => {
+    const placeholder = createEmptyWorkspace();
+    const initialState = createRuntimeState(placeholder);
     const scannedWorkspace = {
       ...workspaceWithTarget(TARGET_A),
-      id: "workspace_second",
+      id: placeholder.id,
       name: "Second Workspace",
+      path: "C:\\projects\\Second Workspace",
+      canonicalPath: "c:\\projects\\second workspace",
       updatedAt: "2026-09-20T12:01:00.000Z"
     } satisfies WorkspaceDetailsDto;
+    const createdState = createRuntimeState(scannedWorkspace);
     const selectDirectory = vi.fn(async () => ({
       ok: true as const,
       value: {
@@ -177,45 +170,25 @@ describe("useWorkspace target selection", () => {
     }));
     const create = vi.fn(async () => ({
       ok: true as const,
-      value: {
-        workspace: secondWorkspace,
-        workspaces: [
-          {
-            id: "workspace",
-            name: "Workspace",
-            updatedAt: "2026-09-16T12:00:00.000Z"
-          },
-          {
-            id: "workspace_second",
-            name: "Second Workspace",
-            updatedAt: "2026-09-20T12:00:00.000Z"
-          }
-        ],
-        snapshots: [],
-        operations: [],
-        monitor: {
-          mode: "inactive" as const,
-          watchedTargets: 0,
-          message: "当前没有可监听的仓库。"
-        }
-      }
+      value: createdState
     }));
-    const addEntry = vi.fn(async () => ({
+    const deleteWorkspace = vi.fn(async () => ({
       ok: true as const,
-      value: {
-        workspace: scannedWorkspace,
-        focusedEntryId: "entry",
-        duplicate: false
-      }
+      value: createdState
     }));
-    installBridge(
-      vi.fn(async () => ({
+    installBridge({
+      create,
+      delete: deleteWorkspace,
+      getState: vi.fn(async () => ({
         ok: true as const,
-        value: workspaceWithTarget(TARGET_A)
+        value: initialState
       })),
-      { addEntry, create, selectDirectory }
-    );
+      selectDirectory
+    });
     await renderHarness();
+
+    expect(controller?.workspace?.id).toBe("workspace");
+    expect(controller?.workspace?.path).toBeUndefined();
 
     let created!: Promise<boolean>;
     act(() => {
@@ -229,188 +202,51 @@ describe("useWorkspace target selection", () => {
     await expect(created).resolves.toBe(true);
     expect(selectDirectory).toHaveBeenCalledOnce();
     expect(create).toHaveBeenCalledWith({
-      name: "Second Workspace"
+      name: "Second Workspace",
+      path: "C:\\projects\\Second Workspace"
     });
-    expect(addEntry).toHaveBeenCalledWith({
-      path: "C:\\projects\\Second Workspace",
-      source: "picker"
-    });
-    expect(controller?.workspace?.id).toBe(
-      "workspace_second"
+    expect(deleteWorkspace).not.toHaveBeenCalled();
+    expect(controller?.workspace?.id).toBe(placeholder.id);
+    expect(controller?.workspace?.path).toBe(
+      "C:\\projects\\Second Workspace"
     );
-    expect(controller?.workspace?.entries).toHaveLength(1);
-    expect(controller?.workspaces).toHaveLength(2);
+    expect(controller?.workspaces).toEqual([
+      {
+        id: placeholder.id,
+        name: "Second Workspace",
+        updatedAt: scannedWorkspace.updatedAt
+      }
+    ]);
     expect(controller?.notice).toBe(
       "Workspace“Second Workspace”已创建并完成目录扫描。"
     );
   });
 
-  it("deletes the previous empty Workspace after creating the first scanned Workspace", async () => {
-    const {
-      selectedEntryId: _selectedEntryId,
-      selectedTarget: _selectedTarget,
-      ...workspaceBase
-    } = workspaceWithTarget(TARGET_A);
-    const emptyWorkspace = {
-      ...workspaceBase,
-      entries: [],
-      repositories: [],
-      worktrees: []
-    } satisfies WorkspaceDetailsDto;
-    const createdWorkspace = {
-      ...emptyWorkspace,
-      id: "workspace_second",
-      name: "Second Workspace",
-      updatedAt: "2026-09-20T12:00:00.000Z"
-    } satisfies WorkspaceDetailsDto;
-    const scannedWorkspace = {
-      ...workspaceWithTarget(TARGET_A),
-      id: "workspace_second",
-      name: "Second Workspace",
-      updatedAt: "2026-09-20T12:01:00.000Z"
-    } satisfies WorkspaceDetailsDto;
-    const initialState: WorkspaceRuntimeStateDto = {
-      ...createRuntimeState(),
-      workspace: emptyWorkspace
-    };
-    const createdState: WorkspaceRuntimeStateDto = {
-      ...initialState,
-      workspace: createdWorkspace,
-      workspaces: [
-        ...initialState.workspaces,
-        {
-          id: createdWorkspace.id,
-          name: createdWorkspace.name,
-          updatedAt: createdWorkspace.updatedAt
+  it("keeps the empty placeholder when Workspace creation fails", async () => {
+    const placeholder = createEmptyWorkspace();
+    const initialState = createRuntimeState(placeholder);
+    installBridge({
+      create: vi.fn(async () => ({
+        ok: false as const,
+        error: {
+          code: "NO_REPOSITORIES_FOUND" as const,
+          message:
+            "No Git repositories were found in the selected directory.",
+          details: {}
         }
-      ]
-    };
-    const finalState: WorkspaceRuntimeStateDto = {
-      ...createdState,
-      workspace: scannedWorkspace,
-      workspaces: [
-        {
-          id: scannedWorkspace.id,
-          name: scannedWorkspace.name,
-          updatedAt: scannedWorkspace.updatedAt
-        }
-      ]
-    };
-    const deleteWorkspace = vi.fn(async () => ({
-      ok: true as const,
-      value: finalState
-    }));
-    installBridge(
-      vi.fn(async () => ({
-        ok: true as const,
-        value: scannedWorkspace
       })),
-      {
-        getState: vi.fn(async () => ({
-          ok: true as const,
-          value: initialState
-        })),
-        selectDirectory: vi.fn(async () => ({
-          ok: true as const,
-          value: {
-            cancelled: false as const,
-            path: "C:\\projects\\Second Workspace"
-          }
-        })),
-        create: vi.fn(async () => ({
-          ok: true as const,
-          value: createdState
-        })),
-        addEntry: vi.fn(async () => ({
-          ok: true as const,
-          value: {
-            workspace: scannedWorkspace,
-            focusedEntryId: "entry",
-            duplicate: false
-          }
-        })),
-        delete: deleteWorkspace
-      }
-    );
-    await renderHarness();
-
-    let created!: Promise<boolean>;
-    act(() => {
-      created = controller!.createWorkspace();
-    });
-    await act(async () => {
-      await created;
-      await flushAsyncWork();
-    });
-
-    await expect(created).resolves.toBe(true);
-    expect(deleteWorkspace).toHaveBeenCalledWith({
-      workspaceId: "workspace"
-    });
-    expect(controller?.workspace?.id).toBe("workspace_second");
-    expect(controller?.workspaces).toHaveLength(1);
-  });
-
-  it("removes an empty Workspace and restores the previous one when scanning fails", async () => {
-    const {
-      selectedEntryId: _selectedEntryId,
-      selectedTarget: _selectedTarget,
-      ...workspaceBase
-    } = workspaceWithTarget(TARGET_A);
-    const secondWorkspace = {
-      ...workspaceBase,
-      id: "workspace_second",
-      name: "Empty",
-      entries: [],
-      repositories: [],
-      worktrees: [],
-      updatedAt: "2026-09-20T12:00:00.000Z"
-    } satisfies WorkspaceDetailsDto;
-    const createdState: WorkspaceRuntimeStateDto = {
-      ...createRuntimeState(),
-      workspace: secondWorkspace,
-      workspaces: [
-        ...createRuntimeState().workspaces,
-        {
-          id: secondWorkspace.id,
-          name: secondWorkspace.name,
-          updatedAt: secondWorkspace.updatedAt
-        }
-      ]
-    };
-    const removeWorkspace = vi.fn(async () => ({
-      ok: true as const,
-      value: createRuntimeState()
-    }));
-    installBridge(
-      vi.fn(async () => ({
+      getState: vi.fn(async () => ({
         ok: true as const,
-        value: workspaceWithTarget(TARGET_A)
+        value: initialState
       })),
-      {
-        selectDirectory: vi.fn(async () => ({
-          ok: true as const,
-          value: {
-            cancelled: false as const,
-            path: "C:\\projects\\Empty"
-          }
-        })),
-        create: vi.fn(async () => ({
-          ok: true as const,
-          value: createdState
-        })),
-        addEntry: vi.fn(async () => ({
-          ok: false as const,
-          error: {
-            code: "NO_REPOSITORIES_FOUND" as const,
-            message:
-              "No Git repositories were found in the selected directory.",
-            details: {}
-          }
-        })),
-        delete: removeWorkspace
-      }
-    );
+      selectDirectory: vi.fn(async () => ({
+        ok: true as const,
+        value: {
+          cancelled: false as const,
+          path: "C:\\projects\\Empty"
+        }
+      }))
+    });
     await renderHarness();
 
     let created!: Promise<boolean>;
@@ -423,14 +259,335 @@ describe("useWorkspace target selection", () => {
     });
 
     await expect(created).resolves.toBe(false);
-    expect(removeWorkspace).toHaveBeenCalledWith({
-      workspaceId: "workspace_second"
-    });
-    expect(controller?.workspace?.id).toBe("workspace");
+    expect(controller?.workspace).toEqual(placeholder);
     expect(controller?.workspaces).toHaveLength(1);
     expect(controller?.error?.code).toBe(
       "NO_REPOSITORIES_FOUND"
     );
+    expect(controller?.busy).toBe(false);
+  });
+
+  it("keeps the latest switch when returning to the visible Workspace", async () => {
+    const first = deferred<
+      Awaited<ReturnType<GitNestBridge["workspace"]["switch"]>>
+    >();
+    const second = deferred<
+      Awaited<ReturnType<GitNestBridge["workspace"]["switch"]>>
+    >();
+    const switchWorkspace = vi.fn(
+      ({ workspaceId }: { workspaceId: string }) =>
+        workspaceId === "workspace-second"
+          ? first.promise
+          : second.promise
+    );
+    installBridge({ switch: switchWorkspace });
+    await renderHarness();
+
+    let firstRequest!: Promise<boolean>;
+    let latestRequest!: Promise<boolean>;
+    act(() => {
+      firstRequest =
+        controller!.switchWorkspace("workspace-second");
+      latestRequest = controller!.switchWorkspace("workspace");
+    });
+    expect(switchWorkspace).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      second.resolve({
+        ok: true,
+        value: createRuntimeState()
+      });
+      await latestRequest;
+      first.resolve({
+        ok: true,
+        value: createRuntimeState(
+          workspaceWithIdentity(
+            "workspace-second",
+            "Second Workspace"
+          )
+        )
+      });
+      await firstRequest;
+    });
+
+    await expect(firstRequest).resolves.toBe(false);
+    await expect(latestRequest).resolves.toBe(true);
+    expect(controller?.workspace?.id).toBe("workspace");
+    expect(controller?.busy).toBe(false);
+  });
+
+  it("renames the active Workspace and updates its summary", async () => {
+    const renamedWorkspace = {
+      ...workspaceWithTarget(TARGET_A),
+      name: "Renamed Workspace",
+      updatedAt: "2026-09-21T08:00:00.000Z"
+    } satisfies WorkspaceDetailsDto;
+    const renamedState = createRuntimeState(renamedWorkspace);
+    const rename = vi.fn(async () => ({
+      ok: true as const,
+      value: renamedState
+    }));
+    installBridge({ rename });
+    await renderHarness();
+
+    let renamed!: Promise<boolean>;
+    act(() => {
+      renamed = controller!.renameWorkspace(
+        "workspace",
+        "Renamed Workspace"
+      );
+    });
+    await act(async () => {
+      await renamed;
+      await flushAsyncWork();
+    });
+
+    await expect(renamed).resolves.toBe(true);
+    expect(rename).toHaveBeenCalledWith({
+      workspaceId: "workspace",
+      name: "Renamed Workspace"
+    });
+    expect(controller?.workspace?.name).toBe(
+      "Renamed Workspace"
+    );
+    expect(controller?.workspaces[0]?.name).toBe(
+      "Renamed Workspace"
+    );
+    expect(controller?.notice).toBe("Workspace 名称已更新。");
+  });
+
+  it("deletes a Workspace and reports cleanup warnings", async () => {
+    const nextWorkspace = workspaceWithIdentity(
+      "workspace-second",
+      "Second Workspace"
+    );
+    const nextState = {
+      ...createRuntimeState(nextWorkspace),
+      cleanupWarning: "Workspace 配置文件未能清理。"
+    } satisfies WorkspaceRuntimeStateDto;
+    const deleteWorkspace = vi.fn(async () => ({
+      ok: true as const,
+      value: nextState
+    }));
+    installBridge({ delete: deleteWorkspace });
+    await renderHarness();
+
+    let deleted!: Promise<boolean>;
+    act(() => {
+      deleted = controller!.deleteWorkspace("workspace");
+    });
+    await act(async () => {
+      await deleted;
+      await flushAsyncWork();
+    });
+
+    await expect(deleted).resolves.toBe(true);
+    expect(deleteWorkspace).toHaveBeenCalledWith({
+      workspaceId: "workspace"
+    });
+    expect(controller?.workspace?.id).toBe("workspace-second");
+    expect(controller?.notice).toContain(
+      "磁盘上的仓库文件未被删除"
+    );
+    expect(controller?.notice).toContain("配置文件未能清理");
+    expect(controller?.cleanupWarning).toBe(
+      nextState.cleanupWarning
+    );
+  });
+
+  it("removes a repository from the active Workspace", async () => {
+    const nextWorkspace = workspaceWithoutTarget(
+      workspaceWithTarget(TARGET_A),
+      TARGET_A
+    );
+    const removeRepository = vi.fn(async () => ({
+      ok: true as const,
+      value: nextWorkspace
+    }));
+    installBridge({ removeRepository });
+    await renderHarness();
+
+    let removed!: Promise<boolean>;
+    act(() => {
+      removed = controller!.removeRepository(TARGET_A);
+    });
+    await act(async () => {
+      await removed;
+      await flushAsyncWork();
+    });
+
+    await expect(removed).resolves.toBe(true);
+    expect(removeRepository).toHaveBeenCalledWith({
+      target: TARGET_A
+    });
+    expect(
+      controller?.workspace?.repositories.map(
+        (repository) => repository.id
+      )
+    ).toEqual(["repository-b", "repository-c"]);
+    expect(controller?.workspace?.excludes).toEqual([
+      "repository-a"
+    ]);
+    expect(controller?.notice).toBe(
+      "已移出 Workspace；磁盘上的仓库文件未被删除。"
+    );
+  });
+
+  it("persists the collapsed state of a Workspace group", async () => {
+    const nextWorkspace = {
+      ...workspaceWithTarget(TARGET_A),
+      groups: [
+        {
+          ...workspaceWithTarget(TARGET_A).groups[0]!,
+          collapsed: true
+        }
+      ]
+    } satisfies WorkspaceDetailsDto;
+    const setGroupCollapsed = vi.fn(async () => ({
+      ok: true as const,
+      value: nextWorkspace
+    }));
+    installBridge({ setGroupCollapsed });
+    await renderHarness();
+
+    await act(async () => {
+      await controller!.setGroupCollapsed("group", true);
+      await flushAsyncWork();
+    });
+
+    expect(setGroupCollapsed).toHaveBeenCalledWith({
+      groupId: "group",
+      collapsed: true
+    });
+    expect(controller?.workspace?.groups[0]?.collapsed).toBe(
+      true
+    );
+  });
+
+  it("ignores a late repository removal after switching Workspace", async () => {
+    const removal = deferred<
+      Awaited<
+        ReturnType<
+          GitNestBridge["workspace"]["removeRepository"]
+        >
+      >
+    >();
+    const nextState = createRuntimeState(
+      workspaceWithIdentity(
+        "workspace-second",
+        "Second Workspace"
+      )
+    );
+    installBridge({
+      removeRepository: vi.fn(() => removal.promise),
+      switch: vi.fn(async () => ({
+        ok: true as const,
+        value: nextState
+      }))
+    });
+    await renderHarness();
+
+    let removing!: Promise<boolean>;
+    act(() => {
+      removing = controller!.removeRepository(TARGET_A);
+    });
+    await act(async () => {
+      await controller!.switchWorkspace("workspace-second");
+    });
+    await act(async () => {
+      removal.resolve({
+        ok: true,
+        value: workspaceWithoutTarget(
+          workspaceWithTarget(TARGET_A),
+          TARGET_A
+        )
+      });
+      await removing;
+      await flushAsyncWork();
+    });
+
+    await expect(removing).resolves.toBe(false);
+    expect(controller?.workspace?.id).toBe("workspace-second");
+    expect(controller?.notice).toBeNull();
+  });
+
+  it("does not let a late scan clear a pending switch or publish old feedback", async () => {
+    const scan = deferred<
+      Awaited<ReturnType<GitNestBridge["workspace"]["rescan"]>>
+    >();
+    const switching = deferred<
+      Awaited<ReturnType<GitNestBridge["workspace"]["switch"]>>
+    >();
+    installBridge({
+      rescan: vi.fn(() => scan.promise),
+      switch: vi.fn(() => switching.promise)
+    });
+    await renderHarness();
+
+    let scanning!: Promise<boolean>;
+    let transition!: Promise<boolean>;
+    act(() => {
+      scanning = controller!.rescan();
+      transition =
+        controller!.switchWorkspace("workspace-second");
+    });
+    await act(async () => {
+      scan.resolve({
+        ok: true,
+        value: workspaceWithTarget(TARGET_B)
+      });
+      await scanning;
+    });
+
+    expect(controller?.operation).toBe("switching");
+    expect(controller?.notice).toBeNull();
+    expect(controller?.workspace?.selectedTarget).toEqual(
+      TARGET_A
+    );
+
+    await act(async () => {
+      switching.resolve({
+        ok: true,
+        value: createRuntimeState(
+          workspaceWithIdentity(
+            "workspace-second",
+            "Second Workspace"
+          )
+        )
+      });
+      await transition;
+    });
+  });
+
+  it("does not let the initial state response overwrite a completed switch", async () => {
+    const initial = deferred<
+      Awaited<ReturnType<GitNestBridge["workspace"]["getState"]>>
+    >();
+    const nextState = createRuntimeState(
+      workspaceWithIdentity(
+        "workspace-second",
+        "Second Workspace"
+      )
+    );
+    installBridge({
+      getState: vi.fn(() => initial.promise),
+      switch: vi.fn(async () => ({
+        ok: true as const,
+        value: nextState
+      }))
+    });
+    await renderHarness();
+
+    await act(async () => {
+      await controller!.switchWorkspace("workspace-second");
+      initial.resolve({
+        ok: true,
+        value: createRuntimeState()
+      });
+      await flushAsyncWork();
+    });
+
+    expect(controller?.workspace?.id).toBe("workspace-second");
   });
 
   async function renderHarness() {
@@ -457,19 +614,72 @@ function Harness({
 }
 
 function installBridge(
-  selectTarget: GitNestBridge["workspace"]["selectTarget"],
   overrides: Partial<GitNestBridge["workspace"]> = {}
 ) {
+  const state = createRuntimeState();
   Object.defineProperty(window, "gitnest", {
     configurable: true,
     value: {
       workspace: {
+        getCurrent: vi.fn(async () => ({
+          ok: true as const,
+          value: state.workspace
+        })),
         getState: vi.fn(async () => ({
           ok: true as const,
-          value: createRuntimeState()
+          value: state
+        })),
+        create: vi.fn(async () => ({
+          ok: true as const,
+          value: state
+        })),
+        switch: vi.fn(async () => ({
+          ok: true as const,
+          value: state
+        })),
+        rename: vi.fn(async () => ({
+          ok: true as const,
+          value: state
+        })),
+        delete: vi.fn(async () => ({
+          ok: true as const,
+          value: state
+        })),
+        selectDirectory: vi.fn(async () => ({
+          ok: true as const,
+          value: {
+            cancelled: true as const
+          }
+        })),
+        rescan: vi.fn(async () => ({
+          ok: true as const,
+          value: state.workspace
+        })),
+        removeRepository: vi.fn(async () => ({
+          ok: true as const,
+          value: state.workspace
+        })),
+        setGroupCollapsed: vi.fn(async () => ({
+          ok: true as const,
+          value: state.workspace
+        })),
+        selectTarget: vi.fn(
+          async ({
+            target
+          }: {
+            target: RepositoryTargetDto;
+          }) => ({
+            ok: true as const,
+            value: workspaceWithTarget(target)
+          })
+        ),
+        refresh: vi.fn(async () => ({
+          ok: true as const,
+          value: {
+            operationId: "operation"
+          }
         })),
         onStateChanged: vi.fn(() => vi.fn()),
-        selectTarget,
         ...overrides
       }
     } as unknown as GitNestBridge
@@ -489,16 +699,35 @@ const TARGET_C: RepositoryTargetDto = {
   worktreeId: "worktree-c"
 };
 
-function createRuntimeState(): WorkspaceRuntimeStateDto {
+function createEmptyWorkspace(): WorkspaceDetailsDto {
   return {
-    workspace: workspaceWithTarget(TARGET_A),
-    workspaces: [
-      {
-        id: "workspace",
-        name: "Workspace",
-        updatedAt: "2026-09-16T12:00:00.000Z"
-      }
-    ],
+    schemaVersion: 2,
+    id: "workspace",
+    name: "Workspace",
+    excludes: [],
+    groups: [],
+    scanIssues: [],
+    repositories: [],
+    worktrees: [],
+    updatedAt: "2026-09-16T12:00:00.000Z"
+  };
+}
+
+function createRuntimeState(
+  workspace: WorkspaceDetailsDto = workspaceWithTarget(
+    TARGET_A
+  ),
+  workspaces: WorkspaceSummaryDto[] = [
+    {
+      id: workspace.id,
+      name: workspace.name,
+      updatedAt: workspace.updatedAt
+    }
+  ]
+): WorkspaceRuntimeStateDto {
+  return {
+    workspace,
+    workspaces,
     snapshots: [],
     operations: [],
     monitor: {
@@ -509,34 +738,38 @@ function createRuntimeState(): WorkspaceRuntimeStateDto {
   };
 }
 
+function workspaceWithIdentity(
+  id: string,
+  name: string
+): WorkspaceDetailsDto {
+  return {
+    ...workspaceWithTarget(TARGET_A),
+    id,
+    name,
+    updatedAt: "2026-09-21T12:00:00.000Z"
+  };
+}
+
 function workspaceWithTarget(
   selectedTarget: RepositoryTargetDto
 ): WorkspaceDetailsDto {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "workspace",
     name: "Workspace",
-    entries: [
+    path: "C:\\workspace",
+    canonicalPath: "c:\\workspace",
+    excludes: [],
+    groups: [
       {
-        id: "entry",
-        kind: "workspace-directory",
-        displayName: "Workspace",
-        path: "C:\\workspace",
-        canonicalPath: "c:\\workspace",
-        excludes: [],
-        order: 0,
-        groups: [
-          {
-            id: "group",
-            name: "Group",
-            collapsed: false,
-            targets: [TARGET_A, TARGET_B, TARGET_C]
-          }
-        ],
-        scanIssues: [],
-        lastScannedAt: "2026-09-16T12:00:00.000Z"
+        id: "group",
+        name: "Group",
+        collapsed: false,
+        targets: [TARGET_A, TARGET_B, TARGET_C]
       }
     ],
+    scanIssues: [],
+    lastScannedAt: "2026-09-16T12:00:00.000Z",
     repositories: [TARGET_A, TARGET_B, TARGET_C].map(
       (target) => ({
         id: target.repositoryId,
@@ -563,10 +796,45 @@ function workspaceWithTarget(
         isPrunable: false
       })
     ),
-    selectedEntryId: "entry",
     selectedTarget,
     updatedAt: "2026-09-16T12:00:00.000Z"
   };
+}
+
+function workspaceWithoutTarget(
+  workspace: WorkspaceDetailsDto,
+  target: RepositoryTargetDto
+): WorkspaceDetailsDto {
+  return {
+    ...workspace,
+    excludes: ["repository-a"],
+    groups: workspace.groups.map((group) => ({
+      ...group,
+      targets: group.targets.filter(
+        (candidate) => !targetsEqual(candidate, target)
+      )
+    })),
+    repositories: workspace.repositories.filter(
+      (repository) => repository.id !== target.repositoryId
+    ),
+    worktrees: workspace.worktrees.filter(
+      (worktree) =>
+        worktree.id !== target.worktreeId ||
+        worktree.repositoryId !== target.repositoryId
+    ),
+    selectedTarget: TARGET_B,
+    updatedAt: "2026-09-21T09:00:00.000Z"
+  };
+}
+
+function targetsEqual(
+  left: RepositoryTargetDto,
+  right: RepositoryTargetDto
+): boolean {
+  return (
+    left.repositoryId === right.repositoryId &&
+    left.worktreeId === right.worktreeId
+  );
 }
 
 function deferred<Value>() {
