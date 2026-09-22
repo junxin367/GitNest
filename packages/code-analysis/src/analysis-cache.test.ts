@@ -18,6 +18,7 @@ import {
 import {
   AnalysisSnapshotCache,
   assertCodeAnalysisSnapshotPayloadSize,
+  codeAnalysisSnapshotConfigurationKey,
   MAX_ANALYSIS_SNAPSHOT_PAYLOAD_BYTES,
   type AnalysisRoot,
   type CodeAnalysisSettings,
@@ -114,6 +115,55 @@ describe("AnalysisSnapshotCache", () => {
       await store.load(
         snapshot.workspaceId,
         snapshot.entryId,
+        {
+          ...createSettings(),
+          maxGraphEdges: 80_000
+        },
+        snapshot.roots
+      )
+    ).toBeNull();
+    expect(
+      await store.load(
+        snapshot.workspaceId,
+        snapshot.entryId,
+        {
+          ...createSettings(),
+          java: {
+            ...createSettings().java,
+            maxReferenceRequests: 2_000
+          }
+        },
+        snapshot.roots
+      )
+    ).toBeNull();
+    expect(
+      await store.load(
+        snapshot.workspaceId,
+        snapshot.entryId,
+        {
+          ...createSettings(),
+          maxGraphNodes: 40_000
+        },
+        snapshot.roots
+      )
+    ).toBeNull();
+    expect(
+      await store.load(
+        snapshot.workspaceId,
+        snapshot.entryId,
+        createSettings(),
+        [
+          {
+            ...snapshot.roots[0]!,
+            revision: "head-two"
+          }
+        ]
+      )
+    ).toBeNull();
+    expect(
+      await store.load(
+        snapshot.workspaceId,
+        snapshot.entryId,
         createSettings(),
         [
           {
@@ -123,6 +173,76 @@ describe("AnalysisSnapshotCache", () => {
         ]
       )
     ).toBeNull();
+  });
+
+  it("includes every configurable analysis budget in the snapshot key", () => {
+    const settings = createSettings();
+    const roots = createSnapshot("analysis").roots;
+    const baseline = codeAnalysisSnapshotConfigurationKey(
+      settings,
+      roots
+    );
+    const variants: CodeAnalysisSettings[] = [
+      { ...settings, maxTotalSourceBytes: 256 * 1_024 * 1_024 },
+      { ...settings, maxGraphEdges: 80_000 },
+      { ...settings, maxRequestChains: 8_000 },
+      { ...settings, maxDiagnostics: 4_000 },
+      {
+        ...settings,
+        java: { ...settings.java, maxDocuments: 160 }
+      },
+      {
+        ...settings,
+        java: {
+          ...settings.java,
+          maxSymbolsPerDocument: 10_000
+        }
+      },
+      {
+        ...settings,
+        java: {
+          ...settings.java,
+          maxCallHierarchyRequests: 80
+        }
+      },
+      {
+        ...settings,
+        java: {
+          ...settings.java,
+          maxTypeHierarchyRequests: 160
+        }
+      },
+      {
+        ...settings,
+        java: {
+          ...settings.java,
+          maxReferenceRequests: 2_000
+        }
+      },
+      {
+        ...settings,
+        java: {
+          ...settings.java,
+          maxDocumentationRequests: 80
+        }
+      },
+      {
+        ...settings,
+        java: {
+          ...settings.java,
+          maxReferencesPerSymbol: 1_000
+        }
+      }
+    ];
+
+    expect(
+      variants.map((variant) =>
+        codeAnalysisSnapshotConfigurationKey(
+          variant,
+          roots
+        )
+      )
+    ).not.toContain(baseline);
   });
 
   it("ignores malformed snapshot JSON", async () => {
@@ -203,20 +323,37 @@ function createSettings(): CodeAnalysisSettings {
     enabled: true,
     staticFallback: true,
     maxFiles: 5_000,
+    maxTotalSourceBytes: 128 * 1_024 * 1_024,
+    maxGraphNodes: 30_000,
+    maxGraphEdges: 100_000,
+    maxRequestChains: 5_000,
+    maxDiagnostics: 2_000,
     maxFileSizeBytes: 768 * 1_024,
-    readConcurrency: 2,
-    graphDepth: 6,
+    readConcurrency: 4,
+    graphDepth: 8,
     lspTimeoutMs: 8_000,
     ignoreDirectories: [".git", "node_modules"],
     typescript: {
       enabled: true,
       command: "typescript-language-server",
-      args: ["--stdio"]
+      args: ["--stdio"],
+      maxDocuments: 120,
+      maxSymbolsPerDocument: 5_000,
+      maxCallHierarchyRequests: 50,
+      maxReferenceRequests: 50,
+      maxDocumentationRequests: 50,
+      maxReferencesPerSymbol: 500
     },
     java: {
       enabled: true,
       command: "jdtls",
-      args: []
+      args: [],
+      maxDocuments: 80,
+      maxSymbolsPerDocument: 5_000,
+      maxCallHierarchyRequests: 40,
+      maxReferenceRequests: 1_000,
+      maxDocumentationRequests: 40,
+      maxReferencesPerSymbol: 500
     }
   };
 }
@@ -229,7 +366,8 @@ function createSnapshot(
       repositoryId: "repository",
       worktreeId: "worktree",
       name: "Repository",
-      path: "C:\\workspace\\repository"
+      path: "C:\\workspace\\repository",
+      revision: "head-one"
     }
   ];
   return {

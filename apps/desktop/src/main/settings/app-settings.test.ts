@@ -11,7 +11,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   DEFAULT_DIFF_COMMIT_PANEL_HEIGHT,
-  createDefaultAppSettings
+  createDefaultAppSettings,
+  type UpdateAppSettingsRequest
 } from "@gitnest/contracts";
 
 import {
@@ -60,10 +61,40 @@ describe("AppSettingsService", () => {
     expect(initial.settings.codeAnalysis.defaultScope).toBe(
       "changed"
     );
+    expect(initial.settings.codeAnalysis.maxGraphNodes).toBe(
+      50_000
+    );
+    expect(initial.settings.codeAnalysis.maxGraphEdges).toBe(
+      100_000
+    );
+    expect(initial.settings.codeAnalysis.maxTotalSourceMb).toBe(
+      128
+    );
+    expect(initial.settings.codeAnalysis.readConcurrency).toBe(4);
+    expect(initial.settings.codeAnalysis.graphDepth).toBe(8);
+    expect(
+      initial.settings.codeAnalysis.java.maxDocuments
+    ).toBe(80);
+    expect(
+      initial.settings.codeAnalysis.java.maxReferenceRequests
+    ).toBe(1_000);
+    expect(
+      initial.settings.codeAnalysis.java
+        .maxTypeHierarchyRequests
+    ).toBe(80);
 
     const updated = await service.update({
       appearance: { theme: "light" },
       git: { pushStrategy: "merge" },
+      codeAnalysis: {
+        maxGraphNodes: 45_000,
+        maxGraphEdges: 120_000,
+        java: {
+          maxDocuments: 500,
+          maxTypeHierarchyRequests: 160,
+          maxReferenceRequests: 2_000
+        }
+      },
       ai: {
         enabled: true,
         apiUrl: "https://ai.example.test/v1",
@@ -74,6 +105,13 @@ describe("AppSettingsService", () => {
 
     expect(updated.ai.apiKeyConfigured).toBe(true);
     expect(updated.git.pushStrategy).toBe("merge");
+    expect(updated.codeAnalysis.maxGraphNodes).toBe(45_000);
+    expect(updated.codeAnalysis.maxGraphEdges).toBe(120_000);
+    expect(updated.codeAnalysis.java).toMatchObject({
+      maxDocuments: 500,
+      maxTypeHierarchyRequests: 160,
+      maxReferenceRequests: 2_000
+    });
     expect(updated).not.toHaveProperty("ai.apiKey");
     const document = JSON.parse(
       await readFile(filePath, "utf8")
@@ -83,6 +121,15 @@ describe("AppSettingsService", () => {
         apiKeyCredentialRef?: string;
         apiKey?: string;
       };
+      codeAnalysis: {
+        maxGraphNodes: number;
+        maxGraphEdges: number;
+        java: {
+          maxDocuments: number;
+          maxTypeHierarchyRequests: number;
+          maxReferenceRequests: number;
+        };
+      };
     };
     expect(document.schemaVersion).toBe(
       APP_SETTINGS_SCHEMA_VERSION
@@ -91,6 +138,13 @@ describe("AppSettingsService", () => {
     expect(document.ai.apiKeyCredentialRef).toBe(
       "settings_ai_api_key_test"
     );
+    expect(document.codeAnalysis.maxGraphNodes).toBe(45_000);
+    expect(document.codeAnalysis.maxGraphEdges).toBe(120_000);
+    expect(document.codeAnalysis.java).toMatchObject({
+      maxDocuments: 500,
+      maxTypeHierarchyRequests: 160,
+      maxReferenceRequests: 2_000
+    });
     await expect(
       vault.read("settings_ai_api_key_test")
     ).resolves.toBe("plain-text-test-key");
@@ -130,6 +184,227 @@ describe("AppSettingsService", () => {
     await expect(
       vault.read("settings_ai_api_key_keep")
     ).rejects.toMatchObject({ code: "MISSING_SECRET" });
+  });
+
+  it("clears the saved AI key when the API URL changes without a replacement key", async () => {
+    const filePath = await createSettingsPath();
+    const vault = new MemorySecretVault();
+    const service = new AppSettingsService(filePath, vault, {
+      credentialRefFactory: () =>
+        "settings_ai_api_key_endpoint"
+    });
+
+    await service.update({
+      ai: {
+        apiUrl: "https://first.example.test/v1",
+        model: "test-model",
+        apiKey: "endpoint-bound-key"
+      }
+    });
+
+    const updated = await service.update({
+      ai: {
+        apiUrl: "https://second.example.test/v1"
+      }
+    });
+
+    expect(updated.ai).toMatchObject({
+      apiUrl: "https://second.example.test/v1",
+      apiKeyConfigured: false
+    });
+    await expect(
+      service.getInternalAiSettings()
+    ).resolves.toMatchObject({
+      apiUrl: "https://second.example.test/v1",
+      apiKey: ""
+    });
+    await expect(
+      vault.read("settings_ai_api_key_endpoint")
+    ).rejects.toMatchObject({ code: "MISSING_SECRET" });
+  });
+
+  it("preserves the saved AI key when the API URL resolves to the same endpoint", async () => {
+    const filePath = await createSettingsPath();
+    const vault = new MemorySecretVault();
+    const service = new AppSettingsService(filePath, vault, {
+      credentialRefFactory: () =>
+        "settings_ai_api_key_equivalent_endpoint"
+    });
+
+    await service.update({
+      ai: {
+        apiUrl: "https://ai.example.test/v1/",
+        model: "test-model",
+        apiKey: "endpoint-bound-key"
+      }
+    });
+
+    const updated = await service.update({
+      ai: {
+        apiUrl:
+          "https://ai.example.test/v1/chat/completions/"
+      }
+    });
+
+    expect(updated.ai).toMatchObject({
+      apiUrl:
+        "https://ai.example.test/v1/chat/completions/",
+      apiKeyConfigured: true
+    });
+    await expect(
+      service.getInternalAiSettings()
+    ).resolves.toMatchObject({
+      apiKey: "endpoint-bound-key"
+    });
+  });
+
+  it("requires an explicit main-process approval for custom Language Server launches", async () => {
+    const filePath = await createSettingsPath();
+    const service = new AppSettingsService(
+      filePath,
+      new MemorySecretVault()
+    );
+    const patch: UpdateAppSettingsRequest = {
+      codeAnalysis: {
+        typescript: {
+          enabled: true,
+          command: "custom-language-server",
+          args: ["--stdio", "--custom"]
+        }
+      }
+    };
+
+    await expect(
+      service.languageServerLaunchesRequiringApproval(patch)
+    ).resolves.toEqual([
+      {
+        language: "typescript",
+        command: "custom-language-server",
+        args: ["--stdio", "--custom"]
+      }
+    ]);
+
+    const unapproved = await service.update(patch);
+    await expect(
+      service.assertLanguageServerLaunchesApproved(
+        unapproved.codeAnalysis
+      )
+    ).rejects.toMatchObject({
+      code: "INVALID_REQUEST"
+    });
+
+    const approved = await service.update(patch, {
+      approvedLanguageServerLaunches: [
+        {
+          language: "typescript",
+          command: "custom-language-server",
+          args: ["--stdio", "--custom"]
+        }
+      ]
+    });
+    await expect(
+      service.assertLanguageServerLaunchesApproved(
+        approved.codeAnalysis
+      )
+    ).resolves.toBeUndefined();
+
+    const restarted = new AppSettingsService(
+      filePath,
+      new MemorySecretVault()
+    );
+    const restored = (await restarted.get()).settings;
+    await expect(
+      restarted.assertLanguageServerLaunchesApproved(
+        restored.codeAnalysis
+      )
+    ).resolves.toBeUndefined();
+
+    await expect(
+      restarted.languageServerLaunchesRequiringApproval({
+        codeAnalysis: {
+          typescript: {
+            maxDocuments: 400,
+            maxReferenceRequests: 800
+          }
+        }
+      })
+    ).resolves.toEqual([]);
+    const budgetChanged = await restarted.update({
+      codeAnalysis: {
+        typescript: {
+          maxDocuments: 400,
+          maxReferenceRequests: 800
+        }
+      }
+    });
+    await expect(
+      restarted.assertLanguageServerLaunchesApproved(
+        budgetChanged.codeAnalysis
+      )
+    ).resolves.toBeUndefined();
+
+    const changed = await restarted.update({
+      codeAnalysis: {
+        typescript: {
+          args: ["--stdio", "--changed"]
+        }
+      }
+    });
+    await expect(
+      restarted.assertLanguageServerLaunchesApproved(
+        changed.codeAnalysis
+      )
+    ).rejects.toMatchObject({
+      code: "INVALID_REQUEST"
+    });
+  });
+
+  it("rejects a stale Language Server approval when the command changes before persistence", async () => {
+    const filePath = await createSettingsPath();
+    const service = new AppSettingsService(
+      filePath,
+      new MemorySecretVault()
+    );
+    const approvalPatch: UpdateAppSettingsRequest = {
+      codeAnalysis: {
+        typescript: {
+          enabled: true,
+          command: "reviewed-language-server",
+          args: ["--stdio"]
+        }
+      }
+    };
+    const approvals =
+      await service.languageServerLaunchesRequiringApproval(
+        approvalPatch
+      );
+
+    await service.update({
+      codeAnalysis: {
+        typescript: {
+          command: "changed-language-server",
+          args: ["--stdio", "--changed"]
+        }
+      }
+    });
+
+    await expect(
+      service.update(
+        {
+          codeAnalysis: {
+            typescript: {
+              enabled: true
+            }
+          }
+        },
+        {
+          approvedLanguageServerLaunches: approvals
+        }
+      )
+    ).rejects.toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("发生了变化")
+    });
   });
 
   it("can clear a credential reference when the protected secret is already missing", async () => {
@@ -404,6 +679,112 @@ describe("AppSettingsService", () => {
     await expect(
       vault.read("settings_ai_api_key_legacy")
     ).resolves.toBe("legacy-plain-text-key");
+  });
+
+  it("backfills analysis budgets and optional language-server settings for existing documents", async () => {
+    const filePath = await createSettingsPath();
+    const defaults = createDefaultAppSettings();
+    const legacyCodeAnalysis = structuredClone(
+      defaults.codeAnalysis
+    ) as unknown as Record<string, unknown>;
+    for (const language of [
+      "vue",
+      "python",
+      "go",
+      "kotlin",
+      "csharp",
+      "rust"
+    ]) {
+      delete legacyCodeAnalysis[language];
+    }
+    delete legacyCodeAnalysis.maxGraphNodes;
+    delete legacyCodeAnalysis.maxTotalSourceMb;
+    delete legacyCodeAnalysis.maxGraphEdges;
+    delete legacyCodeAnalysis.maxRequestChains;
+    delete legacyCodeAnalysis.maxDiagnostics;
+    for (const language of ["typescript", "java"]) {
+      const server = legacyCodeAnalysis[language] as Record<
+        string,
+        unknown
+      >;
+      delete server.maxDocuments;
+      delete server.maxSymbolsPerDocument;
+      delete server.maxCallHierarchyRequests;
+      delete server.maxTypeHierarchyRequests;
+      delete server.maxReferenceRequests;
+      delete server.maxDocumentationRequests;
+      delete server.maxReferencesPerSymbol;
+    }
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
+        general: defaults.general,
+        appearance: defaults.appearance,
+        diff: defaults.diff,
+        git: defaults.git,
+        ai: {
+          enabled: defaults.ai.enabled,
+          apiUrl: defaults.ai.apiUrl,
+          model: defaults.ai.model,
+          prompt: defaults.ai.prompt
+        },
+        codeAnalysis: legacyCodeAnalysis,
+        navigation: defaults.navigation,
+        updatedAt: "2026-09-19T00:00:00.000Z"
+      }),
+      "utf8"
+    );
+    const service = new AppSettingsService(
+      filePath,
+      new MemorySecretVault()
+    );
+
+    const loaded = await service.get();
+
+    expect(loaded.settings.codeAnalysis.vue).toEqual(
+      defaults.codeAnalysis.vue
+    );
+    expect(loaded.settings.codeAnalysis.python).toEqual(
+      defaults.codeAnalysis.python
+    );
+    expect(loaded.settings.codeAnalysis.rust).toEqual(
+      defaults.codeAnalysis.rust
+    );
+    expect(loaded.settings.codeAnalysis.maxGraphNodes).toBe(
+      50_000
+    );
+    expect(loaded.settings.codeAnalysis.maxGraphEdges).toBe(
+      defaults.codeAnalysis.maxGraphEdges
+    );
+    expect(loaded.settings.codeAnalysis.maxTotalSourceMb).toBe(
+      defaults.codeAnalysis.maxTotalSourceMb
+    );
+    expect(loaded.settings.codeAnalysis.java).toEqual(
+      defaults.codeAnalysis.java
+    );
+    expect(
+      (
+        JSON.parse(await readFile(filePath, "utf8")) as {
+          codeAnalysis: { maxGraphNodes: number };
+        }
+      ).codeAnalysis.maxGraphNodes
+    ).toBe(50_000);
+
+    const updated = await service.update({
+      codeAnalysis: {
+        go: {
+          enabled: true,
+          command: "custom-gopls",
+          args: ["serve"]
+        }
+      }
+    });
+    expect(updated.codeAnalysis.go).toMatchObject({
+      enabled: true,
+      command: "custom-gopls",
+      args: ["serve"]
+    });
   });
 
   it("retries a legacy migration after a transient vault failure", async () => {

@@ -12,6 +12,311 @@ import type {
 import { parseSourceFile } from "./source-parser";
 
 describe("buildCodeGraph request chains", () => {
+  it("keeps overloaded Java methods as distinct graph nodes and call sources", () => {
+    const parsed = parseSourceFile(
+      sourceFile("Overloaded.java", "java"),
+      [
+        "class Overloaded {",
+        "  void run(int value) {",
+        "    one();",
+        "  }",
+        "  void run(String value) {",
+        "    two();",
+        "  }",
+        "  void one() {}",
+        "  void two() {}",
+        "}"
+      ].join("\n")
+    );
+
+    const graph = buildCodeGraph({
+      files: [parsed],
+      scope: "workspace",
+      graphDepth: 3
+    });
+    const runNodes = graph.nodes
+      .filter(
+        (node) =>
+          node.name === "run" &&
+          node.location.path === "Overloaded.java"
+      )
+      .sort(
+        (left, right) =>
+          left.location.line - right.location.line
+      );
+    const one = graph.nodes.find(
+      (node) => node.name === "one"
+    );
+    const two = graph.nodes.find(
+      (node) => node.name === "two"
+    );
+
+    expect(runNodes).toHaveLength(2);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.kind === "calls" &&
+          edge.from === runNodes[0]?.id &&
+          edge.to === one?.id
+      )
+    ).toBe(true);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.kind === "calls" &&
+          edge.from === runNodes[1]?.id &&
+          edge.to === two?.id
+      )
+    ).toBe(true);
+  });
+
+  it("resolves ambiguous Java references to the unique symbol in the source package", () => {
+    const first = parseSourceFile(
+      sourceFile("a/Flags.java", "java"),
+      [
+        "package example.a;",
+        "class Flags {",
+        "  static int ENABLED = 1;",
+        "}"
+      ].join("\n")
+    );
+    const second = parseSourceFile(
+      sourceFile("b/Flags.java", "java"),
+      [
+        "package example.b;",
+        "class Flags {",
+        "  static int ENABLED = 2;",
+        "}"
+      ].join("\n")
+    );
+    const caller = parseSourceFile(
+      sourceFile("a/Caller.java", "java"),
+      [
+        "package example.a;",
+        "class Caller {",
+        "  int read() { return Flags.ENABLED; }",
+        "}"
+      ].join("\n")
+    );
+
+    const graph = buildCodeGraph({
+      files: [first, second, caller],
+      scope: "workspace",
+      graphDepth: 3
+    });
+    const source = graph.nodes.find(
+      (node) =>
+        node.name === "read" &&
+        node.location.path === "a/Caller.java"
+    );
+    const target = graph.nodes.find(
+      (node) =>
+        node.name === "ENABLED" &&
+        node.location.path === "a/Flags.java"
+    );
+
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        from: source?.id,
+        to: target?.id,
+        kind: "references"
+      })
+    );
+  });
+
+  it("emits exact inheritance and override edges from LSP semantic relations", () => {
+    const base = parseSourceFile(
+      sourceFile("Base.java", "java"),
+      [
+        "class Base {",
+        "  void execute() {}",
+        "}"
+      ].join("\n")
+    );
+    const child = parseSourceFile(
+      sourceFile("Child.java", "java"),
+      [
+        "class Child extends Base {",
+        "  void execute() {}",
+        "}"
+      ].join("\n")
+    );
+    const baseClass = base.symbols.find(
+      (symbol) => symbol.name === "Base"
+    );
+    const baseMethod = base.symbols.find(
+      (symbol) => symbol.name === "execute"
+    );
+    const childClass = child.symbols.find(
+      (symbol) => symbol.name === "Child"
+    );
+    const childMethod = child.symbols.find(
+      (symbol) => symbol.name === "execute"
+    );
+    childClass!.semanticRelations = [
+      {
+        kind: "extends",
+        targetName: "Base",
+        targetCanonicalPath: base.file.canonicalPath,
+        targetLine: baseClass!.line,
+        source: "lsp",
+        evidence: "LSP Type Hierarchy supertypes"
+      }
+    ];
+    childMethod!.semanticRelations = [
+      {
+        kind: "overrides",
+        targetName: "execute",
+        targetCanonicalPath: base.file.canonicalPath,
+        targetLine: baseMethod!.line,
+        source: "lsp",
+        evidence: "LSP textDocument/implementation"
+      }
+    ];
+
+    const graph = buildCodeGraph({
+      files: [base, child],
+      scope: "workspace",
+      graphDepth: 3
+    });
+    const baseClassNode = graph.nodes.find(
+      (node) =>
+        node.name === "Base" &&
+        node.kind === "class"
+    );
+    const baseMethodNode = graph.nodes.find(
+      (node) =>
+        node.name === "execute" &&
+        node.location.path === "Base.java"
+    );
+    const childClassNode = graph.nodes.find(
+      (node) =>
+        node.name === "Child" &&
+        node.kind === "class"
+    );
+    const childMethodNode = graph.nodes.find(
+      (node) =>
+        node.name === "execute" &&
+        node.location.path === "Child.java"
+    );
+
+    expect(graph.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          from: childClassNode?.id,
+          to: baseClassNode?.id,
+          kind: "extends",
+          confidence: "exact"
+        }),
+        expect.objectContaining({
+          from: childMethodNode?.id,
+          to: baseMethodNode?.id,
+          kind: "overrides",
+          confidence: "exact"
+        })
+      ])
+    );
+  });
+
+  it("connects built-in qualified Java constant usages to nested field symbols", () => {
+    const definition = parseSourceFile(
+      sourceFile("ScProfDef.java", "java"),
+      [
+        "public class ScProfDef {",
+        "  public static final class Flag {",
+        "    public static final int OPEN_GUIDE = 1;",
+        "  }",
+        "}"
+      ].join("\n")
+    );
+    const caller = parseSourceFile(
+      sourceFile("ScProfServiceImpl.java", "java"),
+      [
+        "public class ScProfServiceImpl {",
+        "  public boolean enabled(int flag) {",
+        "    return Misc.checkBit(flag, ScProfDef.Flag.OPEN_GUIDE);",
+        "  }",
+        "}"
+      ].join("\n")
+    );
+
+    const graph = buildCodeGraph({
+      files: [definition, caller],
+      scope: "workspace",
+      graphDepth: 6
+    });
+    const source = graph.nodes.find(
+      (node) =>
+        node.name === "enabled" &&
+        node.location.path === "ScProfServiceImpl.java"
+    );
+    const target = graph.nodes.find(
+      (node) =>
+        node.qualifiedName ===
+        "ScProfDef.Flag.OPEN_GUIDE"
+    );
+
+    expect(source).toBeDefined();
+    expect(target).toBeDefined();
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        from: source?.id,
+        to: target?.id,
+        kind: "references",
+        confidence: "probable",
+        source: "builtin"
+      })
+    );
+  });
+
+  it("does not map a missing field reference to a nearby class node", () => {
+    const definition = parseSourceFile(
+      sourceFile("ScProfDef.java", "java"),
+      [
+        "public class ScProfDef {",
+        "  public static final int OPEN_GUIDE = 1;",
+        "}"
+      ].join("\n")
+    );
+    const caller = parseSourceFile(
+      sourceFile("ScProfServiceImpl.java", "java"),
+      [
+        "public class ScProfServiceImpl {",
+        "  public boolean enabled() {",
+        "    return ScProfDef.OPEN_GUIDE == 1;",
+        "  }",
+        "}"
+      ].join("\n")
+    );
+    const callerMethod = caller.symbols.find(
+      (symbol) => symbol.name === "enabled"
+    );
+    expect(callerMethod).toBeDefined();
+    callerMethod!.references = [
+      {
+        name: "MISSING_FLAG",
+        line: 3,
+        targetCanonicalPath:
+          definition.file.canonicalPath,
+        targetLine: 2,
+        source: "lsp",
+        evidence: "LSP textDocument/references"
+      }
+    ];
+
+    const graph = buildCodeGraph({
+      files: [definition, caller],
+      scope: "workspace",
+      graphDepth: 3
+    });
+
+    expect(
+      graph.edges.some(
+        (edge) => edge.kind === "references"
+      )
+    ).toBe(false);
+  });
+
   it("includes frontend callers before the request and backend callees after the endpoint", () => {
     const frontend = parseSourceFile(
       sourceFile("client.ts", "typescript"),
@@ -255,6 +560,110 @@ describe("buildCodeGraph request chains", () => {
           edge.kind === "calls" && edge.from === edge.to
       )
     ).toBe(false);
+  });
+
+  it("preserves complete HTTP chains when noisy LSP symbols exhaust the node budget", () => {
+    const noisyView = parseSourceFile(
+      sourceFile("aaa/NoisyTemplate.vue", "vue"),
+      "<template><div /></template>"
+    );
+    noisyView.symbols.push(
+      ...Array.from({ length: 50 }, (_, index) => ({
+        name: `templateProperty${index}`,
+        qualifiedName: `templateProperty${index}`,
+        kind: "property" as const,
+        line: index + 1,
+        endLine: index + 1,
+        calls: [],
+        source: "lsp" as const
+      }))
+    );
+    const view = parseSourceFile(
+      sourceFile("MaterialRecognitionPanel.vue", "vue"),
+      [
+        "async function loadRecognitionList(): Promise<void> {",
+        "  await getRecognitionList();",
+        "}"
+      ].join("\n")
+    );
+    const client = parseSourceFile(
+      sourceFile("api/Material/index.ts", "typescript"),
+      [
+        "import { GET } from '@/api/request';",
+        "export async function getRecognitionList() {",
+        "  return GET('/api/resource/getRecognitionList');",
+        "}"
+      ].join("\n")
+    );
+    const controller = parseSourceFile(
+      sourceFile("zzz/ScResController.java", "java"),
+      [
+        "@RestController",
+        '@RequestMapping("/resource")',
+        "public class ScResController {",
+        '  @GetMapping("/getRecognitionList")',
+        "  public Object getRecognitionList() {",
+        "    return scResService.getRecognitionList();",
+        "  }",
+        "}"
+      ].join("\n")
+    );
+    const service = parseSourceFile(
+      sourceFile("zzz/ScResService.java", "java"),
+      [
+        "public class ScResService {",
+        "  public Object getRecognitionList() {",
+        "    return repository.findAll();",
+        "  }",
+        "}"
+      ].join("\n")
+    );
+
+    const graph = buildCodeGraph({
+      files: [
+        noisyView,
+        view,
+        client,
+        controller,
+        service
+      ],
+      scope: "workspace",
+      graphDepth: 8,
+      limits: {
+        maxNodes: 12,
+        maxEdges: 100,
+        maxRequestChains: 10
+      }
+    });
+
+    expect(graph.truncated).toBe(true);
+    expect(graph.nodes).toHaveLength(12);
+    expect(
+      graph.nodes.filter(
+        (node) =>
+          node.kind === "property" && node.source === "lsp"
+      )
+    ).toHaveLength(2);
+    expect(graph.requestChains).toHaveLength(1);
+
+    const chain = graph.requestChains[0];
+    const chainNodes = graph.nodes.filter((node) =>
+      chain?.nodeIds.includes(node.id)
+    );
+    expect(
+      chainNodes.map(
+        (node) =>
+          `${node.location.path}:${node.kind}:${node.name}`
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        "MaterialRecognitionPanel.vue:function:loadRecognitionList",
+        "api/Material/index.ts:function:getRecognitionList",
+        "api/Material/index.ts:client-request:GET /api/resource/getRecognitionList",
+        "zzz/ScResController.java:server-endpoint:getRecognitionList",
+        "zzz/ScResService.java:method:getRecognitionList"
+      ])
+    );
   });
 
   it("does not connect collection receiver calls to unrelated same-file methods", () => {
@@ -729,7 +1138,7 @@ describe("buildCodeGraph request chains", () => {
       method: "RPC",
       route: "ResourceDef.Protocol.Cmd.ADD",
       ambiguous: false,
-      confidence: "exact"
+      confidence: "probable"
     });
     const chainNodes = graph.nodes.filter((node) =>
       chain?.nodeIds.includes(node.id)
@@ -813,6 +1222,61 @@ describe("buildCodeGraph request chains", () => {
     ).toBe(true);
   });
 
+  it("keeps overloaded RPC clients as distinct request chains with unique ids", () => {
+    const client = parseSourceFile(
+      sourceFile("ResourcePort.java", "java"),
+      [
+        "package example.client;",
+        "import example.protocol.ResourceDef;",
+        "public interface ResourcePort {",
+        "  @GeneratedOutbound(ResourceDef.Protocol.Cmd.GET)",
+        "  Object getResource(int id);",
+        "  @GeneratedOutbound(ResourceDef.Protocol.Cmd.GET)",
+        "  Object getResource(int id, boolean create);",
+        "}"
+      ].join("\n")
+    );
+    const handler = parseSourceFile(
+      sourceFile("ResourceProcessor.java", "java"),
+      [
+        "package example.server;",
+        "import example.protocol.ResourceDef;",
+        "public class ResourceProcessor {",
+        "  @InboundDispatch(ResourceDef.Protocol.Cmd.GET)",
+        "  public Object getResource() { return null; }",
+        "}"
+      ].join("\n")
+    );
+
+    const graph = buildCodeGraph({
+      files: [client, handler],
+      scope: "workspace",
+      graphDepth: 3
+    });
+
+    expect(graph.requestChains).toHaveLength(2);
+    expect(
+      new Set(graph.requestChains.map((chain) => chain.id)).size
+    ).toBe(2);
+    expect(
+      new Set(
+        graph.requestChains.map(
+          (chain) => chain.clientNodeId
+        )
+      ).size
+    ).toBe(2);
+    expect(
+      graph.nodes
+        .filter(
+          (node) =>
+            node.kind === "rpc-client" &&
+            node.name === "getResource"
+        )
+        .map((node) => node.location.line)
+        .sort((left, right) => left - right)
+    ).toEqual([4, 6]);
+  });
+
   it.each([
     {
       clientRoute: "/resource/items",
@@ -860,6 +1324,43 @@ describe("buildCodeGraph request chains", () => {
       );
     }
   );
+
+  it("reports meaningful broken links without flagging ordinary library calls", () => {
+    const frontend = parseSourceFile(
+      sourceFile("client.ts", "typescript"),
+      [
+        "import { GET } from '@/api/request';",
+        "export function loadMissing() {",
+        "  console.log('loading');",
+        "  return GET('/api/missing');",
+        "}"
+      ].join("\n")
+    );
+
+    const graph = buildCodeGraph({
+      files: [frontend],
+      scope: "workspace",
+      graphDepth: 3
+    });
+
+    expect(graph.diagnostics).toContainEqual(
+      expect.objectContaining({
+        kind: "unmatched-request",
+        severity: "warning",
+        message: "未找到 GET /api/missing 的服务端端点",
+        evidence: expect.stringContaining(
+          "完整索引中没有"
+        )
+      })
+    );
+    expect(
+      graph.diagnostics.some(
+        (diagnostic) =>
+          diagnostic.kind === "unresolved-call" &&
+          diagnostic.message.includes("console")
+      )
+    ).toBe(false);
+  });
 
   it("stops building when a graph budget is exhausted", () => {
     const parsed = parseSourceFile(

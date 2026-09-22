@@ -105,6 +105,9 @@ describe("WorkspaceRuntimeService", () => {
     expect(completed.snapshots).toHaveLength(6);
     expect(gitClient.maxActive).toBeLessThanOrEqual(4);
     expect(gitClient.calls).toHaveLength(7);
+    expect(new Set(gitClient.priorities)).toEqual(
+      new Set(["background"])
+    );
     expect(snapshotStore.saved).toHaveLength(6);
     expect(
       completed.operations.filter(
@@ -301,11 +304,18 @@ describe("WorkspaceRuntimeService", () => {
     await runtime.dispose();
   });
 
-  it("keeps no-op heartbeat content versions stable and advances them for watcher changes", async () => {
+  it("keeps no-op refreshes stable and advances content versions only for relevant watcher changes", async () => {
     const workspace = createWorkspace(1);
     const target =
       workspace.selectedTarget as RepositoryTarget;
-    const gitClient = new TrackingGitClient();
+    const gitClient = new TrackingGitClient(undefined, [
+      {
+        path: "src/app.ts",
+        indexStatus: ".",
+        worktreeStatus: "M",
+        kind: "ordinary"
+      }
+    ]);
     const watcher = new FakeWatcher();
     let now = "2026-09-17T12:00:00.000Z";
     const runtime = new WorkspaceRuntimeService(
@@ -316,6 +326,7 @@ describe("WorkspaceRuntimeService", () => {
       {
         autoRefresh: false,
         currentTargetDebounceMs: 1,
+        currentTargetMinIntervalMs: 0,
         selectedTargetHeartbeatIntervalMs: 40,
         staleAfterMs: 1,
         clock: () => now
@@ -351,8 +362,20 @@ describe("WorkspaceRuntimeService", () => {
       heartbeat.operations.map((operation) => operation.id)
     ).toEqual(initialOperationIds);
 
-    now = "2026-09-17T12:00:00.000Z";
-    watcher.emit(target);
+    const callsBeforeIgnoredEvent = gitClient.calls.length;
+    watcher.emitPath(
+      "C:\\root\\repository-0\\build\\generated.js",
+      target
+    );
+    const ignored = await waitForState(
+      runtime,
+      (state) =>
+        gitClient.calls.length > callsBeforeIgnoredEvent &&
+        !state.snapshots[0]?.refreshPending
+    );
+    expect(ignored.snapshots[0]?.contentVersion).toBe(1);
+
+    watcher.emitPath("C:\\root\\repository-0\\src\\app.ts", target);
     const watched = await waitForState(
       runtime,
       (state) =>
@@ -363,6 +386,67 @@ describe("WorkspaceRuntimeService", () => {
     expect(
       watched.operations.map((operation) => operation.id)
     ).toEqual(initialOperationIds);
+
+    watcher.emitPath(
+      "C:\\root\\repository-0\\.git\\index",
+      target
+    );
+    const metadataChanged = await waitForState(
+      runtime,
+      (state) =>
+        state.snapshots[0]?.contentVersion === 3
+    );
+    expect(
+      metadataChanged.snapshots[0]?.contentVersion
+    ).toBe(3);
+    await runtime.dispose();
+  });
+
+  it("deduplicates nested repository watches and routes events to the deepest worktree", async () => {
+    const workspace = createNestedRepositoriesWorkspace();
+    const gitClient = new TrackingGitClient();
+    const watcher = new FakeWatcher();
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      gitClient,
+      new MemorySnapshotStore(),
+      watcher,
+      {
+        autoRefresh: false,
+        currentTargetDebounceMs: 1,
+        backgroundTargetDebounceMs: 1,
+        currentTargetMinIntervalMs: 0,
+        backgroundTargetMinIntervalMs: 0,
+        selectedTargetPollingIntervalMs: 0
+      }
+    );
+
+    await runtime.requestWorkspaceRefresh("manual");
+    await waitForState(
+      runtime,
+      (state) =>
+        state.monitor.mode === "watching" &&
+        state.operations.some(
+          (operation) =>
+            operation.kind === "scan" &&
+            operation.state === "succeeded"
+        )
+    );
+
+    expect(
+      watcher.registrations.map(({ path }) => path)
+    ).toEqual(["C:\\root"]);
+
+    gitClient.calls.length = 0;
+    const rootTarget =
+      workspace.selectedTarget as RepositoryTarget;
+    watcher.emitPath(
+      "C:\\root\\child\\src\\app.ts",
+      rootTarget
+    );
+
+    await waitForCondition(() => gitClient.calls.length === 1);
+    expect(gitClient.calls).toEqual(["C:\\root\\child"]);
     await runtime.dispose();
   });
 
@@ -1716,13 +1800,15 @@ class TrackingGitClient implements GitClient {
   active = 0;
   maxActive = 0;
   calls: string[] = [];
+  priorities: Array<GitReadOptions["priority"]> = [];
 
   constructor(
     readonly beforeRead?: (
       callIndex: number,
       path: string,
       options?: ReadRepositorySnapshotOptions
-    ) => Promise<void>
+    ) => Promise<void>,
+    readonly changes: RepositorySnapshot["changes"] = []
   ) {}
 
   async getEnvironment(
@@ -1739,6 +1825,7 @@ class TrackingGitClient implements GitClient {
     this.maxActive = Math.max(this.maxActive, this.active);
     const callIndex = this.calls.length;
     this.calls.push(path);
+    this.priorities.push(options?.priority);
     try {
       await this.beforeRead?.(callIndex, path, options);
       await new Promise((resolve) => setTimeout(resolve, 25));
@@ -1748,10 +1835,10 @@ class TrackingGitClient implements GitClient {
         ahead: 0,
         behind: 0,
         staged: path.endsWith("1") ? 1 : 0,
-        unstaged: 0,
+        unstaged: this.changes.length,
         untracked: 0,
         conflicted: 0,
-        changes: [],
+        changes: structuredClone(this.changes),
         refreshedAt: "2026-09-04T12:00:00.000Z"
       };
     } finally {
@@ -2060,6 +2147,36 @@ function createWorkspace(count: number): Workspace {
     selectedTarget: targets[0] as RepositoryTarget,
     updatedAt: "2026-09-04T11:00:00.000Z"
   };
+}
+
+function createNestedRepositoriesWorkspace(): Workspace {
+  const workspace = createWorkspace(2);
+  const rootRepository = workspace.repositories[0];
+  const childRepository = workspace.repositories[1];
+  const rootWorktree = workspace.worktrees[0];
+  const childWorktree = workspace.worktrees[1];
+  if (
+    !rootRepository ||
+    !childRepository ||
+    !rootWorktree ||
+    !childWorktree
+  ) {
+    throw new Error("Workspace fixture is incomplete.");
+  }
+
+  rootRepository.commonDir = "C:\\root\\.git";
+  rootRepository.canonicalCommonDir = "c:\\root\\.git";
+  rootWorktree.path = "C:\\root";
+  rootWorktree.canonicalPath = "c:\\root";
+  rootWorktree.gitDir = "C:\\root\\.git";
+
+  childRepository.commonDir = "C:\\root\\child\\.git";
+  childRepository.canonicalCommonDir =
+    "c:\\root\\child\\.git";
+  childWorktree.path = "C:\\root\\child";
+  childWorktree.canonicalPath = "c:\\root\\child";
+  childWorktree.gitDir = "C:\\root\\child\\.git";
+  return workspace;
 }
 
 function createWorkspaceWithBackgroundEntry(): Workspace {

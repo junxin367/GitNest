@@ -37,6 +37,12 @@ interface DiffFileSection {
   title: string;
   mode: DiffViewerMode;
   files: DiffViewerFile[];
+  stats: DiffFileSectionStats | null;
+}
+
+interface DiffFileSectionStats {
+  additions: number;
+  deletions: number;
 }
 
 type DiffFileSectionCollapseState = Record<
@@ -53,6 +59,8 @@ interface PendingSelectionReveal {
   fileKey: string;
   requestKey: string;
 }
+
+export type DiffFileSelectionOrigin = "automatic" | "user";
 
 const MAX_GROUP_MUTATION_PATHS = 200;
 const DEFAULT_COLLAPSED_SECTIONS: DiffFileSectionCollapseState = {
@@ -96,7 +104,10 @@ export interface DiffFileNavigatorProps {
   onFileViewChange?:
     | ((value: DiffFileViewDto) => void)
     | undefined;
-  onSelectedFileChange(file: DiffViewerFile): void;
+  onSelectedFileChange(
+    file: DiffViewerFile,
+    origin: DiffFileSelectionOrigin
+  ): void;
   onStageFile?:
     | ((
         file: DiffViewerFile
@@ -206,13 +217,17 @@ export function DiffFileNavigator({
   const sections = useMemo<DiffFileSection[]>(
     () =>
       (["staged", "unstaged", "untracked"] as const)
-        .map((mode) => ({
-          mode,
-          title: modeLabel(mode),
-          files: filteredFiles.filter(
+        .map((mode) => {
+          const sectionFiles = filteredFiles.filter(
             (file) => file.mode === mode
-          )
-        }))
+          );
+          return {
+            mode,
+            title: modeLabel(mode),
+            files: sectionFiles,
+            stats: aggregateFileStats(sectionFiles)
+          };
+        })
         .filter((section) => section.files.length > 0),
     [filteredFiles]
   );
@@ -250,7 +265,7 @@ export function DiffFileNavigator({
       return;
     }
     requestedSelectionRef.current = selectedFile.key;
-    onSelectedFileChange(selectedFile);
+    onSelectedFileChange(selectedFile, "automatic");
   }, [
     onSelectedFileChange,
     selectedFile,
@@ -542,13 +557,14 @@ export function DiffFileNavigator({
           aria-current={selected ? "true" : undefined}
           aria-label={displayName}
           className="diff-workspace-file-select"
-          onClick={() => onSelectedFileChange(file)}
+          onClick={() => onSelectedFileChange(file, "user")}
           type="button"
         >
           <strong title={file.path}>{displayName}</strong>
           <span className="diff-workspace-file-meta">
             <span
               className={`diff-workspace-file-status kind-${file.kind}`}
+              data-status={file.status}
             >
               {file.status}
             </span>
@@ -906,7 +922,23 @@ export function DiffFileNavigator({
                       name="collapse"
                       size={12}
                     />
-                    <span>{section.title}</span>
+                    <span className="diff-workspace-file-section-copy">
+                      <span className="diff-workspace-file-section-label">
+                        {section.title}
+                      </span>
+                      {section.stats ? (
+                        <span
+                          aria-hidden="true"
+                          className="diff-workspace-file-section-stats"
+                          title={`新增 ${section.stats.additions} 行，删除 ${section.stats.deletions} 行`}
+                        >
+                          <strong>
+                            +{section.stats.additions}
+                          </strong>
+                          <em>-{section.stats.deletions}</em>
+                        </span>
+                      ) : null}
+                    </span>
                   </Button>
                   <div className="diff-workspace-file-section-tail">
                     <span className="diff-workspace-file-section-count">
@@ -941,6 +973,31 @@ function modeLabel(mode: DiffViewerMode): string {
 
 function fileName(path: string): string {
   return path.replace(/\\/g, "/").split("/").pop() ?? path;
+}
+
+function aggregateFileStats(
+  files: readonly DiffViewerFile[]
+): DiffFileSectionStats | null {
+  if (
+    !files.every(
+      (file) =>
+        Number.isFinite(file.additions) &&
+        Number.isFinite(file.deletions)
+    )
+  ) {
+    return null;
+  }
+
+  return files.reduce<DiffFileSectionStats>(
+    (stats, file) => ({
+      additions: stats.additions + (file.additions ?? 0),
+      deletions: stats.deletions + (file.deletions ?? 0)
+    }),
+    {
+      additions: 0,
+      deletions: 0
+    }
+  );
 }
 
 export function findNewDiffTreeDirectoryKeys(

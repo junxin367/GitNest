@@ -15,6 +15,7 @@ import type {
 import { createPathIdentity } from "./path-identity";
 import {
   getEntryDefaultTarget,
+  listEntryTargets,
   listWorkspaceTargets,
   repositoryTargetKey
 } from "./workspace-targets";
@@ -511,14 +512,7 @@ function registerPreviousEntryData(
   repositories: Map<string, WorkspaceRepository>,
   worktrees: Map<string, WorkspaceWorktree>
 ): void {
-  const targets = [
-    ...entry.groups.flatMap((group) => group.targets),
-    ...(entry.kind === "workspace-meta-repository"
-      ? [entry.rootTarget]
-      : entry.kind === "standalone-repository"
-        ? [entry.target]
-        : [])
-  ];
+  const targets = listEntryTargets(entry);
 
   for (const target of targets) {
     const repository = current.repositories.find(

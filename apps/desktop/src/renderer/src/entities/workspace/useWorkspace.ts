@@ -40,7 +40,7 @@ export interface WorkspaceController {
   notice: string | null;
   operation: WorkspaceOperation;
   busy: boolean;
-  createWorkspace(name: string): Promise<boolean>;
+  createWorkspace(): Promise<boolean>;
   switchWorkspace(workspaceId: string): Promise<boolean>;
   renameWorkspace(
     workspaceId: string,
@@ -128,21 +128,114 @@ export function useWorkspace(): WorkspaceController {
   }, []);
 
   const createWorkspace = useCallback(
-    async (name: string): Promise<boolean> => {
-      beginWorkspaceTransition();
+    async (): Promise<boolean> => {
+      setOperation("selecting");
+      setError(null);
+      setNotice(null);
+
       try {
-        const result = await window.gitnest.workspace.create({
-          name
-        });
-        if (result.ok) {
-          setRuntimeState(result.value);
-          setNotice(
-            `Workspace“${result.value.workspace.name}”已创建，可继续添加目录。`
-          );
-          return true;
+        const selection =
+          await window.gitnest.workspace.selectDirectory();
+        if (!selection.ok) {
+          setError(selection.error);
+          return false;
         }
-        setError(result.error);
-        return false;
+        if (selection.value.cancelled) {
+          return false;
+        }
+
+        const previousWorkspaceId = workspace?.id;
+        const previousWorkspaceWasEmpty =
+          workspace?.entries.length === 0;
+        beginWorkspaceTransition();
+        const created = await window.gitnest.workspace.create({
+          name: workspaceNameFromPath(selection.value.path)
+        });
+        if (!created.ok) {
+          setError(created.error);
+          return false;
+        }
+
+        setRuntimeState(created.value);
+        setOperation("scanning");
+        const added = await window.gitnest.workspace.addEntry({
+          path: selection.value.path,
+          source: "picker"
+        });
+        if (!added.ok) {
+          let restoredState: WorkspaceRuntimeStateDto | null =
+            null;
+          let rollbackFailure: unknown = null;
+
+          try {
+            const removed =
+              await window.gitnest.workspace.delete({
+                workspaceId: created.value.workspace.id
+              });
+            if (!removed.ok) {
+              rollbackFailure = removed.error;
+            } else {
+              restoredState = removed.value;
+              if (
+                previousWorkspaceId &&
+                restoredState.workspace.id !==
+                  previousWorkspaceId
+              ) {
+                const switched =
+                  await window.gitnest.workspace.switch({
+                    workspaceId: previousWorkspaceId
+                  });
+                if (switched.ok) {
+                  restoredState = switched.value;
+                } else {
+                  rollbackFailure = switched.error;
+                }
+              }
+            }
+          } catch (reason) {
+            rollbackFailure = reason;
+          }
+
+          if (restoredState) {
+            setRuntimeState(restoredState);
+          }
+          setError(
+            rollbackFailure
+              ? withRollbackFailure(
+                  added.error,
+                  rollbackFailure
+                )
+              : added.error
+          );
+          return false;
+        }
+
+        const createdWorkspace = added.value.workspace;
+        let finalState = replaceActiveWorkspace(
+          created.value,
+          createdWorkspace
+        );
+        if (
+          previousWorkspaceWasEmpty &&
+          previousWorkspaceId &&
+          previousWorkspaceId !== createdWorkspace.id
+        ) {
+          const removedPrevious =
+            await window.gitnest.workspace.delete({
+              workspaceId: previousWorkspaceId
+            });
+          if (!removedPrevious.ok) {
+            setRuntimeState(finalState);
+            setError(removedPrevious.error);
+            return true;
+          }
+          finalState = removedPrevious.value;
+        }
+        setRuntimeState(finalState);
+        setNotice(
+          `Workspace“${createdWorkspace.name}”已创建并完成目录扫描。`
+        );
+        return true;
       } catch (reason) {
         setUnexpectedError(reason);
         return false;
@@ -150,7 +243,12 @@ export function useWorkspace(): WorkspaceController {
         setOperation(null);
       }
     },
-    [beginWorkspaceTransition, setUnexpectedError]
+    [
+      beginWorkspaceTransition,
+      setUnexpectedError,
+      workspace?.entries.length,
+      workspace?.id
+    ]
   );
 
   const switchWorkspace = useCallback(
@@ -656,4 +754,64 @@ export function useWorkspace(): WorkspaceController {
       clearFeedback
     ]
   );
+}
+
+function workspaceNameFromPath(path: string): string {
+  const trimmed = path.trim().replace(/[\\/]+$/u, "");
+  const name = trimmed
+    .split(/[\\/]/u)
+    .filter(Boolean)
+    .at(-1);
+
+  return (name || trimmed || "Workspace").slice(0, 120);
+}
+
+function replaceActiveWorkspace(
+  state: WorkspaceRuntimeStateDto,
+  workspace: WorkspaceDetailsDto
+): WorkspaceRuntimeStateDto {
+  const summary = {
+    id: workspace.id,
+    name: workspace.name,
+    updatedAt: workspace.updatedAt
+  };
+  const exists = state.workspaces.some(
+    (candidate) => candidate.id === workspace.id
+  );
+
+  return {
+    ...state,
+    workspace,
+    workspaces: exists
+      ? state.workspaces.map((candidate) =>
+          candidate.id === workspace.id
+            ? summary
+            : candidate
+        )
+      : [...state.workspaces, summary]
+  };
+}
+
+function withRollbackFailure(
+  error: WorkspaceErrorDto,
+  reason: unknown
+): WorkspaceErrorDto {
+  const rollbackMessage =
+    typeof reason === "object" &&
+    reason !== null &&
+    "message" in reason &&
+    typeof reason.message === "string"
+      ? reason.message
+      : reason instanceof Error
+        ? reason.message
+        : "无法恢复原 Workspace。";
+
+  return {
+    ...error,
+    message: `${error.message}；自动回滚失败：${rollbackMessage}`,
+    details: {
+      ...error.details,
+      rollbackFailure: rollbackMessage
+    }
+  };
 }

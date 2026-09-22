@@ -16,6 +16,9 @@ export { normalizeRoute } from "./source-parser";
 export { MAX_CODE_DOCUMENTATION_CHARACTERS } from "./model";
 export type {
   AnalysisConfidence,
+  CodeAnalysisDiagnostic,
+  CodeAnalysisDiagnosticKind,
+  CodeAnalysisIndexStatus,
   AnalysisRoot,
   AnalysisSourceFile,
   ChangedAnalysisPath,
@@ -36,8 +39,12 @@ export type {
   CodeRequestChain,
   CodeRequestTransport,
   LanguageServerCommandSettings,
+  LanguageServerLanguage,
   LanguageServerState,
   LanguageServerStatus,
+  LspSemanticRelation,
   ParsedRemoteBoundary,
+  ParsedSemanticRelation,
+  ParsedSemanticRelationKind,
   ParsedSourceFile
 } from "./model";

@@ -352,7 +352,7 @@ export class WorkspaceService {
       entry.path,
       worktree.path
     );
-    const excludedName = relativeSegments.at(-1);
+    const excludedName = relativeSegments.join("/");
 
     if (!excludedName) {
       throw new WorkspaceError(
@@ -410,20 +410,10 @@ export class WorkspaceService {
     const now = this.#clock();
 
     if (remainingEntries.length === 0) {
-      const {
-        selectedEntryId: _selectedEntryId,
-        selectedTarget: _selectedTarget,
-        ...workspaceBase
-      } = current;
-      const workspace: Workspace = {
-        ...workspaceBase,
-        entries: [],
-        repositories: [],
-        worktrees: [],
-        updatedAt: now
-      };
-      await this.#save(workspace);
-      return workspace;
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The final Workspace entry cannot be removed. Delete the Workspace instead."
+      );
     }
 
     const scans = await this.#scanRoots(roots, now);

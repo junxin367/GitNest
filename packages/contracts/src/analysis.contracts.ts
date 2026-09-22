@@ -7,15 +7,32 @@ export type CodeAnalysisScopeDto =
   | "changed"
   | "workspace";
 
+export const LANGUAGE_SERVER_LANGUAGES = [
+  "typescript",
+  "vue",
+  "java",
+  "python",
+  "go",
+  "kotlin",
+  "csharp",
+  "rust"
+] as const;
+
+export type LanguageServerLanguageDto =
+  (typeof LANGUAGE_SERVER_LANGUAGES)[number];
+
 export type CodeAnalysisLanguageDto =
-  | "typescript"
-  | "javascript"
-  | "vue"
-  | "java";
+  | LanguageServerLanguageDto
+  | "javascript";
 
 export type CodeGraphNodeKindDto =
   | "file"
+  | "module"
+  | "package"
   | "class"
+  | "interface"
+  | "enum"
+  | "property"
   | "function"
   | "method"
   | "client-request"
@@ -26,6 +43,9 @@ export type CodeGraphNodeKindDto =
 export type CodeGraphEdgeKindDto =
   | "contains"
   | "calls"
+  | "extends"
+  | "implements"
+  | "overrides"
   | "http-request"
   | "rpc-request"
   | "references";
@@ -39,6 +59,13 @@ export interface LanguageServerCommandSettingsDto {
   enabled: boolean;
   command: string;
   args: string[];
+  maxDocuments: number;
+  maxSymbolsPerDocument: number;
+  maxCallHierarchyRequests: number;
+  maxTypeHierarchyRequests?: number;
+  maxReferenceRequests: number;
+  maxDocumentationRequests: number;
+  maxReferencesPerSymbol: number;
 }
 
 export interface CodeAnalysisSettingsDto {
@@ -46,6 +73,11 @@ export interface CodeAnalysisSettingsDto {
   defaultScope: CodeAnalysisScopeDto;
   staticFallback: boolean;
   maxFiles: number;
+  maxTotalSourceMb: number;
+  maxGraphNodes: number;
+  maxGraphEdges: number;
+  maxRequestChains: number;
+  maxDiagnostics: number;
   maxFileSizeKb: number;
   readConcurrency: number;
   graphDepth: number;
@@ -53,6 +85,12 @@ export interface CodeAnalysisSettingsDto {
   ignoreDirectories: string[];
   typescript: LanguageServerCommandSettingsDto;
   java: LanguageServerCommandSettingsDto;
+  vue?: LanguageServerCommandSettingsDto;
+  python?: LanguageServerCommandSettingsDto;
+  go?: LanguageServerCommandSettingsDto;
+  kotlin?: LanguageServerCommandSettingsDto;
+  csharp?: LanguageServerCommandSettingsDto;
+  rust?: LanguageServerCommandSettingsDto;
 }
 
 export interface UpdateCodeAnalysisSettingsRequest {
@@ -60,6 +98,11 @@ export interface UpdateCodeAnalysisSettingsRequest {
   defaultScope?: CodeAnalysisScopeDto;
   staticFallback?: boolean;
   maxFiles?: number;
+  maxTotalSourceMb?: number;
+  maxGraphNodes?: number;
+  maxGraphEdges?: number;
+  maxRequestChains?: number;
+  maxDiagnostics?: number;
   maxFileSizeKb?: number;
   readConcurrency?: number;
   graphDepth?: number;
@@ -67,6 +110,12 @@ export interface UpdateCodeAnalysisSettingsRequest {
   ignoreDirectories?: string[];
   typescript?: Partial<LanguageServerCommandSettingsDto>;
   java?: Partial<LanguageServerCommandSettingsDto>;
+  vue?: Partial<LanguageServerCommandSettingsDto>;
+  python?: Partial<LanguageServerCommandSettingsDto>;
+  go?: Partial<LanguageServerCommandSettingsDto>;
+  kotlin?: Partial<LanguageServerCommandSettingsDto>;
+  csharp?: Partial<LanguageServerCommandSettingsDto>;
+  rust?: Partial<LanguageServerCommandSettingsDto>;
 }
 
 export interface CodeAnalysisRootDto {
@@ -74,6 +123,7 @@ export interface CodeAnalysisRootDto {
   worktreeId: string;
   name: string;
   path: string;
+  revision?: string;
 }
 
 export interface CodeGraphLocationDto {
@@ -106,6 +156,8 @@ export interface CodeGraphEdgeDto {
   kind: CodeGraphEdgeKindDto;
   confidence: AnalysisConfidenceDto;
   label?: string;
+  source?: "builtin" | "lsp" | "merged";
+  evidence?: string;
 }
 
 export interface CodeRequestChainDto {
@@ -125,6 +177,31 @@ export interface CodeRequestChainDto {
   confidence: AnalysisConfidenceDto;
 }
 
+export type CodeAnalysisDiagnosticKindDto =
+  | "partial-index"
+  | "unresolved-call"
+  | "unmatched-request"
+  | "unmatched-rpc"
+  | "ambiguous-target";
+
+export interface CodeAnalysisDiagnosticDto {
+  id: string;
+  kind: CodeAnalysisDiagnosticKindDto;
+  severity: "info" | "warning";
+  message: string;
+  evidence: string;
+  nodeId?: string;
+  relatedNodeIds: string[];
+}
+
+export interface CodeAnalysisIndexStatusDto {
+  fullIndexAvailable: boolean;
+  resultCompleteness: "complete" | "partial";
+  impactCoverage: "confirmed" | "possible-omissions";
+  lastFullIndexAt?: string;
+  message: string;
+}
+
 export type LanguageServerStateDto =
   | "disabled"
   | "connected"
@@ -132,11 +209,22 @@ export type LanguageServerStateDto =
   | "failed";
 
 export interface LanguageServerStatusDto {
-  language: "typescript" | "java";
+  language: LanguageServerLanguageDto;
   state: LanguageServerStateDto;
   command: string;
   message: string;
   symbolCount: number;
+  semanticCoverage?:
+    | "complete"
+    | "partial"
+    | "unavailable";
+  documentsTotal?: number;
+  documentsAnalyzed?: number;
+  skippedDocuments?: number;
+  failedDocuments?: number;
+  truncatedDocuments?: number;
+  requestBudgetExhausted?: boolean;
+  enrichmentStoppedEarly?: boolean;
 }
 
 export interface CodeAnalysisStatsDto {
@@ -164,6 +252,8 @@ export interface CodeAnalysisSnapshotDto {
   edges: CodeGraphEdgeDto[];
   requestChains: CodeRequestChainDto[];
   languageServers: LanguageServerStatusDto[];
+  indexStatus?: CodeAnalysisIndexStatusDto;
+  diagnostics?: CodeAnalysisDiagnosticDto[];
   warnings: string[];
   stats: CodeAnalysisStatsDto;
 }
@@ -198,6 +288,7 @@ export interface CodeAnalysisStateDto {
   entryId?: string;
   entryName?: string;
   scope?: CodeAnalysisScopeDto;
+  startedAt?: string;
   progress?: CodeAnalysisProgressDto;
   generatedAt?: string;
   stats?: CodeAnalysisStatsDto;
@@ -232,8 +323,7 @@ export interface CodeAnalysisFileDto {
 }
 
 export type InstallableLanguageServerDto =
-  | "typescript"
-  | "java";
+  LanguageServerLanguageDto;
 
 export interface InstallLanguageServerRequest {
   language: InstallableLanguageServerDto;
@@ -266,26 +356,115 @@ export const DEFAULT_CODE_ANALYSIS_IGNORES = [
   ".cache"
 ] as const;
 
+export const MIN_CODE_ANALYSIS_TOTAL_SOURCE_MB = 16;
+export const DEFAULT_CODE_ANALYSIS_TOTAL_SOURCE_MB = 128;
+export const MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB = 1_024;
+
+export const MIN_CODE_ANALYSIS_GRAPH_NODES = 5_000;
+export const DEFAULT_CODE_ANALYSIS_GRAPH_NODES = 50_000;
+export const MAX_CODE_ANALYSIS_GRAPH_NODES = 200_000;
+
+export const MIN_CODE_ANALYSIS_GRAPH_EDGES = 10_000;
+export const DEFAULT_CODE_ANALYSIS_GRAPH_EDGES = 100_000;
+export const MAX_CODE_ANALYSIS_GRAPH_EDGES = 400_000;
+
+export const MIN_CODE_ANALYSIS_REQUEST_CHAINS = 100;
+export const DEFAULT_CODE_ANALYSIS_REQUEST_CHAINS = 5_000;
+export const MAX_CODE_ANALYSIS_REQUEST_CHAINS = 50_000;
+
+export const MIN_CODE_ANALYSIS_DIAGNOSTICS = 100;
+export const DEFAULT_CODE_ANALYSIS_DIAGNOSTICS = 2_000;
+export const MAX_CODE_ANALYSIS_DIAGNOSTICS = 20_000;
+
+export const MIN_LSP_DOCUMENTS = 1;
+export const MAX_LSP_DOCUMENTS = 5_000;
+export const MIN_LSP_SYMBOLS_PER_DOCUMENT = 100;
+export const DEFAULT_LSP_SYMBOLS_PER_DOCUMENT = 5_000;
+export const MAX_LSP_SYMBOLS_PER_DOCUMENT = 20_000;
+export const MIN_LSP_REQUESTS = 0;
+export const MAX_LSP_REQUESTS = 10_000;
+export const MIN_LSP_REFERENCES_PER_SYMBOL = 1;
+export const DEFAULT_LSP_REFERENCES_PER_SYMBOL = 500;
+export const MAX_LSP_REFERENCES_PER_SYMBOL = 5_000;
+
 export function createDefaultCodeAnalysisSettings(): CodeAnalysisSettingsDto {
   return {
     enabled: true,
     defaultScope: "changed",
     staticFallback: true,
     maxFiles: 5_000,
+    maxTotalSourceMb: DEFAULT_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+    maxGraphNodes: DEFAULT_CODE_ANALYSIS_GRAPH_NODES,
+    maxGraphEdges: DEFAULT_CODE_ANALYSIS_GRAPH_EDGES,
+    maxRequestChains: DEFAULT_CODE_ANALYSIS_REQUEST_CHAINS,
+    maxDiagnostics: DEFAULT_CODE_ANALYSIS_DIAGNOSTICS,
     maxFileSizeKb: 768,
-    readConcurrency: 2,
-    graphDepth: 6,
+    readConcurrency: 4,
+    graphDepth: 8,
     lspTimeoutMs: 8_000,
     ignoreDirectories: [...DEFAULT_CODE_ANALYSIS_IGNORES],
-    typescript: {
+    typescript: languageServerSettings({
       enabled: true,
       command: "typescript-language-server",
       args: ["--stdio"]
-    },
-    java: {
+    }),
+    java: languageServerSettings({
       enabled: true,
       command: "jdtls",
+      args: [],
+      java: true
+    }),
+    vue: languageServerSettings({
+      enabled: true,
+      command: "vue-language-server",
+      args: ["--stdio"]
+    }),
+    python: languageServerSettings({
+      enabled: false,
+      command: "pyright-langserver",
+      args: ["--stdio"]
+    }),
+    go: languageServerSettings({
+      enabled: false,
+      command: "gopls",
+      args: ["serve"]
+    }),
+    kotlin: languageServerSettings({
+      enabled: false,
+      command: "kotlin-lsp",
+      args: ["--stdio"]
+    }),
+    csharp: languageServerSettings({
+      enabled: false,
+      command: "csharp-ls",
       args: []
-    }
+    }),
+    rust: languageServerSettings({
+      enabled: false,
+      command: "rust-analyzer",
+      args: []
+    })
+  };
+}
+
+function languageServerSettings(input: {
+  enabled: boolean;
+  command: string;
+  args: string[];
+  java?: boolean;
+}): LanguageServerCommandSettingsDto {
+  return {
+    enabled: input.enabled,
+    command: input.command,
+    args: [...input.args],
+    maxDocuments: input.java ? 80 : 120,
+    maxSymbolsPerDocument:
+      DEFAULT_LSP_SYMBOLS_PER_DOCUMENT,
+    maxCallHierarchyRequests: input.java ? 40 : 50,
+    maxTypeHierarchyRequests: input.java ? 80 : 50,
+    maxReferenceRequests: input.java ? 1_000 : 50,
+    maxDocumentationRequests: input.java ? 40 : 50,
+    maxReferencesPerSymbol:
+      DEFAULT_LSP_REFERENCES_PER_SYMBOL
   };
 }

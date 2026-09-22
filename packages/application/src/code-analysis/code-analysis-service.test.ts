@@ -22,7 +22,10 @@ import {
   type CodeAnalysisSnapshotStore
 } from "@gitnest/code-analysis";
 import type { GitClient } from "@gitnest/git-core";
-import type { Workspace } from "@gitnest/workspace-core";
+import {
+  WorkspaceError,
+  type Workspace
+} from "@gitnest/workspace-core";
 
 import {
   CodeAnalysisService,
@@ -145,6 +148,66 @@ describe("CodeAnalysisService snapshot persistence", () => {
     await service.dispose();
   });
 
+  it("keeps a live-HEAD snapshot while Workspace still reports the pre-run HEAD", async () => {
+    let workspace = createWorkspace();
+    const worktree = workspace.worktrees[0];
+    if (!worktree) {
+      throw new Error("Workspace fixture is incomplete.");
+    }
+    worktree.head = "stale-head";
+    const store = createSnapshotStore(null);
+    const engine = createEngine(async (input) => ({
+      ...createSnapshot(
+        input.analysisId,
+        input.entryId,
+        input.roots[0]?.worktreeId ?? "worktree"
+      ),
+      roots: structuredClone(input.roots)
+    }));
+    const service = new CodeAnalysisService(
+      {
+        getCurrent: async () => structuredClone(workspace)
+      },
+      createGitClient("live-head"),
+      {
+        cacheDirectory: "C:\\cache",
+        lspDataDirectory: "C:\\lsp",
+        settingsProvider: async () => createSettings(),
+        snapshotStore: store,
+        runner: engine,
+        idFactory: () => "fresh"
+      }
+    );
+    const ready = waitForState(
+      service,
+      (state) => state.state === "ready"
+    );
+
+    await service.start("workspace");
+    await ready;
+
+    await expect(service.getSnapshot()).resolves.toMatchObject({
+      roots: [{ revision: "live-head" }]
+    });
+    await expect(service.getState()).resolves.toMatchObject({
+      state: "ready",
+      snapshotAvailable: true
+    });
+
+    workspace = structuredClone(workspace);
+    workspace.worktrees[0]!.head = "live-head";
+    await expect(service.getSnapshot()).resolves.not.toBeNull();
+
+    workspace = structuredClone(workspace);
+    workspace.worktrees[0]!.head = "future-head";
+    await expect(service.getSnapshot()).resolves.toBeNull();
+    await expect(service.getState()).resolves.toMatchObject({
+      state: "idle",
+      snapshotAvailable: false
+    });
+    await service.dispose();
+  });
+
   it("does not let a late restore from the previous entry replace the current entry", async () => {
     let workspace = createWorkspace("entry-a", "worktree-a");
     const pending = deferred<CodeAnalysisSnapshot | null>();
@@ -198,6 +261,40 @@ describe("CodeAnalysisService snapshot persistence", () => {
       analysisId: "entry-b-cache",
       entryId: "entry-b"
     });
+    await service.dispose();
+  });
+});
+
+describe("CodeAnalysisService launch validation", () => {
+  it("rejects unapproved Language Server settings before starting the runner", async () => {
+    const workspace = createWorkspace();
+    const engine = createEngine();
+    const validateSettings = vi.fn(async () => {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "Language Server launch requires approval."
+      );
+    });
+    const service = new CodeAnalysisService(
+      {
+        getCurrent: async () => structuredClone(workspace)
+      },
+      createGitClient(),
+      {
+        cacheDirectory: "C:\\cache",
+        lspDataDirectory: "C:\\lsp",
+        settingsProvider: async () => createSettings(),
+        settingsValidator: validateSettings,
+        snapshotStore: createSnapshotStore(null),
+        runner: engine
+      }
+    );
+
+    await expect(service.start("workspace")).rejects.toMatchObject({
+      code: "INVALID_REQUEST"
+    });
+    expect(validateSettings).toHaveBeenCalledTimes(1);
+    expect(engine.analyze).not.toHaveBeenCalled();
     await service.dispose();
   });
 });
@@ -274,6 +371,46 @@ describe("CodeAnalysisService node source", () => {
 });
 
 describe("CodeAnalysisService lifecycle", () => {
+  it("publishes the execution start time while analysis is running", async () => {
+    const completion = deferred<CodeAnalysisSnapshot>();
+    const service = new CodeAnalysisService(
+      {
+        getCurrent: async () =>
+          structuredClone(createWorkspace())
+      },
+      createGitClient(),
+      {
+        cacheDirectory: "C:\\cache",
+        lspDataDirectory: "C:\\lsp",
+        settingsProvider: async () => createSettings(),
+        snapshotStore: createSnapshotStore(null),
+        runner: createEngine(async () => completion.promise),
+        idFactory: () => "fresh",
+        clock: () => "2026-09-21T12:00:00.000Z"
+      }
+    );
+    const running = waitForState(
+      service,
+      (state) => state.state === "running"
+    );
+
+    await service.start("workspace");
+
+    await expect(running).resolves.toMatchObject({
+      state: "running",
+      analysisId: "fresh",
+      startedAt: "2026-09-21T12:00:00.000Z"
+    });
+
+    const ready = waitForState(
+      service,
+      (state) => state.state === "ready"
+    );
+    completion.resolve(createSnapshot("fresh"));
+    await ready;
+    await service.dispose();
+  });
+
   it("rejects a new analysis after disposal", async () => {
     const service = createService(
       createWorkspace(),
@@ -369,14 +506,16 @@ function createEngine(
   };
 }
 
-function createGitClient(): Pick<
+function createGitClient(
+  head = "0123456789abcdef"
+): Pick<
   GitClient,
   "readRepositorySnapshot"
 > {
   return {
     readRepositorySnapshot: vi.fn(async () => ({
       branch: "main",
-      head: "0123456789abcdef",
+      head,
       ahead: 0,
       behind: 0,
       staged: 0,
@@ -491,7 +630,8 @@ function createSnapshot(
         repositoryId: "repository",
         worktreeId,
         name: "Repository",
-        path: `C:\\workspace\\${worktreeId}`
+        path: `C:\\workspace\\${worktreeId}`,
+        revision: "0123456789abcdef"
       }
     ],
     nodes: [],
@@ -565,20 +705,37 @@ function createSettings(): CodeAnalysisSettings {
     enabled: true,
     staticFallback: true,
     maxFiles: 5_000,
+    maxTotalSourceBytes: 128 * 1_024 * 1_024,
+    maxGraphNodes: 30_000,
+    maxGraphEdges: 100_000,
+    maxRequestChains: 5_000,
+    maxDiagnostics: 2_000,
     maxFileSizeBytes: 768 * 1_024,
-    readConcurrency: 2,
-    graphDepth: 6,
+    readConcurrency: 4,
+    graphDepth: 8,
     lspTimeoutMs: 8_000,
     ignoreDirectories: [".git", "node_modules"],
     typescript: {
       enabled: false,
       command: "typescript-language-server",
-      args: ["--stdio"]
+      args: ["--stdio"],
+      maxDocuments: 120,
+      maxSymbolsPerDocument: 5_000,
+      maxCallHierarchyRequests: 50,
+      maxReferenceRequests: 50,
+      maxDocumentationRequests: 50,
+      maxReferencesPerSymbol: 500
     },
     java: {
       enabled: false,
       command: "jdtls",
-      args: []
+      args: [],
+      maxDocuments: 80,
+      maxSymbolsPerDocument: 5_000,
+      maxCallHierarchyRequests: 40,
+      maxReferenceRequests: 1_000,
+      maxDocumentationRequests: 40,
+      maxReferencesPerSymbol: 500
     }
   };
 }

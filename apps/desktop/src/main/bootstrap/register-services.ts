@@ -49,6 +49,7 @@ import { RotatingDiagnosticLogger } from "../adapters/diagnostic-logger.adapter"
 import { AiCommitMessageService } from "../ai/ai-commit-message-service";
 import codeAnalysisProcessPath from "../code-analysis/code-analysis-process-entry?modulePath";
 import { LanguageServerInstaller } from "../code-analysis/language-server-installer";
+import { installedLanguageServerSettingsPatch } from "../code-analysis/language-server-settings";
 import { UtilityProcessCodeAnalysisRunner } from "../code-analysis/utility-process-code-analysis-runner";
 import { AppSettingsService } from "../settings/app-settings";
 import {
@@ -188,6 +189,12 @@ export function registerServices(): ApplicationServices {
           enabled: preferences.enabled,
           staticFallback: preferences.staticFallback,
           maxFiles: preferences.maxFiles,
+          maxTotalSourceBytes:
+            preferences.maxTotalSourceMb * 1_024 * 1_024,
+          maxGraphNodes: preferences.maxGraphNodes,
+          maxGraphEdges: preferences.maxGraphEdges,
+          maxRequestChains: preferences.maxRequestChains,
+          maxDiagnostics: preferences.maxDiagnostics,
           maxFileSizeBytes:
             preferences.maxFileSizeKb * 1_024,
           readConcurrency: preferences.readConcurrency,
@@ -203,9 +210,61 @@ export function registerServices(): ApplicationServices {
           java: {
             ...preferences.java,
             args: [...preferences.java.args]
-          }
+          },
+          ...(preferences.vue
+            ? {
+                vue: {
+                  ...preferences.vue,
+                  args: [...preferences.vue.args]
+                }
+              }
+            : {}),
+          ...(preferences.python
+            ? {
+                python: {
+                  ...preferences.python,
+                  args: [...preferences.python.args]
+                }
+              }
+            : {}),
+          ...(preferences.go
+            ? {
+                go: {
+                  ...preferences.go,
+                  args: [...preferences.go.args]
+                }
+              }
+            : {}),
+          ...(preferences.kotlin
+            ? {
+                kotlin: {
+                  ...preferences.kotlin,
+                  args: [...preferences.kotlin.args]
+                }
+              }
+            : {}),
+          ...(preferences.csharp
+            ? {
+                csharp: {
+                  ...preferences.csharp,
+                  args: [...preferences.csharp.args]
+                }
+              }
+            : {}),
+          ...(preferences.rust
+            ? {
+                rust: {
+                  ...preferences.rust,
+                  args: [...preferences.rust.args]
+                }
+              }
+            : {})
         };
       },
+      settingsValidator: (preferences) =>
+        settings.assertLanguageServerLaunchesApproved(
+          preferences
+        ),
       idFactory: randomUUID
     }
   );
@@ -217,24 +276,25 @@ export function registerServices(): ApplicationServices {
         command,
         args
       ) => {
-        await settings.update({
-          codeAnalysis:
-            language === "typescript"
-              ? {
-                  typescript: {
-                    enabled: true,
-                    command,
-                    args
-                  }
-                }
-              : {
-                  java: {
-                    enabled: true,
-                    command,
-                    args
-                  }
-                }
-        });
+        await settings.update(
+          {
+            codeAnalysis:
+              installedLanguageServerSettingsPatch(
+                language,
+                command,
+                args
+              )
+          },
+          {
+            approvedLanguageServerLaunches: [
+              {
+                language,
+                command,
+                args: [...args]
+              }
+            ]
+          }
+        );
       }
     });
   const externalTerminalAdapter =

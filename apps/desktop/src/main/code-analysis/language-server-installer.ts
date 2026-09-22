@@ -1,8 +1,11 @@
 import { spawn } from "node:child_process";
+import { createWriteStream } from "node:fs";
 import {
   access,
+  chmod as chmodPath,
   mkdir,
-  readFile
+  readFile,
+  unlink
 } from "node:fs/promises";
 import {
   basename,
@@ -14,6 +17,9 @@ import {
   resolve,
   sep
 } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream } from "node:stream/web";
 
 import { resolveWindowsEditorJdtls } from "@gitnest/code-analysis";
 import type {
@@ -38,10 +44,30 @@ interface CommandOutput {
   stderr: string;
 }
 
+interface InstalledLanguageServer {
+  command: string;
+  args: string[];
+}
+
 type JdtlsLaunch = {
   command: string;
   args: string[];
 };
+
+type DownloadFile = (
+  url: string,
+  destinationPath: string
+) => Promise<void>;
+
+type ExtractArchive = (
+  archivePath: string,
+  destinationPath: string
+) => Promise<void>;
+
+type ChangeMode = (
+  path: string,
+  mode: number
+) => Promise<void>;
 
 export interface LanguageServerInstallerOptions {
   runtimeDirectory: string;
@@ -62,21 +88,167 @@ export interface LanguageServerInstallerOptions {
   resolveJdtls?: (
     args: string[]
   ) => Promise<JdtlsLaunch | undefined>;
+  resolveCommand?: (
+    command: string
+  ) => Promise<string | undefined>;
   runCommand?: (
     request: CommandRequest
   ) => Promise<CommandOutput>;
+  download?: DownloadFile;
+  extract?: ExtractArchive;
+  arch?: NodeJS.Architecture;
+  chmod?: ChangeMode;
 }
 
 const INSTALL_TIMEOUT_MS = 10 * 60_000;
-const TYPESCRIPT_LANGUAGE_SERVER_PACKAGE =
-  "typescript-language-server@6";
-const TYPESCRIPT_PACKAGE = "typescript@6";
+const COMMAND_PROBE_TIMEOUT_MS = 30_000;
 const JAVA_EXTENSION_ID = "redhat.java";
+const KOTLIN_LANGUAGE_SERVER_VERSION = "263.4702.0";
+const CSHARP_LANGUAGE_SERVER_VERSION = "0.28.0";
+
+interface LanguageServerStrategyBase {
+  language: InstallableLanguageServerDto;
+  displayName: string;
+  directoryName: string;
+  args: string[];
+  installedMessage: string;
+}
+
+interface NpmLanguageServerStrategy
+  extends LanguageServerStrategyBase {
+  kind: "npm";
+  packages: string[];
+  executable: string;
+}
+
+interface JavaLanguageServerStrategy
+  extends LanguageServerStrategyBase {
+  kind: "java";
+}
+
+interface GoLanguageServerStrategy
+  extends LanguageServerStrategyBase {
+  kind: "go";
+}
+
+interface KotlinLanguageServerStrategy
+  extends LanguageServerStrategyBase {
+  kind: "kotlin";
+}
+
+interface CSharpLanguageServerStrategy
+  extends LanguageServerStrategyBase {
+  kind: "csharp";
+}
+
+interface RustLanguageServerStrategy
+  extends LanguageServerStrategyBase {
+  kind: "rust";
+}
+
+type LanguageServerStrategy =
+  | NpmLanguageServerStrategy
+  | JavaLanguageServerStrategy
+  | GoLanguageServerStrategy
+  | KotlinLanguageServerStrategy
+  | CSharpLanguageServerStrategy
+  | RustLanguageServerStrategy;
+
+const LANGUAGE_SERVER_STRATEGIES = {
+  typescript: {
+    kind: "npm",
+    language: "typescript",
+    displayName: "TypeScript",
+    directoryName: "typescript",
+    packages: [
+      "typescript-language-server@6",
+      "typescript@6"
+    ],
+    executable: "typescript-language-server",
+    args: ["--stdio"],
+    installedMessage:
+      "TypeScript Language Server 已安装到 GitNest 应用数据目录。"
+  },
+  vue: {
+    kind: "npm",
+    language: "vue",
+    displayName: "Vue",
+    directoryName: "vue",
+    packages: [
+      "@vue/language-server@3",
+      "typescript@6"
+    ],
+    executable: "vue-language-server",
+    args: ["--stdio"],
+    installedMessage:
+      "Vue Language Server 已安装到 GitNest 应用数据目录。"
+  },
+  java: {
+    kind: "java",
+    language: "java",
+    displayName: "Java",
+    directoryName: "java",
+    args: [],
+    installedMessage:
+      "Java Language Server 已通过编辑器扩展安装并通过检测。"
+  },
+  python: {
+    kind: "npm",
+    language: "python",
+    displayName: "Python",
+    directoryName: "python",
+    packages: ["pyright@1.1.414"],
+    executable: "pyright-langserver",
+    args: ["--stdio"],
+    installedMessage:
+      "Python Language Server 已安装到 GitNest 应用数据目录。"
+  },
+  go: {
+    kind: "go",
+    language: "go",
+    displayName: "Go",
+    directoryName: "go",
+    args: ["serve"],
+    installedMessage:
+      "Go Language Server 已安装到 GitNest 应用数据目录。"
+  },
+  kotlin: {
+    kind: "kotlin",
+    language: "kotlin",
+    displayName: "Kotlin",
+    directoryName: "kotlin",
+    args: ["--stdio"],
+    installedMessage:
+      "Kotlin Language Server 已安装到 GitNest 应用数据目录。"
+  },
+  csharp: {
+    kind: "csharp",
+    language: "csharp",
+    displayName: "C#",
+    directoryName: "csharp",
+    args: [],
+    installedMessage:
+      "C# Language Server 已安装到 GitNest 应用数据目录。"
+  },
+  rust: {
+    kind: "rust",
+    language: "rust",
+    displayName: "Rust",
+    directoryName: "rust",
+    args: [],
+    installedMessage:
+      "Rust Language Server 已通过 rustup 安装并通过检测。"
+  }
+} satisfies Record<
+  InstallableLanguageServerDto,
+  LanguageServerStrategy
+>;
 
 export class LanguageServerInstaller {
   readonly #runtimeDirectory: string;
   readonly #updateLanguageServerSettings: LanguageServerInstallerOptions["updateLanguageServerSettings"];
   readonly #platform: NodeJS.Platform;
+  readonly #arch: NodeJS.Architecture;
   readonly #ensureDirectory: NonNullable<
     LanguageServerInstallerOptions["ensureDirectory"]
   >;
@@ -92,9 +264,15 @@ export class LanguageServerInstaller {
   readonly #resolveJdtls: NonNullable<
     LanguageServerInstallerOptions["resolveJdtls"]
   >;
+  readonly #resolveCommand: NonNullable<
+    LanguageServerInstallerOptions["resolveCommand"]
+  >;
   readonly #runCommand: NonNullable<
     LanguageServerInstallerOptions["runCommand"]
   >;
+  readonly #download: DownloadFile;
+  readonly #extract: ExtractArchive;
+  readonly #chmod: ChangeMode;
   readonly #installing =
     new Set<InstallableLanguageServerDto>();
 
@@ -105,6 +283,7 @@ export class LanguageServerInstaller {
     this.#updateLanguageServerSettings =
       options.updateLanguageServerSettings;
     this.#platform = options.platform ?? process.platform;
+    this.#arch = options.arch ?? process.arch;
     this.#ensureDirectory =
       options.ensureDirectory ??
       (async (path) => {
@@ -120,32 +299,165 @@ export class LanguageServerInstaller {
     this.#resolveJdtls =
       options.resolveJdtls ??
       ((args) => resolveWindowsEditorJdtls(args));
+    this.#resolveCommand =
+      options.resolveCommand ??
+      ((command) =>
+        findCommandOnPath(command, this.#platform));
     this.#runCommand = options.runCommand ?? runCommand;
+    this.#download = options.download ?? downloadFile;
+    this.#extract =
+      options.extract ??
+      ((archivePath, destinationPath) =>
+        extractArchive({
+          archivePath,
+          destinationPath,
+          platform: this.#platform,
+          resolveCommand: this.#resolveCommand,
+          runCommand: this.#runCommand
+        }));
+    this.#chmod =
+      options.chmod ??
+      (async (path, mode) => {
+        await chmodPath(path, mode);
+      });
   }
 
   async install(
     language: InstallableLanguageServerDto
   ): Promise<LanguageServerInstallResultDto> {
+    const strategy = LANGUAGE_SERVER_STRATEGIES[language];
     if (this.#installing.has(language)) {
       throw new GitError(
         "INVALID_REQUEST",
-        `${
-          language === "typescript" ? "TypeScript" : "Java"
-        } Language Server 正在安装。`
+        `${strategy.displayName} Language Server 正在安装。`
       );
     }
     this.#installing.add(language);
     try {
+      const existing =
+        await this.#probeInstalledLanguageServer(strategy);
+      if (existing) {
+        return await this.#persistResult(
+          strategy,
+          existing,
+          "already-installed"
+        );
+      }
+
       await this.#ensureDirectory(this.#runtimeDirectory);
-      return language === "typescript"
-        ? await this.#installTypeScript()
-        : await this.#installJava();
+      const installed =
+        await this.#installLanguageServer(strategy);
+      return await this.#persistResult(
+        strategy,
+        installed,
+        "installed"
+      );
     } finally {
       this.#installing.delete(language);
     }
   }
 
-  async #installTypeScript(): Promise<LanguageServerInstallResultDto> {
+  async #probeInstalledLanguageServer(
+    strategy: LanguageServerStrategy
+  ): Promise<InstalledLanguageServer | undefined> {
+    switch (strategy.kind) {
+      case "npm": {
+        const installed = await this.#probePath(
+          this.#npmExecutablePath(strategy),
+          strategy.args
+        );
+        if (!installed) {
+          return undefined;
+        }
+        const nodeCommand = await this.#resolveCommand(
+          this.#platform === "win32" ? "node.exe" : "node"
+        );
+        return nodeCommand ? installed : undefined;
+      }
+      case "go":
+        return await this.#probePath(
+          this.#goExecutablePath(strategy),
+          strategy.args
+        );
+      case "kotlin":
+        return await this.#probePath(
+          this.#kotlinDistribution(strategy).command,
+          strategy.args
+        );
+      case "csharp":
+        return await this.#probePath(
+          this.#csharpExecutablePath(strategy),
+          strategy.args
+        );
+      case "rust":
+        return await this.#probeRustAnalyzer();
+      case "java":
+        return (await this.#resolveJdtls([]))
+          ? {
+              command: "jdtls",
+              args: strategy.args
+            }
+          : undefined;
+    }
+  }
+
+  async #probePath(
+    command: string,
+    args: string[]
+  ): Promise<InstalledLanguageServer | undefined> {
+    return (await this.#pathExists(command))
+      ? {
+          command,
+          args: [...args]
+        }
+      : undefined;
+  }
+
+  async #installLanguageServer(
+    strategy: LanguageServerStrategy
+  ): Promise<InstalledLanguageServer> {
+    switch (strategy.kind) {
+      case "npm":
+        return await this.#installNpmLanguageServer(
+          strategy
+        );
+      case "java":
+        return await this.#installJava(strategy);
+      case "go":
+        return await this.#installGo(strategy);
+      case "kotlin":
+        return await this.#installKotlin(strategy);
+      case "csharp":
+        return await this.#installCSharp(strategy);
+      case "rust":
+        return await this.#installRust(strategy);
+    }
+  }
+
+  async #persistResult(
+    strategy: LanguageServerStrategy,
+    installed: InstalledLanguageServer,
+    status: LanguageServerInstallResultDto["status"]
+  ): Promise<LanguageServerInstallResultDto> {
+    await this.#updateLanguageServerSettings(
+      strategy.language,
+      installed.command,
+      installed.args
+    );
+    return {
+      language: strategy.language,
+      status,
+      command: installed.command,
+      message:
+        status === "already-installed"
+          ? `已检测到可用的 ${strategy.displayName} Language Server，无需重复安装。`
+          : strategy.installedMessage
+    };
+  }
+
+  async #installNpmLanguageServer(
+    strategy: NpmLanguageServerStrategy
+  ): Promise<InstalledLanguageServer> {
     const npmLaunch = await this.#resolveNpmLaunch();
     if (!npmLaunch) {
       throw new GitError(
@@ -156,7 +468,7 @@ export class LanguageServerInstaller {
 
     const installDirectory = join(
       this.#runtimeDirectory,
-      "typescript"
+      strategy.directoryName
     );
     await this.#ensureDirectory(installDirectory);
     await this.#runCommand({
@@ -171,58 +483,310 @@ export class LanguageServerInstaller {
         "--no-audit",
         "--no-fund",
         "--omit=dev",
-        TYPESCRIPT_LANGUAGE_SERVER_PACKAGE,
-        TYPESCRIPT_PACKAGE
+        ...strategy.packages
       ],
       cwd: installDirectory,
       timeoutMs: INSTALL_TIMEOUT_MS
     });
 
-    const command = join(
-      installDirectory,
-      "node_modules",
-      ".bin",
-      this.#platform === "win32"
-        ? "typescript-language-server.cmd"
-        : "typescript-language-server"
-    );
+    const command = this.#npmExecutablePath(strategy);
     if (!(await this.#pathExists(command))) {
       throw new GitError(
         "COMMAND_FAILED",
-        "npm 已结束，但 GitNest 未找到 TypeScript Language Server 可执行文件。"
+        `npm 已结束，但 GitNest 未找到 ${strategy.displayName} Language Server 可执行文件。`
       );
     }
-
-    await this.#updateLanguageServerSettings(
-      "typescript",
-      command,
-      ["--stdio"]
-    );
     return {
-      language: "typescript",
-      status: "installed",
       command,
-      message:
-        "TypeScript Language Server 已安装到 GitNest 应用数据目录。"
+      args: [...strategy.args]
     };
   }
 
-  async #installJava(): Promise<LanguageServerInstallResultDto> {
-    if (await this.#resolveJdtls([])) {
-      await this.#updateLanguageServerSettings(
-        "java",
-        "jdtls",
-        []
-      );
-      return {
-        language: "java",
-        status: "already-installed",
-        command: "jdtls",
-        message:
-          "已检测到可用的 Java Language Server，无需重复安装。"
-      };
-    }
+  #npmExecutablePath(
+    strategy: NpmLanguageServerStrategy
+  ): string {
+    return join(
+      this.#runtimeDirectory,
+      strategy.directoryName,
+      "node_modules",
+      ".bin",
+      this.#platform === "win32"
+        ? `${strategy.executable}.cmd`
+        : strategy.executable
+    );
+  }
 
+  async #installGo(
+    strategy: GoLanguageServerStrategy
+  ): Promise<InstalledLanguageServer> {
+    const goCommand = await this.#resolveCommand("go");
+    if (!goCommand) {
+      throw new GitError(
+        "COMMAND_FAILED",
+        "未检测到 Go 命令行工具，无法安装 gopls。请先安装 Go。"
+      );
+    }
+    const installDirectory = join(
+      this.#runtimeDirectory,
+      strategy.directoryName
+    );
+    await this.#ensureDirectory(installDirectory);
+    await this.#runCommand({
+      command: goCommand,
+      args: [
+        "install",
+        "golang.org/x/tools/gopls@v0.23.0"
+      ],
+      env: {
+        GOBIN: installDirectory
+      },
+      cwd: installDirectory,
+      timeoutMs: INSTALL_TIMEOUT_MS
+    });
+    const command = this.#goExecutablePath(strategy);
+    if (!(await this.#pathExists(command))) {
+      throw new GitError(
+        "COMMAND_FAILED",
+        "go install 已结束，但 GitNest 未找到 gopls 可执行文件。"
+      );
+    }
+    return {
+      command,
+      args: [...strategy.args]
+    };
+  }
+
+  #goExecutablePath(
+    strategy: GoLanguageServerStrategy
+  ): string {
+    return join(
+      this.#runtimeDirectory,
+      strategy.directoryName,
+      this.#platform === "win32" ? "gopls.exe" : "gopls"
+    );
+  }
+
+  async #installKotlin(
+    strategy: KotlinLanguageServerStrategy
+  ): Promise<InstalledLanguageServer> {
+    const distribution = this.#kotlinDistribution(strategy);
+    await this.#ensureDirectory(distribution.installDirectory);
+    await this.#download(
+      distribution.url,
+      distribution.archivePath
+    );
+    await this.#extract(
+      distribution.archivePath,
+      distribution.installDirectory
+    );
+    if (!(await this.#pathExists(distribution.command))) {
+      throw new GitError(
+        "COMMAND_FAILED",
+        "Kotlin Language Server 归档已解压，但 GitNest 未找到启动文件。"
+      );
+    }
+    if (this.#platform !== "win32") {
+      await this.#chmod(distribution.command, 0o755);
+    }
+    return {
+      command: distribution.command,
+      args: [...strategy.args]
+    };
+  }
+
+  #kotlinDistribution(
+    strategy: KotlinLanguageServerStrategy
+  ): {
+    installDirectory: string;
+    archivePath: string;
+    command: string;
+    url: string;
+  } {
+    if (this.#arch !== "x64" && this.#arch !== "arm64") {
+      throw new GitError(
+        "COMMAND_FAILED",
+        `Kotlin Language Server 暂不支持当前处理器架构：${this.#arch}。`
+      );
+    }
+    const installDirectory = join(
+      this.#runtimeDirectory,
+      strategy.directoryName
+    );
+    const armSuffix =
+      this.#arch === "arm64" ? "-aarch64" : "";
+    const archiveExtension =
+      this.#platform === "win32"
+        ? ".win.zip"
+        : this.#platform === "darwin"
+          ? ".sit"
+          : ".tar.gz";
+    const archiveName = `kotlin-server-${KOTLIN_LANGUAGE_SERVER_VERSION}${armSuffix}${archiveExtension}`;
+    const command =
+      this.#platform === "win32"
+        ? join(
+            installDirectory,
+            "bin",
+            "intellij-server.exe"
+          )
+        : join(
+            installDirectory,
+            `kotlin-server-${KOTLIN_LANGUAGE_SERVER_VERSION}`,
+            "kotlin-lsp.sh"
+          );
+    return {
+      installDirectory,
+      archivePath: join(installDirectory, archiveName),
+      command,
+      url:
+        `https://download-cdn.jetbrains.com/language-server/kotlin-server/` +
+        `${KOTLIN_LANGUAGE_SERVER_VERSION}/${archiveName}`
+    };
+  }
+
+  async #installCSharp(
+    strategy: CSharpLanguageServerStrategy
+  ): Promise<InstalledLanguageServer> {
+    const dotnetCommand =
+      await this.#resolveCommand("dotnet");
+    if (!dotnetCommand) {
+      throw new GitError(
+        "COMMAND_FAILED",
+        "未检测到 dotnet 命令行工具，无法安装 C# Language Server。请先安装 .NET SDK 10 或更高版本。"
+      );
+    }
+    const sdkOutput = await this.#runCommand({
+      command: dotnetCommand,
+      args: ["--list-sdks"],
+      cwd: this.#runtimeDirectory,
+      timeoutMs: COMMAND_PROBE_TIMEOUT_MS
+    });
+    if (!hasDotnetSdkMajor(sdkOutput.stdout, 10)) {
+      throw new GitError(
+        "COMMAND_FAILED",
+        "C# Language Server 需要 .NET SDK 10 或更高版本。"
+      );
+    }
+    const installDirectory = join(
+      this.#runtimeDirectory,
+      strategy.directoryName
+    );
+    await this.#ensureDirectory(installDirectory);
+    await this.#runCommand({
+      command: dotnetCommand,
+      args: [
+        "tool",
+        "install",
+        "csharp-ls",
+        "--tool-path",
+        installDirectory,
+        "--version",
+        CSHARP_LANGUAGE_SERVER_VERSION
+      ],
+      cwd: installDirectory,
+      timeoutMs: INSTALL_TIMEOUT_MS
+    });
+    const command = this.#csharpExecutablePath(strategy);
+    if (!(await this.#pathExists(command))) {
+      throw new GitError(
+        "COMMAND_FAILED",
+        "dotnet tool install 已结束，但 GitNest 未找到 csharp-ls 可执行文件。"
+      );
+    }
+    return {
+      command,
+      args: [...strategy.args]
+    };
+  }
+
+  #csharpExecutablePath(
+    strategy: CSharpLanguageServerStrategy
+  ): string {
+    return join(
+      this.#runtimeDirectory,
+      strategy.directoryName,
+      this.#platform === "win32"
+        ? "csharp-ls.exe"
+        : "csharp-ls"
+    );
+  }
+
+  async #installRust(
+    strategy: RustLanguageServerStrategy
+  ): Promise<InstalledLanguageServer> {
+    const rustupCommand =
+      await this.#resolveCommand("rustup");
+    if (!rustupCommand) {
+      throw new GitError(
+        "COMMAND_FAILED",
+        "未检测到 rustup，无法安装 rust-analyzer。请先安装 Rust 与 rustup。"
+      );
+    }
+    await this.#runCommand({
+      command: rustupCommand,
+      args: ["component", "add", "rust-analyzer"],
+      cwd: this.#runtimeDirectory,
+      timeoutMs: INSTALL_TIMEOUT_MS
+    });
+    const installed =
+      await this.#resolveRustAnalyzer(rustupCommand);
+    if (!installed) {
+      throw new GitError(
+        "COMMAND_FAILED",
+        "rustup 已结束，但 GitNest 未找到 rust-analyzer 可执行文件。"
+      );
+    }
+    return {
+      command: installed,
+      args: [...strategy.args]
+    };
+  }
+
+  async #probeRustAnalyzer(): Promise<
+    InstalledLanguageServer | undefined
+  > {
+    const rustupCommand =
+      await this.#resolveCommand("rustup");
+    if (!rustupCommand) {
+      return undefined;
+    }
+    const command =
+      await this.#resolveRustAnalyzer(rustupCommand);
+    return command
+      ? {
+          command,
+          args: []
+        }
+      : undefined;
+  }
+
+  async #resolveRustAnalyzer(
+    rustupCommand: string
+  ): Promise<string | undefined> {
+    let output: CommandOutput;
+    try {
+      output = await this.#runCommand({
+        command: rustupCommand,
+        args: ["which", "rust-analyzer"],
+        cwd: this.#runtimeDirectory,
+        timeoutMs: COMMAND_PROBE_TIMEOUT_MS
+      });
+    } catch {
+      return undefined;
+    }
+    const command = output.stdout
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .find(Boolean);
+    return command &&
+      isAbsolute(command) &&
+      (await this.#pathExists(command))
+      ? command
+      : undefined;
+  }
+
+  async #installJava(
+    strategy: JavaLanguageServerStrategy
+  ): Promise<InstalledLanguageServer> {
     const editorCli = await this.#resolveEditorCliLaunch();
     if (!editorCli) {
       throw new GitError(
@@ -256,20 +820,140 @@ export class LanguageServerInstaller {
         "扩展安装命令已完成，但 GitNest 尚未检测到 JDT LS。请重启编辑器后重试。"
       );
     }
-
-    await this.#updateLanguageServerSettings(
-      "java",
-      "jdtls",
-      []
-    );
     return {
-      language: "java",
-      status: "installed",
       command: "jdtls",
-      message:
-        "Java Language Server 已通过编辑器扩展安装并通过检测。"
+      args: [...strategy.args]
     };
   }
+}
+
+function hasDotnetSdkMajor(
+  output: string,
+  minimumMajor: number
+): boolean {
+  return output
+    .split(/\r?\n/u)
+    .some((line) => {
+      const match = /^\s*(\d+)\./u.exec(line);
+      return (
+        match?.[1] !== undefined &&
+        Number.parseInt(match[1], 10) >= minimumMajor
+      );
+    });
+}
+
+async function downloadFile(
+  url: string,
+  destinationPath: string
+): Promise<void> {
+  try {
+    const response = await fetch(url, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(INSTALL_TIMEOUT_MS)
+    });
+    if (!response.ok || !response.body) {
+      throw new GitError(
+        "COMMAND_FAILED",
+        "无法下载 Kotlin Language Server，请检查网络后重试。",
+        {
+          status: response.status,
+          url
+        }
+      );
+    }
+    await pipeline(
+      Readable.fromWeb(
+        response.body as ReadableStream<Uint8Array>
+      ),
+      createWriteStream(destinationPath)
+    );
+  } catch (error) {
+    await unlink(destinationPath).catch(() => undefined);
+    if (error instanceof GitError) {
+      throw error;
+    }
+    throw new GitError(
+      "COMMAND_FAILED",
+      "无法下载 Kotlin Language Server，请检查网络后重试。",
+      {
+        cause:
+          error instanceof Error
+            ? error.message
+            : String(error)
+      }
+    );
+  }
+}
+
+async function extractArchive(options: {
+  archivePath: string;
+  destinationPath: string;
+  platform: NodeJS.Platform;
+  resolveCommand(
+    command: string
+  ): Promise<string | undefined>;
+  runCommand(
+    request: CommandRequest
+  ): Promise<CommandOutput>;
+}): Promise<void> {
+  if (options.platform === "win32") {
+    const powershell =
+      (await options.resolveCommand("powershell.exe")) ??
+      (await options.resolveCommand("pwsh.exe"));
+    if (!powershell) {
+      throw new GitError(
+        "COMMAND_FAILED",
+        "未检测到 PowerShell，无法解压 Kotlin Language Server。"
+      );
+    }
+    await options.runCommand({
+      command: powershell,
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Expand-Archive -LiteralPath $env:GITNEST_KOTLIN_ARCHIVE -DestinationPath $env:GITNEST_KOTLIN_DESTINATION -Force"
+      ],
+      env: {
+        GITNEST_KOTLIN_ARCHIVE: options.archivePath,
+        GITNEST_KOTLIN_DESTINATION:
+          options.destinationPath
+      },
+      cwd: options.destinationPath,
+      timeoutMs: INSTALL_TIMEOUT_MS
+    });
+    return;
+  }
+
+  const extractorName =
+    options.platform === "darwin" ? "ditto" : "tar";
+  const extractor =
+    await options.resolveCommand(extractorName);
+  if (!extractor) {
+    throw new GitError(
+      "COMMAND_FAILED",
+      `未检测到 ${extractorName}，无法解压 Kotlin Language Server。`
+    );
+  }
+  await options.runCommand({
+    command: extractor,
+    args:
+      options.platform === "darwin"
+        ? [
+            "-x",
+            "-k",
+            options.archivePath,
+            options.destinationPath
+          ]
+        : [
+            "-xzf",
+            options.archivePath,
+            "-C",
+            options.destinationPath
+          ],
+    cwd: options.destinationPath,
+    timeoutMs: INSTALL_TIMEOUT_MS
+  });
 }
 
 async function resolveNpmLaunch(

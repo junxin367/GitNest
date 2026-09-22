@@ -81,11 +81,12 @@
 }
 
 .analysis-graph-edge {
-  pointer-events: none;
+  pointer-events: stroke;
   fill: none;
   stroke: var(--muted);
   stroke-width: 1.4;
   opacity: 0.72;
+  cursor: help;
 }
 
 .analysis-graph-edge.edge-http-request {
@@ -102,6 +103,22 @@
   stroke: var(--blue);
 }
 
+.analysis-graph-edge.edge-references {
+  stroke: var(--purple);
+  stroke-dasharray: 5 4;
+}
+
+.analysis-graph-edge.edge-extends,
+.analysis-graph-edge.edge-implements {
+  stroke: var(--orange);
+  stroke-dasharray: 8 4;
+}
+
+.analysis-graph-edge.edge-overrides {
+  stroke: var(--pink);
+  stroke-dasharray: 3 3;
+}
+
 .analysis-graph-edge-label {
   fill: var(--accent);
   font-size: calc(var(--font-size-caption) - 3px);
@@ -111,6 +128,10 @@
 
 .analysis-graph-edge-label.edge-label-rpc-request {
   fill: var(--green);
+}
+
+.analysis-graph-edge-label.edge-label-references {
+  fill: var(--purple);
 }
 
 .analysis-graph-arrow path {
@@ -169,6 +190,23 @@
 
 .analysis-graph-node.node-class circle {
   fill: var(--yellow);
+}
+
+.analysis-graph-node.node-module circle,
+.analysis-graph-node.node-package circle {
+  fill: var(--blue);
+}
+
+.analysis-graph-node.node-interface circle {
+  fill: var(--green);
+}
+
+.analysis-graph-node.node-enum circle {
+  fill: var(--yellow);
+}
+
+.analysis-graph-node.node-property circle {
+  fill: var(--accent);
 }
 
 .analysis-node-kind {
@@ -388,6 +426,24 @@
 
 .analysis-node-dot.node-rpc-handler {
   background: var(--green);
+}
+
+.analysis-node-dot.node-module,
+.analysis-node-dot.node-package {
+  background: var(--blue);
+}
+
+.analysis-node-dot.node-class,
+.analysis-node-dot.node-enum {
+  background: var(--yellow);
+}
+
+.analysis-node-dot.node-interface {
+  background: var(--green);
+}
+
+.analysis-node-dot.node-property {
+  background: var(--accent);
 }
 
 .analysis-node-details .detail-list {
@@ -813,4 +869,10 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-3);
+}
+
+@container settings-content (min-width: 700px) {
+  .analysis-settings-number-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }

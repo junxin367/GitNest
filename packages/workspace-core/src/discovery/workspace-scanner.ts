@@ -98,11 +98,22 @@ export class WorkspaceScanner {
 
     const normalizedRootRealPath =
       this.#fileSystem.normalizePath(rootRealPath);
-    const excludedNames = new Set(
-      [...DEFAULT_WORKSPACE_EXCLUDES, ...root.excludes].map((name) =>
-        name.toLocaleLowerCase()
-      )
-    );
+    const excludedNames = new Set<string>();
+    const excludedRelativePaths = new Set<string>();
+    for (const value of [
+      ...DEFAULT_WORKSPACE_EXCLUDES,
+      ...root.excludes
+    ]) {
+      const normalizedExclude = normalizeExclude(value);
+      if (!normalizedExclude) {
+        continue;
+      }
+      if (normalizedExclude.includes("/")) {
+        excludedRelativePaths.add(normalizedExclude);
+      } else {
+        excludedNames.add(normalizedExclude);
+      }
+    }
 
     const visit = async (
       directoryPath: string,
@@ -214,10 +225,27 @@ export class WorkspaceScanner {
 
       const children = entries
         .filter(
-          (entry) =>
-            (entry.kind === "directory" ||
-              entry.kind === "symbolic-link") &&
-            !excludedNames.has(entry.name.toLocaleLowerCase())
+          (entry) => {
+            if (
+              entry.kind !== "directory" &&
+              entry.kind !== "symbolic-link"
+            ) {
+              return false;
+            }
+            const relativePath = this.#fileSystem
+              .relativeSegments(
+                normalizedDefinition.path,
+                entry.path
+              )
+              .join("/")
+              .toLocaleLowerCase();
+            return (
+              !excludedNames.has(
+                entry.name.toLocaleLowerCase()
+              ) &&
+              !excludedRelativePaths.has(relativePath)
+            );
+          }
         )
         .sort((left, right) =>
           left.name.localeCompare(right.name, undefined, {
@@ -239,6 +267,15 @@ export class WorkspaceScanner {
       scannedAt: options.scannedAt ?? new Date().toISOString()
     };
   }
+}
+
+function normalizeExclude(value: string): string {
+  return value
+    .trim()
+    .split(/[\\/]+/u)
+    .filter((segment) => segment && segment !== ".")
+    .join("/")
+    .toLocaleLowerCase();
 }
 
 function assertNotCancelled(signal?: AbortSignal): void {

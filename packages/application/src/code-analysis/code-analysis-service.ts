@@ -51,6 +51,7 @@ export interface CodeAnalysisState {
   entryId?: string;
   entryName?: string;
   scope?: CodeAnalysisScope;
+  startedAt?: string;
   progress?: CodeAnalysisProgress;
   generatedAt?: string;
   stats?: CodeAnalysisStats;
@@ -78,7 +79,12 @@ export interface CodeAnalysisFile {
     | "typescript"
     | "javascript"
     | "vue"
-    | "java";
+    | "java"
+    | "python"
+    | "go"
+    | "kotlin"
+    | "csharp"
+    | "rust";
   content: string;
   startLine: number;
   endLine: number;
@@ -90,7 +96,11 @@ export interface CodeAnalysisServiceOptions {
   cacheDirectory: string;
   lspDataDirectory: string;
   settingsProvider(): Promise<CodeAnalysisSettings>;
+  settingsValidator?(
+    settings: CodeAnalysisSettings
+  ): Promise<void>;
   idFactory?: () => string;
+  clock?: () => string;
   runner: CodeAnalysisRunnerPort;
   snapshotStore?: CodeAnalysisSnapshotStore;
 }
@@ -105,7 +115,11 @@ export class CodeAnalysisService {
   readonly #cacheDirectory: string;
   readonly #lspDataDirectory: string;
   readonly #settingsProvider: () => Promise<CodeAnalysisSettings>;
+  readonly #settingsValidator:
+    | ((settings: CodeAnalysisSettings) => Promise<void>)
+    | undefined;
   readonly #idFactory: () => string;
+  readonly #clock: () => string;
   readonly #runner: CodeAnalysisRunnerPort;
   readonly #snapshotStore: CodeAnalysisSnapshotStore;
   readonly #listeners = new Set<StateListener>();
@@ -115,6 +129,7 @@ export class CodeAnalysisService {
   };
   #snapshot: CodeAnalysisSnapshot | null = null;
   #snapshotConfigurationKey = "";
+  #snapshotInputConfigurationKey = "";
   #runQueue: Promise<void> = Promise.resolve();
   #selectionKey = "";
   #selectionGeneration = 0;
@@ -144,12 +159,15 @@ export class CodeAnalysisService {
     this.#cacheDirectory = options.cacheDirectory;
     this.#lspDataDirectory = options.lspDataDirectory;
     this.#settingsProvider = options.settingsProvider;
+    this.#settingsValidator = options.settingsValidator;
     this.#idFactory =
       options.idFactory ??
       (() =>
         `analysis_${Date.now()}_${Math.random()
           .toString(36)
           .slice(2, 10)}`);
+    this.#clock =
+      options.clock ?? (() => new Date().toISOString());
     this.#runner = options.runner;
     this.#snapshotStore =
       options.snapshotStore ??
@@ -192,6 +210,8 @@ export class CodeAnalysisService {
         "Code analysis is disabled in application settings."
       );
     }
+    await this.#settingsValidator?.(settings);
+    this.#assertNotDisposed();
     const workspace = await this.#workspace.getCurrent();
     this.#assertNotDisposed();
     const context = resolveAnalysisContext(workspace);
@@ -231,6 +251,7 @@ export class CodeAnalysisService {
       entryId: context.entry.id,
       entryName: context.entry.displayName,
       scope,
+      startedAt: this.#clock(),
       progress: {
         stage: "discovering",
         completed: 0,
@@ -466,6 +487,7 @@ export class CodeAnalysisService {
     if (!snapshotMatches) {
       this.#snapshot = null;
       this.#snapshotConfigurationKey = "";
+      this.#snapshotInputConfigurationKey = "";
     }
 
     if (!selectionChanged) {
@@ -508,7 +530,9 @@ export class CodeAnalysisService {
 
     if (
       this.#snapshot &&
-      this.#snapshotConfigurationKey === configurationKey &&
+      (this.#snapshotConfigurationKey === configurationKey ||
+        this.#snapshotInputConfigurationKey ===
+          configurationKey) &&
       snapshotMatchesContext(
         this.#snapshot,
         workspace,
@@ -529,6 +553,7 @@ export class CodeAnalysisService {
     if (this.#snapshot) {
       this.#snapshot = null;
       this.#snapshotConfigurationKey = "";
+      this.#snapshotInputConfigurationKey = "";
       this.#setIdleState(workspace, context);
     }
 
@@ -573,6 +598,7 @@ export class CodeAnalysisService {
 
       this.#snapshot = snapshot;
       this.#snapshotConfigurationKey = configurationKey;
+      this.#snapshotInputConfigurationKey = "";
       if (this.#active?.entryKey === selectionKey) {
         this.#setState({
           ...this.#state,
@@ -654,13 +680,12 @@ export class CodeAnalysisService {
     controller: AbortController;
   }): Promise<void> {
     try {
-      const changedPaths =
-        input.scope === "changed"
-          ? await this.#readChangedPaths(
-              input.context.roots,
-              input.controller.signal
-            )
-          : [];
+      const repositoryState =
+        await this.#readRepositoryState(
+          input.context.roots,
+          input.scope === "changed",
+          input.controller.signal
+        );
       const snapshot = await this.#runner.analyze({
         analysisId: input.analysisId,
         workspaceId: input.workspace.id,
@@ -671,10 +696,14 @@ export class CodeAnalysisService {
           repositoryId: root.repositoryId,
           worktreeId: root.worktreeId,
           name: root.name,
-          path: root.path
+          path: root.path,
+          revision:
+            repositoryState.revisions.get(
+              repositoryTargetKey(root)
+            ) ?? root.revision
         })),
         scope: input.scope,
-        changedPaths,
+        changedPaths: repositoryState.changedPaths,
         cacheDirectory: this.#cacheDirectory,
         lspDataDirectory: this.#lspDataDirectory,
         settings: input.settings,
@@ -716,6 +745,11 @@ export class CodeAnalysisService {
         codeAnalysisSnapshotConfigurationKey(
           input.settings,
           completedSnapshot.roots
+        );
+      this.#snapshotInputConfigurationKey =
+        codeAnalysisSnapshotConfigurationKey(
+          input.settings,
+          input.context.roots
         );
       this.#hydratedCacheKey = `${input.selectionKey}\0${this.#snapshotConfigurationKey}`;
       this.#active = undefined;
@@ -782,8 +816,9 @@ export class CodeAnalysisService {
     }
   }
 
-  async #readChangedPaths(
+  async #readRepositoryState(
     roots: AnalysisRootContext[],
+    includeChangedPaths: boolean,
     signal: AbortSignal
   ) {
     const changedPaths: Array<{
@@ -791,6 +826,7 @@ export class CodeAnalysisService {
       worktreeId: string;
       path: string;
     }> = [];
+    const revisions = new Map<string, string>();
     for (const root of roots) {
       throwIfAborted(signal);
       const snapshot = await this.#git.readRepositorySnapshot(
@@ -800,9 +836,15 @@ export class CodeAnalysisService {
           signal
         }
       );
-      appendChangedPaths(changedPaths, root, snapshot);
+      revisions.set(
+        repositoryTargetKey(root),
+        snapshot.head
+      );
+      if (includeChangedPaths) {
+        appendChangedPaths(changedPaths, root, snapshot);
+      }
     }
-    return changedPaths;
+    return { changedPaths, revisions };
   }
 
   #setState(state: CodeAnalysisState): void {
@@ -823,6 +865,7 @@ interface AnalysisRootContext {
   worktreeId: string;
   name: string;
   path: string;
+  revision: string;
 }
 
 interface AnalysisContext {
@@ -976,7 +1019,8 @@ function toAnalysisRoot(
     repositoryId: worktree.repositoryId,
     worktreeId: worktree.id,
     name: repositoryName ?? worktree.name,
-    path: worktree.path
+    path: worktree.path,
+    revision: worktree.head
   };
 }
 

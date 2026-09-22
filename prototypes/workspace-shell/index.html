@@ -1895,6 +1895,7 @@
     }
 
     .settings-content {
+      container: settings-content / inline-size;
       display: grid;
       gap: var(--space-4);
       min-width: 0;
@@ -2396,6 +2397,158 @@
     .settings-inline-note .icon {
       flex: 0 0 auto;
       color: var(--blue);
+    }
+
+    .settings-safety-note {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-2);
+      padding: var(--space-3);
+      color: var(--yellow);
+      background: var(--yellow-soft);
+      border: 1px solid
+        color-mix(in srgb, var(--yellow) 24%, transparent);
+      border-radius: var(--radius-regular);
+    }
+
+    .settings-safety-note .icon {
+      flex: 0 0 auto;
+    }
+
+    .settings-safety-note strong {
+      display: block;
+      color: var(--text-soft);
+      font-size: var(--font-size-caption);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .settings-safety-note p,
+    .settings-field-help {
+      margin: var(--space-1) 0 0;
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+      line-height: var(--line-height-body);
+    }
+
+    .settings-lsp-breadcrumb {
+      min-width: 0;
+      overflow-x: auto;
+      padding: var(--space-4) 0 var(--space-1);
+    }
+
+    .settings-lsp-breadcrumb ol {
+      display: flex;
+      align-items: center;
+      width: max-content;
+      min-width: 100%;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .settings-lsp-breadcrumb li {
+      display: flex;
+      align-items: center;
+    }
+
+    .settings-lsp-breadcrumb button {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-height: 30px;
+      padding: 0 var(--space-2);
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-small);
+      cursor: pointer;
+      font: inherit;
+      font-size: var(--font-size-caption);
+      white-space: nowrap;
+    }
+
+    .settings-lsp-breadcrumb button:hover,
+    .settings-lsp-breadcrumb button:focus-visible {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .settings-lsp-breadcrumb button:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: -1px;
+    }
+
+    .settings-lsp-breadcrumb button[aria-current="page"] {
+      color: var(--text);
+      background: var(--accent-soft);
+    }
+
+    .settings-lsp-breadcrumb-separator {
+      margin: 0 var(--space-2);
+      color: var(--muted);
+      line-height: 1;
+    }
+
+    .settings-lsp-breadcrumb-state {
+      width: 6px;
+      height: 6px;
+      background: var(--muted);
+      border-radius: 50%;
+      opacity: 0.7;
+    }
+
+    .settings-lsp-breadcrumb-state.enabled {
+      background: var(--green);
+      box-shadow: 0 0 0 2px
+        color-mix(in srgb, var(--green) 14%, transparent);
+      opacity: 1;
+    }
+
+    .settings-lsp-editor {
+      display: grid;
+      gap: var(--space-4);
+      min-width: 0;
+      margin: var(--space-3) 0 var(--space-4);
+      padding: var(--space-4);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .settings-lsp-editor-header {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-3);
+    }
+
+    .settings-lsp-editor-header > div {
+      min-width: 0;
+    }
+
+    .settings-lsp-editor-header > .settings-switch {
+      flex: 0 0 auto;
+      margin-left: auto;
+    }
+
+    .settings-lsp-editor-title {
+      margin: 0;
+      color: var(--text);
+      font-size: var(--font-size-body);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .settings-lsp-editor-description {
+      margin: var(--space-1) 0 0;
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+      line-height: var(--line-height-body);
+    }
+
+    .settings-lsp-editor-fields {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      align-items: start;
+      gap: var(--space-3);
     }
 
     .settings-shortcut-list {
@@ -4147,6 +4300,7 @@
       font-size: var(--font-size-caption);
       font-weight: var(--font-weight-semibold);
       letter-spacing: 0.02em;
+      line-height: 1;
     }
 
     .file-section-title:hover {
@@ -4162,6 +4316,8 @@
     }
 
     .file-section-title > .icon {
+      display: block;
+      flex: 0 0 13px;
       width: 13px;
       height: 13px;
       transition: transform var(--motion-micro) var(--ease-enter);
@@ -4171,11 +4327,43 @@
       transform: rotate(90deg);
     }
 
+    .file-section-copy {
+      display: inline-flex;
+      min-width: 0;
+      align-items: center;
+      gap: var(--space-2);
+      line-height: 1;
+    }
+
     .file-section-label {
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .file-section-stats {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: var(--space-1);
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: calc(var(--font-size-caption) - 1px);
+      font-variant-numeric: tabular-nums;
+      font-weight: var(--font-weight-regular);
+      letter-spacing: 0;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .file-section-stats strong {
+      color: var(--green);
+    }
+
+    .file-section-stats em {
+      color: var(--red);
+      font-style: normal;
     }
 
     .file-section-count {
@@ -4394,6 +4582,21 @@
     .file-status-letter.untracked {
       color: var(--blue);
       background: var(--blue-soft);
+    }
+
+    .file-status-letter.renamed,
+    .file-status-letter.copied {
+      color: var(--purple);
+      background: color-mix(
+        in srgb,
+        var(--purple) 13%,
+        transparent
+      );
+    }
+
+    .file-status-letter.conflicted {
+      color: var(--red);
+      background: var(--red-soft);
     }
 
     .file-path {
@@ -8642,13 +8845,20 @@
       color: var(--text);
     }
 
-    .analysis-settings-grid {
+    .analysis-settings-number-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: var(--space-3);
+      padding: var(--space-4) 0 0;
     }
 
-    .analysis-settings-grid .settings-ai-field {
+    @container settings-content (min-width: 700px) {
+      .analysis-settings-number-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+    }
+
+    .analysis-settings-number-grid .gn-input-field {
       min-width: 0;
     }
 
@@ -8740,7 +8950,7 @@
       .settings-option-grid,
       .settings-option-grid.three,
       .settings-ai-field-grid,
-      .analysis-settings-grid {
+      .analysis-settings-number-grid {
         grid-template-columns: minmax(0, 1fr);
       }
 
@@ -9519,14 +9729,14 @@
           path: "src/main/java/com/faisco/core/service/WorkspaceStateService.java",
           name: "WorkspaceStateService.java",
           dir: "src/main/java/com/faisco/core/service",
-          status: "modified",
+          status: "deleted",
           staged: false
         },
         {
           path: "src/test/java/com/faisco/core/service/WorkspaceStateServiceTest.java",
           name: "WorkspaceStateServiceTest.java",
           dir: "src/test/java/com/faisco/core/service",
-          status: "modified",
+          status: "added",
           staged: false
         },
         {
@@ -9593,6 +9803,19 @@
 
     function formatSnapshotDate(value) {
       return snapshotDateFormatter.format(new Date(value));
+    }
+
+    function formatAnalysisExecutionTime(milliseconds) {
+      const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      const parts = hours > 0
+        ? [hours, minutes, seconds]
+        : [minutes, seconds];
+      return parts
+        .map((part) => String(part).padStart(2, "0"))
+        .join(":");
     }
 
     function repoAbsolutePath(repo) {
@@ -9742,6 +9965,24 @@
         ];
       }
 
+      if (file.status === "added") {
+        return [
+          { kind: "hunk", oldLine: "", newLine: "", code: "@@ -0,0 +1,3 @@" },
+          { kind: "added", oldLine: "", newLine: "1", code: `// ${fileName}` },
+          { kind: "added", oldLine: "", newLine: "2", code: `// 原型新增文件：${path}` },
+          { kind: "added", oldLine: "", newLine: "3", code: "export const enabled = true;" }
+        ];
+      }
+
+      if (file.status === "deleted") {
+        return [
+          { kind: "hunk", oldLine: "", newLine: "", code: "@@ -1,3 +0,0 @@" },
+          { kind: "deleted", oldLine: "1", newLine: "", code: `// ${fileName}` },
+          { kind: "deleted", oldLine: "2", newLine: "", code: `// 原型删除文件：${path}` },
+          { kind: "deleted", oldLine: "3", newLine: "", code: "export const enabled = false;" }
+        ];
+      }
+
       const beforeContext = isMarkdown
         ? [
             "## 背景",
@@ -9880,6 +10121,18 @@
           if (line.kind === "added") stats.additions += 1;
           if (line.kind === "deleted") stats.deletions += 1;
           return stats;
+        },
+        { additions: 0, deletions: 0 }
+      );
+    }
+
+    function aggregateDiffPreviewStats(files) {
+      return files.reduce(
+        (total, file) => {
+          const stats = diffPreviewStats(file);
+          total.additions += stats.additions;
+          total.deletions += stats.deletions;
+          return total;
         },
         { additions: 0, deletions: 0 }
       );
@@ -11442,8 +11695,10 @@
       analysisRunning: false,
       analysisProgress: 100,
       analysisProgressLabel: "请求链与关系图已生成",
+      analysisStartedAt: null,
       analysisSelectedChain: "get-user",
       analysisSelectedNode: "",
+      analysisGraphSelectionCleared: false,
       analysisNavigationMode: "chains",
       analysisFilter: "",
       analysisNodeFilter: "",
@@ -11457,6 +11712,7 @@
       analysisTimer: null,
       analysisEnabled: true,
       analysisStaticFallback: true,
+      analysisSelectedLanguageServer: "typescript",
       analysisTypeScriptEnabled: true,
       analysisTypeScriptCommand: "typescript-language-server",
       analysisTypeScriptArgs: "--stdio",
@@ -11465,13 +11721,37 @@
       analysisJavaCommand: "jdtls",
       analysisJavaArgs: "",
       analysisJavaInstalled: true,
+      analysisVueEnabled: true,
+      analysisVueCommand: "vue-language-server",
+      analysisVueArgs: "--stdio",
+      analysisVueInstalled: true,
+      analysisPythonEnabled: false,
+      analysisPythonCommand: "pyright-langserver",
+      analysisPythonArgs: "--stdio",
+      analysisGoEnabled: false,
+      analysisGoCommand: "gopls",
+      analysisGoArgs: "serve",
+      analysisKotlinEnabled: false,
+      analysisKotlinCommand: "kotlin-lsp",
+      analysisKotlinArgs: "--stdio",
+      analysisCsharpEnabled: false,
+      analysisCsharpCommand: "csharp-ls",
+      analysisCsharpArgs: "",
+      analysisRustEnabled: false,
+      analysisRustCommand: "rust-analyzer",
+      analysisRustArgs: "",
       analysisInstallingLanguage: null,
       analysisMaxFiles: 5000,
       analysisMaxFileSize: 768,
-      analysisConcurrency: 2,
-      analysisGraphDepth: 6,
+      analysisMaxTotalSource: 128,
+      analysisMaxGraphNodes: 50000,
+      analysisMaxGraphEdges: 100000,
+      analysisMaxRequestChains: 5000,
+      analysisMaxDiagnostics: 2000,
+      analysisConcurrency: 4,
+      analysisGraphDepth: 8,
       analysisLspTimeout: 8000,
-      analysisIgnoreDirectories: ".git\nnode_modules\n.pnpm\ntarget\ndist\nbuild\ntemp\ntest-results\n.idea\ncoverage",
+      analysisIgnoreDirectories: ".git\n.idea\n.vscode\n.pnpm\nnode_modules\ntarget\ndist\nbuild\nout\ntemp\ntest-results\ncoverage\n.cache",
       transientLoadingTimer: null,
       paletteReturnFocus: null,
       palettePointerDownOnBackdrop: false,
@@ -13615,11 +13895,94 @@
       document.querySelector(".workspace-frame").classList.toggle("analysis-view", state.view === "analysis");
     }
 
+    const analysisLanguageServerConfigurations = [
+      {
+        id: "typescript",
+        label: "TypeScript",
+        title: "TypeScript Language Server",
+        description: "用于 JavaScript、TypeScript、TSX 和 JSX 的符号增强。",
+        commandPlaceholder: "typescript-language-server",
+        enabledKey: "analysisTypeScriptEnabled",
+        commandKey: "analysisTypeScriptCommand",
+        argsKey: "analysisTypeScriptArgs"
+      },
+      {
+        id: "java",
+        label: "Java",
+        title: "Java Language Server",
+        description: "用于 Java/Spring 的符号和调用层级增强；GitNest 会自动设置独立 -data 目录。",
+        commandPlaceholder: "jdtls",
+        enabledKey: "analysisJavaEnabled",
+        commandKey: "analysisJavaCommand",
+        argsKey: "analysisJavaArgs"
+      },
+      {
+        id: "vue",
+        label: "Vue",
+        title: "Vue Language Server",
+        description: "用于 Vue 单文件组件的符号和调用层级增强，与 TypeScript Language Server 独立运行。",
+        commandPlaceholder: "vue-language-server",
+        enabledKey: "analysisVueEnabled",
+        commandKey: "analysisVueCommand",
+        argsKey: "analysisVueArgs"
+      },
+      {
+        id: "python",
+        label: "Python",
+        title: "Python Language Server",
+        description: "用于 Python 文件的符号和调用层级增强；默认命令兼容 Pyright。",
+        commandPlaceholder: "pyright-langserver",
+        enabledKey: "analysisPythonEnabled",
+        commandKey: "analysisPythonCommand",
+        argsKey: "analysisPythonArgs"
+      },
+      {
+        id: "go",
+        label: "Go",
+        title: "Go Language Server",
+        description: "用于 Go 文件的符号和调用层级增强。",
+        commandPlaceholder: "gopls",
+        enabledKey: "analysisGoEnabled",
+        commandKey: "analysisGoCommand",
+        argsKey: "analysisGoArgs"
+      },
+      {
+        id: "kotlin",
+        label: "Kotlin",
+        title: "Kotlin Language Server",
+        description: "用于 Kotlin 文件的符号和调用层级增强。",
+        commandPlaceholder: "kotlin-lsp",
+        enabledKey: "analysisKotlinEnabled",
+        commandKey: "analysisKotlinCommand",
+        argsKey: "analysisKotlinArgs"
+      },
+      {
+        id: "csharp",
+        label: "C#",
+        title: "C# Language Server",
+        description: "用于 C# 文件的符号和调用层级增强。",
+        commandPlaceholder: "csharp-ls",
+        enabledKey: "analysisCsharpEnabled",
+        commandKey: "analysisCsharpCommand",
+        argsKey: "analysisCsharpArgs"
+      },
+      {
+        id: "rust",
+        label: "Rust",
+        title: "Rust Language Server",
+        description: "用于 Rust 文件的符号和调用层级增强。",
+        commandPlaceholder: "rust-analyzer",
+        enabledKey: "analysisRustEnabled",
+        commandKey: "analysisRustCommand",
+        argsKey: "analysisRustArgs"
+      }
+    ];
+
     const settingsSections = [
       { id: "general", label: "通用", subtitle: "应用行为与偏好", iconName: "settings" },
       { id: "ai", label: "AI 提交信息", subtitle: "生成提交信息", iconName: "sparkle" },
-      { id: "git", label: "Git", subtitle: "运行环境与 Fetch", iconName: "branch" },
-      { id: "analysis", label: "LSP 与代码分析", subtitle: "请求链与关系图", iconName: "graph" },
+      { id: "analysis", label: "LSP 与代码分析", subtitle: "请求链与调用关系", iconName: "graph" },
+      { id: "git", label: "Git", subtitle: "运行环境与同步策略", iconName: "branch" },
       { id: "account", label: "账号与认证", subtitle: "凭据与仓库绑定", iconName: "repository" }
     ];
 
@@ -13656,6 +14019,27 @@
 
     function saveSettings() {
       showToast("设置已保存", "界面偏好已更新。", "check");
+    }
+
+    function selectAnalysisLanguageServer(language) {
+      if (!analysisLanguageServerConfigurations.some((item) => item.id === language)) return;
+      state.analysisSelectedLanguageServer = language;
+      renderSettingsPage();
+    }
+
+    function toggleAnalysisLanguageServer(language) {
+      const configuration = analysisLanguageServerConfigurations.find((item) => item.id === language);
+      if (!configuration) return;
+      state[configuration.enabledKey] = !state[configuration.enabledKey];
+      renderSettingsPage();
+    }
+
+    function saveAnalysisSettings() {
+      showToast(
+        "设置已更新",
+        "LSP 与代码分析设置已保存；已有分析结果会在下次运行时按新设置重建。",
+        "check"
+      );
     }
 
     function persistAiSettings() {
@@ -13858,6 +14242,93 @@
       `).join("");
     }
 
+    function renderAnalysisLanguageServerSettings() {
+      const configuration =
+        analysisLanguageServerConfigurations.find(
+          (item) => item.id === state.analysisSelectedLanguageServer
+        ) || analysisLanguageServerConfigurations[0];
+      const enabled = Boolean(state[configuration.enabledKey]);
+      const breadcrumb = analysisLanguageServerConfigurations
+        .map((server, index) => {
+          const active = server.id === configuration.id;
+          const serverEnabled = Boolean(state[server.enabledKey]);
+          return `
+            <li>
+              ${index > 0 ? '<span aria-hidden="true" class="settings-lsp-breadcrumb-separator">&gt;</span>' : ""}
+              <button
+                type="button"
+                ${active ? 'aria-current="page"' : ""}
+                aria-label="${server.label}，${serverEnabled ? "已启用" : "已停用"}"
+                onclick="selectAnalysisLanguageServer('${server.id}')"
+              >
+                <span aria-hidden="true" class="settings-lsp-breadcrumb-state ${serverEnabled ? "enabled" : ""}"></span>
+                <span>${server.label}</span>
+              </button>
+            </li>
+          `;
+        })
+        .join("");
+      const fieldId = `${configuration.id}-language-server`;
+
+      return `
+        <section class="panel settings-card">
+          <div class="settings-card-header">
+            <div>
+              <div class="settings-card-title">Language Server 配置</div>
+              <div class="settings-card-description">在同一区域切换并配置各语言 Server；未显示的配置和未保存草稿会继续保留。</div>
+            </div>
+          </div>
+          <div class="settings-card-body">
+            <nav class="settings-lsp-breadcrumb" aria-label="Language Server 配置导航">
+              <ol>${breadcrumb}</ol>
+            </nav>
+            <div class="settings-lsp-editor" role="region" aria-label="${configuration.title} 配置">
+              <div class="settings-lsp-editor-header">
+                <div>
+                  <h3 class="settings-lsp-editor-title">${configuration.title}</h3>
+                  <p class="settings-lsp-editor-description">${configuration.description}</p>
+                </div>
+                <button
+                  type="button"
+                  class="settings-switch ${enabled ? "active" : ""}"
+                  aria-label="启用 ${configuration.title}"
+                  aria-pressed="${enabled}"
+                  onclick="toggleAnalysisLanguageServer('${configuration.id}')"
+                >
+                  <span class="settings-switch-thumb"></span>
+                </button>
+              </div>
+              <div class="settings-lsp-editor-fields">
+                ${renderInput({
+                  id: `lsp-command-${fieldId}`,
+                  label: "启动命令",
+                  value: state[configuration.commandKey],
+                  placeholder: configuration.commandPlaceholder,
+                  autocomplete: "off",
+                  spellcheck: false,
+                  fullWidth: true,
+                  attributes: `maxlength="2048" oninput="state.${configuration.commandKey} = this.value"`
+                })}
+                ${renderTextarea({
+                  id: `lsp-args-${fieldId}`,
+                  label: "启动参数",
+                  value: state[configuration.argsKey],
+                  placeholder:
+                    configuration.id === "java"
+                      ? "通常留空，GitNest 会自动追加 -data"
+                      : "--stdio",
+                  rows: 4,
+                  fullWidth: true,
+                  helpText: "每行一个参数；进程通过 stdio 启动，不使用 Shell 拼接。",
+                  attributes: `oninput="state.${configuration.argsKey} = this.value"`
+                })}
+              </div>
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
     function renderSettingsPage() {
       const activeSection = settingsSections.find((item) => item.id === state.settingsSection) || settingsSections[0];
       state.settingsSection = activeSection.id;
@@ -13908,54 +14379,12 @@
                 ${settingsOption("analysisScope", "workspace", "files", "默认分析全部代码", "默认选中全部代码；仍需在代码分析页手动启动。")}
               </div>
               ${settingsToggle("允许内置分析降级", "Language Server 未安装、超时或失败时，继续使用内置框架分析器生成请求链。", "analysisStaticFallback")}
-              <div class="settings-inline-note">${icon("check", 14)}Workspace 保持只读；缓存与 Java LSP 数据保存在 GitNest 应用数据目录。</div>
-            </div>
-          </section>
-
-          <section class="panel settings-card">
-            <div class="settings-card-header">
-              <div>
-                <div class="settings-card-title">TypeScript Language Server</div>
-                <div class="settings-card-description">用于 JavaScript、TypeScript、TSX、JSX 和 Vue 的符号与调用层级增强。</div>
-              </div>
-              <button type="button" class="settings-switch ${state.analysisTypeScriptEnabled ? "active" : ""}" aria-label="启用 TypeScript Language Server" aria-pressed="${state.analysisTypeScriptEnabled}" onclick="toggleSetting('analysisTypeScriptEnabled', 'TypeScript Language Server')">
-                <span class="settings-switch-thumb"></span>
-              </button>
-            </div>
-            <div class="settings-card-body">
-              <div class="settings-ai-field-grid">
-                <label class="settings-ai-field">
-                  命令
-                  <input autocomplete="off" spellcheck="false" type="text" value="${escapeHtml(state.analysisTypeScriptCommand)}" oninput="state.analysisTypeScriptCommand = this.value" />
-                </label>
-                <label class="settings-ai-field">
-                  参数
-                  <input autocomplete="off" spellcheck="false" type="text" value="${escapeHtml(state.analysisTypeScriptArgs)}" oninput="state.analysisTypeScriptArgs = this.value" />
-                </label>
-              </div>
-            </div>
-          </section>
-
-          <section class="panel settings-card">
-            <div class="settings-card-header">
-              <div>
-                <div class="settings-card-title">Java Language Server</div>
-                <div class="settings-card-description">用于 Java/Spring 的符号和调用层级增强；GitNest 自动使用独立 -data 目录。</div>
-              </div>
-              <button type="button" class="settings-switch ${state.analysisJavaEnabled ? "active" : ""}" aria-label="启用 Java Language Server" aria-pressed="${state.analysisJavaEnabled}" onclick="toggleSetting('analysisJavaEnabled', 'Java Language Server')">
-                <span class="settings-switch-thumb"></span>
-              </button>
-            </div>
-            <div class="settings-card-body">
-              <div class="settings-ai-field-grid">
-                <label class="settings-ai-field">
-                  命令
-                  <input autocomplete="off" spellcheck="false" type="text" value="${escapeHtml(state.analysisJavaCommand)}" oninput="state.analysisJavaCommand = this.value" />
-                </label>
-                <label class="settings-ai-field">
-                  参数
-                  <input autocomplete="off" spellcheck="false" type="text" value="${escapeHtml(state.analysisJavaArgs)}" oninput="state.analysisJavaArgs = this.value" />
-                </label>
+              <div class="settings-safety-note">
+                ${icon("check", 15)}
+                <div>
+                  <strong>Workspace 保持只读</strong>
+                  <p>源码只执行目录遍历与读取；分析缓存和各语言 LSP 数据统一保存在 GitNest 应用数据目录。</p>
+                </div>
               </div>
             </div>
           </section>
@@ -13968,59 +14397,129 @@
               </div>
             </div>
             <div class="settings-card-body">
-              <div class="analysis-settings-grid">
-                <label class="settings-ai-field">
-                  最大文件数
-                  <input min="100" max="50000" type="number" value="${state.analysisMaxFiles}" oninput="state.analysisMaxFiles = Number(this.value)" />
-                </label>
-                <label class="settings-ai-field">
-                  单文件上限（KiB）
-                  <input min="64" max="4096" type="number" value="${state.analysisMaxFileSize}" oninput="state.analysisMaxFileSize = Number(this.value)" />
-                </label>
-                <label class="settings-ai-field">
-                  读取并发数
-                  <input min="1" max="4" type="number" value="${state.analysisConcurrency}" oninput="state.analysisConcurrency = Number(this.value)" />
-                </label>
-                <label class="settings-ai-field">
-                  默认关系深度
-                  <input min="1" max="12" type="number" value="${state.analysisGraphDepth}" oninput="state.analysisGraphDepth = Number(this.value)" />
-                </label>
-                <label class="settings-ai-field">
-                  LSP 超时（ms）
-                  <input min="1000" max="60000" type="number" value="${state.analysisLspTimeout}" oninput="state.analysisLspTimeout = Number(this.value)" />
-                </label>
+              <div class="analysis-settings-number-grid">
+                ${renderInput({
+                  id: "analysis-max-files",
+                  label: "最大文件数",
+                  type: "number",
+                  value: state.analysisMaxFiles,
+                  fullWidth: true,
+                  reserveHelpSpace: true,
+                  attributes: 'min="100" max="50000" oninput="state.analysisMaxFiles = Number(this.value)"'
+                })}
+                ${renderInput({
+                  id: "analysis-max-file-size",
+                  label: "单文件上限（KiB）",
+                  type: "number",
+                  value: state.analysisMaxFileSize,
+                  fullWidth: true,
+                  reserveHelpSpace: true,
+                  attributes: 'min="64" max="4096" oninput="state.analysisMaxFileSize = Number(this.value)"'
+                })}
+                ${renderInput({
+                  id: "analysis-max-total-source",
+                  label: "源码总量上限（MiB）",
+                  type: "number",
+                  value: state.analysisMaxTotalSource,
+                  fullWidth: true,
+                  helpText: "限制本轮读取的源码总量，避免大型 Workspace 占用过多内存。",
+                  reserveHelpSpace: true,
+                  attributes: 'min="16" max="1024" oninput="state.analysisMaxTotalSource = Number(this.value)"'
+                })}
+                ${renderInput({
+                  id: "analysis-max-graph-nodes",
+                  label: "关系图节点上限",
+                  type: "number",
+                  value: state.analysisMaxGraphNodes,
+                  fullWidth: true,
+                  helpText: "提高上限会增加分析耗时、内存占用和快照体积。",
+                  reserveHelpSpace: true,
+                  attributes: 'min="5000" max="200000" step="1000" oninput="state.analysisMaxGraphNodes = Number(this.value)"'
+                })}
+                ${renderInput({
+                  id: "analysis-max-graph-edges",
+                  label: "关系图边上限",
+                  type: "number",
+                  value: state.analysisMaxGraphEdges,
+                  fullWidth: true,
+                  helpText: "限制调用、引用、包含等关系边总量。",
+                  reserveHelpSpace: true,
+                  attributes: 'min="10000" max="400000" step="1000" oninput="state.analysisMaxGraphEdges = Number(this.value)"'
+                })}
+                ${renderInput({
+                  id: "analysis-max-request-chains",
+                  label: "请求链上限",
+                  type: "number",
+                  value: state.analysisMaxRequestChains,
+                  fullWidth: true,
+                  helpText: "限制最终保存并展示的请求链数量。",
+                  reserveHelpSpace: true,
+                  attributes: 'min="100" max="50000" step="100" oninput="state.analysisMaxRequestChains = Number(this.value)"'
+                })}
+                ${renderInput({
+                  id: "analysis-max-diagnostics",
+                  label: "分析提示上限",
+                  type: "number",
+                  value: state.analysisMaxDiagnostics,
+                  fullWidth: true,
+                  helpText: "限制本轮保留的分析提示和诊断数量。",
+                  reserveHelpSpace: true,
+                  attributes: 'min="100" max="20000" step="100" oninput="state.analysisMaxDiagnostics = Number(this.value)"'
+                })}
+                ${renderInput({
+                  id: "analysis-concurrency",
+                  label: "读取并发数",
+                  type: "number",
+                  value: state.analysisConcurrency,
+                  fullWidth: true,
+                  reserveHelpSpace: true,
+                  attributes: 'min="1" max="4" oninput="state.analysisConcurrency = Number(this.value)"'
+                })}
+                ${renderInput({
+                  id: "analysis-graph-depth",
+                  label: "默认关系深度",
+                  type: "number",
+                  value: state.analysisGraphDepth,
+                  fullWidth: true,
+                  reserveHelpSpace: true,
+                  attributes: 'min="1" max="12" oninput="state.analysisGraphDepth = Number(this.value)"'
+                })}
+                ${renderInput({
+                  id: "analysis-lsp-timeout",
+                  label: "LSP 超时（ms）",
+                  type: "number",
+                  value: state.analysisLspTimeout,
+                  fullWidth: true,
+                  reserveHelpSpace: true,
+                  attributes: 'min="1000" max="60000" oninput="state.analysisLspTimeout = Number(this.value)"'
+                })}
               </div>
               ${renderTextarea({
-                id: "analysisIgnoreDirectories",
+                id: "analysis-ignore-directories",
                 value: state.analysisIgnoreDirectories,
                 label: "忽略目录",
                 size: "large",
+                rows: 7,
                 fullWidth: true,
                 fieldClassName: "settings-ai-prompt",
                 placeholder: "每行一个目录名",
+                helpText: "每行一个目录名；匹配目录后不会继续向下扫描。",
                 attributes: 'oninput="state.analysisIgnoreDirectories = this.value"'
               })}
               <div class="settings-ai-actions">
-                <span class="settings-card-description">全部代码分析始终需要在代码分析页手动启动。</span>
-                <div class="settings-ai-actions-buttons">
-                  ${renderButton({
-                    label: "打开代码分析",
-                    size: "small",
-                    variant: "default",
-                    icon: icon("graph", 13),
-                    attributes: 'onclick="openCodeAnalysis()"'
-                  })}
-                  ${renderButton({
-                    label: "保存代码分析设置",
-                    size: "small",
-                    variant: "primary",
-                    icon: icon("check", 13),
-                    attributes: 'onclick="saveSettings()"'
-                  })}
-                </div>
+                <p class="settings-field-help">全部代码分析始终需要在代码分析页手动启动。</p>
+                ${renderButton({
+                  label: "保存代码分析设置",
+                  size: "small",
+                  variant: "primary",
+                  icon: icon("check", 13),
+                  attributes: 'onclick="saveAnalysisSettings()"'
+                })}
               </div>
             </div>
           </section>
+
+          ${renderAnalysisLanguageServerSettings()}
         `;
       }
 
@@ -15170,7 +15669,9 @@
       }
       const selectedMatch = analysisNodeById(state.analysisSelectedNode);
       const selected = selectedMatch?.node || null;
-      const graphSelected = selected || chain?.nodes[0] || null;
+      const graphSelected = state.analysisGraphSelectionCleared
+        ? null
+        : selected || chain?.nodes[0] || null;
       const workspaceScope = state.analysisScope === "workspace";
       const summary = workspaceScope
         ? { files: 468, nodes: 1286, edges: 1734, chains: 2, cached: 392 }
@@ -15224,7 +15725,7 @@
             <section class="panel analysis-progress-panel" aria-label="代码分析进度">
               <div class="analysis-progress-copy">
                 <span>正在分析<strong>${escapeHtml(state.analysisProgressLabel)}</strong></span>
-                <span>${state.analysisProgress}%</span>
+                <span>执行时间 ${formatAnalysisExecutionTime(Date.now() - state.analysisStartedAt)} · ${state.analysisProgress}%</span>
               </div>
               <div class="analysis-progress-track"><span style="transform: scaleX(${Math.max(0.02, state.analysisProgress / 100)})"></span></div>
             </section>
@@ -15249,8 +15750,7 @@
             <span>分析时间 ${formatSnapshotDate(state.analysisGeneratedAt)}</span>
             <span>${workspaceScope ? "全部代码" : "变动代码"}</span>
             <span>耗时 ${workspaceScope ? "3.8 s" : "620 ms"}</span>
-            ${renderAnalysisLanguageServerState("typescript", "TS LSP")}
-            ${renderAnalysisLanguageServerState("java", "Java LSP")}
+            ${renderAnalysisLanguageServerStates()}
             <details class="analysis-warning-panel">
               <summary aria-label="查看 1 条分析提示">
                 ${icon("alert", 13)}
@@ -15330,30 +15830,66 @@
       });
     }
 
-    function renderAnalysisLanguageServerState(language, label) {
-      const installed = language === "typescript"
-        ? state.analysisTypeScriptInstalled
-        : state.analysisJavaInstalled;
-      if (installed) {
-        return `<span class="analysis-server-state connected">${label}：已连接</span>`;
+    function renderAnalysisLanguageServerStates() {
+      const servers = [
+        {
+          language: "typescript",
+          name: "TypeScript",
+          label: "TS LSP",
+          installed: state.analysisTypeScriptInstalled
+        },
+        {
+          language: "vue",
+          name: "Vue",
+          label: "Vue LSP",
+          installed: state.analysisVueInstalled
+        },
+        {
+          language: "java",
+          name: "Java",
+          label: "Java LSP",
+          installed: state.analysisJavaInstalled
+        }
+      ];
+      const connectedServers = servers.filter((server) => server.installed);
+      const visibleServers = connectedServers.length > 1
+        ? servers.filter((server) => !server.installed)
+        : servers;
+      const connectedState = connectedServers.length > 1
+        ? `
+          <span
+            class="analysis-server-state connected"
+            aria-label="已连接的 Language Server：${connectedServers.map((server) => server.name).join("、")}"
+            title="已连接：${connectedServers.map((server) => server.name).join("、")}"
+          >LSP：${connectedServers.length} 个已连接</span>
+        `
+        : "";
+      return `${connectedState}${visibleServers
+        .map((server) => renderAnalysisLanguageServerState(server))
+        .join("")}`;
+    }
+
+    function renderAnalysisLanguageServerState(server) {
+      if (server.installed) {
+        return `<span class="analysis-server-state connected">${server.label}：已连接</span>`;
       }
-      const installing = state.analysisInstallingLanguage === language;
+      const installing = state.analysisInstallingLanguage === server.language;
       const installDisabled = state.analysisRunning || (
         state.analysisInstallingLanguage &&
         !installing
       );
       return `
         <span class="analysis-server-state unavailable">
-          <span>${label}：未安装</span>
+          <span>${server.label}：未安装</span>
           ${renderButton({
             label: installing ? "安装中…" : "安装",
-            ariaLabel: `安装 ${label}`,
+            ariaLabel: `安装 ${server.label}`,
             size: "small",
             variant: "toolbar",
             icon: icon("download", 12),
             disabled: Boolean(installing || installDisabled),
             className: "analysis-server-install",
-            attributes: `onclick="installAnalysisLanguageServer('${language}')"`
+            attributes: `onclick="installAnalysisLanguageServer('${server.language}')"`
           })}
         </span>
       `;
@@ -15361,7 +15897,7 @@
 
     function installAnalysisLanguageServer(language) {
       if (
-        !["typescript", "java"].includes(language) ||
+        !["typescript", "vue", "java"].includes(language) ||
         state.analysisRunning ||
         state.analysisInstallingLanguage
       ) {
@@ -15372,6 +15908,8 @@
       window.setTimeout(() => {
         if (language === "typescript") {
           state.analysisTypeScriptInstalled = true;
+        } else if (language === "vue") {
+          state.analysisVueInstalled = true;
         } else {
           state.analysisJavaInstalled = true;
         }
@@ -15379,7 +15917,7 @@
         renderCodeAnalysis();
         showToast(
           "Language Server 安装完成",
-          `${language === "typescript" ? "TypeScript" : "Java"} Language Server 已安装，正在重新分析。`,
+          `${language === "typescript" ? "TypeScript" : language === "vue" ? "Vue" : "Java"} Language Server 已安装，正在重新分析。`,
           "check"
         );
         runCodeAnalysisPrototype();
@@ -15396,6 +15934,7 @@
       const chain = analysisChains.find((candidate) => scope === "workspace" || candidate.changed);
       state.analysisSelectedChain = chain?.id || "";
       state.analysisSelectedNode = "";
+      state.analysisGraphSelectionCleared = false;
       state.analysisDiffExpanded = false;
       resetAnalysisGraphViewState(chain);
       renderCodeAnalysis();
@@ -15467,6 +16006,7 @@
       state.analysisNavigationMode = "chains";
       state.analysisSelectedChain = chain.id;
       state.analysisSelectedNode = "";
+      state.analysisGraphSelectionCleared = false;
       state.analysisDiffExpanded = false;
       resetAnalysisGraphViewState(chain);
       renderCodeAnalysis();
@@ -15478,6 +16018,7 @@
       state.analysisNavigationMode = "symbols";
       state.analysisSelectedChain = match.chain.id;
       state.analysisSelectedNode = match.node.id;
+      state.analysisGraphSelectionCleared = false;
       state.analysisDiffExpanded = false;
       resetAnalysisGraphViewState(match.chain, nodeId);
       renderCodeAnalysis();
@@ -15490,11 +16031,13 @@
         state.analysisDiffExpanded = false;
       }
       state.analysisSelectedNode = nodeId;
+      state.analysisGraphSelectionCleared = false;
       syncAnalysisNodeInspection();
     }
 
     function clearAnalysisNodeInspection() {
       state.analysisSelectedNode = "";
+      state.analysisGraphSelectionCleared = true;
       state.analysisDiffExpanded = false;
       syncAnalysisNodeInspection();
     }
@@ -15522,7 +16065,9 @@
       if (!panel || !workspace) return;
       const chain = selectedAnalysisChain();
       const selected = analysisNodeById(state.analysisSelectedNode)?.node || null;
-      const graphSelected = selected || chain?.nodes[0] || null;
+      const graphSelected = state.analysisGraphSelectionCleared
+        ? null
+        : selected || chain?.nodes[0] || null;
       const chains = analysisChainsForCurrentScope();
       panel.classList.toggle("is-node-detail", Boolean(selected));
       panel.innerHTML = selected
@@ -15718,6 +16263,7 @@
       ];
       let index = 0;
       state.analysisRunning = true;
+      state.analysisStartedAt = Date.now();
       state.analysisProgress = steps[0][0];
       state.analysisProgressLabel = steps[0][1];
       renderCodeAnalysis();
@@ -17259,6 +17805,9 @@
         modified: "M",
         added: "A",
         deleted: "D",
+        renamed: "R",
+        copied: "C",
+        conflicted: "U",
         untracked: "?"
       };
       const stats = diffPreviewStats(file);
@@ -17433,12 +17982,19 @@
       const canGroupStage = files.length > 0;
       const canGroupDiscard = files.length > 0 && !isStagedSection;
       const hasActions = canGroupStage || canGroupDiscard;
+      const stats = aggregateDiffPreviewStats(files);
       return `
         <section class="file-section ${isCollapsed ? "collapsed" : ""}${isEmpty ? " empty" : ""}">
           <div class="file-section-header${hasActions ? " has-actions" : ""}">
             <button type="button" class="file-section-title" aria-expanded="${!isCollapsed}" aria-controls="${bodyId}" onclick="toggleChangeSection('${mode}')">
               ${icon("chevronDown", 13)}
-              <span class="file-section-label">${title}</span>
+              <span class="file-section-copy">
+                <span class="file-section-label">${title}</span>
+                <span class="file-section-stats" aria-label="新增 ${stats.additions} 行，删除 ${stats.deletions} 行">
+                  <strong>+${stats.additions}</strong>
+                  <em>-${stats.deletions}</em>
+                </span>
+              </span>
             </button>
             <span class="file-section-tail">
               <span class="file-section-count">${files.length}</span>

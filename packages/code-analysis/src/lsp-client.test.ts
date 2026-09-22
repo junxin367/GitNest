@@ -11,6 +11,7 @@ import {
   join,
   resolve
 } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   describe,
@@ -22,20 +23,64 @@ import {
 import {
   ExternalLanguageServerPool,
   JsonRpcClient,
+  orderLanguageServerDocuments,
   parseDocumentSymbols,
+  parseIncomingCalls,
+  parseReferenceLocations,
+  parseWorkspaceSymbols,
   resolveLanguageServerStartupTimeoutMs,
   resolveLanguageServerWorkspaceReadyTimeoutMs,
   resolveLanguageServerWorkspace,
+  resolveLspLanguageId,
   resolveNodeCommandShim,
   resolveWindowsEditorJdtls
 } from "./lsp-client";
 import type {
   AnalysisSourceFile,
   CodeAnalysisSettings,
+  LanguageServerCommandSettings,
   LspDocumentSymbol
 } from "./model";
 
 describe("parseDocumentSymbols budgets", () => {
+  it("retains detail and the full selection identity used for overloaded symbols", () => {
+    const parsed = parseDocumentSymbols([
+      {
+        ...lspSymbol("run"),
+        detail: "void run(String value)",
+        selectionRange: {
+          start: { line: 4, character: 7 },
+          end: { line: 4, character: 10 }
+        },
+        range: {
+          start: { line: 4, character: 2 },
+          end: { line: 6, character: 3 }
+        }
+      }
+    ]);
+
+    expect(parsed.symbols[0]).toMatchObject({
+      name: "run",
+      detail: "void run(String value)",
+      line: 5,
+      character: 7,
+      endLine: 7,
+      endCharacter: 3
+    });
+  });
+
+  it("honors a configured per-document symbol limit", () => {
+    const parsed = parseDocumentSymbols(
+      Array.from({ length: 12 }, (_, index) =>
+        lspSymbol(`symbol-${index}`)
+      ),
+      10
+    );
+
+    expect(parsed.symbols).toHaveLength(10);
+    expect(parsed.truncated).toBe(true);
+  });
+
   it("caps symbol count, depth, and retained names", () => {
     const flat = parseDocumentSymbols(
       Array.from({ length: 5_002 }, (_, index) =>
@@ -56,6 +101,239 @@ describe("parseDocumentSymbols budgets", () => {
 
     expect(countParsedSymbols(deep.symbols)).toBe(65);
     expect(deep.truncated).toBe(true);
+  });
+});
+
+describe("parseWorkspaceSymbols", () => {
+  it("adds only allowed symbols from documents that were not already analyzed", () => {
+    const firstPath = resolve(
+      "fixtures",
+      "workspace-symbols",
+      "First.java"
+    );
+    const secondPath = resolve(
+      "fixtures",
+      "workspace-symbols",
+      "Second.java"
+    );
+    const canonical = (path: string) =>
+      process.platform === "win32"
+        ? path.toLocaleLowerCase("en-US")
+        : path;
+    const parsed = parseWorkspaceSymbols(
+      [
+        workspaceSymbol("First", firstPath, 0),
+        workspaceSymbol("Second", secondPath, 4),
+        workspaceSymbol(
+          "External",
+          resolve("outside", "External.java"),
+          0
+        )
+      ],
+      new Set([canonical(firstPath), canonical(secondPath)]),
+      new Set([canonical(firstPath)]),
+      10
+    );
+
+    expect(parsed.symbolCount).toBe(1);
+    expect(parsed.truncated).toBe(false);
+    expect(
+      parsed.symbolsByPath.get(canonical(secondPath))
+    ).toEqual([
+      expect.objectContaining({
+        name: "Second",
+        line: 5,
+        kind: 5
+      })
+    ]);
+  });
+
+  it("reports truncation when the workspace symbol budget is exhausted", () => {
+    const filePath = resolve(
+      "fixtures",
+      "workspace-symbols",
+      "Many.java"
+    );
+    const canonicalPath =
+      process.platform === "win32"
+        ? filePath.toLocaleLowerCase("en-US")
+        : filePath;
+    const parsed = parseWorkspaceSymbols(
+      [
+        workspaceSymbol("One", filePath, 0),
+        workspaceSymbol("Two", filePath, 1)
+      ],
+      new Set([canonicalPath]),
+      new Set(),
+      1
+    );
+
+    expect(parsed.symbolCount).toBe(1);
+    expect(parsed.truncated).toBe(true);
+  });
+});
+
+describe("parseIncomingCalls", () => {
+  it("retains caller identity, declaration, and call-site locations", () => {
+    const sourcePath = resolve(
+      "fixtures",
+      "incoming-calls",
+      "Caller.ts"
+    );
+
+    expect(
+      parseIncomingCalls([
+        {
+          from: {
+            name: "caller",
+            uri: pathToFileURL(sourcePath).href,
+            range: {
+              start: { line: 2, character: 0 },
+              end: { line: 9, character: 1 }
+            },
+            selectionRange: {
+              start: { line: 3, character: 16 },
+              end: { line: 3, character: 22 }
+            }
+          },
+          fromRanges: [
+            {
+              start: { line: 7, character: 9 },
+              end: { line: 7, character: 15 }
+            }
+          ]
+        }
+      ])
+    ).toEqual([
+      {
+        name: "caller",
+        line: 8,
+        sourceCanonicalPath:
+          process.platform === "win32"
+            ? sourcePath.toLocaleLowerCase("en-US")
+            : sourcePath,
+        sourceLine: 4
+      }
+    ]);
+  });
+});
+
+describe("parseReferenceLocations", () => {
+  it("honors a configured per-symbol reference limit", () => {
+    const sourcePath = resolve(
+      "fixtures",
+      "references",
+      "Caller.java"
+    );
+    const locations = Array.from({ length: 4 }, (_, index) => ({
+      uri: pathToFileURL(sourcePath).href,
+      range: {
+        start: { line: index, character: 3 },
+        end: { line: index, character: 8 }
+      }
+    }));
+
+    expect(parseReferenceLocations(locations, 2)).toHaveLength(2);
+  });
+
+  it("normalizes, deduplicates, and rejects malformed locations", () => {
+    const sourcePath = resolve(
+      "fixtures",
+      "references",
+      "ScProfServiceImpl.java"
+    );
+    const location = {
+      uri: pathToFileURL(sourcePath).href,
+      range: {
+        start: { line: 281, character: 37 },
+        end: { line: 281, character: 47 }
+      }
+    };
+
+    expect(
+      parseReferenceLocations([
+        location,
+        location,
+        {
+          uri: "jdt://contents/runtime/ScProfDef.class",
+          range: location.range
+        },
+        {
+          uri: pathToFileURL(sourcePath).href,
+          range: {
+            start: { line: -1, character: 0 }
+          }
+        }
+      ])
+    ).toEqual([
+      {
+        sourceCanonicalPath:
+          process.platform === "win32"
+            ? sourcePath.toLocaleLowerCase("en-US")
+            : sourcePath,
+        line: 282,
+        character: 37
+      }
+    ]);
+  });
+});
+
+describe("orderLanguageServerDocuments", () => {
+  it("prioritizes explicit and changed files, then production paths deterministically", () => {
+    const root = resolve("fixtures", "lsp-ordering");
+    const document = (
+      relativePath: string,
+      changed = false
+    ) => {
+      const file = sourceFile(root, "java");
+      const absolutePath = resolve(root, relativePath);
+      return {
+        content: "",
+        file: {
+          ...file,
+          absolutePath,
+          canonicalPath:
+            process.platform === "win32"
+              ? absolutePath.toLocaleLowerCase("en-US")
+              : absolutePath,
+          relativePath,
+          changed
+        }
+      };
+    };
+    const priority = document(
+      "web/src/test/java/PriorityTest.java"
+    );
+    const changed = document(
+      "web/src/test/java/ChangedTest.java",
+      true
+    );
+    const productionCore = document(
+      "core/src/main/java/ScProfDef.java"
+    );
+    const productionWeb = document(
+      "web/src/main/java/ScProfServiceImpl.java"
+    );
+    const test = document("web/src/test/java/OtherTest.java");
+
+    expect(
+      orderLanguageServerDocuments(
+        [
+          test,
+          productionWeb,
+          changed,
+          productionCore,
+          priority
+        ],
+        new Set([priority.file.canonicalPath])
+      ).map(({ file }) => file.relativePath)
+    ).toEqual([
+      priority.file.relativePath,
+      changed.file.relativePath,
+      productionCore.file.relativePath,
+      productionWeb.file.relativePath,
+      test.file.relativePath
+    ]);
   });
 });
 
@@ -161,6 +439,25 @@ function lspSymbol(
   };
 }
 
+function workspaceSymbol(
+  name: string,
+  path: string,
+  line: number
+): Record<string, unknown> {
+  return {
+    name,
+    kind: 5,
+    containerName: "example",
+    location: {
+      uri: pathToFileURL(path).href,
+      range: {
+        start: { line, character: 0 },
+        end: { line, character: name.length }
+      }
+    }
+  };
+}
+
 function countParsedSymbols(
   symbols: LspDocumentSymbol[]
 ): number {
@@ -169,6 +466,24 @@ function countParsedSymbols(
       total + 1 + countParsedSymbols(symbol.children),
     0
   );
+}
+
+function serverSettings(
+  input: Pick<
+    LanguageServerCommandSettings,
+    "enabled" | "command" | "args"
+  > &
+    Partial<LanguageServerCommandSettings>
+): LanguageServerCommandSettings {
+  return {
+    maxDocuments: 120,
+    maxSymbolsPerDocument: 5_000,
+    maxCallHierarchyRequests: 50,
+    maxReferenceRequests: 50,
+    maxDocumentationRequests: 50,
+    maxReferencesPerSymbol: 500,
+    ...input
+  };
 }
 
 describe("resolveNodeCommandShim", () => {
@@ -247,6 +562,140 @@ describe("resolveNodeCommandShim", () => {
 });
 
 describe("language server workspace selection", () => {
+  it("uses explicit LSP language ids for every supported source language", () => {
+    expect(
+      (
+        [
+          "typescript",
+          "javascript",
+          "vue",
+          "java",
+          "python",
+          "go",
+          "kotlin",
+          "csharp",
+          "rust"
+        ] as const
+      ).map((language) => [
+        language,
+        resolveLspLanguageId(language)
+      ])
+    ).toEqual([
+      ["typescript", "typescript"],
+      ["javascript", "javascript"],
+      ["vue", "vue"],
+      ["java", "java"],
+      ["python", "python"],
+      ["go", "go"],
+      ["kotlin", "kotlin"],
+      ["csharp", "csharp"],
+      ["rust", "rust"]
+    ]);
+  });
+
+  it("routes Vue and optional languages to independent servers", async () => {
+    const rootPath = resolve("fixtures", "language-routing");
+    const disabled = serverSettings({
+      enabled: false,
+      command: "disabled-language-server",
+      args: [] as string[]
+    });
+    const settings: CodeAnalysisSettings = {
+      enabled: true,
+      staticFallback: true,
+      maxFiles: 100,
+      maxTotalSourceBytes: 128 * 1_024 * 1_024,
+      maxGraphNodes: 30_000,
+      maxGraphEdges: 100_000,
+      maxRequestChains: 5_000,
+      maxDiagnostics: 2_000,
+      maxFileSizeBytes: 256 * 1_024,
+      readConcurrency: 1,
+      graphDepth: 3,
+      lspTimeoutMs: 1_000,
+      ignoreDirectories: [],
+      typescript: { ...disabled },
+      java: { ...disabled },
+      vue: { ...disabled },
+      python: { ...disabled },
+      go: { ...disabled },
+      kotlin: { ...disabled },
+      csharp: { ...disabled },
+      rust: { ...disabled }
+    };
+    const languages = [
+      "typescript",
+      "vue",
+      "java",
+      "python",
+      "go",
+      "kotlin",
+      "csharp",
+      "rust"
+    ] as const;
+    const pool = new ExternalLanguageServerPool(1_000);
+
+    const result = await pool.analyze({
+      sessionPrefix: "language-routing-test",
+      workspaceRootPath: rootPath,
+      workspaceFolders: [rootPath],
+      lspDataDirectory: join(rootPath, ".lsp"),
+      settings,
+      documents: languages.map((language) => ({
+        file: sourceFile(
+          join(rootPath, language),
+          language
+        ),
+        content: "source"
+      }))
+    });
+
+    expect(
+      result.statuses.map((status) => [
+        status.language,
+        status.state
+      ])
+    ).toEqual(
+      languages.map((language) => [language, "disabled"])
+    );
+
+    const vueOnly = await pool.analyze({
+      sessionPrefix: "vue-routing-test",
+      workspaceRootPath: rootPath,
+      workspaceFolders: [rootPath],
+      lspDataDirectory: join(rootPath, ".lsp"),
+      settings: {
+        ...settings,
+        typescript: {
+          ...settings.typescript,
+          enabled: true,
+          command: "must-not-be-started-for-vue",
+          args: []
+        }
+      },
+      documents: [
+        {
+          file: sourceFile(rootPath, "vue"),
+          content: "<template />"
+        }
+      ]
+    });
+
+    expect(vueOnly.statuses).toContainEqual(
+      expect.objectContaining({
+        language: "typescript",
+        state: "disabled",
+        message: "当前范围没有对应语言文件。"
+      })
+    );
+    expect(vueOnly.statuses).toContainEqual(
+      expect.objectContaining({
+        language: "vue",
+        state: "disabled"
+      })
+    );
+  });
+
   it("anchors Java to the first relevant repository root", () => {
     const firstRoot = join("fixtures", "java-one");
     const secondRoot = join("fixtures", "java-two");
@@ -313,7 +762,7 @@ describe("language server workspace selection", () => {
     });
   });
 
-  it("gives Java startup and warm-up requests more time", () => {
+  it("gives cold starts and Java workspace imports separate time budgets", () => {
     expect(
       resolveLanguageServerStartupTimeoutMs("java", 8_000)
     ).toBe(120_000);
@@ -328,7 +777,13 @@ describe("language server workspace selection", () => {
         "typescript",
         8_000
       )
-    ).toBe(8_000);
+    ).toBe(30_000);
+    expect(
+      resolveLanguageServerStartupTimeoutMs(
+        "python",
+        45_000
+      )
+    ).toBe(45_000);
     expect(
       resolveLanguageServerWorkspaceReadyTimeoutMs(
         "java",
@@ -420,6 +875,752 @@ describe("language server documentation", () => {
           message: expect.stringContaining("补充 1 条文档")
         })
       );
+    } finally {
+      await pool.disposeAll();
+    }
+  });
+
+  it("requests project references for constant symbols without including declarations", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "gitnest-lsp-references-")
+    );
+    directories.push(root);
+    const projectRoot = join(root, "project");
+    const serverPath = join(
+      root,
+      "references-language-server.mjs"
+    );
+    const eventsPath = join(root, "events.jsonl");
+    await mkdir(projectRoot, { recursive: true });
+    await writeFile(
+      serverPath,
+      referencesLanguageServerSource(),
+      "utf8"
+    );
+    const absolutePath = join(projectRoot, "Source.ts");
+    const file: AnalysisSourceFile = {
+      ...sourceFile(projectRoot, "typescript"),
+      absolutePath,
+      canonicalPath:
+        process.platform === "win32"
+          ? absolutePath.toLocaleLowerCase("en-US")
+          : absolutePath,
+      relativePath: "Source.ts"
+    };
+    const settings = typescriptAnalysisSettings(serverPath);
+    settings.typescript.args.push(eventsPath);
+    const pool = new ExternalLanguageServerPool(1_000);
+
+    try {
+      const result = await pool.analyze({
+        sessionPrefix: "typescript-references-test",
+        workspaceRootPath: projectRoot,
+        workspaceFolders: [projectRoot],
+        lspDataDirectory: join(root, "lsp"),
+        settings,
+        documents: [
+          {
+            file,
+            content: [
+              "export const OPEN_GUIDE = 1;",
+              "export const enabled = OPEN_GUIDE === 1;"
+            ].join("\n")
+          }
+        ]
+      });
+      const symbol =
+        result.symbolsByPath.get(file.canonicalPath)?.[0];
+
+      expect(symbol).toMatchObject({
+        name: "OPEN_GUIDE",
+        kind: 14,
+        references: [
+          {
+            sourceCanonicalPath: file.canonicalPath,
+            line: 2,
+            character: 23
+          }
+        ]
+      });
+      expect(result.statuses).toContainEqual(
+        expect.objectContaining({
+          language: "typescript",
+          state: "connected",
+          message: expect.stringContaining(
+            "1 条引用关系"
+          )
+        })
+      );
+      const events = (await readFile(eventsPath, "utf8"))
+        .trim()
+        .split(/\r?\n/u)
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              method: string;
+              includeDeclaration?: boolean;
+            }
+        );
+      expect(events).toContainEqual({
+        method: "textDocument/references",
+        includeDeclaration: false
+      });
+    } finally {
+      await pool.disposeAll();
+    }
+  });
+
+  it("continues reference enrichment after one request times out", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "gitnest-lsp-timeout-isolation-")
+    );
+    directories.push(root);
+    const projectRoot = join(root, "project");
+    const serverPath = join(
+      root,
+      "timeout-isolation-language-server.mjs"
+    );
+    const eventsPath = join(root, "events.jsonl");
+    await mkdir(projectRoot, { recursive: true });
+    await writeFile(
+      serverPath,
+      timeoutIsolationLanguageServerSource(),
+      "utf8"
+    );
+    const absolutePath = join(projectRoot, "Source.ts");
+    const file: AnalysisSourceFile = {
+      ...sourceFile(projectRoot, "typescript"),
+      absolutePath,
+      canonicalPath:
+        process.platform === "win32"
+          ? absolutePath.toLocaleLowerCase("en-US")
+          : absolutePath,
+      relativePath: "Source.ts"
+    };
+    const settings = typescriptAnalysisSettings(serverPath);
+    settings.lspTimeoutMs = 120;
+    settings.typescript.args.push(eventsPath);
+    settings.typescript.maxCallHierarchyRequests = 0;
+    settings.typescript.maxTypeHierarchyRequests = 10;
+    settings.typescript.maxReferenceRequests = 3;
+    settings.typescript.maxDocumentationRequests = 0;
+    const pool = new ExternalLanguageServerPool(1_000);
+
+    try {
+      const result = await pool.analyze({
+        sessionPrefix: "typescript-timeout-isolation-test",
+        workspaceRootPath: projectRoot,
+        workspaceFolders: [projectRoot],
+        lspDataDirectory: join(root, "lsp"),
+        settings,
+        documents: [
+          {
+            file,
+            content: [
+              "function first() {}",
+              "function second() {}",
+              "function third() {}"
+            ].join("\n")
+          }
+        ]
+      });
+      const symbols =
+        result.symbolsByPath.get(file.canonicalPath) ?? [];
+
+      expect(symbols[0]).toMatchObject({
+        name: "first",
+        references: []
+      });
+      expect(symbols[1]).toMatchObject({
+        name: "second",
+        references: [expect.any(Object)]
+      });
+      expect(symbols[2]).toMatchObject({
+        name: "third",
+        references: [expect.any(Object)]
+      });
+      expect(result.statuses).toContainEqual(
+        expect.objectContaining({
+          language: "typescript",
+          state: "connected",
+          enrichmentStoppedEarly: false,
+          message: expect.stringContaining(
+            "2 条引用关系"
+          )
+        })
+      );
+      const events = (await readFile(eventsPath, "utf8"))
+        .trim()
+        .split(/\r?\n/u)
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              method: string;
+              line: number;
+            }
+        );
+      expect(events).toEqual([
+        {
+          method: "textDocument/references",
+          line: 0
+        },
+        {
+          method: "textDocument/references",
+          line: 1
+        },
+        {
+          method: "textDocument/references",
+          line: 2
+        }
+      ]);
+    } finally {
+      await pool.disposeAll();
+    }
+  });
+
+  it("isolates one documentSymbol timeout and requests later documents concurrently", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "gitnest-lsp-document-isolation-")
+    );
+    directories.push(root);
+    const projectRoot = join(root, "project");
+    const serverPath = join(
+      root,
+      "document-isolation-language-server.mjs"
+    );
+    const eventsPath = join(root, "events.jsonl");
+    await mkdir(projectRoot, { recursive: true });
+    await writeFile(
+      serverPath,
+      documentIsolationLanguageServerSource(),
+      "utf8"
+    );
+    const files = ["A.ts", "B.ts", "C.ts"].map(
+      (relativePath): AnalysisSourceFile => {
+        const absolutePath = join(
+          projectRoot,
+          relativePath
+        );
+        return {
+          ...sourceFile(projectRoot, "typescript"),
+          absolutePath,
+          canonicalPath:
+            process.platform === "win32"
+              ? absolutePath.toLocaleLowerCase("en-US")
+              : absolutePath,
+          relativePath
+        };
+      }
+    );
+    const settings = typescriptAnalysisSettings(serverPath);
+    settings.readConcurrency = 2;
+    settings.lspTimeoutMs = 150;
+    settings.typescript.args.push(eventsPath);
+    settings.typescript.maxCallHierarchyRequests = 0;
+    settings.typescript.maxTypeHierarchyRequests = 10;
+    settings.typescript.maxReferenceRequests = 0;
+    settings.typescript.maxDocumentationRequests = 0;
+    const pool = new ExternalLanguageServerPool(1_000);
+
+    try {
+      const result = await pool.analyze({
+        sessionPrefix: "typescript-document-isolation-test",
+        workspaceRootPath: projectRoot,
+        workspaceFolders: [projectRoot],
+        lspDataDirectory: join(root, "lsp"),
+        settings,
+        documents: files.map((file) => ({
+          file,
+          content: `export const ${file.relativePath[0]} = 1;`
+        }))
+      });
+
+      expect(
+        result.symbolsByPath.has(files[0]!.canonicalPath)
+      ).toBe(true);
+      expect(
+        result.symbolsByPath.has(files[1]!.canonicalPath)
+      ).toBe(false);
+      expect(
+        result.symbolsByPath.has(files[2]!.canonicalPath)
+      ).toBe(true);
+      expect(result.statuses).toContainEqual(
+        expect.objectContaining({
+          language: "typescript",
+          state: "connected",
+          semanticCoverage: "partial",
+          documentsTotal: 3,
+          documentsAnalyzed: 2,
+          skippedDocuments: 1,
+          failedDocuments: 1,
+          message: expect.stringMatching(
+            /1 个文件的 documentSymbol 请求失败.*其余文件仍继续分析/u
+          )
+        })
+      );
+      const events = (await readFile(eventsPath, "utf8"))
+        .trim()
+        .split(/\r?\n/u)
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              file: string;
+              arrivedWhileBPending: boolean;
+            }
+        );
+      expect(events).toContainEqual({
+        file: "C",
+        arrivedWhileBPending: true
+      });
+    } finally {
+      await pool.disposeAll();
+    }
+  });
+
+  it("collects inheritance and override relations from type hierarchy and implementation requests", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "gitnest-lsp-type-relations-")
+    );
+    directories.push(root);
+    const projectRoot = join(root, "project");
+    const serverPath = join(
+      root,
+      "type-relations-language-server.mjs"
+    );
+    await mkdir(projectRoot, { recursive: true });
+    await writeFile(
+      serverPath,
+      typeRelationsLanguageServerSource(),
+      "utf8"
+    );
+    const createFile = (
+      relativePath: string
+    ): AnalysisSourceFile => {
+      const absolutePath = join(projectRoot, relativePath);
+      return {
+        ...sourceFile(projectRoot, "typescript"),
+        absolutePath,
+        canonicalPath:
+          process.platform === "win32"
+            ? absolutePath.toLocaleLowerCase("en-US")
+            : absolutePath,
+        relativePath
+      };
+    };
+    const base = createFile("Base.ts");
+    const child = createFile("Child.ts");
+    const settings = typescriptAnalysisSettings(serverPath);
+    settings.typescript.maxCallHierarchyRequests = 0;
+    settings.typescript.maxTypeHierarchyRequests = 20;
+    settings.typescript.maxReferenceRequests = 0;
+    settings.typescript.maxDocumentationRequests = 0;
+    const pool = new ExternalLanguageServerPool(1_000);
+
+    try {
+      const result = await pool.analyze({
+        sessionPrefix: "typescript-type-relations-test",
+        workspaceRootPath: projectRoot,
+        workspaceFolders: [projectRoot],
+        lspDataDirectory: join(root, "lsp"),
+        settings,
+        documents: [
+          {
+            file: base,
+            content:
+              "class Base {\n  execute() {}\n}"
+          },
+          {
+            file: child,
+            content:
+              "class Child extends Base {\n  execute() {}\n}"
+          }
+        ]
+      });
+
+      expect(result.semanticRelations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "extends",
+            sourceCanonicalPath: child.canonicalPath,
+            sourceLine: 1,
+            targetCanonicalPath: base.canonicalPath,
+            targetLine: 1
+          }),
+          expect.objectContaining({
+            kind: "overrides",
+            sourceCanonicalPath: child.canonicalPath,
+            sourceLine: 2,
+            targetCanonicalPath: base.canonicalPath,
+            targetLine: 2
+          })
+        ])
+      );
+      expect(result.statuses).toContainEqual(
+        expect.objectContaining({
+          language: "typescript",
+          state: "connected",
+          message: expect.stringContaining("类型关系")
+        })
+      );
+    } finally {
+      await pool.disposeAll();
+    }
+  });
+
+  it("shares semantic request budgets across files and reports skipped coverage", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "gitnest-lsp-fair-budget-")
+    );
+    directories.push(root);
+    const projectRoot = join(root, "project");
+    const serverPath = join(
+      root,
+      "fair-budget-language-server.mjs"
+    );
+    const eventsPath = join(root, "events.jsonl");
+    await mkdir(projectRoot, { recursive: true });
+    await writeFile(
+      serverPath,
+      fairBudgetLanguageServerSource(),
+      "utf8"
+    );
+    const files = ["A.ts", "B.ts", "C.ts"].map(
+      (relativePath): AnalysisSourceFile => {
+        const absolutePath = join(
+          projectRoot,
+          relativePath
+        );
+        return {
+          ...sourceFile(projectRoot, "typescript"),
+          absolutePath,
+          canonicalPath:
+            process.platform === "win32"
+              ? absolutePath.toLocaleLowerCase("en-US")
+              : absolutePath,
+          relativePath
+        };
+      }
+    );
+    const settings = typescriptAnalysisSettings(serverPath);
+    settings.typescript.args.push(eventsPath);
+    settings.typescript.maxDocuments = 2;
+    settings.typescript.maxSymbolsPerDocument = 10;
+    settings.typescript.maxCallHierarchyRequests = 0;
+    settings.typescript.maxReferenceRequests = 2;
+    settings.typescript.maxDocumentationRequests = 0;
+    const pool = new ExternalLanguageServerPool(1_000);
+
+    try {
+      const result = await pool.analyze({
+        sessionPrefix: "typescript-fair-budget-test",
+        workspaceRootPath: projectRoot,
+        workspaceFolders: [projectRoot],
+        lspDataDirectory: join(root, "lsp"),
+        settings,
+        documents: files.map((file) => ({
+          file,
+          content: "export const FIRST = 1;\nexport const SECOND = 2;"
+        }))
+      });
+      const events = (await readFile(eventsPath, "utf8"))
+        .trim()
+        .split(/\r?\n/u)
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              method: string;
+              uri: string;
+              line?: number;
+            }
+        );
+      const referenceEvents = events.filter(
+        (event) =>
+          event.method === "textDocument/references"
+      );
+
+      expect(referenceEvents).toEqual([
+        {
+          method: "textDocument/references",
+          uri: pathToFileURL(files[0]!.absolutePath).href,
+          line: 0
+        },
+        {
+          method: "textDocument/references",
+          uri: pathToFileURL(files[1]!.absolutePath).href,
+          line: 0
+        }
+      ]);
+      expect(
+        result.symbolsByPath.get(files[2]!.canonicalPath)
+      ).toEqual([
+        expect.objectContaining({
+          name: "THIRD_FILE",
+          kind: 14,
+          line: 1
+        })
+      ]);
+      expect(result.statuses).toContainEqual(
+        expect.objectContaining({
+          language: "typescript",
+          state: "connected",
+          semanticCoverage: "partial",
+          documentsTotal: 3,
+          documentsAnalyzed: 2,
+          skippedDocuments: 1,
+          message: expect.stringMatching(
+            /另有 1 个文件.*maxDocuments=2.*Workspace Symbol 另外补充 1 个.*引用请求预算 2 已用尽/u
+          )
+        })
+      );
+    } finally {
+      await pool.disposeAll();
+    }
+  });
+});
+
+describe("non-Java language server resilience", () => {
+  const directories: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      directories.splice(0).map((directory) =>
+        rm(directory, { recursive: true, force: true })
+      )
+    );
+  });
+
+  it("answers Vue 3 tsserver bridge notifications so document requests complete", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "gitnest-vue-tsserver-bridge-")
+    );
+    directories.push(root);
+    const projectRoot = join(root, "project");
+    const serverPath = join(
+      root,
+      "vue-tsserver-bridge.mjs"
+    );
+    await mkdir(projectRoot, { recursive: true });
+    await writeFile(
+      serverPath,
+      vueTsserverBridgeLanguageServerSource(),
+      "utf8"
+    );
+    const file = sourceFile(projectRoot, "vue");
+    const pool = new ExternalLanguageServerPool(1_000);
+
+    try {
+      const result = await pool.analyze({
+        sessionPrefix: "vue-tsserver-bridge-test",
+        workspaceRootPath: projectRoot,
+        workspaceFolders: [projectRoot],
+        lspDataDirectory: join(root, "lsp"),
+        settings: optionalLanguageAnalysisSettings(
+          "vue",
+          serverPath
+        ),
+        documents: [
+          {
+            file,
+            content:
+              '<script setup lang="ts">\nconst ready = true\n</script>'
+          }
+        ]
+      });
+
+      expect(result.statuses).toContainEqual(
+        expect.objectContaining({
+          language: "vue",
+          state: "connected",
+          symbolCount: 1
+        })
+      );
+      expect(
+        result.symbolsByPath.get(file.canonicalPath)
+      ).toEqual([
+        expect.objectContaining({
+          name: "ready"
+        })
+      ]);
+    } finally {
+      await pool.disposeAll();
+    }
+  });
+
+  it("rebuilds a non-Java session once when its first document request exits", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "gitnest-lsp-reconnect-")
+    );
+    directories.push(root);
+    const projectRoot = join(root, "project");
+    const serverPath = join(
+      root,
+      "reconnecting-language-server.mjs"
+    );
+    const statePath = join(root, "attempt.txt");
+    const eventsPath = `${statePath}.events`;
+    await mkdir(projectRoot, { recursive: true });
+    await writeFile(
+      serverPath,
+      reconnectingLanguageServerSource(),
+      "utf8"
+    );
+    const file = sourceFile(projectRoot, "python");
+    const pool = new ExternalLanguageServerPool(1_000);
+
+    try {
+      const result = await pool.analyze({
+        sessionPrefix: "python-reconnect-test",
+        workspaceRootPath: projectRoot,
+        workspaceFolders: [projectRoot],
+        lspDataDirectory: join(root, "lsp"),
+        settings: optionalLanguageAnalysisSettings(
+          "python",
+          serverPath,
+          [statePath]
+        ),
+        documents: [
+          {
+            file,
+            content: "ready = True"
+          }
+        ]
+      });
+
+      expect(result.statuses).toContainEqual(
+        expect.objectContaining({
+          language: "python",
+          state: "connected",
+          message: expect.stringContaining(
+            "已自动重连"
+          ),
+          symbolCount: 1
+        })
+      );
+      expect(result.warnings).not.toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("Python LSP")
+        ])
+      );
+      const events = (await readFile(eventsPath, "utf8"))
+        .trim()
+        .split(/\r?\n/)
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              event: string;
+              attempt: number;
+            }
+        );
+      expect(
+        events.filter((event) => event.event === "spawn")
+      ).toHaveLength(2);
+      expect(
+        events.findIndex(
+          (event) =>
+            event.event === "exit" &&
+            event.attempt === 1
+        )
+      ).toBeLessThan(
+        events.findIndex(
+          (event) =>
+            event.event === "spawn" &&
+            event.attempt === 2
+        )
+      );
+    } finally {
+      await pool.disposeAll();
+    }
+  });
+
+  it("closes documents that leave the analyzed scope while reusing a session", async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "gitnest-lsp-document-lifecycle-")
+    );
+    directories.push(root);
+    const projectRoot = join(root, "project");
+    const serverPath = join(
+      root,
+      "document-lifecycle-language-server.mjs"
+    );
+    const eventsPath = join(root, "events.jsonl");
+    await mkdir(projectRoot, { recursive: true });
+    await writeFile(
+      serverPath,
+      documentLifecycleLanguageServerSource(),
+      "utf8"
+    );
+    const sourceTemplate = sourceFile(
+      projectRoot,
+      "typescript"
+    );
+    const firstPath = join(projectRoot, "First.ts");
+    const secondPath = join(projectRoot, "Second.ts");
+    const first = {
+      ...sourceTemplate,
+      absolutePath: firstPath,
+      canonicalPath: firstPath.toLocaleLowerCase("en-US"),
+      relativePath: "First.ts"
+    };
+    const second = {
+      ...sourceTemplate,
+      absolutePath: secondPath,
+      canonicalPath: secondPath.toLocaleLowerCase("en-US"),
+      relativePath: "Second.ts"
+    };
+    const settings = typescriptAnalysisSettings(serverPath);
+    settings.typescript.args.push(eventsPath);
+    const pool = new ExternalLanguageServerPool(5_000);
+    const baseInput = {
+      sessionPrefix: "typescript-document-lifecycle-test",
+      workspaceRootPath: projectRoot,
+      workspaceFolders: [projectRoot],
+      lspDataDirectory: join(root, "lsp"),
+      settings
+    };
+
+    try {
+      await pool.analyze({
+        ...baseInput,
+        documents: [
+          { file: first, content: "export const first = 1;" },
+          { file: second, content: "export const second = 2;" }
+        ]
+      });
+      await pool.analyze({
+        ...baseInput,
+        documents: [
+          { file: second, content: "export const second = 2;" }
+        ]
+      });
+      await pool.analyze({
+        ...baseInput,
+        documents: []
+      });
+      await new Promise((resolvePromise) =>
+        setTimeout(resolvePromise, 50)
+      );
+
+      const events = (await readFile(eventsPath, "utf8"))
+        .trim()
+        .split(/\r?\n/u)
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              method: string;
+              uri?: string;
+            }
+        );
+      expect(
+        events
+          .filter(
+            (event) =>
+              event.method === "textDocument/didClose"
+          )
+          .map((event) => event.uri)
+      ).toEqual([
+        pathToFileURL(firstPath).toString(),
+        pathToFileURL(secondPath).toString()
+      ]);
     } finally {
       await pool.disposeAll();
     }
@@ -803,21 +2004,30 @@ function analysisSettings(
     enabled: true,
     staticFallback: true,
     maxFiles: 100,
+    maxTotalSourceBytes: 128 * 1_024 * 1_024,
+    maxGraphNodes: 30_000,
+    maxGraphEdges: 100_000,
+    maxRequestChains: 5_000,
+    maxDiagnostics: 2_000,
     maxFileSizeBytes: 256 * 1_024,
     readConcurrency: 1,
     graphDepth: 3,
     lspTimeoutMs: 1_000,
     ignoreDirectories: [],
-    typescript: {
+    typescript: serverSettings({
       enabled: false,
       command: "typescript-language-server",
       args: ["--stdio"]
-    },
-    java: {
+    }),
+    java: serverSettings({
       enabled: true,
       command: process.execPath,
-      args: [serverPath, ...serverArgs]
-    }
+      args: [serverPath, ...serverArgs],
+      maxDocuments: 80,
+      maxCallHierarchyRequests: 40,
+      maxReferenceRequests: 1_000,
+      maxDocumentationRequests: 40
+    })
   };
 }
 
@@ -828,22 +2038,304 @@ function typescriptAnalysisSettings(
     enabled: true,
     staticFallback: true,
     maxFiles: 100,
+    maxTotalSourceBytes: 128 * 1_024 * 1_024,
+    maxGraphNodes: 30_000,
+    maxGraphEdges: 100_000,
+    maxRequestChains: 5_000,
+    maxDiagnostics: 2_000,
     maxFileSizeBytes: 256 * 1_024,
     readConcurrency: 1,
     graphDepth: 3,
     lspTimeoutMs: 1_000,
     ignoreDirectories: [],
-    typescript: {
+    typescript: serverSettings({
       enabled: true,
       command: process.execPath,
       args: [serverPath]
-    },
-    java: {
+    }),
+    java: serverSettings({
       enabled: false,
       command: "jdtls",
-      args: []
+      args: [],
+      maxDocuments: 80,
+      maxCallHierarchyRequests: 40,
+      maxReferenceRequests: 1_000,
+      maxDocumentationRequests: 40
+    })
+  };
+}
+
+function optionalLanguageAnalysisSettings(
+  language: "vue" | "python",
+  serverPath: string,
+  serverArgs: string[] = []
+): CodeAnalysisSettings {
+  const disabled = serverSettings({
+    enabled: false,
+    command: "disabled-language-server",
+    args: [] as string[]
+  });
+  const settings: CodeAnalysisSettings = {
+    enabled: true,
+    staticFallback: true,
+    maxFiles: 100,
+    maxTotalSourceBytes: 128 * 1_024 * 1_024,
+    maxGraphNodes: 30_000,
+    maxGraphEdges: 100_000,
+    maxRequestChains: 5_000,
+    maxDiagnostics: 2_000,
+    maxFileSizeBytes: 256 * 1_024,
+    readConcurrency: 1,
+    graphDepth: 3,
+    lspTimeoutMs: 1_000,
+    ignoreDirectories: [],
+    typescript: { ...disabled },
+    java: { ...disabled }
+  };
+  settings[language] = serverSettings({
+    enabled: true,
+    command: process.execPath,
+    args: [serverPath, ...serverArgs]
+  });
+  return settings;
+}
+
+function vueTsserverBridgeLanguageServerSource(): string {
+  return String.raw`
+let buffer = Buffer.alloc(0);
+let pendingDocumentSymbolId;
+const bridgeRequestId = 73;
+
+function send(message) {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  process.stdout.write(
+    "Content-Length: " + body.byteLength + "\r\n\r\n"
+  );
+  process.stdout.write(body);
+}
+
+function respond(id, result) {
+  send({ jsonrpc: "2.0", id, result });
+}
+
+function symbol() {
+  return {
+    name: "ready",
+    kind: 13,
+    range: {
+      start: { line: 1, character: 0 },
+      end: { line: 1, character: 18 }
+    },
+    selectionRange: {
+      start: { line: 1, character: 6 },
+      end: { line: 1, character: 11 }
     }
   };
+}
+
+function handle(message) {
+  if (message.method === "initialize") {
+    respond(message.id, {
+      capabilities: {
+        documentSymbolProvider: true,
+        hoverProvider: false,
+        callHierarchyProvider: false
+      }
+    });
+    return;
+  }
+  if (message.method === "textDocument/documentSymbol") {
+    pendingDocumentSymbolId = message.id;
+    send({
+      jsonrpc: "2.0",
+      method: "tsserver/request",
+      params: [[
+        bridgeRequestId,
+        "_vue:projectInfo",
+        {
+          file: "Source.vue",
+          needFileNameList: false
+        }
+      ]]
+    });
+    setTimeout(() => {
+      if (pendingDocumentSymbolId !== undefined) {
+        process.stderr.write(
+          "GitNest did not answer tsserver/request."
+        );
+        process.exit(24);
+      }
+    }, 500);
+    return;
+  }
+  if (message.method === "tsserver/response") {
+    const expected = JSON.stringify([
+      [bridgeRequestId, null]
+    ]);
+    if (JSON.stringify(message.params) !== expected) {
+      process.stderr.write(
+        "Unexpected tsserver/response payload: " +
+          JSON.stringify(message.params)
+      );
+      process.exit(25);
+      return;
+    }
+    const requestId = pendingDocumentSymbolId;
+    pendingDocumentSymbolId = undefined;
+    respond(requestId, [symbol()]);
+    return;
+  }
+  if (message.method === "shutdown") {
+    respond(message.id, null);
+    return;
+  }
+  if (message.method === "exit") {
+    process.exit(0);
+  }
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (true) {
+    const headerEnd = buffer.indexOf("\r\n\r\n");
+    if (headerEnd < 0) {
+      return;
+    }
+    const header = buffer
+      .subarray(0, headerEnd)
+      .toString("ascii");
+    const match = /Content-Length:\s*(\d+)/i.exec(header);
+    if (!match) {
+      buffer = buffer.subarray(headerEnd + 4);
+      continue;
+    }
+    const length = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    if (buffer.length < bodyStart + length) {
+      return;
+    }
+    const body = buffer
+      .subarray(bodyStart, bodyStart + length)
+      .toString("utf8");
+    buffer = buffer.subarray(bodyStart + length);
+    handle(JSON.parse(body));
+  }
+});
+`;
+}
+
+function reconnectingLanguageServerSource(): string {
+  return String.raw`
+import {
+  appendFileSync,
+  readFileSync,
+  writeFileSync
+} from "node:fs";
+
+const statePath = process.argv[2];
+const eventsPath = statePath + ".events";
+let attempt = 0;
+try {
+  attempt = Number(readFileSync(statePath, "utf8")) || 0;
+} catch {}
+attempt += 1;
+writeFileSync(statePath, String(attempt), "utf8");
+function record(event) {
+  appendFileSync(
+    eventsPath,
+    JSON.stringify({ event, attempt }) + "\n",
+    "utf8"
+  );
+}
+record("spawn");
+process.on("exit", () => record("exit"));
+
+let buffer = Buffer.alloc(0);
+
+function send(message) {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  process.stdout.write(
+    "Content-Length: " + body.byteLength + "\r\n\r\n"
+  );
+  process.stdout.write(body);
+}
+
+function respond(id, result) {
+  send({ jsonrpc: "2.0", id, result });
+}
+
+function handle(message) {
+  if (message.method === "initialize") {
+    respond(message.id, {
+      capabilities: {
+        documentSymbolProvider: true,
+        hoverProvider: false,
+        callHierarchyProvider: false
+      }
+    });
+    return;
+  }
+  if (message.method === "textDocument/documentSymbol") {
+    if (attempt === 1) {
+      process.stderr.write(
+        "transient first document failure"
+      );
+      setTimeout(() => process.exit(23), 20);
+      return;
+    }
+    respond(message.id, [
+      {
+        name: "ready",
+        kind: 13,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 12 }
+        },
+        selectionRange: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 5 }
+        }
+      }
+    ]);
+    return;
+  }
+  if (message.method === "shutdown") {
+    respond(message.id, null);
+    return;
+  }
+  if (message.method === "exit") {
+    process.exit(0);
+  }
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (true) {
+    const headerEnd = buffer.indexOf("\r\n\r\n");
+    if (headerEnd < 0) {
+      return;
+    }
+    const header = buffer
+      .subarray(0, headerEnd)
+      .toString("ascii");
+    const match = /Content-Length:\s*(\d+)/i.exec(header);
+    if (!match) {
+      buffer = buffer.subarray(headerEnd + 4);
+      continue;
+    }
+    const length = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    if (buffer.length < bodyStart + length) {
+      return;
+    }
+    const body = buffer
+      .subarray(bodyStart, bodyStart + length)
+      .toString("utf8");
+    buffer = buffer.subarray(bodyStart + length);
+    handle(JSON.parse(body));
+  }
+});
+`;
 }
 
 function hoverLanguageServerSource(): string {
@@ -904,6 +2396,754 @@ function handle(message) {
   }
   if (message.method === "textDocument/prepareCallHierarchy") {
     respond(message.id, null);
+    return;
+  }
+  if (message.method === "shutdown") {
+    respond(message.id, null);
+    return;
+  }
+  if (message.method === "exit") {
+    process.exit(0);
+  }
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (true) {
+    const headerEnd = buffer.indexOf("\r\n\r\n");
+    if (headerEnd < 0) {
+      return;
+    }
+    const header = buffer.subarray(0, headerEnd).toString("ascii");
+    const match = /Content-Length:\s*(\d+)/i.exec(header);
+    if (!match) {
+      buffer = buffer.subarray(headerEnd + 4);
+      continue;
+    }
+    const length = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    if (buffer.length < bodyStart + length) {
+      return;
+    }
+    const body = buffer
+      .subarray(bodyStart, bodyStart + length)
+      .toString("utf8");
+    buffer = buffer.subarray(bodyStart + length);
+    handle(JSON.parse(body));
+  }
+});
+`;
+}
+
+function typeRelationsLanguageServerSource(): string {
+  return String.raw`
+let buffer = Buffer.alloc(0);
+let baseUri = "";
+let childUri = "";
+
+function send(message) {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  process.stdout.write(
+    "Content-Length: " + body.byteLength + "\r\n\r\n"
+  );
+  process.stdout.write(body);
+}
+
+function respond(id, result) {
+  send({ jsonrpc: "2.0", id, result });
+}
+
+function item(name, uri, line, kind) {
+  return {
+    name,
+    kind,
+    uri,
+    range: {
+      start: { line, character: 0 },
+      end: { line, character: name.length }
+    },
+    selectionRange: {
+      start: { line, character: 0 },
+      end: { line, character: name.length }
+    }
+  };
+}
+
+function documentSymbols(uri) {
+  const className = uri === baseUri ? "Base" : "Child";
+  return [
+    {
+      ...item(className, uri, 0, 5),
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 2, character: 1 }
+      },
+      children: [
+        {
+          ...item("execute", uri, 1, 6),
+          detail: "execute(): void"
+        }
+      ]
+    }
+  ];
+}
+
+function handle(message) {
+  if (message.method === "initialize") {
+    respond(message.id, {
+      capabilities: {
+        documentSymbolProvider: true,
+        hoverProvider: false,
+        callHierarchyProvider: false,
+        referencesProvider: false,
+        typeHierarchyProvider: true,
+        implementationProvider: true,
+        workspaceSymbolProvider: false
+      }
+    });
+    return;
+  }
+  if (message.method === "textDocument/didOpen") {
+    const uri = message.params?.textDocument?.uri ?? "";
+    if (uri.endsWith("Base.ts")) {
+      baseUri = uri;
+    } else if (uri.endsWith("Child.ts")) {
+      childUri = uri;
+    }
+    return;
+  }
+  if (message.method === "textDocument/documentSymbol") {
+    respond(
+      message.id,
+      documentSymbols(message.params?.textDocument?.uri ?? "")
+    );
+    return;
+  }
+  if (message.method === "textDocument/prepareTypeHierarchy") {
+    const uri = message.params?.textDocument?.uri ?? "";
+    respond(
+      message.id,
+      [item(uri === baseUri ? "Base" : "Child", uri, 0, 5)]
+    );
+    return;
+  }
+  if (message.method === "typeHierarchy/supertypes") {
+    respond(
+      message.id,
+      message.params?.item?.name === "Child"
+        ? [item("Base", baseUri, 0, 5)]
+        : []
+    );
+    return;
+  }
+  if (message.method === "typeHierarchy/subtypes") {
+    respond(
+      message.id,
+      message.params?.item?.name === "Base"
+        ? [item("Child", childUri, 0, 5)]
+        : []
+    );
+    return;
+  }
+  if (message.method === "textDocument/implementation") {
+    const uri = message.params?.textDocument?.uri ?? "";
+    const line = message.params?.position?.line ?? 0;
+    respond(
+      message.id,
+      uri === baseUri
+        ? [
+            {
+              uri: childUri,
+              range: {
+                start: { line, character: 0 },
+                end: { line, character: 1 }
+              }
+            }
+          ]
+        : []
+    );
+    return;
+  }
+  if (message.method === "shutdown") {
+    respond(message.id, null);
+    return;
+  }
+  if (message.method === "exit") {
+    process.exit(0);
+  }
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (true) {
+    const headerEnd = buffer.indexOf("\r\n\r\n");
+    if (headerEnd < 0) {
+      return;
+    }
+    const header = buffer.subarray(0, headerEnd).toString("ascii");
+    const match = /Content-Length:\s*(\d+)/i.exec(header);
+    if (!match) {
+      buffer = buffer.subarray(headerEnd + 4);
+      continue;
+    }
+    const length = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    if (buffer.length < bodyStart + length) {
+      return;
+    }
+    const body = buffer
+      .subarray(bodyStart, bodyStart + length)
+      .toString("utf8");
+    buffer = buffer.subarray(bodyStart + length);
+    handle(JSON.parse(body));
+  }
+});
+`;
+}
+
+function timeoutIsolationLanguageServerSource(): string {
+  return String.raw`
+import { appendFileSync } from "node:fs";
+
+const eventsPath = process.argv[2];
+let buffer = Buffer.alloc(0);
+let documentUri = "";
+
+function send(message) {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  process.stdout.write(
+    "Content-Length: " + body.byteLength + "\r\n\r\n"
+  );
+  process.stdout.write(body);
+}
+
+function respond(id, result) {
+  send({ jsonrpc: "2.0", id, result });
+}
+
+function symbol(name, line) {
+  return {
+    name,
+    kind: 6,
+    range: {
+      start: { line, character: 0 },
+      end: { line, character: 20 }
+    },
+    selectionRange: {
+      start: { line, character: 9 },
+      end: { line, character: 9 + name.length }
+    }
+  };
+}
+
+function handle(message) {
+  if (message.method === "initialize") {
+    respond(message.id, {
+      capabilities: {
+        documentSymbolProvider: true,
+        hoverProvider: false,
+        callHierarchyProvider: false,
+        referencesProvider: true,
+        typeHierarchyProvider: false,
+        implementationProvider: false,
+        workspaceSymbolProvider: false
+      }
+    });
+    return;
+  }
+  if (message.method === "textDocument/didOpen") {
+    documentUri = message.params?.textDocument?.uri ?? "";
+    return;
+  }
+  if (message.method === "textDocument/documentSymbol") {
+    respond(message.id, [
+      symbol("first", 0),
+      symbol("second", 1),
+      symbol("third", 2)
+    ]);
+    return;
+  }
+  if (message.method === "textDocument/references") {
+    const line = message.params?.position?.line ?? 0;
+    appendFileSync(
+      eventsPath,
+      JSON.stringify({
+        method: message.method,
+        line
+      }) + "\n",
+      "utf8"
+    );
+    if (line === 0) {
+      return;
+    }
+    respond(message.id, [
+      {
+        uri: documentUri,
+        range: {
+          start: { line: line + 10, character: 2 },
+          end: { line: line + 10, character: 8 }
+        }
+      }
+    ]);
+    return;
+  }
+  if (message.method === "shutdown") {
+    respond(message.id, null);
+    return;
+  }
+  if (message.method === "exit") {
+    process.exit(0);
+  }
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (true) {
+    const headerEnd = buffer.indexOf("\r\n\r\n");
+    if (headerEnd < 0) {
+      return;
+    }
+    const header = buffer.subarray(0, headerEnd).toString("ascii");
+    const match = /Content-Length:\s*(\d+)/i.exec(header);
+    if (!match) {
+      buffer = buffer.subarray(headerEnd + 4);
+      continue;
+    }
+    const length = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    if (buffer.length < bodyStart + length) {
+      return;
+    }
+    const body = buffer
+      .subarray(bodyStart, bodyStart + length)
+      .toString("utf8");
+    buffer = buffer.subarray(bodyStart + length);
+    handle(JSON.parse(body));
+  }
+});
+`;
+}
+
+function documentIsolationLanguageServerSource(): string {
+  return String.raw`
+import { appendFileSync } from "node:fs";
+
+const eventsPath = process.argv[2];
+let buffer = Buffer.alloc(0);
+let bPending = false;
+
+function send(message) {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  process.stdout.write(
+    "Content-Length: " + body.byteLength + "\r\n\r\n"
+  );
+  process.stdout.write(body);
+}
+
+function respond(id, result) {
+  send({ jsonrpc: "2.0", id, result });
+}
+
+function record(event) {
+  appendFileSync(
+    eventsPath,
+    JSON.stringify(event) + "\n",
+    "utf8"
+  );
+}
+
+function handle(message) {
+  if (message.method === "initialize") {
+    respond(message.id, {
+      capabilities: {
+        documentSymbolProvider: true,
+        hoverProvider: false,
+        callHierarchyProvider: false,
+        referencesProvider: false,
+        typeHierarchyProvider: false,
+        implementationProvider: false,
+        workspaceSymbolProvider: false
+      }
+    });
+    return;
+  }
+  if (message.method === "textDocument/documentSymbol") {
+    const uri = message.params?.textDocument?.uri ?? "";
+    const file = /\/([ABC])\.ts$/u.exec(uri)?.[1] ?? "";
+    record({
+      file,
+      arrivedWhileBPending: bPending
+    });
+    if (file === "B") {
+      bPending = true;
+      setTimeout(() => {
+        bPending = false;
+      }, 80);
+      return;
+    }
+    respond(message.id, [
+      {
+        name: file,
+        kind: 14,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 20 }
+        },
+        selectionRange: {
+          start: { line: 0, character: 13 },
+          end: { line: 0, character: 14 }
+        }
+      }
+    ]);
+    return;
+  }
+  if (message.method === "shutdown") {
+    respond(message.id, null);
+    return;
+  }
+  if (message.method === "exit") {
+    process.exit(0);
+  }
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (true) {
+    const headerEnd = buffer.indexOf("\r\n\r\n");
+    if (headerEnd < 0) {
+      return;
+    }
+    const header = buffer.subarray(0, headerEnd).toString("ascii");
+    const match = /Content-Length:\s*(\d+)/i.exec(header);
+    if (!match) {
+      buffer = buffer.subarray(headerEnd + 4);
+      continue;
+    }
+    const length = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    if (buffer.length < bodyStart + length) {
+      return;
+    }
+    const body = buffer
+      .subarray(bodyStart, bodyStart + length)
+      .toString("utf8");
+    buffer = buffer.subarray(bodyStart + length);
+    handle(JSON.parse(body));
+  }
+});
+`;
+}
+
+function referencesLanguageServerSource(): string {
+  return String.raw`
+import { appendFileSync } from "node:fs";
+
+const eventsPath = process.argv[2];
+let buffer = Buffer.alloc(0);
+let documentUri = "";
+
+function send(message) {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  process.stdout.write(
+    "Content-Length: " + body.byteLength + "\r\n\r\n"
+  );
+  process.stdout.write(body);
+}
+
+function respond(id, result) {
+  send({ jsonrpc: "2.0", id, result });
+}
+
+function handle(message) {
+  if (message.method === "initialize") {
+    respond(message.id, {
+      capabilities: {
+        documentSymbolProvider: true,
+        hoverProvider: false,
+        callHierarchyProvider: false,
+        referencesProvider: true
+      }
+    });
+    return;
+  }
+  if (message.method === "textDocument/didOpen") {
+    documentUri = message.params?.textDocument?.uri ?? "";
+    return;
+  }
+  if (message.method === "textDocument/documentSymbol") {
+    respond(message.id, [
+      {
+        name: "OPEN_GUIDE",
+        kind: 14,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 28 }
+        },
+        selectionRange: {
+          start: { line: 0, character: 13 },
+          end: { line: 0, character: 23 }
+        }
+      }
+    ]);
+    return;
+  }
+  if (message.method === "textDocument/references") {
+    appendFileSync(
+      eventsPath,
+      JSON.stringify({
+        method: message.method,
+        includeDeclaration:
+          message.params?.context?.includeDeclaration
+      }) + "\n",
+      "utf8"
+    );
+    respond(message.id, [
+      {
+        uri: documentUri,
+        range: {
+          start: { line: 1, character: 23 },
+          end: { line: 1, character: 33 }
+        }
+      },
+      {
+        uri: documentUri,
+        range: {
+          start: { line: 1, character: 23 },
+          end: { line: 1, character: 33 }
+        }
+      }
+    ]);
+    return;
+  }
+  if (message.method === "shutdown") {
+    respond(message.id, null);
+    return;
+  }
+  if (message.method === "exit") {
+    process.exit(0);
+  }
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (true) {
+    const headerEnd = buffer.indexOf("\r\n\r\n");
+    if (headerEnd < 0) {
+      return;
+    }
+    const header = buffer.subarray(0, headerEnd).toString("ascii");
+    const match = /Content-Length:\s*(\d+)/i.exec(header);
+    if (!match) {
+      buffer = buffer.subarray(headerEnd + 4);
+      continue;
+    }
+    const length = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    if (buffer.length < bodyStart + length) {
+      return;
+    }
+    const body = buffer
+      .subarray(bodyStart, bodyStart + length)
+      .toString("utf8");
+    buffer = buffer.subarray(bodyStart + length);
+    handle(JSON.parse(body));
+  }
+});
+`;
+}
+
+function fairBudgetLanguageServerSource(): string {
+  return String.raw`
+import { appendFileSync } from "node:fs";
+
+const eventsPath = process.argv[2];
+let buffer = Buffer.alloc(0);
+let firstDocumentUri = "";
+
+function send(message) {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  process.stdout.write(
+    "Content-Length: " + body.byteLength + "\r\n\r\n"
+  );
+  process.stdout.write(body);
+}
+
+function respond(id, result) {
+  send({ jsonrpc: "2.0", id, result });
+}
+
+function record(event) {
+  appendFileSync(
+    eventsPath,
+    JSON.stringify(event) + "\n",
+    "utf8"
+  );
+}
+
+function handle(message) {
+  if (message.method === "initialize") {
+    respond(message.id, {
+      capabilities: {
+        documentSymbolProvider: true,
+        hoverProvider: false,
+        callHierarchyProvider: false,
+        referencesProvider: true,
+        workspaceSymbolProvider: true
+      }
+    });
+    return;
+  }
+  if (message.method === "textDocument/didOpen") {
+    firstDocumentUri ||= message.params?.textDocument?.uri ?? "";
+    return;
+  }
+  if (message.method === "textDocument/documentSymbol") {
+    const uri = message.params?.textDocument?.uri ?? "";
+    record({ method: message.method, uri });
+    respond(message.id, [
+      {
+        name: "FIRST",
+        kind: 14,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 23 }
+        },
+        selectionRange: {
+          start: { line: 0, character: 13 },
+          end: { line: 0, character: 18 }
+        }
+      },
+      {
+        name: "SECOND",
+        kind: 14,
+        range: {
+          start: { line: 1, character: 0 },
+          end: { line: 1, character: 24 }
+        },
+        selectionRange: {
+          start: { line: 1, character: 13 },
+          end: { line: 1, character: 19 }
+        }
+      }
+    ]);
+    return;
+  }
+  if (message.method === "textDocument/references") {
+    record({
+      method: message.method,
+      uri: message.params?.textDocument?.uri ?? "",
+      line: message.params?.position?.line
+    });
+    respond(message.id, []);
+    return;
+  }
+  if (message.method === "workspace/symbol") {
+    const uri = firstDocumentUri.replace(
+      /A\.ts$/u,
+      "C.ts"
+    );
+    record({ method: message.method, uri });
+    respond(message.id, [
+      {
+        name: "THIRD_FILE",
+        kind: 14,
+        location: {
+          uri,
+          range: {
+            start: { line: 0, character: 13 },
+            end: { line: 0, character: 23 }
+          }
+        }
+      }
+    ]);
+    return;
+  }
+  if (message.method === "shutdown") {
+    respond(message.id, null);
+    return;
+  }
+  if (message.method === "exit") {
+    process.exit(0);
+  }
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (true) {
+    const headerEnd = buffer.indexOf("\r\n\r\n");
+    if (headerEnd < 0) {
+      return;
+    }
+    const header = buffer.subarray(0, headerEnd).toString("ascii");
+    const match = /Content-Length:\s*(\d+)/i.exec(header);
+    if (!match) {
+      buffer = buffer.subarray(headerEnd + 4);
+      continue;
+    }
+    const length = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    if (buffer.length < bodyStart + length) {
+      return;
+    }
+    const body = buffer
+      .subarray(bodyStart, bodyStart + length)
+      .toString("utf8");
+    buffer = buffer.subarray(bodyStart + length);
+    handle(JSON.parse(body));
+  }
+});
+`;
+}
+
+function documentLifecycleLanguageServerSource(): string {
+  return String.raw`
+import { appendFileSync } from "node:fs";
+
+const eventsPath = process.argv[2];
+let buffer = Buffer.alloc(0);
+
+function record(message) {
+  if (
+    message.method === "textDocument/didOpen" ||
+    message.method === "textDocument/didClose"
+  ) {
+    appendFileSync(
+      eventsPath,
+      JSON.stringify({
+        method: message.method,
+        uri: message.params?.textDocument?.uri
+      }) + "\n",
+      "utf8"
+    );
+  }
+}
+
+function send(message) {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  process.stdout.write(
+    "Content-Length: " + body.byteLength + "\r\n\r\n"
+  );
+  process.stdout.write(body);
+}
+
+function respond(id, result) {
+  send({ jsonrpc: "2.0", id, result });
+}
+
+function handle(message) {
+  record(message);
+  if (message.method === "initialize") {
+    respond(message.id, {
+      capabilities: {
+        documentSymbolProvider: true,
+        hoverProvider: false,
+        callHierarchyProvider: false
+      }
+    });
+    return;
+  }
+  if (message.method === "textDocument/documentSymbol") {
+    respond(message.id, []);
     return;
   }
   if (message.method === "shutdown") {
@@ -1319,11 +3559,23 @@ function sourceFile(
   rootPath: string,
   language: AnalysisSourceFile["language"]
 ): AnalysisSourceFile {
-  const absolutePath = join(rootPath, "Source.java");
+  const extension = {
+    typescript: "ts",
+    javascript: "js",
+    vue: "vue",
+    java: "java",
+    python: "py",
+    go: "go",
+    kotlin: "kt",
+    csharp: "cs",
+    rust: "rs"
+  }[language];
+  const relativePath = `Source.${extension}`;
+  const absolutePath = join(rootPath, relativePath);
   return {
     absolutePath,
     canonicalPath: absolutePath.toLocaleLowerCase("en-US"),
-    relativePath: "Source.java",
+    relativePath,
     repositoryId: rootPath,
     worktreeId: rootPath,
     rootPath,

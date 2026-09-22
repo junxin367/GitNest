@@ -4,10 +4,15 @@ import {
   type SpawnOptions
 } from "node:child_process";
 
-import { GitError } from "@gitnest/git-core";
+import {
+  GitError,
+  type GitReadPriority
+} from "@gitnest/git-core";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_OUTPUT_LIMIT_BYTES = 16 * 1024 * 1024;
+const DEFAULT_INTERACTIVE_CONCURRENCY = 1;
+const DEFAULT_SHARED_CONCURRENCY = 3;
 
 export interface ProcessRequest {
   executable: string;
@@ -20,6 +25,7 @@ export interface ProcessRequest {
   discardOutputAfterLimit?: boolean | undefined;
   allowFailure?: boolean | undefined;
   writeIntent?: boolean | undefined;
+  priority?: GitReadPriority | undefined;
   environment?:
     | Readonly<Record<string, string | undefined>>
     | undefined;
@@ -41,6 +47,136 @@ export interface ProcessBufferResult {
   outputTruncated?: boolean;
 }
 
+export interface GitProcessSchedulerOptions {
+  interactiveConcurrency?: number;
+  sharedConcurrency?: number;
+}
+
+interface ScheduledProcessTask {
+  start(): void;
+}
+
+export class GitProcessScheduler {
+  readonly #interactiveConcurrency: number;
+  readonly #sharedConcurrency: number;
+  readonly #interactiveQueue: ScheduledProcessTask[] = [];
+  readonly #foregroundQueue: ScheduledProcessTask[] = [];
+  readonly #backgroundQueue: ScheduledProcessTask[] = [];
+  #activeInteractive = 0;
+  #activeShared = 0;
+
+  constructor(options: GitProcessSchedulerOptions = {}) {
+    this.#interactiveConcurrency = positiveConcurrency(
+      options.interactiveConcurrency ??
+        DEFAULT_INTERACTIVE_CONCURRENCY
+    );
+    this.#sharedConcurrency = positiveConcurrency(
+      options.sharedConcurrency ?? DEFAULT_SHARED_CONCURRENCY
+    );
+  }
+
+  run<Result>(
+    priority: GitReadPriority,
+    signal: AbortSignal | undefined,
+    task: () => Promise<Result>
+  ): Promise<Result> {
+    if (signal?.aborted) {
+      return Promise.reject(cancelledBeforeStart());
+    }
+
+    return new Promise<Result>((resolve, reject) => {
+      const queue = this.#queueFor(priority);
+      let queued = true;
+      const cancel = () => {
+        if (!queued) {
+          return;
+        }
+        const index = queue.indexOf(scheduled);
+        if (index >= 0) {
+          queue.splice(index, 1);
+        }
+        queued = false;
+        signal?.removeEventListener("abort", cancel);
+        reject(cancelledBeforeStart());
+        this.#drain();
+      };
+      const scheduled: ScheduledProcessTask = {
+        start: () => {
+          queued = false;
+          signal?.removeEventListener("abort", cancel);
+          if (signal?.aborted) {
+            reject(cancelledBeforeStart());
+            this.#release(priority);
+            return;
+          }
+          void Promise.resolve()
+            .then(task)
+            .then(resolve, reject)
+            .finally(() => {
+              this.#release(priority);
+            });
+        }
+      };
+
+      signal?.addEventListener("abort", cancel, {
+        once: true
+      });
+      queue.push(scheduled);
+      this.#drain();
+    });
+  }
+
+  #queueFor(
+    priority: GitReadPriority
+  ): ScheduledProcessTask[] {
+    if (priority === "interactive") {
+      return this.#interactiveQueue;
+    }
+    return priority === "foreground"
+      ? this.#foregroundQueue
+      : this.#backgroundQueue;
+  }
+
+  #drain(): void {
+    while (
+      this.#activeInteractive <
+        this.#interactiveConcurrency &&
+      this.#interactiveQueue.length > 0
+    ) {
+      const task = this.#interactiveQueue.shift();
+      if (!task) {
+        break;
+      }
+      this.#activeInteractive += 1;
+      task.start();
+    }
+
+    while (
+      this.#activeShared < this.#sharedConcurrency
+    ) {
+      const task =
+        this.#foregroundQueue.shift() ??
+        this.#backgroundQueue.shift();
+      if (!task) {
+        break;
+      }
+      this.#activeShared += 1;
+      task.start();
+    }
+  }
+
+  #release(priority: GitReadPriority): void {
+    if (priority === "interactive") {
+      this.#activeInteractive -= 1;
+    } else {
+      this.#activeShared -= 1;
+    }
+    this.#drain();
+  }
+}
+
+const processScheduler = new GitProcessScheduler();
+
 export function runProcess(
   request: ProcessRequest
 ): Promise<ProcessResult> {
@@ -56,6 +192,25 @@ export function runProcessBuffer(
 }
 
 async function runProcessWithStdout<Stdout extends string | Buffer>({
+  priority = "foreground",
+  ...request
+}: ProcessRequest, decodeStdout: (stdout: Buffer) => Stdout): Promise<{
+  exitCode: number;
+  stdout: Stdout;
+  stderr: string;
+  durationMs: number;
+  outputTruncated?: boolean;
+}> {
+  return processScheduler.run(
+    priority,
+    request.signal,
+    () => executeProcessWithStdout(request, decodeStdout)
+  );
+}
+
+async function executeProcessWithStdout<
+  Stdout extends string | Buffer
+>({
   executable,
   args,
   cwd,
@@ -269,6 +424,20 @@ async function runProcessWithStdout<Stdout extends string | Buffer>({
       });
     });
   });
+}
+
+function positiveConcurrency(value: number): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error("Git process concurrency must be a positive integer.");
+  }
+  return value;
+}
+
+function cancelledBeforeStart(): GitError {
+  return new GitError(
+    "COMMAND_CANCELLED",
+    "The Git command was cancelled before it started."
+  );
 }
 
 export function createReadOnlyProcessEnvironment(

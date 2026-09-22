@@ -18,18 +18,17 @@ import type {
   ParsedSourceFile
 } from "./model";
 import { BUILTIN_ANALYSIS_PROFILE_VERSIONS } from "./profiles/registry";
-import { DEFAULT_MAX_TOTAL_SOURCE_BYTES } from "./source-inventory";
 
-const CACHE_SCHEMA_VERSION = 1;
-const SNAPSHOT_CACHE_SCHEMA_VERSION = 2;
-const PARSER_VERSION = 8;
-const GRAPH_VERSION = 8;
+const CACHE_SCHEMA_VERSION = 2;
+const SNAPSHOT_CACHE_SCHEMA_VERSION = 3;
+const PARSER_VERSION = 12;
+const GRAPH_VERSION = 13;
 export const MAX_ANALYSIS_INDEX_CACHE_BYTES =
   128 * 1_024 * 1_024;
 export const MAX_ANALYSIS_SNAPSHOT_BYTES =
-  40 * 1_024 * 1_024;
+  72 * 1_024 * 1_024;
 export const MAX_ANALYSIS_SNAPSHOT_PAYLOAD_BYTES =
-  32 * 1_024 * 1_024;
+  64 * 1_024 * 1_024;
 const CACHE_READ_CHUNK_BYTES = 64 * 1_024;
 
 interface CachedFile {
@@ -41,6 +40,9 @@ export interface AnalysisCacheDocument {
   schemaVersion: typeof CACHE_SCHEMA_VERSION;
   settingsKey: string;
   fullIndexComplete: boolean;
+  semanticIndexComplete: boolean;
+  fullIndexRevisions: Record<string, string>;
+  lastFullIndexAt?: string;
   files: Record<string, CachedFile>;
   updatedAt: string;
 }
@@ -301,6 +303,8 @@ function createEmptyCache(
     schemaVersion: CACHE_SCHEMA_VERSION,
     settingsKey: settingsKey(settings, roots),
     fullIndexComplete: false,
+    semanticIndexComplete: false,
+    fullIndexRevisions: {},
     files: {},
     updatedAt: new Date(0).toISOString()
   };
@@ -315,8 +319,7 @@ function settingsKey(
       JSON.stringify({
         parserVersion: PARSER_VERSION,
         profiles: BUILTIN_ANALYSIS_PROFILE_VERSIONS,
-        maxTotalSourceBytes:
-          DEFAULT_MAX_TOTAL_SOURCE_BYTES,
+        maxTotalSourceBytes: settings.maxTotalSourceBytes,
         maxFiles: settings.maxFiles,
         maxFileSizeBytes: settings.maxFileSizeBytes,
         ignoreDirectories: [...settings.ignoreDirectories].sort(),
@@ -347,38 +350,93 @@ export function codeAnalysisSnapshotConfigurationKey(
         parserVersion: PARSER_VERSION,
         graphVersion: GRAPH_VERSION,
         profiles: BUILTIN_ANALYSIS_PROFILE_VERSIONS,
-        maxTotalSourceBytes:
-          DEFAULT_MAX_TOTAL_SOURCE_BYTES,
+        maxTotalSourceBytes: settings.maxTotalSourceBytes,
         maxFiles: settings.maxFiles,
         maxFileSizeBytes: settings.maxFileSizeBytes,
         ignoreDirectories: [...settings.ignoreDirectories].sort(),
         graphDepth: settings.graphDepth,
+        maxGraphNodes: settings.maxGraphNodes,
+        maxGraphEdges: settings.maxGraphEdges,
+        maxRequestChains: settings.maxRequestChains,
+        maxDiagnostics: settings.maxDiagnostics,
         staticFallback: settings.staticFallback,
         lspTimeoutMs: settings.lspTimeoutMs,
-        typescript: {
-          enabled: settings.typescript.enabled,
-          command: settings.typescript.command,
-          args: [...settings.typescript.args]
-        },
-        java: {
-          enabled: settings.java.enabled,
-          command: settings.java.command,
-          args: [...settings.java.args]
-        },
+        languageServers:
+          codeAnalysisLanguageServerConfiguration(settings),
         roots: roots
           .map((root) => ({
             repositoryId: root.repositoryId,
             worktreeId: root.worktreeId,
-            path: canonicalPath(root.path)
+            path: canonicalPath(root.path),
+            revision: root.revision ?? ""
           }))
           .sort((left, right) =>
-            `${left.repositoryId}\0${left.worktreeId}\0${left.path}`.localeCompare(
-              `${right.repositoryId}\0${right.worktreeId}\0${right.path}`
+            `${left.repositoryId}\0${left.worktreeId}\0${left.path}\0${left.revision}`.localeCompare(
+              `${right.repositoryId}\0${right.worktreeId}\0${right.path}\0${right.revision}`
             )
           )
       })
     )
     .digest("hex");
+}
+
+function codeAnalysisLanguageServerConfiguration(
+  settings: CodeAnalysisSettings
+): Record<
+  string,
+  {
+    enabled: boolean;
+    command: string;
+    args: string[];
+    maxDocuments: number;
+    maxSymbolsPerDocument: number;
+    maxCallHierarchyRequests: number;
+    maxTypeHierarchyRequests: number;
+    maxReferenceRequests: number;
+    maxDocumentationRequests: number;
+    maxReferencesPerSymbol: number;
+  } | null
+> {
+  return Object.fromEntries(
+    (
+      [
+        "typescript",
+        "vue",
+        "java",
+        "python",
+        "go",
+        "kotlin",
+        "csharp",
+        "rust"
+      ] as const
+    ).map((language) => {
+      const server = settings[language];
+      return [
+        language,
+        server
+          ? {
+              enabled: server.enabled,
+              command: server.command,
+              args: [...server.args],
+              maxDocuments: server.maxDocuments,
+              maxSymbolsPerDocument:
+                server.maxSymbolsPerDocument,
+              maxCallHierarchyRequests:
+                server.maxCallHierarchyRequests,
+              maxTypeHierarchyRequests:
+                server.maxTypeHierarchyRequests ??
+                server.maxCallHierarchyRequests,
+              maxReferenceRequests:
+                server.maxReferenceRequests,
+              maxDocumentationRequests:
+                server.maxDocumentationRequests,
+              maxReferencesPerSymbol:
+                server.maxReferencesPerSymbol
+            }
+          : null
+      ];
+    })
+  );
 }
 
 function canonicalPath(path: string): string {
@@ -460,7 +518,7 @@ function analysisRootsMatch(
         (root) =>
           `${root.repositoryId}\0${root.worktreeId}\0${canonicalPath(
             root.path
-          )}`
+          )}\0${root.revision ?? ""}`
       )
       .sort();
   const leftKeys = toKeys(left);
@@ -516,6 +574,10 @@ function isCacheDocument(
     input.schemaVersion === CACHE_SCHEMA_VERSION &&
     typeof input.settingsKey === "string" &&
     typeof input.fullIndexComplete === "boolean" &&
+    typeof input.semanticIndexComplete === "boolean" &&
+    isStringRecord(input.fullIndexRevisions) &&
+    (input.lastFullIndexAt === undefined ||
+      typeof input.lastFullIndexAt === "string") &&
     isRecord(files) &&
     Object.entries(files).every(([path, cached]) =>
       isCachedFile(path, cached)
@@ -563,6 +625,11 @@ function isCodeAnalysisSnapshot(
     value.requestChains.every(isCodeRequestChain) &&
     Array.isArray(value.languageServers) &&
     value.languageServers.every(isLanguageServerStatus) &&
+    (value.indexStatus === undefined ||
+      isCodeAnalysisIndexStatus(value.indexStatus)) &&
+    (value.diagnostics === undefined ||
+      (Array.isArray(value.diagnostics) &&
+        value.diagnostics.every(isCodeAnalysisDiagnostic))) &&
     Array.isArray(value.warnings) &&
     value.warnings.every(
       (warning) => typeof warning === "string"
@@ -577,7 +644,9 @@ function isAnalysisRoot(value: unknown): boolean {
     typeof value.repositoryId === "string" &&
     typeof value.worktreeId === "string" &&
     typeof value.name === "string" &&
-    typeof value.path === "string"
+    typeof value.path === "string" &&
+    (value.revision === undefined ||
+      typeof value.revision === "string")
   );
 }
 
@@ -593,7 +662,12 @@ function isCodeGraphNode(value: unknown): boolean {
     typeof value.id === "string" &&
     [
       "file",
+      "module",
+      "package",
       "class",
+      "interface",
+      "enum",
+      "property",
       "function",
       "method",
       "client-request",
@@ -607,7 +681,12 @@ function isCodeGraphNode(value: unknown): boolean {
       "typescript",
       "javascript",
       "vue",
-      "java"
+      "java",
+      "python",
+      "go",
+      "kotlin",
+      "csharp",
+      "rust"
     ].includes(String(value.language)) &&
     isGraphLocation(value.location) &&
     typeof value.changed === "boolean" &&
@@ -644,13 +723,22 @@ function isCodeGraphEdge(value: unknown): boolean {
     [
       "contains",
       "calls",
+      "extends",
+      "implements",
+      "overrides",
       "http-request",
       "rpc-request",
       "references"
     ].includes(String(value.kind)) &&
     isAnalysisConfidence(value.confidence) &&
     (value.label === undefined ||
-      typeof value.label === "string")
+      typeof value.label === "string") &&
+    (value.source === undefined ||
+      value.source === "builtin" ||
+      value.source === "lsp" ||
+      value.source === "merged") &&
+    (value.evidence === undefined ||
+      typeof value.evidence === "string")
   );
 }
 
@@ -685,8 +773,16 @@ function isCodeRequestChain(value: unknown): boolean {
 function isLanguageServerStatus(value: unknown): boolean {
   return (
     isRecord(value) &&
-    (value.language === "typescript" ||
-      value.language === "java") &&
+    [
+      "typescript",
+      "vue",
+      "java",
+      "python",
+      "go",
+      "kotlin",
+      "csharp",
+      "rust"
+    ].includes(String(value.language)) &&
     [
       "disabled",
       "connected",
@@ -695,7 +791,20 @@ function isLanguageServerStatus(value: unknown): boolean {
     ].includes(String(value.state)) &&
     typeof value.command === "string" &&
     typeof value.message === "string" &&
-    isFiniteNumber(value.symbolCount)
+    isFiniteNumber(value.symbolCount) &&
+    (value.semanticCoverage === undefined ||
+      value.semanticCoverage === "complete" ||
+      value.semanticCoverage === "partial" ||
+      value.semanticCoverage === "unavailable") &&
+    isOptionalFiniteNumber(value.documentsTotal) &&
+    isOptionalFiniteNumber(value.documentsAnalyzed) &&
+    isOptionalFiniteNumber(value.skippedDocuments) &&
+    isOptionalFiniteNumber(value.failedDocuments) &&
+    isOptionalFiniteNumber(value.truncatedDocuments) &&
+    (value.requestBudgetExhausted === undefined ||
+      typeof value.requestBudgetExhausted === "boolean") &&
+    (value.enrichmentStoppedEarly === undefined ||
+      typeof value.enrichmentStoppedEarly === "boolean")
   );
 }
 
@@ -762,7 +871,12 @@ function isAnalysisSourceFile(
     (value.language === "typescript" ||
       value.language === "javascript" ||
       value.language === "vue" ||
-      value.language === "java") &&
+      value.language === "java" ||
+      value.language === "python" ||
+      value.language === "go" ||
+      value.language === "kotlin" ||
+      value.language === "csharp" ||
+      value.language === "rust") &&
     isFiniteNumber(value.size) &&
     isFiniteNumber(value.modifiedAtMs) &&
     typeof value.fingerprint === "string" &&
@@ -777,20 +891,57 @@ function isParsedSymbol(value: unknown): boolean {
   return (
     typeof value.name === "string" &&
     typeof value.qualifiedName === "string" &&
-    (value.kind === "class" ||
+    (value.kind === "module" ||
+      value.kind === "package" ||
+      value.kind === "class" ||
+      value.kind === "interface" ||
+      value.kind === "enum" ||
+      value.kind === "property" ||
       value.kind === "function" ||
       value.kind === "method") &&
     isFiniteNumber(value.line) &&
     isFiniteNumber(value.endLine) &&
+    (value.selectionCharacter === undefined ||
+      isFiniteNumber(value.selectionCharacter)) &&
     (value.parentQualifiedName === undefined ||
       typeof value.parentQualifiedName === "string") &&
+    (value.packageName === undefined ||
+      typeof value.packageName === "string") &&
+    (value.signature === undefined ||
+      typeof value.signature === "string") &&
+    (value.semanticId === undefined ||
+      typeof value.semanticId === "string") &&
     (value.documentation === undefined ||
       typeof value.documentation === "string") &&
     Array.isArray(value.calls) &&
     value.calls.every(isParsedCall) &&
+    (value.references === undefined ||
+      (Array.isArray(value.references) &&
+        value.references.every(isParsedReference))) &&
+    (value.semanticRelations === undefined ||
+      (Array.isArray(value.semanticRelations) &&
+        value.semanticRelations.every(
+          isParsedSemanticRelation
+        ))) &&
     (value.source === "builtin" ||
       value.source === "lsp" ||
       value.source === "merged")
+  );
+}
+
+function isParsedSemanticRelation(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    (value.kind === "extends" ||
+      value.kind === "implements" ||
+      value.kind === "overrides") &&
+    typeof value.targetName === "string" &&
+    (value.targetCanonicalPath === undefined ||
+      typeof value.targetCanonicalPath === "string") &&
+    (value.targetLine === undefined ||
+      isFiniteNumber(value.targetLine)) &&
+    value.source === "lsp" &&
+    typeof value.evidence === "string"
   );
 }
 
@@ -806,7 +957,77 @@ function isParsedCall(value: unknown): boolean {
     (value.targetCanonicalPath === undefined ||
       typeof value.targetCanonicalPath === "string") &&
     (value.targetLine === undefined ||
-      isFiniteNumber(value.targetLine))
+      isFiniteNumber(value.targetLine)) &&
+    (value.source === undefined ||
+      value.source === "builtin" ||
+      value.source === "lsp" ||
+      value.source === "merged") &&
+    (value.evidence === undefined ||
+      typeof value.evidence === "string")
+  );
+}
+
+function isParsedReference(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const hasQualifiedTarget =
+    typeof value.targetQualifiedName === "string";
+  const hasLocationTarget =
+    typeof value.targetCanonicalPath === "string" &&
+    isFiniteNumber(value.targetLine);
+  return (
+    typeof value.name === "string" &&
+    isFiniteNumber(value.line) &&
+    (value.targetQualifiedName === undefined ||
+      typeof value.targetQualifiedName === "string") &&
+    (value.targetCanonicalPath === undefined ||
+      typeof value.targetCanonicalPath === "string") &&
+    (value.targetLine === undefined ||
+      isFiniteNumber(value.targetLine)) &&
+    (hasQualifiedTarget || hasLocationTarget) &&
+    (value.source === "builtin" ||
+      value.source === "lsp" ||
+      value.source === "merged") &&
+    typeof value.evidence === "string"
+  );
+}
+
+function isCodeAnalysisIndexStatus(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.fullIndexAvailable === "boolean" &&
+    (value.resultCompleteness === "complete" ||
+      value.resultCompleteness === "partial") &&
+    (value.impactCoverage === "confirmed" ||
+      value.impactCoverage === "possible-omissions") &&
+    (value.lastFullIndexAt === undefined ||
+      typeof value.lastFullIndexAt === "string") &&
+    typeof value.message === "string"
+  );
+}
+
+function isCodeAnalysisDiagnostic(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    [
+      "partial-index",
+      "unresolved-call",
+      "unmatched-request",
+      "unmatched-rpc",
+      "ambiguous-target"
+    ].includes(String(value.kind)) &&
+    (value.severity === "info" ||
+      value.severity === "warning") &&
+    typeof value.message === "string" &&
+    typeof value.evidence === "string" &&
+    (value.nodeId === undefined ||
+      typeof value.nodeId === "string") &&
+    Array.isArray(value.relatedNodeIds) &&
+    value.relatedNodeIds.every(
+      (nodeId) => typeof nodeId === "string"
+    )
   );
 }
 
@@ -863,6 +1084,21 @@ function isRecord(
   );
 }
 
+function isStringRecord(
+  value: unknown
+): value is Record<string, string> {
+  return (
+    isRecord(value) &&
+    Object.values(value).every(
+      (item) => typeof item === "string"
+    )
+  );
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function isOptionalFiniteNumber(value: unknown): boolean {
+  return value === undefined || isFiniteNumber(value);
 }

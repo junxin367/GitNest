@@ -390,7 +390,8 @@
 }
 
 .analysis-runtime-strip > span,
-.analysis-warning-panel > summary {
+.analysis-warning-panel > summary,
+.analysis-index-status-menu > summary {
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
@@ -462,12 +463,14 @@
   );
 }
 
-.analysis-warning-panel {
+.analysis-warning-panel,
+.analysis-index-status-menu {
   position: relative;
   flex: 0 0 auto;
 }
 
-.analysis-warning-panel > summary {
+.analysis-warning-panel > summary,
+.analysis-index-status-menu > summary {
   gap: 4px;
   color: var(--yellow);
   border-color: color-mix(
@@ -479,20 +482,26 @@
   list-style: none;
 }
 
-.analysis-warning-panel > summary::-webkit-details-marker {
+.analysis-warning-panel > summary::-webkit-details-marker,
+.analysis-index-status-menu
+  > summary::-webkit-details-marker {
   display: none;
 }
 
-.analysis-warning-panel > summary::marker {
+.analysis-warning-panel > summary::marker,
+.analysis-index-status-menu > summary::marker {
   content: "";
 }
 
 .analysis-warning-panel > summary:hover,
-.analysis-warning-panel[open] > summary {
+.analysis-warning-panel[open] > summary,
+.analysis-index-status-menu > summary:hover,
+.analysis-index-status-menu[open] > summary {
   background: var(--yellow-soft);
 }
 
-.analysis-warning-panel > summary:focus-visible {
+.analysis-warning-panel > summary:focus-visible,
+.analysis-index-status-menu > summary:focus-visible {
   outline: 2px solid var(--yellow);
   outline-offset: 1px;
 }
@@ -512,6 +521,35 @@
   color: var(--text-soft);
   font-size: var(--font-size-caption);
   line-height: var(--line-height-body);
+}
+
+.analysis-index-status-menu
+  > .analysis-index-status-popover {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  display: grid;
+  gap: var(--space-2);
+  width: max-content;
+  min-width: 300px;
+  max-width: min(440px, calc(100vw - var(--space-6)));
+  color: var(--text-soft);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+
+.analysis-index-status-popover strong {
+  color: var(--text);
+  font-size: var(--font-size-body);
+}
+
+.analysis-index-status-popover span,
+.analysis-index-status-popover small {
+  overflow-wrap: anywhere;
+}
+
+.analysis-index-status-popover > button {
+  justify-self: start;
 }
 
 .analysis-workbench {
@@ -760,6 +798,15 @@
   overflow: auto;
 }
 
+.analysis-list-limit {
+  padding: var(--space-2) var(--space-3);
+  color: var(--muted);
+  font-size: calc(var(--font-size-caption) - 1px);
+  line-height: 1.5;
+  background: var(--surface-subtle);
+  border-bottom: 1px solid var(--border-soft);
+}
+
 .analysis-chain-list > button {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -888,4 +935,71 @@
   margin: 0;
   font-size: var(--font-size-caption);
   line-height: var(--line-height-body);
+}
+
+.analysis-diagnostics {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.analysis-diagnostics h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-caption);
+}
+
+.analysis-diagnostics ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.analysis-diagnostics li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2);
+  color: var(--yellow);
+  background: var(--yellow-soft);
+  border: 1px solid
+    color-mix(in srgb, var(--yellow) 18%, transparent);
+  border-radius: var(--radius-regular);
+}
+
+.analysis-diagnostics li > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.analysis-diagnostics strong,
+.analysis-diagnostics span {
+  overflow-wrap: anywhere;
+  font-size: calc(var(--font-size-caption) - 1px);
+}
+
+.analysis-diagnostics strong {
+  color: var(--text-soft);
+}
+
+.analysis-diagnostics span {
+  color: var(--muted);
+  line-height: var(--line-height-body);
+}
+
+.analysis-node-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.analysis-node-details .analysis-diagnostics {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
 }

@@ -4,7 +4,17 @@ export type CodeAnalysisLanguage =
   | "typescript"
   | "javascript"
   | "vue"
-  | "java";
+  | "java"
+  | "python"
+  | "go"
+  | "kotlin"
+  | "csharp"
+  | "rust";
+
+export type LanguageServerLanguage = Exclude<
+  CodeAnalysisLanguage,
+  "javascript"
+>;
 
 export type CodeAnalysisProfileId =
   | "web-http"
@@ -14,7 +24,12 @@ export type CodeRequestTransport = "http" | "rpc";
 
 export type CodeGraphNodeKind =
   | "file"
+  | "module"
+  | "package"
   | "class"
+  | "interface"
+  | "enum"
+  | "property"
   | "function"
   | "method"
   | "client-request"
@@ -25,6 +40,9 @@ export type CodeGraphNodeKind =
 export type CodeGraphEdgeKind =
   | "contains"
   | "calls"
+  | "extends"
+  | "implements"
+  | "overrides"
   | "http-request"
   | "rpc-request"
   | "references";
@@ -41,6 +59,7 @@ export interface AnalysisRoot {
   worktreeId: string;
   name: string;
   path: string;
+  revision?: string;
 }
 
 export interface ChangedAnalysisPath {
@@ -53,12 +72,24 @@ export interface LanguageServerCommandSettings {
   enabled: boolean;
   command: string;
   args: string[];
+  maxDocuments: number;
+  maxSymbolsPerDocument: number;
+  maxCallHierarchyRequests: number;
+  maxTypeHierarchyRequests?: number;
+  maxReferenceRequests: number;
+  maxDocumentationRequests: number;
+  maxReferencesPerSymbol: number;
 }
 
 export interface CodeAnalysisSettings {
   enabled: boolean;
   staticFallback: boolean;
   maxFiles: number;
+  maxTotalSourceBytes: number;
+  maxGraphNodes: number;
+  maxGraphEdges: number;
+  maxRequestChains: number;
+  maxDiagnostics: number;
   maxFileSizeBytes: number;
   readConcurrency: number;
   graphDepth: number;
@@ -66,6 +97,12 @@ export interface CodeAnalysisSettings {
   ignoreDirectories: string[];
   typescript: LanguageServerCommandSettings;
   java: LanguageServerCommandSettings;
+  vue?: LanguageServerCommandSettings;
+  python?: LanguageServerCommandSettings;
+  go?: LanguageServerCommandSettings;
+  kotlin?: LanguageServerCommandSettings;
+  csharp?: LanguageServerCommandSettings;
+  rust?: LanguageServerCommandSettings;
 }
 
 export type CodeAnalysisProgressStage =
@@ -104,17 +141,57 @@ export interface ParsedCall {
   line: number;
   targetCanonicalPath?: string;
   targetLine?: number;
+  source?: "builtin" | "lsp" | "merged";
+  evidence?: string;
+}
+
+export interface ParsedReference {
+  name: string;
+  line: number;
+  targetQualifiedName?: string;
+  targetCanonicalPath?: string;
+  targetLine?: number;
+  source: "builtin" | "lsp" | "merged";
+  evidence: string;
+}
+
+export type ParsedSemanticRelationKind =
+  | "extends"
+  | "implements"
+  | "overrides";
+
+export interface ParsedSemanticRelation {
+  kind: ParsedSemanticRelationKind;
+  targetName: string;
+  targetCanonicalPath?: string;
+  targetLine?: number;
+  source: "lsp";
+  evidence: string;
 }
 
 export interface ParsedSymbol {
   name: string;
   qualifiedName: string;
-  kind: "class" | "function" | "method";
+  kind:
+    | "module"
+    | "package"
+    | "class"
+    | "interface"
+    | "enum"
+    | "property"
+    | "function"
+    | "method";
   line: number;
   endLine: number;
+  selectionCharacter?: number;
   parentQualifiedName?: string;
+  packageName?: string;
+  signature?: string;
+  semanticId?: string;
   documentation?: string;
   calls: ParsedCall[];
+  references?: ParsedReference[];
+  semanticRelations?: ParsedSemanticRelation[];
   source: "builtin" | "lsp" | "merged";
 }
 
@@ -186,6 +263,8 @@ export interface CodeGraphEdge {
   kind: CodeGraphEdgeKind;
   confidence: AnalysisConfidence;
   label?: string;
+  source?: "builtin" | "lsp" | "merged";
+  evidence?: string;
 }
 
 export interface CodeRequestChain {
@@ -205,6 +284,31 @@ export interface CodeRequestChain {
   confidence: AnalysisConfidence;
 }
 
+export type CodeAnalysisDiagnosticKind =
+  | "partial-index"
+  | "unresolved-call"
+  | "unmatched-request"
+  | "unmatched-rpc"
+  | "ambiguous-target";
+
+export interface CodeAnalysisDiagnostic {
+  id: string;
+  kind: CodeAnalysisDiagnosticKind;
+  severity: "info" | "warning";
+  message: string;
+  evidence: string;
+  nodeId?: string;
+  relatedNodeIds: string[];
+}
+
+export interface CodeAnalysisIndexStatus {
+  fullIndexAvailable: boolean;
+  resultCompleteness: "complete" | "partial";
+  impactCoverage: "confirmed" | "possible-omissions";
+  lastFullIndexAt?: string;
+  message: string;
+}
+
 export type LanguageServerState =
   | "disabled"
   | "connected"
@@ -212,11 +316,22 @@ export type LanguageServerState =
   | "failed";
 
 export interface LanguageServerStatus {
-  language: "typescript" | "java";
+  language: LanguageServerLanguage;
   state: LanguageServerState;
   command: string;
   message: string;
   symbolCount: number;
+  semanticCoverage?:
+    | "complete"
+    | "partial"
+    | "unavailable";
+  documentsTotal?: number;
+  documentsAnalyzed?: number;
+  skippedDocuments?: number;
+  failedDocuments?: number;
+  truncatedDocuments?: number;
+  requestBudgetExhausted?: boolean;
+  enrichmentStoppedEarly?: boolean;
 }
 
 export interface CodeAnalysisStats {
@@ -244,6 +359,8 @@ export interface CodeAnalysisSnapshot {
   edges: CodeGraphEdge[];
   requestChains: CodeRequestChain[];
   languageServers: LanguageServerStatus[];
+  indexStatus?: CodeAnalysisIndexStatus;
+  diagnostics?: CodeAnalysisDiagnostic[];
   warnings: string[];
   stats: CodeAnalysisStats;
 }
@@ -268,6 +385,8 @@ export interface SourceInventoryResult {
   files: AnalysisSourceFile[];
   totalBytes: number;
   skippedFiles: number;
+  configuredSkippedFiles: number;
+  inspectionFailureCount: number;
   truncated: boolean;
   warnings: string[];
 }
@@ -278,9 +397,14 @@ export interface LspDocumentSymbol {
   line: number;
   character: number;
   endLine: number;
+  endCharacter?: number;
+  detail?: string;
+  containerName?: string;
   documentation?: string;
   children: LspDocumentSymbol[];
   outgoingCalls: LspCallReference[];
+  incomingCalls: LspIncomingCallReference[];
+  references?: LspReferenceLocation[];
 }
 
 export interface LspCallReference {
@@ -290,8 +414,33 @@ export interface LspCallReference {
   targetLine?: number;
 }
 
+export interface LspIncomingCallReference {
+  name: string;
+  line: number;
+  sourceCanonicalPath?: string;
+  sourceLine?: number;
+}
+
+export interface LspReferenceLocation {
+  sourceCanonicalPath?: string;
+  line: number;
+  character: number;
+}
+
+export interface LspSemanticRelation {
+  kind: ParsedSemanticRelationKind;
+  sourceName: string;
+  sourceCanonicalPath: string;
+  sourceLine: number;
+  targetName: string;
+  targetCanonicalPath: string;
+  targetLine: number;
+  evidence: string;
+}
+
 export interface LspAnalysisResult {
   symbolsByPath: Map<string, LspDocumentSymbol[]>;
+  semanticRelations?: LspSemanticRelation[];
   statuses: LanguageServerStatus[];
   warnings: string[];
 }

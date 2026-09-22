@@ -18,6 +18,7 @@ export async function readGitEnvironment(
   const commandOptions = {
     executable: executablePath,
     signal: options.signal,
+    priority: options.priority,
     timeoutMs: options.timeoutMs
   };
   const versionResult = await runProcess({

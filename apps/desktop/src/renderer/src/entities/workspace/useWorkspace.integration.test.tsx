@@ -147,7 +147,7 @@ describe("useWorkspace target selection", () => {
     );
   });
 
-  it("replaces the complete runtime state after creating a Workspace", async () => {
+  it("creates a scanned Workspace from the selected directory", async () => {
     const {
       selectedEntryId: _selectedEntryId,
       selectedTarget: _selectedTarget,
@@ -162,6 +162,19 @@ describe("useWorkspace target selection", () => {
       worktrees: [],
       updatedAt: "2026-09-20T12:00:00.000Z"
     } satisfies WorkspaceDetailsDto;
+    const scannedWorkspace = {
+      ...workspaceWithTarget(TARGET_A),
+      id: "workspace_second",
+      name: "Second Workspace",
+      updatedAt: "2026-09-20T12:01:00.000Z"
+    } satisfies WorkspaceDetailsDto;
+    const selectDirectory = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        cancelled: false as const,
+        path: "C:\\projects\\Second Workspace"
+      }
+    }));
     const create = vi.fn(async () => ({
       ok: true as const,
       value: {
@@ -187,20 +200,26 @@ describe("useWorkspace target selection", () => {
         }
       }
     }));
+    const addEntry = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        workspace: scannedWorkspace,
+        focusedEntryId: "entry",
+        duplicate: false
+      }
+    }));
     installBridge(
       vi.fn(async () => ({
         ok: true as const,
         value: workspaceWithTarget(TARGET_A)
       })),
-      { create }
+      { addEntry, create, selectDirectory }
     );
     await renderHarness();
 
     let created!: Promise<boolean>;
     act(() => {
-      created = controller!.createWorkspace(
-        "Second Workspace"
-      );
+      created = controller!.createWorkspace();
     });
     await act(async () => {
       await created;
@@ -208,13 +227,210 @@ describe("useWorkspace target selection", () => {
     });
 
     await expect(created).resolves.toBe(true);
+    expect(selectDirectory).toHaveBeenCalledOnce();
     expect(create).toHaveBeenCalledWith({
       name: "Second Workspace"
+    });
+    expect(addEntry).toHaveBeenCalledWith({
+      path: "C:\\projects\\Second Workspace",
+      source: "picker"
     });
     expect(controller?.workspace?.id).toBe(
       "workspace_second"
     );
+    expect(controller?.workspace?.entries).toHaveLength(1);
     expect(controller?.workspaces).toHaveLength(2);
+    expect(controller?.notice).toBe(
+      "Workspace“Second Workspace”已创建并完成目录扫描。"
+    );
+  });
+
+  it("deletes the previous empty Workspace after creating the first scanned Workspace", async () => {
+    const {
+      selectedEntryId: _selectedEntryId,
+      selectedTarget: _selectedTarget,
+      ...workspaceBase
+    } = workspaceWithTarget(TARGET_A);
+    const emptyWorkspace = {
+      ...workspaceBase,
+      entries: [],
+      repositories: [],
+      worktrees: []
+    } satisfies WorkspaceDetailsDto;
+    const createdWorkspace = {
+      ...emptyWorkspace,
+      id: "workspace_second",
+      name: "Second Workspace",
+      updatedAt: "2026-09-20T12:00:00.000Z"
+    } satisfies WorkspaceDetailsDto;
+    const scannedWorkspace = {
+      ...workspaceWithTarget(TARGET_A),
+      id: "workspace_second",
+      name: "Second Workspace",
+      updatedAt: "2026-09-20T12:01:00.000Z"
+    } satisfies WorkspaceDetailsDto;
+    const initialState: WorkspaceRuntimeStateDto = {
+      ...createRuntimeState(),
+      workspace: emptyWorkspace
+    };
+    const createdState: WorkspaceRuntimeStateDto = {
+      ...initialState,
+      workspace: createdWorkspace,
+      workspaces: [
+        ...initialState.workspaces,
+        {
+          id: createdWorkspace.id,
+          name: createdWorkspace.name,
+          updatedAt: createdWorkspace.updatedAt
+        }
+      ]
+    };
+    const finalState: WorkspaceRuntimeStateDto = {
+      ...createdState,
+      workspace: scannedWorkspace,
+      workspaces: [
+        {
+          id: scannedWorkspace.id,
+          name: scannedWorkspace.name,
+          updatedAt: scannedWorkspace.updatedAt
+        }
+      ]
+    };
+    const deleteWorkspace = vi.fn(async () => ({
+      ok: true as const,
+      value: finalState
+    }));
+    installBridge(
+      vi.fn(async () => ({
+        ok: true as const,
+        value: scannedWorkspace
+      })),
+      {
+        getState: vi.fn(async () => ({
+          ok: true as const,
+          value: initialState
+        })),
+        selectDirectory: vi.fn(async () => ({
+          ok: true as const,
+          value: {
+            cancelled: false as const,
+            path: "C:\\projects\\Second Workspace"
+          }
+        })),
+        create: vi.fn(async () => ({
+          ok: true as const,
+          value: createdState
+        })),
+        addEntry: vi.fn(async () => ({
+          ok: true as const,
+          value: {
+            workspace: scannedWorkspace,
+            focusedEntryId: "entry",
+            duplicate: false
+          }
+        })),
+        delete: deleteWorkspace
+      }
+    );
+    await renderHarness();
+
+    let created!: Promise<boolean>;
+    act(() => {
+      created = controller!.createWorkspace();
+    });
+    await act(async () => {
+      await created;
+      await flushAsyncWork();
+    });
+
+    await expect(created).resolves.toBe(true);
+    expect(deleteWorkspace).toHaveBeenCalledWith({
+      workspaceId: "workspace"
+    });
+    expect(controller?.workspace?.id).toBe("workspace_second");
+    expect(controller?.workspaces).toHaveLength(1);
+  });
+
+  it("removes an empty Workspace and restores the previous one when scanning fails", async () => {
+    const {
+      selectedEntryId: _selectedEntryId,
+      selectedTarget: _selectedTarget,
+      ...workspaceBase
+    } = workspaceWithTarget(TARGET_A);
+    const secondWorkspace = {
+      ...workspaceBase,
+      id: "workspace_second",
+      name: "Empty",
+      entries: [],
+      repositories: [],
+      worktrees: [],
+      updatedAt: "2026-09-20T12:00:00.000Z"
+    } satisfies WorkspaceDetailsDto;
+    const createdState: WorkspaceRuntimeStateDto = {
+      ...createRuntimeState(),
+      workspace: secondWorkspace,
+      workspaces: [
+        ...createRuntimeState().workspaces,
+        {
+          id: secondWorkspace.id,
+          name: secondWorkspace.name,
+          updatedAt: secondWorkspace.updatedAt
+        }
+      ]
+    };
+    const removeWorkspace = vi.fn(async () => ({
+      ok: true as const,
+      value: createRuntimeState()
+    }));
+    installBridge(
+      vi.fn(async () => ({
+        ok: true as const,
+        value: workspaceWithTarget(TARGET_A)
+      })),
+      {
+        selectDirectory: vi.fn(async () => ({
+          ok: true as const,
+          value: {
+            cancelled: false as const,
+            path: "C:\\projects\\Empty"
+          }
+        })),
+        create: vi.fn(async () => ({
+          ok: true as const,
+          value: createdState
+        })),
+        addEntry: vi.fn(async () => ({
+          ok: false as const,
+          error: {
+            code: "NO_REPOSITORIES_FOUND" as const,
+            message:
+              "No Git repositories were found in the selected directory.",
+            details: {}
+          }
+        })),
+        delete: removeWorkspace
+      }
+    );
+    await renderHarness();
+
+    let created!: Promise<boolean>;
+    act(() => {
+      created = controller!.createWorkspace();
+    });
+    await act(async () => {
+      await created;
+      await flushAsyncWork();
+    });
+
+    await expect(created).resolves.toBe(false);
+    expect(removeWorkspace).toHaveBeenCalledWith({
+      workspaceId: "workspace_second"
+    });
+    expect(controller?.workspace?.id).toBe("workspace");
+    expect(controller?.workspaces).toHaveLength(1);
+    expect(controller?.error?.code).toBe(
+      "NO_REPOSITORIES_FOUND"
+    );
   });
 
   async function renderHarness() {

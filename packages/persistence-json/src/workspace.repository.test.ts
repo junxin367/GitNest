@@ -437,7 +437,7 @@ describe("JsonWorkspaceStore", () => {
     expect(persisted.unknownLegacyField).toBeUndefined();
   });
 
-  it("normalizes persisted Workspace meta repositories into the default root group", async () => {
+  it("normalizes grouped root repositories and removes the standalone default group", async () => {
     temporary =
       await createTemporaryDirectoryFixture(
         "workspace-root-group-normalization"
@@ -447,13 +447,14 @@ describe("JsonWorkspaceStore", () => {
       "default.workspace.json"
     );
     const document =
-      createCurrentWorkspaceDocument() as Record<
+      createLegacyWorkspaceWithTwoEntries() as unknown as Record<
         string,
         unknown
       >;
-    const entry = (
-      document.entries as Array<Record<string, unknown>>
-    )[0] as Record<string, unknown>;
+    const entries = document.entries as Array<
+      Record<string, unknown>
+    >;
+    const entry = entries[0] as Record<string, unknown>;
     const target = document.selectedTarget;
     entry.kind = "workspace-meta-repository";
     entry.rootTarget = target;
@@ -475,6 +476,10 @@ describe("JsonWorkspaceStore", () => {
         }
       ]
     });
+    expect(migrated?.entries[1]).toMatchObject({
+      kind: "standalone-repository",
+      groups: []
+    });
     const persisted = JSON.parse(
       await readFile(filePath, "utf8")
     );
@@ -482,6 +487,7 @@ describe("JsonWorkspaceStore", () => {
       name: "原/根仓库",
       targets: [target]
     });
+    expect(persisted.entries[1].groups).toEqual([]);
   });
 
   it("rejects semantically inconsistent Repository and selected-target relationships", async () => {

@@ -128,6 +128,7 @@ export class RepositoryQueryService {
               ? {}
               : { contextLines }),
             includeMedia: true,
+            priority: "interactive",
             signal
           }
         )
@@ -197,6 +198,7 @@ export class RepositoryQueryService {
               ? {}
               : { contextLines }),
             includeMedia: true,
+            priority: "interactive",
             signal
           }
         )
@@ -257,6 +259,7 @@ export class RepositoryQueryService {
             ? {}
             : { contextLines }),
           includeMedia: true,
+          priority: "interactive",
           signal
         }
       );

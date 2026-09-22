@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 
-const LOADING_INDICATOR_MINIMUM_MS = 500;
+const LOADING_INDICATOR_MINIMUM_MS = 100;
 
 interface MinimumLoadingIndicatorOptions {
   minimumVisibleMs?: number;

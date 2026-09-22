@@ -34,6 +34,7 @@ import {
   type GitStashClient,
   type GitWorktreeCommandClient,
   type GitReadOptions,
+  type GitReadPriority,
   type GitWriteOptions,
   type FetchRemoteOptions,
   type GitPullStrategy,
@@ -253,7 +254,10 @@ export class GitCliClient
   async getEnvironment(
     options: GitReadOptions = {}
   ): Promise<GitEnvironment> {
-    const executablePath = await this.#getExecutablePath(options.signal);
+    const executablePath = await this.#getExecutablePath(
+      options.signal,
+      options.priority
+    );
     return readGitEnvironment(executablePath, options);
   }
 
@@ -304,7 +308,10 @@ export class GitCliClient
     options: ReadRepositorySnapshotOptions = {}
   ): Promise<RepositorySnapshot> {
     const worktreePath = await validateDirectoryPath(path);
-    const executablePath = await this.#getExecutablePath(options.signal);
+    const executablePath = await this.#getExecutablePath(
+      options.signal,
+      options.priority
+    );
 
     try {
       const result = await runProcess({
@@ -312,6 +319,7 @@ export class GitCliClient
         cwd: worktreePath,
         args: STATUS_ARGUMENTS,
         signal: options.signal,
+        priority: options.priority,
         timeoutMs: options.timeoutMs
       });
       return await reconcileRepositorySnapshot(
@@ -320,6 +328,7 @@ export class GitCliClient
           executable: executablePath,
           cwd: worktreePath,
           signal: options.signal,
+          priority: options.priority,
           timeoutMs: options.timeoutMs
         },
         options.includeChangeStats ?? false
@@ -336,7 +345,10 @@ export class GitCliClient
     const worktreePath = await validateDirectoryPath(path);
     const relativePath = validateRelativePathspec(options.path);
     const contextLines = clampContextLines(options.contextLines);
-    const executablePath = await this.#getExecutablePath(options.signal);
+    const executablePath = await this.#getExecutablePath(
+      options.signal,
+      options.priority
+    );
 
     try {
       const result = await runProcess({
@@ -348,6 +360,7 @@ export class GitCliClient
           contextLines
         ),
         signal: options.signal,
+        priority: options.priority,
         timeoutMs: options.timeoutMs,
         outputLimitBytes: DIFF_OUTPUT_LIMIT_BYTES,
         truncateOutput: true,
@@ -392,6 +405,7 @@ export class GitCliClient
             executable: executablePath,
             cwd: worktreePath,
             signal: options.signal,
+            priority: options.priority,
             timeoutMs: options.timeoutMs
           }
         )
@@ -582,12 +596,14 @@ export class GitCliClient
     const relativePath = validateRelativePathspec(options.path);
     const contextLines = clampContextLines(options.contextLines);
     const executablePath = await this.#getExecutablePath(
-      options.signal
+      options.signal,
+      options.priority
     );
     const commandOptions = {
       executable: executablePath,
       cwd: worktreePath,
       signal: options.signal,
+      priority: options.priority,
       timeoutMs: options.timeoutMs
     };
 
@@ -716,11 +732,15 @@ export class GitCliClient
     const normalizedRef = validateStashRef(options.stashRef);
     const relativePath = validateRelativePathspec(options.path);
     const contextLines = clampContextLines(options.contextLines);
-    const executablePath = await this.#getExecutablePath(options.signal);
+    const executablePath = await this.#getExecutablePath(
+      options.signal,
+      options.priority
+    );
     const commandOptions = {
       executable: executablePath,
       cwd: worktreePath,
       signal: options.signal,
+      priority: options.priority,
       timeoutMs: options.timeoutMs
     };
 
@@ -2098,10 +2118,14 @@ export class GitCliClient
   }
 
   async #getExecutablePath(
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    priority?: GitReadPriority
   ): Promise<string> {
     if (!this.#executablePath) {
-      this.#executablePath = await findGitExecutable(signal);
+      this.#executablePath = await findGitExecutable(
+        signal,
+        priority
+      );
     }
 
     return this.#executablePath;
@@ -2112,6 +2136,7 @@ interface CommandOptions {
   executable: string;
   cwd: string;
   signal?: AbortSignal | undefined;
+  priority?: GitReadPriority | undefined;
   timeoutMs?: number | undefined;
 }
 

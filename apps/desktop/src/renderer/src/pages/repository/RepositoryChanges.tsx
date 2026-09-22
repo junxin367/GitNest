@@ -129,8 +129,7 @@ export function RepositoryChanges({
         scopeChanged
       })
     );
-  const showDiffSkeleton =
-    useMinimumLoadingIndicator(diffLoading);
+  const showDiffSkeleton = diffLoading;
   const workspaceFiles = useMemo(
     () =>
       files.map((file) =>

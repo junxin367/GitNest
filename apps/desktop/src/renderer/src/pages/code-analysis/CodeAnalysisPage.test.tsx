@@ -16,8 +16,10 @@ import {
 
 import {
   createDefaultAppSettings,
+  LANGUAGE_SERVER_LANGUAGES,
   type CodeAnalysisSnapshotDto,
-  type GitNestBridge
+  type GitNestBridge,
+  type LanguageServerLanguageDto
 } from "@gitnest/contracts";
 
 import type { CodeAnalysisController } from "../../entities/code-analysis/useCodeAnalysis";
@@ -26,6 +28,20 @@ import { CodeAnalysisPage } from "./CodeAnalysisPage";
 const analysisMock = vi.hoisted(() => ({
   controller: null as CodeAnalysisController | null
 }));
+
+const languageServerNames: Record<
+  LanguageServerLanguageDto,
+  string
+> = {
+  typescript: "TypeScript",
+  vue: "Vue",
+  java: "Java",
+  python: "Python",
+  go: "Go",
+  kotlin: "Kotlin",
+  csharp: "C#",
+  rust: "Rust"
+};
 
 vi.mock(
   "../../entities/code-analysis/useCodeAnalysis",
@@ -131,6 +147,318 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(header?.lastElementChild?.tagName).toBe("P");
   });
 
+  it("uses the same code-node count in the summary and navigation tab", async () => {
+    const base = createSnapshot();
+    const snapshot: CodeAnalysisSnapshotDto = {
+      ...base,
+      nodes: [
+        {
+          ...base.nodes[0]!,
+          id: "file-node",
+          kind: "file",
+          name: "caller.ts",
+          qualifiedName: "src/caller.ts"
+        },
+        ...base.nodes
+      ],
+      stats: {
+        ...base.stats,
+        analyzedFiles: 1,
+        symbolCount: 2
+      }
+    };
+    analysisMock.controller = createController(snapshot);
+
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    const summaryCard = Array.from(
+      container.querySelectorAll(".analysis-summary-card")
+    ).find(
+      (card) =>
+        card.querySelector("span")?.textContent === "代码节点"
+    );
+    const navigationTab = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.analysis-navigation-tabs [role="tab"]'
+      )
+    ).find((tab) => tab.textContent?.includes("代码节点"));
+
+    expect(
+      summaryCard?.querySelector("strong")?.textContent
+    ).toBe("3");
+    expect(
+      navigationTab?.querySelector("span")?.textContent
+    ).toBe("3");
+  });
+
+  it("limits code-node results without rendering a truncation notice", async () => {
+    const base = createSnapshot();
+    const nodes = Array.from({ length: 121 }, (_, index) => ({
+      ...base.nodes[0]!,
+      id: `node-${index}`,
+      name: `Node ${index}`,
+      qualifiedName: `Fixture.Node${index}`,
+      location: {
+        ...base.nodes[0]!.location,
+        path: `src/node-${index}.ts`
+      }
+    }));
+    analysisMock.controller = createController({
+      ...base,
+      nodes,
+      edges: [],
+      stats: {
+        ...base.stats,
+        symbolCount: nodes.length,
+        edgeCount: 0
+      }
+    });
+
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(
+      container.querySelectorAll(".analysis-symbol-result")
+    ).toHaveLength(120);
+    expect(container.textContent).not.toContain(
+      "仅显示前 120 个匹配节点"
+    );
+
+    const input = container.querySelector<HTMLInputElement>(
+      'input[aria-label="搜索代码节点"]'
+    );
+    if (!input) {
+      throw new Error("Code-node search input was not rendered.");
+    }
+    await act(async () => {
+      setInputValue(input, "Node 120");
+      await flushAsyncWork();
+    });
+
+    expect(
+      container.querySelectorAll(".analysis-symbol-result")
+    ).toHaveLength(1);
+  });
+
+  it("shows qualified class member names and renders their containment graph", async () => {
+    const base = createSnapshot();
+    const nestedClass = {
+      ...base.nodes[0]!,
+      id: "flag",
+      kind: "class" as const,
+      name: "Flag",
+      qualifiedName: "ScProfDef.Flag",
+      language: "java" as const,
+      location: {
+        ...base.nodes[0]!.location,
+        path: "src/main/java/fai/app/ScProfDef.java",
+        line: 28
+      }
+    };
+    const property = {
+      ...base.nodes[0]!,
+      id: "open-guide",
+      kind: "property" as const,
+      name: "OPEN_GUIDE",
+      qualifiedName: "ScProfDef.Flag.OPEN_GUIDE",
+      language: "java" as const,
+      location: {
+        ...base.nodes[0]!.location,
+        path: "src/main/java/fai/app/ScProfDef.java",
+        line: 29
+      }
+    };
+    analysisMock.controller = createController({
+      ...base,
+      nodes: [nestedClass, property],
+      edges: [
+        {
+          id: "flag-open-guide",
+          from: nestedClass.id,
+          to: property.id,
+          kind: "contains",
+          confidence: "exact"
+        }
+      ],
+      requestChains: [],
+      stats: {
+        ...base.stats,
+        symbolCount: 2,
+        edgeCount: 1,
+        requestChainCount: 0
+      }
+    });
+
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(
+      Array.from(
+        container.querySelectorAll(
+          ".analysis-symbol-result strong"
+        )
+      ).map((element) => element.textContent)
+    ).toEqual(
+      expect.arrayContaining([
+        "ScProfDef.Flag",
+        "ScProfDef.Flag.OPEN_GUIDE"
+      ])
+    );
+    expect(
+      container.querySelector(
+        ".analysis-graph-panel .analysis-panel-heading span"
+      )?.textContent
+    ).toBe("ScProfDef.Flag 的上下游");
+    expect(
+      container.querySelector(".edge-contains")
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        '[aria-label="property ScProfDef.Flag.OPEN_GUIDE"] .analysis-node-name'
+      )?.textContent
+    ).toBe("ScProfDef.Flag.OPEN_GUIDE");
+  });
+
+  it("offers managed installation for every supported LSP", async () => {
+    const snapshot = {
+      ...createSnapshot(),
+      languageServers: LANGUAGE_SERVER_LANGUAGES.map(
+        (language) => ({
+          language,
+          state:
+            language === "python"
+              ? ("disabled" as const)
+              : ("unavailable" as const),
+          command: `${language}-language-server`,
+          message: `${language} Language Server 未安装。`,
+          symbolCount: 0
+        })
+      )
+    };
+    const controller = createController(snapshot);
+    controller.installLanguageServer = vi.fn(
+      async (language) => ({
+        language,
+        status: "installed" as const,
+        command: `C:\\GitNest\\runtime\\lsp\\servers\\${language}\\server.exe`,
+        message: `${language} Language Server 已安装。`
+      })
+    );
+    analysisMock.controller = controller;
+    const reloadSettings = vi.fn(async () => undefined);
+
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={reloadSettings}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    for (const language of LANGUAGE_SERVER_LANGUAGES.filter(
+      (language) => language !== "python"
+    )) {
+      expect(
+        container.querySelector(
+          `[aria-label="安装 ${languageServerNames[language]} Language Server"]`
+        )
+      ).not.toBeNull();
+    }
+    const installButton =
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="安装并启用 Python Language Server"]'
+      );
+    expect(installButton).not.toBeNull();
+    expect(
+      container.querySelector(
+        '[aria-label^="配置 "]'
+      )
+    ).toBeNull();
+
+    await act(async () => {
+      installButton?.click();
+      await flushAsyncWork();
+    });
+
+    expect(
+      controller.installLanguageServer
+    ).toHaveBeenCalledWith("python");
+    expect(reloadSettings).toHaveBeenCalledOnce();
+    expect(controller.start).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain(
+      "请手动运行代码分析以使用该服务。"
+    );
+    expect(document.body.textContent).not.toContain(
+      "正在重新运行代码分析。"
+    );
+  });
+
+  it("does not offer installation when an enabled LSP only has no matching files", async () => {
+    const snapshot = {
+      ...createSnapshot(),
+      languageServers: [
+        {
+          language: "typescript" as const,
+          state: "disabled" as const,
+          command: "typescript-language-server",
+          message: "当前范围没有对应语言文件。",
+          symbolCount: 0
+        }
+      ]
+    };
+    analysisMock.controller = createController(snapshot);
+
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(
+      container.querySelector(
+        '[aria-label="安装并启用 TypeScript Language Server"]'
+      )
+    ).toBeNull();
+  });
+
   it("shows a layout-matched skeleton while the initial analysis state loads", async () => {
     const controller = createController();
     controller.state = {
@@ -179,6 +507,9 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
   });
 
   it("replaces the empty state with full-page progress as soon as analysis starts", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(
+      Date.parse("2026-09-21T12:00:00.000Z")
+    );
     const controller = createController();
     controller.state = {
       state: "idle",
@@ -211,6 +542,9 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(startingProgress?.textContent).toContain(
       "正在启动代码分析"
     );
+    expect(startingProgress?.textContent).toContain(
+      "执行时间 00:00"
+    );
     expect(container.textContent).not.toContain(
       "尚未生成代码关系索引"
     );
@@ -229,6 +563,7 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       entryId: "entry",
       entryName: "Entry",
       scope: "workspace",
+      startedAt: "2026-09-21T11:58:55.000Z",
       progress: {
         stage: "parsing",
         completed: 3,
@@ -261,6 +596,9 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       "正在解析源码"
     );
     expect(runningProgress?.textContent).toContain("3/10");
+    expect(runningProgress?.textContent).toContain(
+      "执行时间 01:05"
+    );
     expect(
       runningProgress
         ?.querySelector('[role="progressbar"]')
@@ -448,7 +786,7 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     ).not.toBeNull();
   });
 
-  it("keeps analysis warnings inline immediately after Java LSP", async () => {
+  it("aggregates connected LSPs while keeping failures and warnings separate", async () => {
     const snapshot: CodeAnalysisSnapshotDto = {
       ...createSnapshot(),
       languageServers: [
@@ -458,6 +796,13 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
           command: "typescript-language-server",
           message: "已连接。",
           symbolCount: 1
+        },
+        {
+          language: "vue",
+          state: "failed",
+          command: "vue-language-server",
+          message: "连接失败。",
+          symbolCount: 0
         },
         {
           language: "java",
@@ -486,17 +831,30 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       ".analysis-runtime-strip"
     );
     const runtimeItems = Array.from(runtimeStrip?.children ?? []);
-    const javaState = runtimeItems.find((item) =>
-      item.textContent?.includes("Java LSP：已连接")
+    const connectedState = runtimeItems.find((item) =>
+      item.textContent?.includes("LSP：2 个已连接")
+    );
+    const failedState = runtimeItems.find((item) =>
+      item.textContent?.includes("Vue LSP：失败")
     );
     const warningPanel = runtimeStrip?.querySelector(
       ".analysis-warning-panel"
     );
 
-    expect(javaState).not.toBeUndefined();
+    expect(connectedState).not.toBeUndefined();
+    expect(connectedState?.getAttribute("title")).toBe(
+      "已连接：TypeScript、Java"
+    );
+    expect(runtimeStrip?.textContent).not.toContain(
+      "TypeScript LSP：已连接"
+    );
+    expect(runtimeStrip?.textContent).not.toContain(
+      "Java LSP：已连接"
+    );
+    expect(failedState).not.toBeUndefined();
     expect(warningPanel).not.toBeNull();
     expect(runtimeItems.indexOf(warningPanel!)).toBe(
-      runtimeItems.indexOf(javaState!) + 1
+      runtimeItems.indexOf(failedState!) + 1
     );
     expect(
       warningPanel?.querySelector("summary")?.textContent
@@ -592,6 +950,76 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(document.activeElement).toBe(methodTrigger);
   });
 
+  it("deduplicates legacy request-chain ids before rendering and clears every row for an empty filter result", async () => {
+    const baseSnapshot = createSnapshot();
+    const duplicateChain = {
+      id: "duplicate-chain",
+      profileId: "web-http" as const,
+      transport: "http" as const,
+      operationKey: "GET /api/users/:id",
+      method: "GET",
+      route: "/api/users/:id",
+      title: "GET /api/users/:id",
+      clientNodeId: "caller",
+      endpointNodeId: "callee",
+      nodeIds: ["caller", "callee"],
+      edgeIds: ["caller-callee"],
+      changed: true,
+      ambiguous: false,
+      confidence: "exact" as const
+    };
+    analysisMock.controller = createController({
+      ...baseSnapshot,
+      requestChains: [
+        duplicateChain,
+        { ...duplicateChain }
+      ],
+      stats: {
+        ...baseSnapshot.stats,
+        requestChainCount: 2
+      }
+    });
+
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(
+      container.querySelectorAll(
+        ".analysis-chain-list > button"
+      )
+    ).toHaveLength(1);
+    expect(container.textContent).toContain("1 条请求链");
+
+    const input = container.querySelector<HTMLInputElement>(
+      'input[aria-label="筛选请求链"]'
+    );
+    if (!input) {
+      throw new Error("Request-chain filter was not rendered.");
+    }
+    await act(async () => {
+      setInputValue(input, "no-such-request-chain");
+      await flushAsyncWork();
+    });
+
+    expect(
+      container.querySelectorAll(
+        ".analysis-chain-list > button"
+      )
+    ).toHaveLength(0);
+    expect(container.textContent).toContain(
+      "没有匹配的请求链"
+    );
+  });
+
   it("selects a request chain's entry node without replacing navigation", async () => {
     const snapshot: CodeAnalysisSnapshotDto = {
       ...createSnapshot(),
@@ -681,6 +1109,83 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
         ".analysis-chain-panel.is-node-detail"
       )
     ).toBeNull();
+  });
+
+  it("clears the selected graph node after clicking blank canvas space", async () => {
+    const baseSnapshot = createSnapshot();
+    analysisMock.controller = createController({
+      ...baseSnapshot,
+      requestChains: [
+        {
+          id: "get-user",
+          profileId: "web-http",
+          transport: "http",
+          operationKey: "GET /api/users/:id",
+          method: "GET",
+          route: "/api/users/:id",
+          title: "GET /api/users/:id",
+          clientNodeId: "caller",
+          endpointNodeId: "callee",
+          nodeIds: ["caller", "callee"],
+          edgeIds: ["caller-callee"],
+          changed: true,
+          ambiguous: false,
+          confidence: "exact"
+        }
+      ],
+      stats: {
+        ...baseSnapshot.stats,
+        requestChainCount: 1
+      }
+    });
+
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(
+      container.querySelector(
+        '.analysis-graph-node.selected[aria-label="function caller"]'
+      )
+    ).not.toBeNull();
+
+    const viewport = container.querySelector<HTMLDivElement>(
+      ".analysis-graph-scroll"
+    );
+    act(() => {
+      dispatchPointer(viewport as Element, "pointerdown", {
+        pointerId: 7,
+        clientX: 100,
+        clientY: 100
+      });
+      dispatchPointer(viewport as Element, "pointerup", {
+        pointerId: 7,
+        clientX: 100,
+        clientY: 100
+      });
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".analysis-graph-node.selected")
+      ).toBeNull();
+    });
+    expect(
+      container.querySelectorAll(".analysis-graph-node")
+    ).toHaveLength(2);
+    expect(
+      container.querySelector(
+        '.analysis-chain-list > button[aria-current="true"]'
+      )
+    ).not.toBeNull();
   });
 
   it("renders an RPC chain with its analysis profile and generic ambiguity wording", async () => {
@@ -1213,6 +1718,174 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       window.gitnest.repository.getDiff
     ).not.toHaveBeenCalled();
   });
+
+  it("shows index coverage, edge evidence, and editor positioning without extra filter or chain-step panels", async () => {
+    const base = createSnapshot();
+    const snapshot: CodeAnalysisSnapshotDto = {
+      ...base,
+      edges: [
+        {
+          ...base.edges[0]!,
+          source: "merged",
+          evidence: "LSP call hierarchy matched callee"
+        }
+      ],
+      requestChains: [
+        {
+          id: "request-chain",
+          profileId: "web-http",
+          transport: "http",
+          operationKey: "GET /items",
+          method: "GET",
+          route: "/items",
+          title: "GET /items",
+          clientNodeId: "caller",
+          endpointNodeId: "callee",
+          nodeIds: ["caller", "callee"],
+          edgeIds: ["caller-callee"],
+          changed: true,
+          ambiguous: false,
+          confidence: "probable"
+        }
+      ],
+      indexStatus: {
+        fullIndexAvailable: false,
+        resultCompleteness: "partial",
+        impactCoverage: "possible-omissions",
+        lastFullIndexAt: "2026-09-19T12:00:00.000Z",
+        message: "当前结果来自局部索引，可能遗漏未扫描调用者。"
+      },
+      diagnostics: [
+        {
+          id: "diagnostic",
+          kind: "unresolved-call",
+          severity: "warning",
+          message: "下游调用未解析",
+          evidence: "未找到 receiverType 对应实现",
+          nodeId: "callee",
+          relatedNodeIds: []
+        }
+      ],
+      stats: {
+        ...base.stats,
+        requestChainCount: 1,
+        truncated: true
+      }
+    };
+    const controller = createController(snapshot);
+    analysisMock.controller = controller;
+
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(
+      container.querySelector(
+        '[aria-label="代码索引状态"]'
+      )
+    ).toBeNull();
+    const indexStatusMenu =
+      container.querySelector<HTMLDetailsElement>(
+        ".analysis-index-status-menu"
+      );
+    expect(indexStatusMenu?.textContent).toContain(
+      "结果已按性能上限截断"
+    );
+    expect(indexStatusMenu?.textContent).toContain(
+      "局部索引"
+    );
+    expect(
+      indexStatusMenu?.parentElement?.classList.contains(
+        "analysis-runtime-strip"
+      )
+    ).toBe(true);
+    expect(container.textContent).toContain(
+      "LSP call hierarchy matched callee"
+    );
+    expect(
+      container.querySelector(
+        '[aria-label="代码分析筛选"]'
+      )
+    ).toBeNull();
+    expect(
+      container.querySelector(
+        '[aria-label="请求链步骤"]'
+      )
+    ).toBeNull();
+    expect(
+      container.querySelector(
+        '[aria-label="复制当前请求链"]'
+      )
+    ).toBeNull();
+
+    await act(async () => {
+      Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button")
+      )
+        .find((button) =>
+          button.textContent?.includes("建立完整索引")
+        )
+        ?.click();
+      await flushAsyncWork();
+    });
+    expect(controller.start).toHaveBeenCalledWith("workspace");
+
+    expect(container.textContent).not.toContain("导出 JSON");
+
+    act(() => {
+      container
+        .querySelector<SVGGElement>(
+          '[aria-label="function callee"]'
+        )
+        ?.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            key: "Enter"
+          })
+        );
+    });
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain(
+        "在 Cursor 中定位"
+      );
+      expect(container.textContent).toContain(
+        "下游调用未解析"
+      );
+    });
+    await act(async () => {
+      Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button")
+      )
+        .find((button) =>
+          button.textContent?.includes("在 Cursor 中定位")
+        )
+        ?.click();
+      await flushAsyncWork();
+    });
+    expect(
+      window.gitnest.system.openExternalApplication
+    ).toHaveBeenCalledWith({
+      context: {
+        scope: "file",
+        target: {
+          repositoryId: "repository",
+          worktreeId: "worktree"
+        },
+        path: "src/callee.ts",
+        line: 1,
+        column: 1
+      },
+      kind: "cursor"
+    });
+  });
 });
 
 function createController(
@@ -1335,6 +2008,25 @@ function createBridge(): GitNestBridge {
           endLine: 3,
           totalLines: 3,
           truncated: false
+        }
+      }))
+    },
+    system: {
+      listExternalApplications: vi.fn(async () => ({
+        ok: true as const,
+        value: [
+          {
+            kind: "cursor" as const,
+            label: "Cursor"
+          }
+        ]
+      })),
+      openExternalApplication: vi.fn(async (request) => ({
+        ok: true as const,
+        value: {
+          kind: request.kind,
+          label: "Cursor",
+          scope: request.context.scope
         }
       }))
     },

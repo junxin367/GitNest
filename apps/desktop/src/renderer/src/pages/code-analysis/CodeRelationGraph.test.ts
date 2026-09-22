@@ -29,7 +29,7 @@ import {
 } from "./CodeRelationGraph";
 
 describe("buildRelationGraphLayout", () => {
-  it("places callers left, callees right, and ignores contains edges", () => {
+  it("places callers left, callees right, and ignores file containment edges", () => {
     const snapshot = createSnapshot(
       [
         node("file", "file", "file"),
@@ -70,6 +70,114 @@ describe("buildRelationGraphLayout", () => {
     );
     expect(layout.positionById.get("c")?.x).toBeGreaterThan(
       layout.positionById.get("b")?.x ?? 0
+    );
+  });
+
+  it("shows a nested type between its owner and member properties", () => {
+    const outerClass = {
+      ...node("outer", "ScProfDef", "class"),
+      qualifiedName: "ScProfDef",
+      language: "java" as const
+    };
+    const nestedClass = {
+      ...node("flag", "Flag", "class"),
+      qualifiedName: "ScProfDef.Flag",
+      language: "java" as const
+    };
+    const property = {
+      ...node("open-guide", "OPEN_GUIDE", "property"),
+      qualifiedName: "ScProfDef.Flag.OPEN_GUIDE",
+      language: "java" as const
+    };
+    const caller = {
+      ...node("caller", "enabled", "method"),
+      qualifiedName: "ScProfServiceImpl.enabled",
+      language: "java" as const
+    };
+    const snapshot = createSnapshot(
+      [outerClass, nestedClass, property, caller],
+      [
+        edge("outer-flag", "outer", "flag", "contains"),
+        edge(
+          "flag-open-guide",
+          "flag",
+          "open-guide",
+          "contains"
+        ),
+        edge(
+          "caller-open-guide",
+          "caller",
+          "open-guide",
+          "references"
+        )
+      ]
+    );
+
+    const layout = buildRelationGraphLayout(
+      snapshot,
+      null,
+      "flag"
+    );
+
+    expect(
+      layout.nodes.map(({ node: graphNode }) => graphNode.id)
+    ).toEqual(
+      expect.arrayContaining([
+        "outer",
+        "flag",
+        "open-guide",
+        "caller"
+      ])
+    );
+    expect(layout.positionById.get("outer")?.x).toBeLessThan(
+      layout.positionById.get("flag")?.x ?? 0
+    );
+    expect(
+      layout.positionById.get("open-guide")?.x
+    ).toBeGreaterThan(
+      layout.positionById.get("flag")?.x ?? 0
+    );
+    expect(layout.positionById.get("caller")?.x).toBeLessThan(
+      layout.positionById.get("flag")?.x ?? 0
+    );
+    expect(layout.edges.map((graphEdge) => graphEdge.id)).toEqual(
+      expect.arrayContaining([
+        "outer-flag",
+        "flag-open-guide",
+        "caller-open-guide"
+      ])
+    );
+  });
+
+  it("places symbols that reference a focused property upstream", () => {
+    const snapshot = createSnapshot(
+      [
+        node("caller", "ScProfServiceImpl.enabled", "method"),
+        node("constant", "OPEN_GUIDE", "property")
+      ],
+      [
+        edge(
+          "caller-constant",
+          "caller",
+          "constant",
+          "references"
+        )
+      ]
+    );
+
+    const layout = buildRelationGraphLayout(
+      snapshot,
+      null,
+      "constant"
+    );
+
+    expect(
+      layout.nodes.map(({ node: graphNode }) => graphNode.id)
+    ).toEqual(expect.arrayContaining(["caller", "constant"]));
+    expect(
+      layout.positionById.get("caller")?.x
+    ).toBeLessThan(
+      layout.positionById.get("constant")?.x ?? 0
     );
   });
 
@@ -379,6 +487,55 @@ describe("CodeRelationGraph interactions", () => {
     );
   });
 
+  it("renders qualified names for nested classes and properties", () => {
+    const nestedClass = {
+      ...node("flag", "Flag", "class"),
+      qualifiedName: "ScProfDef.Flag",
+      language: "java" as const
+    };
+    const property = {
+      ...node("open-guide", "OPEN_GUIDE", "property"),
+      qualifiedName: "ScProfDef.Flag.OPEN_GUIDE",
+      language: "java" as const
+    };
+    act(() => {
+      root.render(
+        createElement(CodeRelationGraph, {
+          snapshot: createSnapshot(
+            [nestedClass, property],
+            [
+              edge(
+                "flag-open-guide",
+                "flag",
+                "open-guide",
+                "contains"
+              )
+            ]
+          ),
+          chain: null,
+          focusNodeId: nestedClass.id,
+          selectedNodeId: nestedClass.id,
+          onSelectNode: vi.fn(),
+          onClearSelection: vi.fn()
+        })
+      );
+    });
+
+    expect(
+      container.querySelector(
+        '[aria-label="class ScProfDef.Flag"] .analysis-node-name'
+      )?.textContent
+    ).toBe("ScProfDef.Flag");
+    expect(
+      container.querySelector(
+        '[aria-label="property ScProfDef.Flag.OPEN_GUIDE"] .analysis-node-name'
+      )?.textContent
+    ).toBe("ScProfDef.Flag.OPEN_GUIDE");
+    expect(
+      container.querySelector(".edge-contains")
+    ).not.toBeNull();
+  });
+
   it("renders RPC request edges and RPC node labels", () => {
     const rpcClient = node(
       "rpc-client",
@@ -439,6 +596,87 @@ describe("CodeRelationGraph interactions", () => {
     ).toBe("RPC");
     expect(container.textContent).toContain("RPC 客户端");
     expect(container.textContent).toContain("RPC 处理器");
+  });
+
+  it("renders reference edges with a distinct label", () => {
+    const snapshot = createSnapshot(
+      [
+        node("caller", "ScProfServiceImpl.enabled", "method"),
+        node("constant", "OPEN_GUIDE", "property")
+      ],
+      [
+        edge(
+          "caller-constant",
+          "caller",
+          "constant",
+          "references"
+        )
+      ]
+    );
+
+    act(() => {
+      root.render(
+        createElement(CodeRelationGraph, {
+          snapshot,
+          chain: null,
+          focusNodeId: "constant",
+          selectedNodeId: "constant",
+          onSelectNode: vi.fn(),
+          onClearSelection: vi.fn()
+        })
+      );
+    });
+
+    expect(
+      container.querySelector(".edge-references")
+    ).not.toBeNull();
+    expect(
+      container.querySelector(".edge-label-references")
+        ?.textContent
+    ).toBe("引用");
+  });
+
+  it("renders inheritance, implementation, and override edges with distinct labels", () => {
+    const cases = [
+      ["extends", "继承"],
+      ["implements", "实现"],
+      ["overrides", "重写"]
+    ] as const;
+
+    for (const [kind, label] of cases) {
+      const snapshot = createSnapshot(
+        [node("source", "Child"), node("target", "Base")],
+        [
+          edge(
+            `source-target-${kind}`,
+            "source",
+            "target",
+            kind
+          )
+        ]
+      );
+
+      act(() => {
+        root.render(
+          createElement(CodeRelationGraph, {
+            snapshot,
+            chain: null,
+            focusNodeId: "source",
+            selectedNodeId: "source",
+            onSelectNode: vi.fn(),
+            onClearSelection: vi.fn()
+          })
+        );
+      });
+
+      expect(
+        container.querySelector(`.edge-${kind}`)
+      ).not.toBeNull();
+      expect(
+        container.querySelector(`.edge-label-${kind}`)
+          ?.textContent
+      ).toBe(label);
+    }
   });
 
   it("pans the canvas and lets individual nodes be repositioned", () => {

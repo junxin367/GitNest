@@ -70,6 +70,7 @@
       value: options.value ?? "",
       label: options.label || "",
       fullWidth: Boolean(options.fullWidth),
+      reserveHelpSpace: Boolean(options.reserveHelpSpace),
       disabled: Boolean(options.disabled),
       readonly: Boolean(options.readonly),
       state: options.state === "error" || options.state === "focus"
@@ -142,8 +143,8 @@
       `data-has-trailing="${String(Boolean(trailing))}"`,
       options.state === "focus" ? 'data-focused="true"' : ""
     ].filter(Boolean).join(" ");
-    const help = options.helpText
-      ? `<small class="gn-input-field__help" data-state="${options.state}">${escapeHtml(options.helpText)}</small>`
+    const help = options.helpText || options.reserveHelpSpace
+      ? `<small class="gn-input-field__help" data-state="${options.state}"${options.helpText ? ` title="${escapeHtml(options.helpText)}"` : ' aria-hidden="true"'}>${options.helpText ? escapeHtml(options.helpText) : "&nbsp;"}</small>`
       : "";
     return `
       <div ${fieldAttrs}>

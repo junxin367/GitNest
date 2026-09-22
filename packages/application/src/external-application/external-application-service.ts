@@ -29,6 +29,8 @@ export type ExternalApplicationContext =
       scope: "file";
       target: RepositoryTarget;
       path: string;
+      line?: number;
+      column?: number;
     };
 
 export interface ExternalApplicationProfile {
@@ -44,7 +46,11 @@ export interface ExternalApplicationPort {
   launch(
     profile: ExternalApplicationProfile,
     workingDirectory: string,
-    filePath?: string
+    filePath?: string,
+    position?: {
+      line: number;
+      column: number;
+    }
   ): Promise<void>;
 }
 
@@ -97,7 +103,8 @@ export class ExternalApplicationService {
     await this.#applications.launch(
       profile,
       launchTarget.workingDirectory,
-      launchTarget.filePath
+      launchTarget.filePath,
+      launchTarget.position
     );
     return {
       kind: profile.kind,
@@ -110,6 +117,10 @@ export class ExternalApplicationService {
 interface ExternalApplicationLaunchTarget {
   workingDirectory: string;
   filePath?: string;
+  position?: {
+    line: number;
+    column: number;
+  };
 }
 
 function resolveLaunchTarget(
@@ -161,7 +172,15 @@ function resolveLaunchTarget(
   if (context.scope === "file") {
     return {
       workingDirectory: worktree.path,
-      filePath: validateRelativeWorktreeFilePath(context.path)
+      filePath: validateRelativeWorktreeFilePath(context.path),
+      ...(context.line !== undefined
+        ? {
+            position: {
+              line: context.line,
+              column: context.column ?? 1
+            }
+          }
+        : {})
     };
   }
 

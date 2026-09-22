@@ -40,6 +40,8 @@ export type OpenExternalApplicationContextDto =
       scope: "file";
       target: RepositoryTargetDto;
       path: string;
+      line?: number;
+      column?: number;
     };
 
 export interface OpenExternalApplicationRequest {

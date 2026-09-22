@@ -16,6 +16,7 @@ import type {
 } from "@gitnest/contracts";
 
 import { Icon } from "../../shared/ui/Icon";
+import { codeNodeDisplayName } from "./codeAnalysisNavigation";
 
 interface CodeRelationGraphProps {
   snapshot: CodeAnalysisSnapshotDto;
@@ -256,9 +257,9 @@ export function CodeRelationGraph({
   if (graph.nodes.length === 0) {
     return (
       <div className="analysis-graph-empty">
-        <strong>当前没有可绘制的调用关系</strong>
+        <strong>当前没有可绘制的调用、引用或类型关系</strong>
         <p>
-          搜索并选择函数、方法或接口后，这里会同时展示上游调用者与下游依赖。
+          搜索并选择代码节点后，这里会同时展示上游调用者、引用位置、类型关系与下游依赖。
         </p>
       </div>
     );
@@ -492,7 +493,7 @@ export function CodeRelationGraph({
           }}
         >
           <svg
-            aria-label="代码调用关系图"
+            aria-label="代码关系图"
             className="analysis-graph-svg"
             height={graph.height * zoom}
             overflow="visible"
@@ -526,13 +527,27 @@ export function CodeRelationGraph({
                 const path = edgePath(from, to);
                 return (
                   <g key={edge.id}>
+                    <title>
+                      {[
+                        `${edge.kind}: ${from.node.qualifiedName} → ${to.node.qualifiedName}`,
+                        `confidence: ${edge.confidence}`,
+                        `source: ${edge.source ?? "unknown"}`,
+                        edge.evidence
+                      ]
+                        .filter(Boolean)
+                        .join("\n")}
+                    </title>
                     <path
                       className={`analysis-graph-edge edge-${edge.kind}`}
                       d={path.d}
                       markerEnd={`url(#${arrowId})`}
                     />
                     {(edge.kind === "http-request" ||
-                      edge.kind === "rpc-request") && (
+                      edge.kind === "rpc-request" ||
+                      edge.kind === "references" ||
+                      edge.kind === "extends" ||
+                      edge.kind === "implements" ||
+                      edge.kind === "overrides") && (
                       <text
                         className={`analysis-graph-edge-label edge-label-${edge.kind}`}
                         x={path.labelX}
@@ -540,7 +555,15 @@ export function CodeRelationGraph({
                       >
                         {edge.kind === "rpc-request"
                           ? "RPC"
-                          : "HTTP"}
+                          : edge.kind === "references"
+                            ? "引用"
+                            : edge.kind === "extends"
+                              ? "继承"
+                              : edge.kind === "implements"
+                                ? "实现"
+                                : edge.kind === "overrides"
+                                  ? "重写"
+                            : "HTTP"}
                       </text>
                     )}
                   </g>
@@ -551,6 +574,7 @@ export function CodeRelationGraph({
               {displayedNodes.map(({ node, x, y }) => {
                 const documentation = nodeDocumentation(node);
                 const location = `${node.location.path}:${node.location.line}`;
+                const displayName = codeNodeDisplayName(node);
                 return (
                   <g
                     aria-label={`${node.kind} ${node.qualifiedName}`}
@@ -624,9 +648,9 @@ export function CodeRelationGraph({
                       <div className="analysis-node-copy-inner">
                         <strong
                           className="analysis-node-name"
-                          title={node.name}
+                          title={node.qualifiedName}
                         >
-                          {node.name}
+                          {displayName}
                         </strong>
                         {documentation && (
                           <span
@@ -737,7 +761,9 @@ export function buildRelationGraphLayout(
   const nodeById = new Map(
     snapshot.nodes.map((node) => [node.id, node])
   );
-  const relationEdges = snapshot.edges.filter(isCallRelation);
+  const relationEdges = snapshot.edges.filter((edge) =>
+    isCodeRelation(edge, nodeById)
+  );
   let preferredIds: string[];
   let levelById: Map<string, number>;
   let candidateEdges: CodeGraphEdgeDto[];
@@ -768,14 +794,24 @@ export function buildRelationGraphLayout(
     ]);
     levelById = context.levelById;
   } else {
-    const context = collectDirectionalContext(
-      focusNodeId,
-      relationEdges,
-      snapshot.nodes
-        .filter((node) => node.kind !== "file")
-        .map((node) => node.id),
-      NODE_GRAPH_DEPTH
-    );
+    const focusNode = focusNodeId
+      ? nodeById.get(focusNodeId)
+      : undefined;
+    const context =
+      focusNode && isRelationContainer(focusNode)
+        ? collectContainerRelationContext(
+            focusNode.id,
+            relationEdges,
+            NODE_GRAPH_DEPTH
+          )
+        : collectDirectionalContext(
+            focusNodeId,
+            relationEdges,
+            snapshot.nodes
+              .filter((node) => node.kind !== "file")
+              .map((node) => node.id),
+            NODE_GRAPH_DEPTH
+          );
     preferredIds = context.nodeIds;
     levelById = context.levelById;
     candidateEdges = relationEdges;
@@ -1093,6 +1129,110 @@ function median(values: number[]): number {
   );
 }
 
+function collectContainerRelationContext(
+  selectedNodeId: string,
+  edges: CodeGraphEdgeDto[],
+  depthLimit: number
+): {
+  nodeIds: string[];
+  levelById: Map<string, number>;
+} {
+  const structuralEdges = edges.filter(
+    (edge) => edge.kind === "contains"
+  );
+  const semanticEdges = edges.filter(
+    (edge) => edge.kind !== "contains"
+  );
+  const structuralIncoming = edgeAdjacency(
+    structuralEdges,
+    "to"
+  );
+  const structuralOutgoing = edgeAdjacency(
+    structuralEdges,
+    "from"
+  );
+  const semanticIncoming = edgeAdjacency(
+    semanticEdges,
+    "to"
+  );
+  const semanticOutgoing = edgeAdjacency(
+    semanticEdges,
+    "from"
+  );
+  const descendants = traverseDirection(
+    selectedNodeId,
+    structuralOutgoing,
+    (edge) => edge.to,
+    depthLimit
+  );
+  const ancestors = traverseDirection(
+    selectedNodeId,
+    structuralIncoming,
+    (edge) => edge.from,
+    depthLimit
+  );
+  const memberIds = new Set(descendants.keys());
+  const upstream = traverseDirections(
+    [...memberIds],
+    semanticIncoming,
+    (edge) => edge.from,
+    depthLimit
+  );
+  const downstream = traverseDirections(
+    [...memberIds],
+    semanticOutgoing,
+    (edge) => edge.to,
+    depthLimit
+  );
+  const levelById = new Map<string, number>([
+    [selectedNodeId, 0]
+  ]);
+
+  for (const [nodeId, depth] of ancestors) {
+    if (nodeId !== selectedNodeId) {
+      levelById.set(nodeId, -depth);
+    }
+  }
+  for (const [nodeId, depth] of descendants) {
+    if (nodeId !== selectedNodeId) {
+      levelById.set(nodeId, depth);
+    }
+  }
+  for (const [nodeId, depth] of upstream) {
+    if (
+      depth > 0 &&
+      !memberIds.has(nodeId) &&
+      !levelById.has(nodeId)
+    ) {
+      levelById.set(nodeId, -depth);
+    }
+  }
+  const memberDepth = Math.max(0, ...descendants.values());
+  for (const [nodeId, depth] of downstream) {
+    if (
+      depth > 0 &&
+      !memberIds.has(nodeId) &&
+      !levelById.has(nodeId)
+    ) {
+      levelById.set(nodeId, memberDepth + depth);
+    }
+  }
+
+  return {
+    nodeIds: [...levelById]
+      .sort(
+        ([leftId, leftLevel], [rightId, rightLevel]) =>
+          Number(rightId === selectedNodeId) -
+            Number(leftId === selectedNodeId) ||
+          Math.abs(leftLevel) - Math.abs(rightLevel) ||
+          leftLevel - rightLevel ||
+          leftId.localeCompare(rightId)
+      )
+      .map(([nodeId]) => nodeId),
+    levelById
+  };
+}
+
 function collectDirectionalContext(
   selectedNodeId: string | null,
   edges: CodeGraphEdgeDto[],
@@ -1115,13 +1255,14 @@ function collectDirectionalContext(
 
   const incoming = new Map<string, CodeGraphEdgeDto[]>();
   const outgoing = new Map<string, CodeGraphEdgeDto[]>();
-  for (const edge of edges) {
-    const outgoingGroup = outgoing.get(edge.from) ?? [];
-    outgoingGroup.push(edge);
-    outgoing.set(edge.from, outgoingGroup);
-    const incomingGroup = incoming.get(edge.to) ?? [];
-    incomingGroup.push(edge);
-    incoming.set(edge.to, incomingGroup);
+  for (const [nodeId, group] of edgeAdjacency(
+    edges,
+    "from"
+  )) {
+    outgoing.set(nodeId, group);
+  }
+  for (const [nodeId, group] of edgeAdjacency(edges, "to")) {
+    incoming.set(nodeId, group);
   }
 
   const upstream = traverseDirection(
@@ -1202,8 +1343,24 @@ function traverseDirection(
   targetFor: (edge: CodeGraphEdgeDto) => string,
   depthLimit: number
 ): Map<string, number> {
-  const depths = new Map<string, number>([[rootId, 0]]);
-  let frontier = [rootId];
+  return traverseDirections(
+    [rootId],
+    adjacency,
+    targetFor,
+    depthLimit
+  );
+}
+
+function traverseDirections(
+  rootIds: string[],
+  adjacency: Map<string, CodeGraphEdgeDto[]>,
+  targetFor: (edge: CodeGraphEdgeDto) => string,
+  depthLimit: number
+): Map<string, number> {
+  const depths = new Map<string, number>(
+    rootIds.map((rootId) => [rootId, 0])
+  );
+  let frontier = [...rootIds];
   for (
     let depth = 1;
     depth <= depthLimit && frontier.length > 0;
@@ -1225,11 +1382,50 @@ function traverseDirection(
   return depths;
 }
 
-function isCallRelation(edge: CodeGraphEdgeDto): boolean {
+function edgeAdjacency(
+  edges: CodeGraphEdgeDto[],
+  endpoint: "from" | "to"
+): Map<string, CodeGraphEdgeDto[]> {
+  const adjacency = new Map<string, CodeGraphEdgeDto[]>();
+  for (const edge of edges) {
+    const nodeId = edge[endpoint];
+    const group = adjacency.get(nodeId) ?? [];
+    group.push(edge);
+    adjacency.set(nodeId, group);
+  }
+  return adjacency;
+}
+
+function isRelationContainer(node: CodeGraphNodeDto): boolean {
+  return (
+    node.kind === "module" ||
+    node.kind === "package" ||
+    node.kind === "class" ||
+    node.kind === "interface" ||
+    node.kind === "enum"
+  );
+}
+
+function isCodeRelation(
+  edge: CodeGraphEdgeDto,
+  nodeById: ReadonlyMap<string, CodeGraphNodeDto>
+): boolean {
+  if (edge.kind === "contains") {
+    const owner = nodeById.get(edge.from);
+    return (
+      owner !== undefined &&
+      owner.kind !== "file" &&
+      nodeById.has(edge.to)
+    );
+  }
   return (
     edge.kind === "calls" ||
+    edge.kind === "extends" ||
+    edge.kind === "implements" ||
+    edge.kind === "overrides" ||
     edge.kind === "http-request" ||
-    edge.kind === "rpc-request"
+    edge.kind === "rpc-request" ||
+    edge.kind === "references"
   );
 }
 
@@ -1329,7 +1525,12 @@ function unique(values: string[]): string[] {
 function nodeKindLabel(node: CodeGraphNodeDto): string {
   return {
     file: "文件",
+    module: "模块",
+    package: "包",
     class: "类",
+    interface: "接口",
+    enum: "枚举",
+    property: "属性",
     function: "函数",
     method: "方法",
     "client-request": "前端请求",

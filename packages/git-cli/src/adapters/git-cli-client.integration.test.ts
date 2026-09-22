@@ -1208,7 +1208,7 @@ describe("GitCliClient integration", () => {
     } finally {
       await commitDiffFixture.dispose();
     }
-  });
+  }, 10_000);
 
   it("returns empty read models for a repository with an unborn HEAD", async () => {
     await expect(

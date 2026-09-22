@@ -116,6 +116,7 @@
 }
 
 .settings-content {
+  container: settings-content / inline-size;
   display: grid;
   gap: var(--space-4);
   min-width: 0;
@@ -262,6 +263,148 @@ html[data-theme="light"] .settings-switch.active .settings-switch-thumb {
 
 .settings-inline-warning {
   color: var(--yellow);
+}
+
+.settings-lsp-breadcrumb {
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: var(--space-1);
+}
+
+.settings-lsp-breadcrumb ol {
+  display: flex;
+  align-items: center;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-lsp-breadcrumb li {
+  display: flex;
+  align-items: center;
+}
+
+.settings-lsp-breadcrumb button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 30px;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-small);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  white-space: nowrap;
+}
+
+.settings-lsp-breadcrumb button:hover,
+.settings-lsp-breadcrumb button:focus-visible {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.settings-lsp-breadcrumb button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.settings-lsp-breadcrumb button[aria-current="page"] {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.settings-lsp-breadcrumb-separator {
+  margin: 0 var(--space-2);
+  color: var(--muted);
+  line-height: 1;
+}
+
+.settings-lsp-breadcrumb-state {
+  width: 6px;
+  height: 6px;
+  background: var(--muted);
+  border-radius: 50%;
+  opacity: 0.7;
+}
+
+.settings-lsp-breadcrumb-state.enabled {
+  background: var(--green);
+  box-shadow: 0 0 0 2px
+    color-mix(in srgb, var(--green) 14%, transparent);
+  opacity: 1;
+}
+
+.settings-lsp-editor {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-4);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-regular);
+}
+
+.settings-lsp-editor-header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.settings-lsp-editor-header > div {
+  min-width: 0;
+}
+
+.settings-lsp-editor-header > .settings-switch {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.settings-lsp-editor-title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+}
+
+.settings-lsp-editor-description {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+
+.settings-lsp-editor-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-3);
+}
+
+.settings-lsp-budget {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--border-soft);
+}
+
+.settings-lsp-budget-heading h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+}
+
+.settings-lsp-budget-heading p {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
 }
 
 .settings-terminal-select {

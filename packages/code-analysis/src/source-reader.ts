@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { open } from "node:fs/promises";
 
 import type { AnalysisSourceFile } from "./model";
@@ -36,14 +37,24 @@ export async function readBoundedSourceFile(
     const after = await handle.stat();
     if (
       offset !== before.size ||
-      fingerprint(after.size, after.mtimeMs) !==
-        fingerprint(before.size, before.mtimeMs)
+      versionFingerprint(after.size, after.mtimeMs) !==
+        versionFingerprint(before.size, before.mtimeMs)
     ) {
       throw new Error(
         `Source file changed while it was being read: ${file.relativePath}`
       );
     }
-    return content.subarray(0, offset).toString("utf8");
+    const completeContent = content.subarray(0, offset);
+    if (
+      file.fingerprint.startsWith("sha256:") &&
+      contentFingerprint(completeContent) !==
+        file.fingerprint
+    ) {
+      throw new Error(
+        `Source file changed after discovery: ${file.relativePath}`
+      );
+    }
+    return completeContent.toString("utf8");
   } finally {
     await handle.close();
   }
@@ -69,8 +80,9 @@ function assertReadableVersion(
     );
   }
   if (
-    fingerprint(details.size, details.mtimeMs) !==
-    file.fingerprint
+    details.size !== file.size ||
+    Math.trunc(details.mtimeMs) !==
+      Math.trunc(file.modifiedAtMs)
   ) {
     throw new Error(
       `Source file changed after discovery: ${file.relativePath}`
@@ -78,6 +90,15 @@ function assertReadableVersion(
   }
 }
 
-function fingerprint(size: number, mtimeMs: number): string {
+function versionFingerprint(
+  size: number,
+  mtimeMs: number
+): string {
   return `${size}:${Math.trunc(mtimeMs)}`;
+}
+
+function contentFingerprint(content: Uint8Array): string {
+  return `sha256:${createHash("sha256")
+    .update(content)
+    .digest("hex")}`;
 }

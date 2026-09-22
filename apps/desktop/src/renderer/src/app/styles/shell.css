@@ -949,6 +949,10 @@ p {
   text-align: center;
 }
 
+.workspace-standalone-body {
+  margin-top: var(--space-1);
+}
+
 .group-body {
   position: relative;
   margin-left: var(--space-2);

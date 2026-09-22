@@ -13,6 +13,7 @@ import {
 
 import {
   createDefaultAppSettings,
+  type RepositoryStatusSnapshotDto,
   type UpdateAppSettingsRequest
 } from "@gitnest/contracts";
 
@@ -264,7 +265,7 @@ describe("DiffViewerApp", () => {
     );
   });
 
-  it("refreshes changes and the selected diff when workspace state changes", async () => {
+  it("refreshes changes and the selected diff for the first content change after the baseline", async () => {
     await renderDiffViewer(root);
 
     await vi.waitFor(() => {
@@ -280,24 +281,15 @@ describe("DiffViewerApp", () => {
       bridge.repository.getDiff
     ).mock.calls.length;
 
+    await vi.waitFor(() => {
+      expect(bridge.workspace.getState).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
     emitWorkspaceState?.({
-      snapshots: [
-        {
-          repositoryId: "repository",
-          worktreeId: "worktree",
-          head: "head",
-          branch: "main",
-          ahead: 0,
-          behind: 0,
-          staged: 0,
-          unstaged: 1,
-          untracked: 0,
-          conflicted: 0,
-          refreshPending: false,
-          stale: false,
-          refreshedAt: new Date().toISOString()
-        }
-      ]
+      snapshots: [workspaceSnapshot(5)]
     });
 
     await vi.waitFor(() => {
@@ -307,6 +299,143 @@ describe("DiffViewerApp", () => {
       expect(
         vi.mocked(bridge.repository.getDiff).mock.calls.length
       ).toBeGreaterThan(initialDiffCalls);
+    });
+  });
+
+  it("does not refresh when only the target refresh timestamp changes", async () => {
+    await renderDiffViewer(root);
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelectorAll(".diff-workspace-file")
+      ).toHaveLength(4);
+      expect(window.gitnest.workspace.getState).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const bridge = window.gitnest;
+    const initialChangesCalls = vi.mocked(
+      bridge.repository.getChanges
+    ).mock.calls.length;
+    const initialDiffCalls = vi.mocked(
+      bridge.repository.getDiff
+    ).mock.calls.length;
+
+    emitWorkspaceState?.({
+      snapshots: [
+        {
+          ...workspaceSnapshot(4),
+          refreshedAt: "2026-09-21T13:15:00.000Z"
+        }
+      ]
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(
+      vi.mocked(bridge.repository.getChanges).mock.calls.length
+    ).toBe(initialChangesCalls);
+    expect(
+      vi.mocked(bridge.repository.getDiff).mock.calls.length
+    ).toBe(initialDiffCalls);
+  });
+
+  it("clears stale files and diff when the target snapshot disappears", async () => {
+    await renderDiffViewer(root);
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelectorAll(".diff-workspace-file")
+      ).toHaveLength(4);
+      expect(container.textContent).toContain(
+        "const newValue = true;"
+      );
+    });
+
+    emitWorkspaceState?.({ snapshots: [] });
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelectorAll(".diff-workspace-file")
+      ).toHaveLength(0);
+      expect(container.textContent).toContain(
+        "仓库或 Worktree 已不可用"
+      );
+      expect(container.textContent).not.toContain(
+        "const newValue = true;"
+      );
+    });
+  });
+
+  it("ignores an in-flight changes response after the target snapshot disappears", async () => {
+    const bridge = createBridge();
+    const pendingChanges = deferred<
+      Awaited<
+        ReturnType<typeof bridge.repository.getChanges>
+      >
+    >();
+    vi.mocked(
+      bridge.repository.getChanges
+    ).mockReturnValueOnce(pendingChanges.promise);
+    Object.defineProperty(window, "gitnest", {
+      configurable: true,
+      value: bridge
+    });
+
+    await act(async () => {
+      root.render(<DiffViewerApp />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => {
+      expect(
+        bridge.repository.getChanges
+      ).toHaveBeenCalled();
+    });
+
+    await act(async () => {
+      emitWorkspaceState?.({ snapshots: [] });
+      pendingChanges.resolve({
+        ok: true,
+        value: {
+          target: {
+            repositoryId: "repository",
+            worktreeId: "worktree"
+          },
+          snapshot: {
+            branch: "stale",
+            head: "stale-head",
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            unstaged: 1,
+            untracked: 0,
+            conflicted: 0,
+            changes: [
+              {
+                path: "src/stale/LateResponse.ts",
+                indexStatus: ".",
+                worktreeStatus: "M",
+                kind: "ordinary"
+              }
+            ],
+            refreshedAt: "2026-09-21T13:52:00.000Z"
+          }
+        }
+      });
+      await Promise.resolve();
+    });
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain(
+        "仓库或 Worktree 已不可用"
+      );
+      expect(
+        container.querySelectorAll(".diff-workspace-file")
+      ).toHaveLength(0);
+      expect(container.textContent).not.toContain(
+        "LateResponse.ts"
+      );
     });
   });
 
@@ -629,6 +758,12 @@ function createBridge(): typeof window.gitnest {
       })
     },
     workspace: {
+      getState: vi.fn().mockResolvedValue({
+        ok: true,
+        value: {
+          snapshots: [workspaceSnapshot(4)]
+        }
+      }),
       onStateChanged: vi.fn((listener: (state: unknown) => void) => {
         emitWorkspaceState = listener;
         return () => {
@@ -644,4 +779,39 @@ function createBridge(): typeof window.gitnest {
       toggleMaximize: vi.fn().mockResolvedValue(undefined)
     }
   } as unknown as typeof window.gitnest;
+}
+
+function workspaceSnapshot(
+  contentVersion: number
+): RepositoryStatusSnapshotDto {
+  return {
+    repositoryId: "repository",
+    worktreeId: "worktree",
+    head: "head",
+    branch: "main",
+    ahead: 0,
+    behind: 0,
+    staged: 0,
+    unstaged: 1,
+    untracked: 0,
+    conflicted: 0,
+    contentVersion,
+    refreshPending: false,
+    stale: false,
+    refreshedAt: "2026-09-21T13:14:00.000Z"
+  };
+}
+
+function deferred<Value>(): {
+  promise: Promise<Value>;
+  resolve(value: Value): void;
+} {
+  let resolvePromise!: (value: Value) => void;
+  const promise = new Promise<Value>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: resolvePromise
+  };
 }

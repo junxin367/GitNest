@@ -6,6 +6,22 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DEFAULT_CODE_ANALYSIS_GRAPH_EDGES,
+  DEFAULT_CODE_ANALYSIS_GRAPH_NODES,
+  MAX_CODE_ANALYSIS_DIAGNOSTICS,
+  MAX_CODE_ANALYSIS_GRAPH_EDGES,
+  MAX_CODE_ANALYSIS_GRAPH_NODES,
+  MAX_CODE_ANALYSIS_REQUEST_CHAINS,
+  MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+  MAX_LSP_DOCUMENTS,
+  MAX_LSP_REQUESTS,
+  MIN_CODE_ANALYSIS_DIAGNOSTICS,
+  MIN_CODE_ANALYSIS_GRAPH_EDGES,
+  MIN_CODE_ANALYSIS_GRAPH_NODES,
+  MIN_CODE_ANALYSIS_REQUEST_CHAINS,
+  MIN_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+  MIN_LSP_DOCUMENTS,
+  MIN_LSP_REQUESTS,
   createDefaultAppSettings,
   type ExternalTerminalProfileDto
 } from "@gitnest/contracts";
@@ -387,6 +403,167 @@ describe("ApplicationSettingsPage", () => {
     }
   });
 
+  it("switches one shared LSP editor with breadcrumb navigation", () => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      act(() => {
+        root.render(
+          <ApplicationSettingsPage
+            accounts={emptyAccounts()}
+            appSettings={settingsController()}
+            gitEnvironment={null}
+            initialSection="analysis"
+            terminalProfiles={[]}
+            workspace={null}
+          />
+        );
+      });
+
+      const breadcrumb = container.querySelector(
+        'nav[aria-label="Language Server 配置导航"]'
+      );
+      const cardTitles = Array.from(
+        container.querySelectorAll(".settings-card-title")
+      ).map((element) => element.textContent?.trim());
+      expect(cardTitles.indexOf("性能预算")).toBeLessThan(
+        cardTitles.indexOf("Language Server 配置")
+      );
+      const serverButtons = Array.from(
+        breadcrumb?.querySelectorAll<HTMLButtonElement>(
+          "button[data-language-server-id]"
+        ) ?? []
+      );
+
+      expect(
+        serverButtons.map((button) => button.textContent?.trim())
+      ).toEqual([
+        "TypeScript",
+        "Java",
+        "Vue",
+        "Python",
+        "Go",
+        "Kotlin",
+        "C#",
+        "Rust"
+      ]);
+      expect(
+        container.querySelectorAll(".settings-lsp-editor")
+      ).toHaveLength(1);
+      const typescriptInput =
+        container.querySelector<HTMLInputElement>(
+          "#lsp-command-typescript-language-server"
+        );
+      expect(typescriptInput).not.toBeNull();
+      const typescriptBudgetFields = container.querySelectorAll(
+        ".settings-lsp-budget .gn-input-field"
+      );
+      expect(typescriptBudgetFields).toHaveLength(7);
+      for (const field of typescriptBudgetFields) {
+        expect(
+          field.querySelector(".gn-input-field__help")
+        ).not.toBeNull();
+      }
+      const maxDocuments =
+        container.querySelector<HTMLInputElement>(
+          "#lsp-max-documents-typescript-language-server"
+        );
+      expect(maxDocuments?.value).toBe(
+        String(
+          createDefaultAppSettings().codeAnalysis.typescript
+            .maxDocuments
+        )
+      );
+      expect(maxDocuments?.min).toBe(String(MIN_LSP_DOCUMENTS));
+      expect(maxDocuments?.max).toBe(String(MAX_LSP_DOCUMENTS));
+      const referenceRequests =
+        container.querySelector<HTMLInputElement>(
+          "#lsp-max-reference-requests-typescript-language-server"
+        );
+      expect(referenceRequests?.min).toBe(
+        String(MIN_LSP_REQUESTS)
+      );
+      expect(referenceRequests?.max).toBe(
+        String(MAX_LSP_REQUESTS)
+      );
+      const typeHierarchyRequests =
+        container.querySelector<HTMLInputElement>(
+          "#lsp-max-type-hierarchy-typescript-language-server"
+        );
+      expect(typeHierarchyRequests?.value).toBe(
+        String(
+          createDefaultAppSettings().codeAnalysis.typescript
+            .maxTypeHierarchyRequests
+        )
+      );
+      expect(typeHierarchyRequests?.min).toBe(
+        String(MIN_LSP_REQUESTS)
+      );
+      expect(typeHierarchyRequests?.max).toBe(
+        String(MAX_LSP_REQUESTS)
+      );
+      expect(
+        container.querySelector(
+          "#lsp-command-java-language-server"
+        )
+      ).toBeNull();
+
+      act(() => {
+        setNativeInputValue(
+          typescriptInput,
+          "draft-typescript-language-server"
+        );
+        typescriptInput?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+        setNativeInputValue(referenceRequests, "125");
+        referenceRequests?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+      });
+      const javaButton = breadcrumb?.querySelector<HTMLButtonElement>(
+        'button[data-language-server-id="java"]'
+      );
+      act(() => javaButton?.click());
+
+      expect(javaButton?.getAttribute("aria-current")).toBe("page");
+      expect(
+        container.querySelector(
+          "#lsp-command-typescript-language-server"
+        )
+      ).toBeNull();
+      expect(
+        container.querySelector(
+          "#lsp-command-java-language-server"
+        )
+      ).not.toBeNull();
+
+      const typescriptButton =
+        breadcrumb?.querySelector<HTMLButtonElement>(
+          'button[data-language-server-id="typescript"]'
+        );
+      act(() => typescriptButton?.click());
+
+      expect(
+        container.querySelector<HTMLInputElement>(
+          "#lsp-command-typescript-language-server"
+        )?.value
+      ).toBe("draft-typescript-language-server");
+      expect(
+        container.querySelector<HTMLInputElement>(
+          "#lsp-max-reference-requests-typescript-language-server"
+        )?.value
+      ).toBe("125");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("does not replace a newer AI draft when an earlier save finishes", async () => {
     vi.stubGlobal("React", React);
     const container = document.createElement("div");
@@ -524,6 +701,151 @@ describe("ApplicationSettingsPage", () => {
           "#lsp-command-typescript-language-server"
         )?.value
       ).toBe("newer-language-server");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("edits and saves configurable analysis limits", async () => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const update = vi.fn(async () => true);
+    const appSettings = settingsController({ update });
+
+    try {
+      act(() => {
+        root.render(
+          <ApplicationSettingsPage
+            accounts={emptyAccounts()}
+            appSettings={appSettings}
+            gitEnvironment={null}
+            initialSection="analysis"
+            terminalProfiles={[]}
+            workspace={null}
+          />
+        );
+      });
+      const input = container.querySelector<HTMLInputElement>(
+        "#analysis-max-graph-nodes"
+      );
+      expect(input?.value).toBe(
+        String(DEFAULT_CODE_ANALYSIS_GRAPH_NODES)
+      );
+      expect(input?.min).toBe(
+        String(MIN_CODE_ANALYSIS_GRAPH_NODES)
+      );
+      expect(input?.max).toBe(
+        String(MAX_CODE_ANALYSIS_GRAPH_NODES)
+      );
+      expect(input?.step).toBe("1000");
+      const totalSourceInput =
+        container.querySelector<HTMLInputElement>(
+          "#analysis-max-total-source"
+        );
+      expect(totalSourceInput?.min).toBe(
+        String(MIN_CODE_ANALYSIS_TOTAL_SOURCE_MB)
+      );
+      expect(totalSourceInput?.max).toBe(
+        String(MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB)
+      );
+      const graphEdgesInput =
+        container.querySelector<HTMLInputElement>(
+          "#analysis-max-graph-edges"
+        );
+      expect(graphEdgesInput?.min).toBe(
+        String(MIN_CODE_ANALYSIS_GRAPH_EDGES)
+      );
+      expect(graphEdgesInput?.max).toBe(
+        String(MAX_CODE_ANALYSIS_GRAPH_EDGES)
+      );
+      expect(graphEdgesInput?.value).toBe(
+        String(DEFAULT_CODE_ANALYSIS_GRAPH_EDGES)
+      );
+      const requestChainsInput =
+        container.querySelector<HTMLInputElement>(
+          "#analysis-max-request-chains"
+        );
+      expect(requestChainsInput?.min).toBe(
+        String(MIN_CODE_ANALYSIS_REQUEST_CHAINS)
+      );
+      expect(requestChainsInput?.max).toBe(
+        String(MAX_CODE_ANALYSIS_REQUEST_CHAINS)
+      );
+      const diagnosticsInput =
+        container.querySelector<HTMLInputElement>(
+          "#analysis-max-diagnostics"
+        );
+      expect(diagnosticsInput?.min).toBe(
+        String(MIN_CODE_ANALYSIS_DIAGNOSTICS)
+      );
+      expect(diagnosticsInput?.max).toBe(
+        String(MAX_CODE_ANALYSIS_DIAGNOSTICS)
+      );
+      expect(
+        container.querySelector<HTMLInputElement>(
+          "#analysis-concurrency"
+        )?.value
+      ).toBe("4");
+      expect(
+        container.querySelector<HTMLInputElement>(
+          "#analysis-graph-depth"
+        )?.value
+      ).toBe("8");
+      const performanceFields = container.querySelectorAll(
+        ".settings-card-body > .analysis-settings-number-grid .gn-input-field"
+      );
+      expect(performanceFields).toHaveLength(10);
+      for (const field of performanceFields) {
+        expect(
+          field.querySelector(".gn-input-field__help")
+        ).not.toBeNull();
+      }
+      expect(
+        input
+          ?.closest(".gn-input-field")
+          ?.querySelector(".gn-input-field__help")
+          ?.getAttribute("title")
+      ).toBe(
+        "提高上限会增加分析耗时、内存占用和快照体积。"
+      );
+
+      act(() => {
+        setNativeInputValue(input, "45000");
+        input?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+        setNativeInputValue(graphEdgesInput, "120000");
+        graphEdgesInput?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+      });
+      const save = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button")
+      ).find((button) =>
+        button.textContent?.includes(
+          "保存代码分析设置"
+        )
+      );
+      await act(async () => {
+        save?.click();
+        await Promise.resolve();
+      });
+
+      expect(update).toHaveBeenCalledWith(
+        {
+          codeAnalysis: expect.objectContaining({
+            maxGraphNodes: 45_000,
+            maxGraphEdges: 120_000
+          })
+        },
+        expect.objectContaining({
+          notice: expect.stringContaining("代码分析设置已保存")
+        })
+      );
     } finally {
       act(() => root.unmount());
       container.remove();

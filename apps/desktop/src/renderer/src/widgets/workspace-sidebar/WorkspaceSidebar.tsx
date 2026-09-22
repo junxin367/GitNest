@@ -46,8 +46,7 @@ import {
   WorkspaceDeleteDialog,
   WorkspaceEntryTapdKeywordDialog,
   WorkspaceEntryRemoveDialog,
-  WorkspaceEntryRenameDialog,
-  WorkspaceNameDialog
+  WorkspaceEntryRenameDialog
 } from "./WorkspaceEntryDialogs";
 import {
   changedRepositoriesOnlyPreferenceKey,
@@ -67,7 +66,7 @@ interface WorkspaceSidebarProps {
   workspaces: WorkspaceSummaryDto[];
   snapshots: RepositoryStatusSnapshotDto[];
   busy: boolean;
-  onCreateWorkspace(name: string): Promise<boolean>;
+  onCreateWorkspace(): Promise<boolean>;
   onSwitchWorkspace(workspaceId: string): Promise<boolean>;
   onDeleteWorkspace(workspaceId: string): Promise<boolean>;
   onAddDirectory(): void;
@@ -90,6 +89,7 @@ interface WorkspaceSidebarProps {
 
 interface VisibleEntry {
   entry: WorkspaceEntryDto;
+  ungroupedTargets: RepositoryTargetDto[];
   groups: Array<{
     group: RepositoryGroupDto;
     targets: RepositoryTargetDto[];
@@ -202,6 +202,14 @@ export function WorkspaceSidebar({
     useState<RepositoryTargetDto | null>(null);
   const [removeSubmitting, setRemoveSubmitting] =
     useState(false);
+  const [
+    deleteWorkspaceFromEntry,
+    setDeleteWorkspaceFromEntry
+  ] = useState(false);
+  const [
+    deleteWorkspaceSubmitting,
+    setDeleteWorkspaceSubmitting
+  ] = useState(false);
   const [tapdKeywordSubmitting, setTapdKeywordSubmitting] =
     useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
@@ -452,6 +460,20 @@ export function WorkspaceSidebar({
       : undefined;
   const contextGroupCanBeDeleted =
     contextGroup?.targets.length === 0;
+  const contextRemovalDeletesWorkspace = Boolean(
+    contextEntry &&
+      workspace?.entries.length === 1 &&
+      (!contextMenu?.target ||
+        contextEntry.kind === "standalone-repository")
+  );
+  const contextTargetIsRootRepository = Boolean(
+    contextMenu?.target &&
+      contextEntry?.kind === "workspace-meta-repository" &&
+      repositoryTargetSelected(
+        contextEntry.rootTarget,
+        contextMenu.target
+      )
+  );
   const renameEntry = workspace?.entries.find(
     (entry) => entry.id === renameEntryId
   );
@@ -497,6 +519,8 @@ export function WorkspaceSidebar({
     setRenameEntryId(null);
     setRemoveEntryId(null);
     setRemoveTarget(null);
+    setDeleteWorkspaceFromEntry(false);
+    setDeleteWorkspaceSubmitting(false);
     setRepositoryMenuOpen(false);
   }, [workspaceId]);
 
@@ -791,6 +815,11 @@ export function WorkspaceSidebar({
       return;
     }
     setContextMenu(null);
+    if (contextRemovalDeletesWorkspace) {
+      setDeleteWorkspaceSubmitting(false);
+      setDeleteWorkspaceFromEntry(true);
+      return;
+    }
     setRemoveSubmitting(false);
     setRemoveTarget(contextMenu?.target ?? null);
     setRemoveEntryId(contextEntry.id);
@@ -826,6 +855,96 @@ export function WorkspaceSidebar({
     } finally {
       setRemoveSubmitting(false);
     }
+  };
+
+  const confirmDeleteWorkspaceFromEntry =
+    async (): Promise<boolean> => {
+      if (
+        !workspace ||
+        workspaces.length <= 1 ||
+        deleteWorkspaceSubmitting
+      ) {
+        return false;
+      }
+      setDeleteWorkspaceSubmitting(true);
+      try {
+        return await onDeleteWorkspace(workspace.id);
+      } finally {
+        setDeleteWorkspaceSubmitting(false);
+      }
+    };
+
+  const renderRepositoryRow = (
+    entry: WorkspaceEntryDto,
+    target: RepositoryTargetDto
+  ) => {
+    if (!workspace) {
+      return null;
+    }
+    const resolved = resolveWorkspaceTarget(workspace, target);
+    const name =
+      resolved.worktree?.name ??
+      resolved.repository?.name ??
+      "未知仓库";
+    const snapshot = findTargetSnapshot(snapshots, target);
+    const selected =
+      activeView === "repository" &&
+      repositoryTargetSelected(
+        workspace.selectedTarget,
+        target
+      );
+    const branch =
+      snapshot?.branch ??
+      resolved.worktree?.branch ??
+      "detached";
+    const tone = snapshotTone(snapshot);
+    const status = snapshotStatus(snapshot);
+
+    return (
+      <Button variant="unstyled"
+        aria-current={selected ? "true" : undefined}
+        aria-haspopup="menu"
+        className={`repository-row${
+          selected ? " selected" : ""
+        }`}
+        key={`${entry.id}:${target.repositoryId}:${target.worktreeId}`}
+        onClick={() => onSelectTarget(target)}
+        onContextMenu={(event) =>
+          openContextMenu(
+            event,
+            entry.id,
+            name,
+            target
+          )
+        }
+        title={resolved.worktree?.path}
+        type="button"
+      >
+        <span className={`repository-state ${tone}`}>
+          <Icon name="repository" size={13} />
+        </span>
+        <span className="repository-row-main">
+          <span
+            className="repository-row-name"
+            title={name}
+          >
+            {name}
+          </span>
+          <span className="repository-row-branch">
+            <Icon name="branch" size={11} />
+            <span title={branch}>{branch}</span>
+          </span>
+        </span>
+        {status.label && (
+          <span
+            aria-label={status.ariaLabel}
+            className={`repository-row-status ${tone}`}
+          >
+            {status.label}
+          </span>
+        )}
+      </Button>
+    );
   };
 
   return (
@@ -948,7 +1067,7 @@ export function WorkspaceSidebar({
         className="repository-list"
       >
         {entries.length > 0 && workspace ? (
-          entries.map(({ entry, groups }) => (
+          entries.map(({ entry, groups, ungroupedTargets }) => (
             <section
               className={`workspace-root${
                 workspace.selectedEntryId === entry.id
@@ -1029,6 +1148,13 @@ export function WorkspaceSidebar({
                 inert={collapsedEntryIds.has(entry.id)}
               >
                 <div className="workspace-root-body-inner">
+                  {ungroupedTargets.length > 0 && (
+                    <div className="workspace-standalone-body">
+                      {ungroupedTargets.map((target) =>
+                        renderRepositoryRow(entry, target)
+                      )}
+                    </div>
+                  )}
                   {orderedGroups(entry.id, groups).map(
                     ({ group, targets }) => (
                     <div
@@ -1128,85 +1254,9 @@ export function WorkspaceSidebar({
                           暂无仓库
                         </div>
                       ) : (
-                        targets.map((target) => {
-                          const resolved = resolveWorkspaceTarget(
-                            workspace,
-                            target
-                          );
-                          const name =
-                            resolved.worktree?.name ??
-                            resolved.repository?.name ??
-                            "未知仓库";
-                          const snapshot = findTargetSnapshot(
-                            snapshots,
-                            target
-                          );
-                          const selected =
-                            activeView === "repository" &&
-                            repositoryTargetSelected(
-                              workspace.selectedTarget,
-                              target
-                            );
-                          const branch =
-                            snapshot?.branch ??
-                            resolved.worktree?.branch ??
-                            "detached";
-                          const tone = snapshotTone(snapshot);
-                          const status =
-                            snapshotStatus(snapshot);
-
-                          return (
-                            <Button variant="unstyled"
-                              aria-current={
-                                selected ? "true" : undefined
-                              }
-                              aria-haspopup="menu"
-                              className={`repository-row${
-                                selected ? " selected" : ""
-                              }`}
-                              key={`${target.repositoryId}:${target.worktreeId}`}
-                              onClick={() => onSelectTarget(target)}
-                              onContextMenu={(event) =>
-                                openContextMenu(
-                                  event,
-                                  entry.id,
-                                  name,
-                                  target
-                                )
-                              }
-                              title={resolved.worktree?.path}
-                              type="button"
-                            >
-                              <span
-                                className={`repository-state ${tone}`}
-                              >
-                                <Icon name="repository" size={13} />
-                              </span>
-                              <span
-                                className="repository-row-main"
-                              >
-                                <span
-                                  className="repository-row-name"
-                                  title={name}
-                                >
-                                  {name}
-                                </span>
-                                <span className="repository-row-branch">
-                                  <Icon name="branch" size={11} />
-                                  <span title={branch}>{branch}</span>
-                                </span>
-                              </span>
-                              {status.label && (
-                                <span
-                                  aria-label={status.ariaLabel}
-                                  className={`repository-row-status ${tone}`}
-                                >
-                                  {status.label}
-                                </span>
-                              )}
-                            </Button>
-                          );
-                        })
+                        targets.map((target) =>
+                          renderRepositoryRow(entry, target)
+                        )
                       )}
                     </div>
                   )}
@@ -1315,12 +1365,27 @@ export function WorkspaceSidebar({
                 </MenuItem>
                 <MenuSeparator />
                 <MenuItem
-                  disabled={busy}
+                  disabled={
+                    busy ||
+                    contextTargetIsRootRepository ||
+                    (contextRemovalDeletesWorkspace &&
+                      workspaces.length <= 1)
+                  }
                   leading={<Icon name="warning" size={14} />}
                   onClick={startRemove}
+                  title={
+                    contextTargetIsRootRepository
+                      ? "根仓库不能单独移出；可从条目菜单删除整个 Workspace"
+                      : contextRemovalDeletesWorkspace &&
+                          workspaces.length <= 1
+                      ? "至少需要保留一个 Workspace"
+                      : undefined
+                  }
                   tone="danger"
                 >
-                  移出 Workspace
+                  {contextRemovalDeletesWorkspace
+                    ? "删除 Workspace"
+                    : "移出 Workspace"}
                 </MenuItem>
               </>
             )}
@@ -1370,6 +1435,16 @@ export function WorkspaceSidebar({
           onConfirm={confirmRemove}
         />
       )}
+      {deleteWorkspaceFromEntry && workspace && (
+        <WorkspaceDeleteDialog
+          busy={deleteWorkspaceSubmitting || busy}
+          name={workspace.name}
+          onCancel={() =>
+            setDeleteWorkspaceFromEntry(false)
+          }
+          onConfirm={confirmDeleteWorkspaceFromEntry}
+        />
+      )}
     </aside>
   );
 }
@@ -1379,7 +1454,7 @@ interface WorkspaceSwitcherProps {
   hidden: boolean;
   workspace: WorkspaceDetailsDto | null;
   workspaces: WorkspaceSummaryDto[];
-  onCreateWorkspace(name: string): Promise<boolean>;
+  onCreateWorkspace(): Promise<boolean>;
   onSwitchWorkspace(workspaceId: string): Promise<boolean>;
   onDeleteWorkspace(workspaceId: string): Promise<boolean>;
 }
@@ -1394,9 +1469,7 @@ const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
   onDeleteWorkspace
 }: WorkspaceSwitcherProps) {
   const [open, setOpen] = useState(false);
-  const [dialog, setDialog] = useState<
-    "create" | "delete" | null
-  >(null);
+  const [dialog, setDialog] = useState<"delete" | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -1451,20 +1524,6 @@ const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
       );
     };
   }, [open]);
-
-  const confirmName = async (
-    name: string
-  ): Promise<boolean> => {
-    if (dialogBusy) {
-      return false;
-    }
-    setDialogBusy(true);
-    try {
-      return await onCreateWorkspace(name);
-    } finally {
-      setDialogBusy(false);
-    }
-  };
 
   const confirmDelete = async (): Promise<boolean> => {
     if (
@@ -1551,8 +1610,7 @@ const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
               leading={<Icon name="plus" size={15} />}
               onClick={() => {
                 setOpen(false);
-                setDialogBusy(false);
-                setDialog("create");
+                void onCreateWorkspace();
               }}
             >
               新建 Workspace
@@ -1574,14 +1632,6 @@ const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
           </MenuPopover>
         )}
       </div>
-      {dialog === "create" && (
-        <WorkspaceNameDialog
-          busy={dialogBusy || busy}
-          mode="create"
-          onCancel={() => setDialog(null)}
-          onConfirm={confirmName}
-        />
-      )}
       {dialog === "delete" && workspace && (
         <WorkspaceDeleteDialog
           busy={dialogBusy || busy}
@@ -1733,6 +1783,18 @@ function getVisibleEntries(
         WORKSPACE_ENTRY_LABELS[entry.kind]
           .toLocaleLowerCase()
           .includes(query);
+      const ungroupedTargets =
+        entry.kind === "standalone-repository" &&
+        (!showChangedRepositoriesOnly ||
+          targetHasLocalChanges(snapshots, entry.target)) &&
+        (entryMatches ||
+          workspaceTargetMatchesQuery(
+            workspace,
+            entry.target,
+            query
+          ))
+          ? [entry.target]
+          : [];
       const groups = entry.groups
         .map((group) => ({
           group,
@@ -1782,13 +1844,14 @@ function getVisibleEntries(
 
       return {
         entry,
+        ungroupedTargets,
         groups
       };
     })
     .filter(
-      ({ entry, groups }) =>
+      ({ entry, groups, ungroupedTargets }) =>
         showChangedRepositoriesOnly
-          ? groups.length > 0
+          ? groups.length > 0 || ungroupedTargets.length > 0
           : !query ||
             entry.displayName
               .toLocaleLowerCase()
@@ -1797,7 +1860,29 @@ function getVisibleEntries(
             WORKSPACE_ENTRY_LABELS[entry.kind]
               .toLocaleLowerCase()
               .includes(query) ||
-            groups.length > 0
+            groups.length > 0 ||
+            ungroupedTargets.length > 0
+    );
+}
+
+function workspaceTargetMatchesQuery(
+  workspace: WorkspaceDetailsDto,
+  target: RepositoryTargetDto,
+  query: string
+): boolean {
+  if (!query) {
+    return true;
+  }
+  const resolved = resolveWorkspaceTarget(workspace, target);
+  return [
+    resolved.repository?.name,
+    resolved.worktree?.name,
+    resolved.worktree?.path,
+    resolved.worktree?.branch
+  ]
+    .filter(Boolean)
+    .some((value) =>
+      String(value).toLocaleLowerCase().includes(query)
     );
 }
 

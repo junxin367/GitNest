@@ -45,7 +45,9 @@ export interface ExternalApplicationController {
   open(kind: ExternalApplicationKindDto): Promise<boolean>;
   openFile(
     kind: ExternalApplicationKindDto,
-    path: string
+    path: string,
+    line?: number,
+    column?: number
   ): Promise<boolean>;
   clearError(): void;
 }
@@ -127,11 +129,18 @@ export function useExternalApplications(
     generation.current += 1;
     setActive(null);
     setError(null);
+    if (!stableContext) {
+      setProfiles([]);
+      setLoading(false);
+      return () => {
+        generation.current += 1;
+      };
+    }
     void reload();
     return () => {
       generation.current += 1;
     };
-  }, [contextKey, reload]);
+  }, [contextKey, reload, stableContext]);
 
   const openWithContext = useCallback(
     async (
@@ -189,7 +198,9 @@ export function useExternalApplications(
   const openFile = useCallback(
     async (
       kind: ExternalApplicationKindDto,
-      path: string
+      path: string,
+      line?: number,
+      column?: number
     ) => {
       if (
         !stableContext ||
@@ -200,7 +211,9 @@ export function useExternalApplications(
       return openWithContext(kind, {
         scope: "file",
         target: stableContext.target,
-        path
+        path,
+        ...(line !== undefined ? { line } : {}),
+        ...(column !== undefined ? { column } : {})
       });
     },
     [openWithContext, stableContext]

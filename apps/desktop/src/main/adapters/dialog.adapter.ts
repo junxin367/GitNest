@@ -11,8 +11,8 @@ export async function selectWorkspaceDirectory(
   window: BrowserWindow
 ): Promise<WorkspaceDirectorySelectionDto> {
   const result = await dialog.showOpenDialog(window, {
-    title: "添加 Workspace 目录",
-    buttonLabel: "添加目录",
+    title: "选择 Workspace 目录",
+    buttonLabel: "选择目录",
     properties: ["openDirectory"]
   });
   const path = result.filePaths[0];

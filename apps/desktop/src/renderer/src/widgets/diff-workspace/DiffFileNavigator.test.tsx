@@ -113,6 +113,38 @@ describe("DiffFileNavigator selection reveal", () => {
     expect(document.activeElement).toBe(requestedButton);
     expect(scrollIntoView).toHaveBeenCalledOnce();
   });
+
+  it("summarizes the visible additions and deletions for each file group", () => {
+    act(() => {
+      root.render(
+        <DiffFileNavigator
+          configuration={
+            repositoryDiffWorkspaceConfiguration.navigation
+          }
+          files={FILES_WITH_STATS}
+          onSelectedFileChange={vi.fn()}
+          selectedFileKey={FILES_WITH_STATS[0]!.key}
+        />
+      );
+    });
+
+    expect(sectionStats(container, "已暂存")).toBe("+2-1");
+    expect(sectionStats(container, "未暂存")).toBe("+4-2");
+    expect(sectionStats(container, "未跟踪")).toBe("+4-0");
+    expect(fileStatus(container, "src/App.tsx")).toBe("M");
+    expect(fileStatus(container, "src/Button.tsx")).toBe("D");
+    expect(fileStatus(container, "src/Input.tsx")).toBe("A");
+    expect(fileStatus(container, "README.md")).toBe("?");
+
+    const filter = container.querySelector<HTMLInputElement>(
+      'input[aria-label="筛选变更文件"]'
+    );
+    act(() => setInputValue(filter, "Button"));
+
+    expect(sectionStats(container, "已暂存")).toBeNull();
+    expect(sectionStats(container, "未暂存")).toBe("+1-0");
+    expect(sectionStats(container, "未跟踪")).toBeNull();
+  });
 });
 
 const FILES: DiffViewerFile[] = [
@@ -143,6 +175,108 @@ const FILES: DiffViewerFile[] = [
     }
   }
 ];
+
+const FILES_WITH_STATS: DiffViewerFile[] = [
+  {
+    key: "staged\u0001src/App.tsx",
+    path: "src/App.tsx",
+    mode: "staged",
+    status: "M",
+    kind: "ordinary",
+    additions: 2,
+    deletions: 1,
+    change: {
+      path: "src/App.tsx",
+      indexStatus: "M",
+      worktreeStatus: ".",
+      kind: "ordinary"
+    }
+  },
+  {
+    key: "unstaged\u0001src/Button.tsx",
+    path: "src/Button.tsx",
+    mode: "unstaged",
+    status: "D",
+    kind: "ordinary",
+    additions: 1,
+    deletions: 0,
+    change: {
+      path: "src/Button.tsx",
+      indexStatus: ".",
+      worktreeStatus: "D",
+      kind: "ordinary"
+    }
+  },
+  {
+    key: "unstaged\u0001src/Input.tsx",
+    path: "src/Input.tsx",
+    mode: "unstaged",
+    status: "A",
+    kind: "ordinary",
+    additions: 3,
+    deletions: 2,
+    change: {
+      path: "src/Input.tsx",
+      indexStatus: ".",
+      worktreeStatus: "A",
+      kind: "ordinary"
+    }
+  },
+  {
+    key: "untracked\u0001README.md",
+    path: "README.md",
+    mode: "untracked",
+    status: "?",
+    kind: "untracked",
+    additions: 4,
+    deletions: 0,
+    change: {
+      path: "README.md",
+      indexStatus: "?",
+      worktreeStatus: "?",
+      kind: "untracked"
+    }
+  }
+];
+
+function sectionStats(
+  root: ParentNode,
+  title: string
+): string | null {
+  const section = Array.from(
+    root.querySelectorAll<HTMLElement>(
+      ".diff-workspace-file-section"
+    )
+  ).find(
+    (candidate) =>
+      candidate
+        .querySelector(
+          ".diff-workspace-file-section-label"
+        )
+        ?.textContent?.trim() === title
+  );
+  return (
+    section
+      ?.querySelector(
+        ".diff-workspace-file-section-stats"
+      )
+      ?.textContent?.replace(/\s+/g, "") ?? null
+  );
+}
+
+function fileStatus(
+  root: ParentNode,
+  path: string
+): string | null {
+  return (
+    root
+      .querySelector<HTMLButtonElement>(
+        `button[aria-label="${path}"]`
+      )
+      ?.querySelector(".diff-workspace-file-status")
+      ?.getAttribute("data-status") ?? null
+  );
+}
 
 function setInputValue(
   input: HTMLInputElement | null,

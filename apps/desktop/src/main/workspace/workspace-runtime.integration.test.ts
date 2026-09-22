@@ -1,5 +1,5 @@
 import { appendFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -20,7 +20,6 @@ import {
   type WorkspaceFixture
 } from "@gitnest/testkit";
 import type {
-  RepositoryTarget,
   WorkspaceWatchEvent,
   WorkspaceWatchHandle,
   WorkspaceWatcher,
@@ -92,7 +91,9 @@ describe("WorkspaceRuntimeService integration", () => {
       "\nExternal change\n",
       "utf8"
     );
-    watcher.emit(directTarget as RepositoryTarget);
+    watcher.emit(
+      join(fixture.directRepositoryPath, "README.md")
+    );
 
     const changed = await waitForState(
       runtime,
@@ -188,11 +189,16 @@ class PassiveWatcher implements WorkspaceWatcher {
     };
   }
 
-  emit(target: RepositoryTarget): void {
+  emit(path: string): void {
     const registration = this.#registrations.find(
-      (candidate) =>
-        candidate.target.repositoryId === target.repositoryId &&
-        candidate.target.worktreeId === target.worktreeId
+      (candidate) => {
+        const childPath = relative(candidate.path, path);
+        return (
+          childPath === "" ||
+          (!childPath.startsWith("..") &&
+            !isAbsolute(childPath))
+        );
+      }
     );
 
     if (!registration) {
@@ -200,8 +206,8 @@ class PassiveWatcher implements WorkspaceWatcher {
     }
 
     this.#onChange?.({
-      path: registration.path,
-      target
+      path,
+      target: registration.target
     });
   }
 }

@@ -102,7 +102,8 @@ describe("WorkspaceService integration", () => {
       source: "drop"
     });
     expect(standaloneResult.workspace.entries[2]).toMatchObject({
-      kind: "standalone-repository"
+      kind: "standalone-repository",
+      groups: []
     });
 
     const duplicateResult = await service.addEntry({
@@ -326,6 +327,11 @@ describe("WorkspaceService integration", () => {
             )
           )
       ).toBe(false);
+      expect(
+        withoutNested.entries.find(
+          (entry) => entry.id === metaEntry.id
+        )?.excludes
+      ).toContain("svr/ScResSvr");
       await expect(
         access(localFixture.nestedRepositoryPath)
       ).resolves.toBeUndefined();
@@ -357,10 +363,16 @@ describe("WorkspaceService integration", () => {
         (entry) => entry.id === metaEntry?.id
       );
       expect(remaining).toBeDefined();
-      const empty = await localService.removeEntry({
-        entryId: remaining?.id as string
+      await expect(
+        localService.removeEntry({
+          entryId: remaining?.id as string
+        })
+      ).rejects.toMatchObject({
+        code: "INVALID_REQUEST"
       });
-      expect(empty.entries).toHaveLength(0);
+      expect(
+        (await localService.getCurrent()).entries
+      ).toHaveLength(1);
       await expect(access(localFixture.metaRootPath)).resolves.toBeUndefined();
     } finally {
       await localFixture.dispose();

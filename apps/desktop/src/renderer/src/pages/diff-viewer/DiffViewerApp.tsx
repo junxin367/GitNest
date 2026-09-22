@@ -20,6 +20,7 @@ import {
   canUnstageChange,
   useRepositoryMutations
 } from "../../entities/repository/useRepositoryMutations";
+import { getSnapshotContentRevision } from "../../entities/workspace/model";
 import { useExternalApplications } from "../../features/external-application/useExternalApplications";
 import { useAppSettings } from "../../features/settings/useAppSettings";
 import {
@@ -111,12 +112,16 @@ function DiffViewer({
     useState<GitReadErrorDto | null>(null);
   const [diffError, setDiffError] =
     useState<GitReadErrorDto | null>(null);
+  const [targetMissing, setTargetMissing] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
+  const snapshotRevisionRef = useRef<string | null>(null);
   const diffRequestKeyRef = useRef<string | null>(null);
   const selectedFileKeyRef = useRef(initialFile.key);
+  const requestGenerationRef = useRef(0);
+  const targetMissingRef = useRef(false);
   const [pathCopyStatus, setPathCopyStatus] =
     useState<DiffPathCopyStatus>("idle");
   const mutationHooks = useMemo(
@@ -181,7 +186,14 @@ function DiffViewer({
   }, [selectedFile?.key]);
 
   useEffect(() => {
+    if (targetMissing) {
+      setChangesLoading(false);
+      setChangesLoaded(true);
+      return;
+    }
+
     const queryId = nextQueryId("diff-viewer-changes");
+    const requestGeneration = requestGenerationRef.current;
     let current = true;
     setChangesLoading(true);
     setChangesError(null);
@@ -192,7 +204,11 @@ function DiffViewer({
         target: request.target
       })
       .then((result) => {
-        if (!current) {
+        if (
+          !current ||
+          targetMissingRef.current ||
+          requestGeneration !== requestGenerationRef.current
+        ) {
           return;
         }
         if (!result.ok) {
@@ -216,12 +232,20 @@ function DiffViewer({
         );
       })
       .catch((reason) => {
-        if (current) {
+        if (
+          current &&
+          !targetMissingRef.current &&
+          requestGeneration === requestGenerationRef.current
+        ) {
           setChangesError(unexpectedError(reason));
         }
       })
       .finally(() => {
-        if (current) {
+        if (
+          current &&
+          !targetMissingRef.current &&
+          requestGeneration === requestGenerationRef.current
+        ) {
           setChangesLoaded(true);
           setChangesLoading(false);
         }
@@ -234,35 +258,93 @@ function DiffViewer({
   }, [
     refreshVersion,
     request.target.repositoryId,
-    request.target.worktreeId
+    request.target.worktreeId,
+    targetMissing
   ]);
 
   useEffect(() => {
     let active = true;
+    let eventObserved = false;
+    snapshotRevisionRef.current = null;
+    const clearMissingTarget = () => {
+      targetMissingRef.current = true;
+      requestGenerationRef.current += 1;
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      setTargetMissing(true);
+      setFiles([]);
+      setSelectedKey("");
+      setBranch(undefined);
+      setDiff(null);
+      setChangesLoading(false);
+      setChangesLoaded(true);
+      setDiffLoading(false);
+      setChangesError(null);
+      setDiffError(null);
+      diffRequestKeyRef.current = null;
+    };
+    const scheduleRefresh = () => {
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+      }
+      refreshTimerRef.current = setTimeout(() => {
+        refreshTimerRef.current = null;
+        if (active) {
+          setRefreshVersion((version) => version + 1);
+        }
+      }, 120);
+    };
+    const targetSnapshot = (state: WorkspaceRuntimeStateDto) =>
+      state.snapshots.find(
+        (candidate) =>
+          candidate.repositoryId ===
+            request.target.repositoryId &&
+          candidate.worktreeId === request.target.worktreeId
+      );
     const unsubscribe = window.gitnest.workspace.onStateChanged(
       (state: WorkspaceRuntimeStateDto) => {
         if (!active) {
           return;
         }
-        const snapshot = state.snapshots.find(
-          (candidate) =>
-            candidate.repositoryId === request.target.repositoryId &&
-            candidate.worktreeId === request.target.worktreeId
-        );
+        eventObserved = true;
+        const snapshot = targetSnapshot(state);
+        const previousRevision = snapshotRevisionRef.current;
+        const revision = getSnapshotContentRevision(snapshot);
+        snapshotRevisionRef.current = revision;
         if (!snapshot) {
+          clearMissingTarget();
           return;
         }
-        if (refreshTimerRef.current) {
-          clearTimeout(refreshTimerRef.current);
+        targetMissingRef.current = false;
+        setTargetMissing(false);
+        if (
+          previousRevision === revision ||
+          previousRevision === "missing"
+        ) {
+          return;
         }
-        refreshTimerRef.current = setTimeout(() => {
-          refreshTimerRef.current = null;
-          if (active) {
-            setRefreshVersion((version) => version + 1);
-          }
-        }, 120);
+        scheduleRefresh();
       }
     );
+    void window.gitnest.workspace
+      .getState()
+      .then((result) => {
+        if (!active || eventObserved || !result.ok) {
+          return;
+        }
+        const snapshot = targetSnapshot(result.value);
+        snapshotRevisionRef.current =
+          getSnapshotContentRevision(snapshot);
+        if (!snapshot) {
+          clearMissingTarget();
+          return;
+        }
+        targetMissingRef.current = false;
+        setTargetMissing(false);
+      })
+      .catch(() => undefined);
 
     return () => {
       active = false;
@@ -278,6 +360,12 @@ function DiffViewer({
   ]);
 
   useEffect(() => {
+    if (targetMissing) {
+      setDiff(null);
+      setDiffLoading(false);
+      diffRequestKeyRef.current = null;
+      return;
+    }
     if (!selectedFile) {
       setDiff(null);
       setDiffLoading(false);
@@ -294,6 +382,7 @@ function DiffViewer({
       diffRequestKeyRef.current === diffRequestKey;
     diffRequestKeyRef.current = diffRequestKey;
     const queryId = nextQueryId("diff-viewer-diff");
+    const requestGeneration = requestGenerationRef.current;
     let current = true;
     if (!preserveExistingDiff) {
       setDiff(null);
@@ -311,7 +400,11 @@ function DiffViewer({
         contextLines: diffContextLines
       })
       .then((result) => {
-        if (!current) {
+        if (
+          !current ||
+          targetMissingRef.current ||
+          requestGeneration !== requestGenerationRef.current
+        ) {
           return;
         }
         if (result.ok) {
@@ -321,12 +414,20 @@ function DiffViewer({
         }
       })
       .catch((reason) => {
-        if (current) {
+        if (
+          current &&
+          !targetMissingRef.current &&
+          requestGeneration === requestGenerationRef.current
+        ) {
           setDiffError(unexpectedError(reason));
         }
       })
       .finally(() => {
-        if (current) {
+        if (
+          current &&
+          !targetMissingRef.current &&
+          requestGeneration === requestGenerationRef.current
+        ) {
           setDiffLoading(false);
         }
       });
@@ -342,7 +443,8 @@ function DiffViewer({
     diffContextLines,
     selectedFile?.key,
     selectedFile?.mode,
-    selectedFile?.path
+    selectedFile?.path,
+    targetMissing
   ]);
 
   const repositoryContext = `${request.target.repositoryId}/${
@@ -351,26 +453,33 @@ function DiffViewer({
   const language = selectedFile
     ? languageLabel(selectedFile.path)
     : "—";
-  const panelState: DiffPanelState | undefined = !selectedFile
+  const panelState: DiffPanelState | undefined = targetMissing
     ? {
+        icon: "warning",
+        message:
+          "该仓库或 Worktree 已从当前 Workspace 状态中移除。",
+        title: "仓库或 Worktree 已不可用"
+      }
+    : !selectedFile
+      ? {
         icon: "files",
         message: "当前工作区没有可查看的本地变更。",
         title: "工作区干净"
       }
-    : diffLoading && !diff
-      ? {
-          busy: true,
-          icon: "refresh",
-          message: "正在读取所选文件内容。",
-          title: "读取 Diff…"
-        }
-      : diffError
+      : diffLoading && !diff
         ? {
-            icon: "warning",
-            message: diffError.message,
-            title: "Diff 读取失败"
+            busy: true,
+            icon: "refresh",
+            message: "正在读取所选文件内容。",
+            title: "读取 Diff…"
           }
-        : undefined;
+        : diffError
+          ? {
+              icon: "warning",
+              message: diffError.message,
+              title: "Diff 读取失败"
+            }
+          : undefined;
   const changesMessage =
     changesError && files.length <= 1
       ? {

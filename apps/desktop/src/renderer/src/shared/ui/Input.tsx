@@ -22,6 +22,7 @@ export interface InputProps
   label?: string;
   leading?: ReactNode;
   onClear?: () => void;
+  reserveHelpSpace?: boolean;
   size?: InputSize;
   state?: InputState;
   trailing?: ReactNode;
@@ -43,6 +44,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
       label,
       leading,
       onClear,
+      reserveHelpSpace = false,
       size = "medium",
       state = "default",
       trailing,
@@ -131,12 +133,14 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             </span>
           ) : null}
         </div>
-        {helpText ? (
+        {helpText || reserveHelpSpace ? (
           <small
+            aria-hidden={helpText ? undefined : true}
             className="gn-input-field__help"
             data-state={state}
+            title={helpText || undefined}
           >
-            {helpText}
+            {helpText || "\u00a0"}
           </small>
         ) : null}
       </div>

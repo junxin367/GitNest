@@ -30,15 +30,50 @@ import type {
   CodeAnalysisLanguage,
   CodeAnalysisSettings,
   LanguageServerCommandSettings,
+  LanguageServerLanguage,
   LanguageServerStatus,
   LspAnalysisResult,
   LspCallReference,
-  LspDocumentSymbol
+  LspDocumentSymbol,
+  LspIncomingCallReference,
+  LspReferenceLocation,
+  LspSemanticRelation
 } from "./model";
 
 interface SourceDocument {
   file: AnalysisSourceFile;
   content: string;
+}
+
+interface LspDocumentResponse {
+  document: SourceDocument;
+  uri: string;
+  response: unknown;
+  failure: string | null;
+}
+
+export function orderLanguageServerDocuments<
+  Document extends { file: AnalysisSourceFile }
+>(
+  documents: readonly Document[],
+  priorityPaths?: ReadonlySet<string>
+): Document[] {
+  return [...documents].sort(
+    (left, right) =>
+      Number(
+        priorityPaths?.has(right.file.canonicalPath) ?? false
+      ) -
+        Number(
+          priorityPaths?.has(left.file.canonicalPath) ?? false
+        ) ||
+      Number(right.file.changed) -
+        Number(left.file.changed) ||
+      Number(isTestCodePath(left.file.relativePath)) -
+        Number(isTestCodePath(right.file.relativePath)) ||
+      left.file.canonicalPath.localeCompare(
+        right.file.canonicalPath
+      )
+  );
 }
 
 interface PooledSession {
@@ -47,7 +82,22 @@ interface PooledSession {
   opened: Map<string, { version: number; hash: string }>;
   recoveredJavaWorkspace: boolean;
   hoverSupported: boolean;
+  incomingCallHierarchySupported: boolean;
+  referencesSupported: boolean;
+  typeHierarchySupported: boolean;
+  implementationSupported: boolean;
+  workspaceSymbolSupported: boolean;
   idleTimer?: NodeJS.Timeout;
+}
+
+function isTestCodePath(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/").toLowerCase();
+  return (
+    normalized.includes("/test/") ||
+    normalized.includes("/tests/") ||
+    normalized.includes("/__tests__/") ||
+    /\.(?:test|spec)\.[^/]+$/.test(normalized)
+  );
 }
 
 interface JavaDataWorkspace {
@@ -64,9 +114,127 @@ interface LanguageServerLaunchPlan {
   javaDataWorkspace?: JavaDataWorkspace;
 }
 
+interface LanguageServerDescriptor {
+  language: LanguageServerLanguage;
+  displayName: string;
+  fileLanguages: readonly CodeAnalysisLanguage[];
+  alwaysReport: boolean;
+}
+
+const LANGUAGE_SERVER_DESCRIPTORS: readonly LanguageServerDescriptor[] =
+  [
+    {
+      language: "typescript",
+      displayName: "TypeScript",
+      fileLanguages: ["typescript", "javascript"],
+      alwaysReport: true
+    },
+    {
+      language: "vue",
+      displayName: "Vue",
+      fileLanguages: ["vue"],
+      alwaysReport: false
+    },
+    {
+      language: "java",
+      displayName: "Java",
+      fileLanguages: ["java"],
+      alwaysReport: true
+    },
+    {
+      language: "python",
+      displayName: "Python",
+      fileLanguages: ["python"],
+      alwaysReport: false
+    },
+    {
+      language: "go",
+      displayName: "Go",
+      fileLanguages: ["go"],
+      alwaysReport: false
+    },
+    {
+      language: "kotlin",
+      displayName: "Kotlin",
+      fileLanguages: ["kotlin"],
+      alwaysReport: false
+    },
+    {
+      language: "csharp",
+      displayName: "C#",
+      fileLanguages: ["csharp"],
+      alwaysReport: false
+    },
+    {
+      language: "rust",
+      displayName: "Rust",
+      fileLanguages: ["rust"],
+      alwaysReport: false
+    }
+  ];
+
+const OPTIONAL_LANGUAGE_SERVER_LIMITS = {
+  maxDocuments: 120,
+  maxSymbolsPerDocument: 5_000,
+  maxCallHierarchyRequests: 50,
+  maxTypeHierarchyRequests: 50,
+  maxReferenceRequests: 50,
+  maxDocumentationRequests: 50,
+  maxReferencesPerSymbol: 500
+} as const;
+
+const OPTIONAL_LANGUAGE_SERVER_DEFAULTS: Readonly<
+  Record<
+    Exclude<
+      LanguageServerLanguage,
+      "typescript" | "java"
+    >,
+    LanguageServerCommandSettings
+  >
+> = {
+  vue: {
+    ...OPTIONAL_LANGUAGE_SERVER_LIMITS,
+    enabled: true,
+    command: "vue-language-server",
+    args: ["--stdio"]
+  },
+  python: {
+    ...OPTIONAL_LANGUAGE_SERVER_LIMITS,
+    enabled: false,
+    command: "pyright-langserver",
+    args: ["--stdio"]
+  },
+  go: {
+    ...OPTIONAL_LANGUAGE_SERVER_LIMITS,
+    enabled: false,
+    command: "gopls",
+    args: ["serve"]
+  },
+  kotlin: {
+    ...OPTIONAL_LANGUAGE_SERVER_LIMITS,
+    enabled: false,
+    command: "kotlin-lsp",
+    args: ["--stdio"]
+  },
+  csharp: {
+    ...OPTIONAL_LANGUAGE_SERVER_LIMITS,
+    enabled: false,
+    command: "csharp-ls",
+    args: []
+  },
+  rust: {
+    ...OPTIONAL_LANGUAGE_SERVER_LIMITS,
+    enabled: false,
+    command: "rust-analyzer",
+    args: []
+  }
+};
+
 const JAVA_WARMUP_TIMEOUT_MS = 120_000;
 const JAVA_WORKSPACE_READY_TIMEOUT_MS = 5 * 60_000;
 const JAVA_STATUS_DISCOVERY_TIMEOUT_MS = 2_000;
+const NON_JAVA_COLD_START_TIMEOUT_MS = 30_000;
+const LANGUAGE_SERVER_RECONNECT_DELAY_MS = 250;
 const JAVA_DATA_STATE_FILE = "active-generation.json";
 const MAX_LSP_HEADER_BYTES = 64 * 1_024;
 const MAX_LSP_MESSAGE_BYTES = 16 * 1_024 * 1_024;
@@ -74,9 +242,10 @@ const MAX_LSP_BUFFER_BYTES = 32 * 1_024 * 1_024;
 const MAX_LSP_QUEUED_WRITE_BYTES = 32 * 1_024 * 1_024;
 const MAX_LSP_STATUS_TYPE_CHARACTERS = 128;
 const MAX_LSP_STATUS_MESSAGE_CHARACTERS = 2_048;
-const MAX_LSP_SYMBOLS_PER_DOCUMENT = 5_000;
+const DEFAULT_LSP_SYMBOLS_PER_DOCUMENT = 5_000;
 const MAX_LSP_SYMBOL_DEPTH = 64;
 const MAX_LSP_SYMBOL_NAME_CHARACTERS = 1_024;
+const DEFAULT_LSP_REFERENCES_PER_SYMBOL = 500;
 
 interface NotificationWaiter {
   predicate(params: unknown): boolean;
@@ -109,40 +278,79 @@ export class ExternalLanguageServerPool {
     >();
     const statuses: LanguageServerStatus[] = [];
     const warnings: string[] = [];
+    const semanticRelations: LspSemanticRelation[] = [];
 
-    for (const language of [
-      "typescript",
-      "java"
-    ] as const) {
+    for (const descriptor of LANGUAGE_SERVER_DESCRIPTORS) {
+      const language = descriptor.language;
+      const sessionKey = `${input.sessionPrefix}:${language}`;
       const documents = input.documents.filter((document) =>
-        belongsToLsp(language, document.file.language)
+        descriptor.fileLanguages.includes(
+          document.file.language
+        )
       );
-      const commandSettings =
-        language === "typescript"
-          ? input.settings.typescript
-          : input.settings.java;
+      const commandSettings = languageServerSettings(
+        input.settings,
+        language
+      );
+      if (
+        documents.length === 0 &&
+        !descriptor.alwaysReport
+      ) {
+        await this.#closeSessionDocuments(
+          sessionKey,
+          new Set(),
+          input.signal
+        );
+        continue;
+      }
       if (!commandSettings.enabled) {
+        await this.#closeSessionDocuments(
+          sessionKey,
+          new Set(),
+          input.signal
+        );
         statuses.push({
           language,
           state: "disabled",
           command: commandSettings.command,
           message: "已在设置中禁用。",
-          symbolCount: 0
+          symbolCount: 0,
+          semanticCoverage:
+            documents.length > 0 ? "unavailable" : "complete",
+          documentsTotal: documents.length,
+          documentsAnalyzed: 0,
+          skippedDocuments: documents.length,
+          failedDocuments: 0,
+          truncatedDocuments: 0,
+          requestBudgetExhausted: false,
+          enrichmentStoppedEarly: false
         });
         continue;
       }
       if (documents.length === 0) {
+        await this.#closeSessionDocuments(
+          sessionKey,
+          new Set(),
+          input.signal
+        );
         statuses.push({
           language,
           state: "disabled",
           command: commandSettings.command,
           message: "当前范围没有对应语言文件。",
-          symbolCount: 0
+          symbolCount: 0,
+          semanticCoverage: "complete",
+          documentsTotal: 0,
+          documentsAnalyzed: 0,
+          skippedDocuments: 0,
+          failedDocuments: 0,
+          truncatedDocuments: 0,
+          requestBudgetExhausted: false,
+          enrichmentStoppedEarly: false
         });
         continue;
       }
 
-      const sessionKey = `${input.sessionPrefix}:${language}`;
       const workspace = resolveLanguageServerWorkspace(
         language,
         documents,
@@ -163,158 +371,434 @@ export class ExternalLanguageServerPool {
       const firstDocumentTimeoutMs =
         language === "java"
           ? workspaceReadyTimeoutMs
-          : requestTimeoutMs;
+          : startupTimeoutMs;
+      const orderedDocuments = orderLanguageServerDocuments(
+        documents,
+        input.priorityPaths
+      );
+      const documentLimit = commandSettings.maxDocuments;
+      const selectedDocuments = orderedDocuments.slice(
+        0,
+        documentLimit
+      );
       let releaseSession: (() => void) | undefined;
       try {
         releaseSession = await this.#acquireSession(
           sessionKey,
           input.signal
         );
-        const session = await this.#getSession({
-          key: sessionKey,
-          language,
-          commandSettings,
-          rootPath: workspace.rootPath,
-          workspaceFolders: workspace.workspaceFolders,
-          dataDirectory: input.lspDataDirectory,
-          timeoutMs: startupTimeoutMs,
-          workspaceReadyTimeoutMs,
-          ...(input.signal ? { signal: input.signal } : {})
-        });
-        let symbolCount = 0;
-        let hierarchyCallCount = 0;
-        let documentationCount = 0;
-        let truncatedSymbolDocuments = 0;
-        let hierarchyRequestBudget =
-          language === "java" ? 40 : 50;
-        let documentationRequestBudget =
-          language === "java" ? 40 : 50;
-        let hierarchySupported = true;
-        let hoverSupported = session.hoverSupported;
-        const documentLimit =
-          language === "java" ? 80 : 120;
-        const orderedDocuments = [...documents].sort(
-          (left, right) =>
-            Number(
-              input.priorityPaths?.has(
-                right.file.canonicalPath
-              ) ?? false
-            ) -
-              Number(
-                input.priorityPaths?.has(
-                  left.file.canonicalPath
-                ) ?? false
-              ) ||
-            Number(right.file.changed) -
-              Number(left.file.changed)
-        );
-        const selectedDocuments = orderedDocuments.slice(
-          0,
-          documentLimit
-        );
+        const firstDocument = selectedDocuments[0]!;
+        const firstDocumentUri = pathToFileURL(
+          firstDocument.file.absolutePath
+        ).toString();
+        let session: PooledSession | undefined;
+        let firstDocumentResponse: unknown;
+        let sessionReady = false;
+        let didReconnect = false;
+        let firstConnectionError: unknown;
+        const sessionAttempts =
+          language === "java" ? 1 : 2;
         for (
-          let documentIndex = 0;
-          documentIndex < selectedDocuments.length;
-          documentIndex += 1
+          let attempt = 0;
+          attempt < sessionAttempts;
+          attempt += 1
         ) {
-          const document = selectedDocuments[documentIndex];
-          if (!document) {
-            continue;
-          }
-          throwIfAborted(input.signal);
-          const uri = pathToFileURL(
-            document.file.absolutePath
-          ).toString();
-          await openOrUpdateDocument(
-            session,
-            uri,
-            document,
-            requestTimeoutMs,
-            input.signal
-          );
-          const response = await session.client.request(
-            "textDocument/documentSymbol",
-            {
-              textDocument: { uri }
-            },
-            documentIndex === 0
-              ? firstDocumentTimeoutMs
-              : requestTimeoutMs,
-            input.signal
-          );
-          const parsedSymbols =
-            parseDocumentSymbols(response);
-          const symbols = parsedSymbols.symbols;
-          if (parsedSymbols.truncated) {
-            truncatedSymbolDocuments += 1;
-          }
-          if (
-            hoverSupported &&
-            documentationRequestBudget > 0
-          ) {
-            const documentation =
-              await enrichDocumentation({
-                session,
-                uri,
-                symbols,
-                budget: documentationRequestBudget,
-                timeoutMs: requestTimeoutMs,
-                ...(input.signal
-                  ? { signal: input.signal }
-                  : {})
-              });
-            documentationRequestBudget -=
-              documentation.attempted;
-            documentationCount +=
-              documentation.documented;
-            hoverSupported = documentation.supported;
-            session.hoverSupported =
-              documentation.supported;
-          }
-          if (
-            hierarchySupported &&
-            hierarchyRequestBudget > 0
-          ) {
-            const hierarchy = await enrichCallHierarchy({
-              session,
-              uri,
-              symbols,
-              budget: hierarchyRequestBudget,
-              timeoutMs: requestTimeoutMs,
+          try {
+            session = await this.#getSession({
+              key: sessionKey,
+              language,
+              commandSettings,
+              rootPath: workspace.rootPath,
+              workspaceFolders:
+                workspace.workspaceFolders,
+              dataDirectory: input.lspDataDirectory,
+              timeoutMs: startupTimeoutMs,
+              workspaceReadyTimeoutMs,
               ...(input.signal
                 ? { signal: input.signal }
                 : {})
             });
-            hierarchyRequestBudget -= hierarchy.attempted;
-            hierarchyCallCount += hierarchy.callCount;
-            hierarchySupported = hierarchy.supported;
+            closeUnusedDocuments(
+              session,
+              new Set(
+                selectedDocuments.map((document) =>
+                  pathToFileURL(
+                    document.file.absolutePath
+                  ).toString()
+                )
+              )
+            );
+            await openOrUpdateDocument(
+              session,
+              firstDocumentUri,
+              firstDocument,
+              requestTimeoutMs,
+              input.signal
+            );
+            firstDocumentResponse =
+              await session.client.request(
+                "textDocument/documentSymbol",
+                {
+                  textDocument: {
+                    uri: firstDocumentUri
+                  }
+                },
+                firstDocumentTimeoutMs,
+                input.signal
+              );
+            sessionReady = true;
+            break;
+          } catch (error) {
+            const canReconnect =
+              attempt + 1 < sessionAttempts &&
+              isRecoverableLanguageServerConnectionError(
+                error,
+                input.signal
+              );
+            if (!canReconnect) {
+              if (didReconnect) {
+                throw new Error(
+                  "LSP 自动重连后仍失败。" +
+                    `首次失败：${errorMessage(
+                      firstConnectionError
+                    )}；` +
+                    `重试失败：${errorMessage(error)}`,
+                  { cause: error }
+                );
+              }
+              throw error;
+            }
+            didReconnect = true;
+            firstConnectionError = error;
+            await this.#disposeSession(sessionKey);
+            await delayWithSignal(
+              LANGUAGE_SERVER_RECONNECT_DELAY_MS,
+              input.signal
+            );
+          }
+        }
+        if (!sessionReady || !session) {
+          throw new Error("LSP 会话未能完成首个文档请求。");
+        }
+        let symbolCount = 0;
+        let truncatedSymbolDocuments = 0;
+        const preparedDocuments: PreparedLspDocument[] = [];
+        const analyzedPaths = new Set<string>();
+        const remainingDocumentResults =
+          await mapWithConcurrency(
+            selectedDocuments.slice(1),
+            input.settings.readConcurrency,
+            async (document): Promise<LspDocumentResponse> => {
+              throwIfAborted(input.signal);
+              const uri = pathToFileURL(
+                document.file.absolutePath
+              ).toString();
+              try {
+                await openOrUpdateDocument(
+                  session,
+                  uri,
+                  document,
+                  requestTimeoutMs,
+                  input.signal
+                );
+                const response =
+                  await session.client.request(
+                    "textDocument/documentSymbol",
+                    {
+                      textDocument: { uri }
+                    },
+                    requestTimeoutMs,
+                    input.signal
+                  );
+                return {
+                  document,
+                  uri,
+                  response,
+                  failure: null
+                };
+              } catch (error) {
+                if (input.signal?.aborted) {
+                  throw error;
+                }
+                return {
+                  document,
+                  uri,
+                  response: undefined,
+                  failure: errorMessage(error)
+                };
+              }
+            }
+          );
+        const documentResults: LspDocumentResponse[] = [
+          {
+            document: firstDocument,
+            uri: firstDocumentUri,
+            response: firstDocumentResponse,
+            failure: null
+          },
+          ...remainingDocumentResults
+        ];
+        const failedDocumentMessages: string[] = [];
+        for (const result of documentResults) {
+          if (result.failure !== null) {
+            failedDocumentMessages.push(
+              `${result.document.file.relativePath}: ${result.failure}`
+            );
+            continue;
+          }
+          const parsedSymbols = parseDocumentSymbols(
+            result.response,
+            commandSettings.maxSymbolsPerDocument
+          );
+          const symbols = parsedSymbols.symbols;
+          if (parsedSymbols.truncated) {
+            truncatedSymbolDocuments += 1;
           }
           symbolCount += countSymbols(symbols);
           symbolsByPath.set(
-            document.file.canonicalPath,
+            result.document.file.canonicalPath,
             symbols
           );
+          analyzedPaths.add(
+            result.document.file.canonicalPath
+          );
+          preparedDocuments.push({
+            uri: result.uri,
+            symbols
+          });
         }
+
+        const skippedByLimitCount = Math.max(
+          0,
+          documents.length - selectedDocuments.length
+        );
+        const failedDocumentCount =
+          failedDocumentMessages.length;
+        const uncoveredDocumentCount =
+          skippedByLimitCount + failedDocumentCount;
+        const workspaceSymbols =
+          uncoveredDocumentCount > 0 &&
+          session.workspaceSymbolSupported
+            ? await enrichWorkspaceSymbols({
+                session,
+                allowedPaths: new Set(
+                  documents.map(
+                    (document) =>
+                      document.file.canonicalPath
+                  )
+                ),
+                existingPaths: analyzedPaths,
+                maxSymbols:
+                  commandSettings.maxSymbolsPerDocument,
+                timeoutMs: requestTimeoutMs,
+                ...(input.signal
+                  ? { signal: input.signal }
+                  : {})
+              })
+            : emptyWorkspaceSymbolResult();
+        if (
+          uncoveredDocumentCount > 0 &&
+          session.workspaceSymbolSupported
+        ) {
+          session.workspaceSymbolSupported =
+            workspaceSymbols.supported;
+        }
+        for (const [
+          canonicalPath,
+          workspacePathSymbols
+        ] of workspaceSymbols.symbolsByPath) {
+          symbolsByPath.set(
+            canonicalPath,
+            workspacePathSymbols
+          );
+        }
+        symbolCount += workspaceSymbols.symbolCount;
+
+        const documentation = session.hoverSupported
+          ? await enrichDocumentation({
+              session,
+              documents: preparedDocuments,
+              budget:
+                commandSettings.maxDocumentationRequests,
+              concurrency: input.settings.readConcurrency,
+              timeoutMs: requestTimeoutMs,
+              ...(input.signal
+                ? { signal: input.signal }
+                : {})
+            })
+          : emptyDocumentationResult();
+        session.hoverSupported = documentation.supported;
+
+        const hierarchy = await enrichCallHierarchy({
+          session,
+          documents: preparedDocuments,
+          budget:
+            commandSettings.maxCallHierarchyRequests,
+          concurrency: input.settings.readConcurrency,
+          timeoutMs: requestTimeoutMs,
+          ...(input.signal
+            ? { signal: input.signal }
+            : {})
+        });
+
+        const references = session.referencesSupported
+          ? await enrichReferences({
+              session,
+              documents: preparedDocuments,
+              budget:
+                commandSettings.maxReferenceRequests,
+              maxReferencesPerSymbol:
+                commandSettings.maxReferencesPerSymbol,
+              concurrency: input.settings.readConcurrency,
+              timeoutMs: requestTimeoutMs,
+              ...(input.signal
+                ? { signal: input.signal }
+                : {})
+            })
+          : emptyReferenceResult();
+        session.referencesSupported = references.supported;
+
+        const typeRelations = await enrichTypeRelations({
+          session,
+          documents: preparedDocuments,
+          budget:
+            commandSettings.maxTypeHierarchyRequests ??
+            commandSettings.maxCallHierarchyRequests,
+          concurrency: input.settings.readConcurrency,
+          timeoutMs: requestTimeoutMs,
+          ...(input.signal
+            ? { signal: input.signal }
+            : {})
+        });
+        semanticRelations.push(...typeRelations.relations);
+
+        const exhaustedBudgetMessages = [
+          documentation.budgetExhausted
+            ? `文档请求预算 ${commandSettings.maxDocumentationRequests} 已用尽`
+            : undefined,
+          hierarchy.budgetExhausted
+            ? `调用层级请求预算 ${commandSettings.maxCallHierarchyRequests} 已用尽`
+            : undefined,
+          typeRelations.budgetExhausted
+            ? `类型关系请求预算 ${
+                commandSettings.maxTypeHierarchyRequests ??
+                commandSettings.maxCallHierarchyRequests
+              } 已用尽`
+            : undefined,
+          references.budgetExhausted
+            ? `引用请求预算 ${commandSettings.maxReferenceRequests} 已用尽`
+            : undefined
+        ].filter(
+          (message): message is string =>
+            message !== undefined
+        );
+        const interruptedEnrichments = [
+          documentation.stoppedEarly ? "文档" : undefined,
+          hierarchy.stoppedEarly ? "调用层级" : undefined,
+          typeRelations.stoppedEarly ? "类型关系" : undefined,
+          references.stoppedEarly ? "引用" : undefined
+        ].filter(
+          (name): name is string => name !== undefined
+        );
+        const requestBudgetExhausted =
+          documentation.budgetExhausted ||
+          hierarchy.budgetExhausted ||
+          typeRelations.budgetExhausted ||
+          references.budgetExhausted;
+        const enrichmentStoppedEarly =
+          documentation.stoppedEarly ||
+          hierarchy.stoppedEarly ||
+          typeRelations.stoppedEarly ||
+          references.stoppedEarly;
+        const semanticRequestBudgetExhausted =
+          hierarchy.budgetExhausted ||
+          typeRelations.budgetExhausted ||
+          references.budgetExhausted;
+        const semanticEnrichmentStoppedEarly =
+          hierarchy.stoppedEarly ||
+          typeRelations.stoppedEarly ||
+          references.stoppedEarly;
+        const requiredSemanticCapabilityMissing =
+          !hierarchy.supported ||
+          !references.supported ||
+          !typeRelations.supported;
+        const semanticCoverage =
+          uncoveredDocumentCount > 0 ||
+          truncatedSymbolDocuments > 0 ||
+          semanticRequestBudgetExhausted ||
+          semanticEnrichmentStoppedEarly ||
+          requiredSemanticCapabilityMissing
+            ? "partial"
+            : "complete";
+
         statuses.push({
           language,
           state: "connected",
           command: commandSettings.command,
           message:
             `${
+              didReconnect
+                ? "已自动重连，"
+                : ""
+            }${
               language === "java" &&
               session.recoveredJavaWorkspace
                 ? "已自动重建 Java 索引，"
                 : ""
+            }已连接并增强 ${preparedDocuments.length} 个文件，补充 ${documentation.documented} 条文档、${hierarchy.callCount} 条调用关系、${typeRelations.relationCount} 条类型关系、${references.referenceCount} 条引用关系。${
+              skippedByLimitCount > 0
+                ? ` 另有 ${skippedByLimitCount} 个文件因 maxDocuments=${documentLimit} 未进入 Language Server 增强。`
+                : ""
             }${
-              documents.length > documentLimit
-                ? `已连接，按性能上限增强前 ${documentLimit} 个文件，并补充 ${documentationCount} 条文档、${hierarchyCallCount} 条调用关系。`
-                : `已连接并完成符号增强，补充 ${documentationCount} 条文档、${hierarchyCallCount} 条调用关系。`
+              failedDocumentCount > 0
+                ? ` ${failedDocumentCount} 个文件的 documentSymbol 请求失败（${failedDocumentMessages
+                    .slice(0, 3)
+                    .join("；")}${
+                    failedDocumentCount > 3
+                      ? "；其余省略"
+                      : ""
+                  }），其余文件仍继续分析。`
+                : ""
             }${
               truncatedSymbolDocuments > 0
-                ? ` ${truncatedSymbolDocuments} 个文件的符号结果达到每文件 ${MAX_LSP_SYMBOLS_PER_DOCUMENT} 条安全上限。`
+                ? ` ${truncatedSymbolDocuments} 个文件的符号结果达到每文件 ${commandSettings.maxSymbolsPerDocument} 条数量上限或内部结构安全上限。`
+                : ""
+            }${
+              workspaceSymbols.symbolCount > 0
+                ? ` Workspace Symbol 另外补充 ${workspaceSymbols.symbolCount} 个未打开文件符号。`
+                : ""
+            }${
+              workspaceSymbols.truncated
+                ? ` Workspace Symbol 结果达到 ${commandSettings.maxSymbolsPerDocument} 条安全上限。`
+                : ""
+            }${
+              workspaceSymbols.failed
+                ? " Workspace Symbol 补查失败，未影响已完成的文档分析。"
+                : ""
+            }${
+              exhaustedBudgetMessages.length > 0
+                ? ` ${exhaustedBudgetMessages.join("；")}。`
+                : ""
+            }${
+              interruptedEnrichments.length > 0
+                ? ` ${interruptedEnrichments.join("、")}增强因连续请求失败提前停止，可在下次分析重试。`
+                : ""
+            }${
+              requiredSemanticCapabilityMissing
+                ? " Language Server 未提供全部调用、引用或类型关系能力。"
                 : ""
             }`,
-          symbolCount
+          symbolCount,
+          semanticCoverage,
+          documentsTotal: documents.length,
+          documentsAnalyzed: preparedDocuments.length,
+          skippedDocuments: uncoveredDocumentCount,
+          failedDocuments: failedDocumentCount,
+          truncatedDocuments:
+            truncatedSymbolDocuments +
+            Number(workspaceSymbols.truncated),
+          requestBudgetExhausted,
+          enrichmentStoppedEarly
         });
         this.#scheduleIdle(
           sessionKey,
@@ -336,10 +820,18 @@ export class ExternalLanguageServerPool {
           state: unavailable ? "unavailable" : "failed",
           command: commandSettings.command,
           message: errorMessage(error),
-          symbolCount: 0
+          symbolCount: 0,
+          semanticCoverage: "unavailable",
+          documentsTotal: documents.length,
+          documentsAnalyzed: 0,
+          skippedDocuments: documents.length,
+          failedDocuments: documents.length,
+          truncatedDocuments: 0,
+          requestBudgetExhausted: false,
+          enrichmentStoppedEarly: true
         });
         warnings.push(
-          `${language === "typescript" ? "TypeScript" : "Java"} LSP ${
+          `${descriptor.displayName} LSP ${
             unavailable ? "不可用" : "执行失败"
           }，${
             input.settings.staticFallback
@@ -353,7 +845,12 @@ export class ExternalLanguageServerPool {
       }
     }
 
-    return { symbolsByPath, statuses, warnings };
+    return {
+      symbolsByPath,
+      semanticRelations,
+      statuses,
+      warnings
+    };
   }
 
   async disposeAll(): Promise<void> {
@@ -407,7 +904,7 @@ export class ExternalLanguageServerPool {
 
   async #getSession(input: {
     key: string;
-    language: "typescript" | "java";
+    language: LanguageServerLanguage;
     commandSettings: LanguageServerCommandSettings;
     rootPath: string;
     workspaceFolders: string[];
@@ -527,7 +1024,7 @@ export class ExternalLanguageServerPool {
 
   async #startSession(
     input: {
-      language: "typescript" | "java";
+      language: LanguageServerLanguage;
       commandSettings: LanguageServerCommandSettings;
       timeoutMs: number;
       workspaceReadyTimeoutMs: number;
@@ -542,6 +1039,10 @@ export class ExternalLanguageServerPool {
       plan.rootPath
     );
     let hoverSupported = false;
+    let referencesSupported = false;
+    let typeHierarchySupported = false;
+    let implementationSupported = false;
+    let workspaceSymbolSupported = false;
     try {
       await client.start(input.signal);
       const rootUri = pathToFileURL(
@@ -573,6 +1074,16 @@ export class ExternalLanguageServerPool {
               },
               callHierarchy: {
                 dynamicRegistration: false
+              },
+              typeHierarchy: {
+                dynamicRegistration: false
+              },
+              implementation: {
+                dynamicRegistration: false,
+                linkSupport: true
+              },
+              references: {
+                dynamicRegistration: false
               }
             },
             workspace: {
@@ -593,6 +1104,14 @@ export class ExternalLanguageServerPool {
       );
       hoverSupported =
         serverSupportsHover(initializeResult);
+      referencesSupported =
+        serverSupportsReferences(initializeResult);
+      typeHierarchySupported =
+        serverSupportsTypeHierarchy(initializeResult);
+      implementationSupported =
+        serverSupportsImplementation(initializeResult);
+      workspaceSymbolSupported =
+        serverSupportsWorkspaceSymbols(initializeResult);
       client.notify("initialized", {});
       if (input.language === "java") {
         await client.waitForJavaServiceReady(
@@ -620,7 +1139,12 @@ export class ExternalLanguageServerPool {
       client,
       opened: new Map(),
       recoveredJavaWorkspace,
-      hoverSupported
+      hoverSupported,
+      incomingCallHierarchySupported: true,
+      referencesSupported,
+      typeHierarchySupported,
+      implementationSupported,
+      workspaceSymbolSupported
     };
   }
 
@@ -647,6 +1171,35 @@ export class ExternalLanguageServerPool {
       clearTimeout(session.idleTimer);
     }
     await session.client.dispose();
+  }
+
+  async #closeSessionDocuments(
+    key: string,
+    retainedUris: ReadonlySet<string>,
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (!this.#sessions.has(key)) {
+      return;
+    }
+    const release = await this.#acquireSession(key, signal);
+    try {
+      const session = this.#sessions.get(key);
+      if (!session) {
+        return;
+      }
+      if (!session.client.alive) {
+        await this.#disposeSession(key);
+        return;
+      }
+      try {
+        closeUnusedDocuments(session, retainedUris);
+        this.#scheduleIdle(key, session);
+      } catch {
+        await this.#disposeSession(key);
+      }
+    } finally {
+      release();
+    }
   }
 }
 
@@ -819,8 +1372,40 @@ function isRecoverableJavaStartupError(
   );
 }
 
+function isRecoverableLanguageServerConnectionError(
+  error: unknown,
+  signal?: AbortSignal
+): boolean {
+  if (
+    signal?.aborted ||
+    error instanceof LanguageServerTerminationError ||
+    isCommandUnavailable(error)
+  ) {
+    return false;
+  }
+  const message = errorMessage(error);
+  if (
+    /(?:安全上限|缺少有效的 Content-Length)/i.test(
+      message
+    ) ||
+    isMethodUnsupported(error)
+  ) {
+    return false;
+  }
+  return (
+    /LSP 请求 .+ 超时/.test(message) ||
+    /LSP 进程(?:已退出|当前不可用)/.test(message) ||
+    /(?:timed out|timeout|EPIPE|ECONNRESET|broken pipe|write after end)/i.test(
+      message
+    ) ||
+    /(?:ServerNotInitialized|server not initialized|-32002)/i.test(
+      message
+    )
+  );
+}
+
 export function resolveLanguageServerWorkspace(
-  language: "typescript" | "java",
+  language: LanguageServerLanguage,
   documents: ReadonlyArray<{ file: AnalysisSourceFile }>,
   fallbackRootPath: string,
   fallbackWorkspaceFolders: string[]
@@ -850,16 +1435,19 @@ export function resolveLanguageServerWorkspace(
 }
 
 export function resolveLanguageServerStartupTimeoutMs(
-  language: "typescript" | "java",
+  language: LanguageServerLanguage,
   requestTimeoutMs: number
 ): number {
   return language === "java"
     ? Math.max(requestTimeoutMs, JAVA_WARMUP_TIMEOUT_MS)
-    : requestTimeoutMs;
+    : Math.max(
+        requestTimeoutMs,
+        NON_JAVA_COLD_START_TIMEOUT_MS
+      );
 }
 
 export function resolveLanguageServerWorkspaceReadyTimeoutMs(
-  language: "typescript" | "java",
+  language: LanguageServerLanguage,
   requestTimeoutMs: number
 ): number {
   return language === "java"
@@ -938,155 +1526,748 @@ function pathComparison(left: string, right: string): number {
   return normalizedLeft.localeCompare(normalizedRight, "en-US");
 }
 
-async function enrichCallHierarchy(input: {
-  session: PooledSession;
+interface PreparedLspDocument {
   uri: string;
   symbols: LspDocumentSymbol[];
-  budget: number;
-  timeoutMs: number;
-  signal?: AbortSignal;
-}): Promise<{
+}
+
+interface LspSymbolWorkItem {
+  uri: string;
+  symbol: LspDocumentSymbol;
+}
+
+interface BaseEnrichmentResult {
   attempted: number;
-  callCount: number;
   supported: boolean;
-}> {
-  let attempted = 0;
-  let callCount = 0;
-  const callableSymbols = flattenSymbols(input.symbols).filter(
-    (symbol) => symbol.kind === 6 || symbol.kind === 12
+  budgetExhausted: boolean;
+  stoppedEarly: boolean;
+}
+
+interface DocumentationEnrichmentResult
+  extends BaseEnrichmentResult {
+  documented: number;
+}
+
+interface CallHierarchyEnrichmentResult
+  extends BaseEnrichmentResult {
+  callCount: number;
+}
+
+interface ReferenceEnrichmentResult
+  extends BaseEnrichmentResult {
+  referenceCount: number;
+}
+
+interface TypeRelationEnrichmentResult
+  extends BaseEnrichmentResult {
+  relationCount: number;
+  relations: LspSemanticRelation[];
+}
+
+interface WorkspaceSymbolResult {
+  symbolsByPath: Map<string, LspDocumentSymbol[]>;
+  symbolCount: number;
+  supported: boolean;
+  truncated: boolean;
+  failed: boolean;
+}
+
+function emptyDocumentationResult(): DocumentationEnrichmentResult {
+  return {
+    attempted: 0,
+    documented: 0,
+    supported: false,
+    budgetExhausted: false,
+    stoppedEarly: false
+  };
+}
+
+function emptyReferenceResult(): ReferenceEnrichmentResult {
+  return {
+    attempted: 0,
+    referenceCount: 0,
+    supported: false,
+    budgetExhausted: false,
+    stoppedEarly: false
+  };
+}
+
+function emptyWorkspaceSymbolResult(): WorkspaceSymbolResult {
+  return {
+    symbolsByPath: new Map(),
+    symbolCount: 0,
+    supported: false,
+    truncated: false,
+    failed: false
+  };
+}
+
+function roundRobinSymbolWorkItems(
+  documents: readonly PreparedLspDocument[],
+  selectSymbols: (
+    symbols: LspDocumentSymbol[]
+  ) => LspDocumentSymbol[]
+): LspSymbolWorkItem[] {
+  const queues = documents.map((document) => ({
+    uri: document.uri,
+    symbols: selectSymbols(document.symbols)
+  }));
+  const maxQueueLength = queues.reduce(
+    (maximum, queue) =>
+      Math.max(maximum, queue.symbols.length),
+    0
   );
-  for (const symbol of callableSymbols) {
-    if (attempted >= input.budget) {
-      break;
-    }
-    attempted += 1;
-    throwIfAborted(input.signal);
-    try {
-      const prepared = await input.session.client.request(
-        "textDocument/prepareCallHierarchy",
-        {
-          textDocument: { uri: input.uri },
-          position: {
-            line: Math.max(0, symbol.line - 1),
-            character: Math.max(0, symbol.character)
-          }
-        },
-        input.timeoutMs,
-        input.signal
-      );
-      const item = firstCallHierarchyItem(prepared);
-      if (!item) {
-        continue;
-      }
-      const response = await input.session.client.request(
-        "callHierarchy/outgoingCalls",
-        { item },
-        input.timeoutMs,
-        input.signal
-      );
-      const calls = parseOutgoingCalls(response);
-      symbol.outgoingCalls = calls;
-      callCount += calls.length;
-    } catch (error) {
-      if (isMethodUnsupported(error)) {
-        return {
-          attempted,
-          callCount,
-          supported: false
-        };
+  const workItems: LspSymbolWorkItem[] = [];
+  for (
+    let symbolIndex = 0;
+    symbolIndex < maxQueueLength;
+    symbolIndex += 1
+  ) {
+    for (const queue of queues) {
+      const symbol = queue.symbols[symbolIndex];
+      if (symbol) {
+        workItems.push({
+          uri: queue.uri,
+          symbol
+        });
       }
     }
   }
+  return workItems;
+}
+
+async function enrichWorkspaceSymbols(input: {
+  session: PooledSession;
+  allowedPaths: ReadonlySet<string>;
+  existingPaths: ReadonlySet<string>;
+  maxSymbols: number;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<WorkspaceSymbolResult> {
+  try {
+    const response = await input.session.client.request(
+      "workspace/symbol",
+      { query: "" },
+      input.timeoutMs,
+      input.signal
+    );
+    const parsed = parseWorkspaceSymbols(
+      response,
+      input.allowedPaths,
+      input.existingPaths,
+      input.maxSymbols
+    );
+    return {
+      ...parsed,
+      supported: true,
+      failed: false
+    };
+  } catch (error) {
+    if (input.signal?.aborted) {
+      throw error;
+    }
+    return {
+      ...emptyWorkspaceSymbolResult(),
+      supported: !isMethodUnsupported(error),
+      failed: !isMethodUnsupported(error)
+    };
+  }
+}
+
+async function enrichCallHierarchy(input: {
+  session: PooledSession;
+  documents: PreparedLspDocument[];
+  budget: number;
+  concurrency: number;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<CallHierarchyEnrichmentResult> {
+  let attempted = 0;
+  let callCount = 0;
+  let consecutiveFailures = 0;
+  let unsupported = false;
+  let stopRequested = false;
+  let stoppedEarly = false;
+  const workItems = roundRobinSymbolWorkItems(
+    input.documents,
+    (symbols) =>
+      flattenSymbols(symbols).filter(
+        (symbol) =>
+          symbol.kind === 6 ||
+          symbol.kind === 9 ||
+          symbol.kind === 12
+      )
+  );
+  const budget = Math.max(0, Math.floor(input.budget));
+  await mapWithConcurrency(
+    workItems.slice(0, budget),
+    input.concurrency,
+    async ({ uri, symbol }) => {
+      if (stopRequested) {
+        return;
+      }
+      attempted += 1;
+      throwIfAborted(input.signal);
+      try {
+        const prepared = await input.session.client.request(
+          "textDocument/prepareCallHierarchy",
+          {
+            textDocument: { uri },
+            position: {
+              line: Math.max(0, symbol.line - 1),
+              character: Math.max(0, symbol.character)
+            }
+          },
+          input.timeoutMs,
+          input.signal
+        );
+        const items = callHierarchyItems(prepared);
+        for (const item of items) {
+          const response = await input.session.client.request(
+            "callHierarchy/outgoingCalls",
+            { item },
+            input.timeoutMs,
+            input.signal
+          );
+          const calls = parseOutgoingCalls(response);
+          const previousOutgoingCount =
+            symbol.outgoingCalls.length;
+          symbol.outgoingCalls = mergeCallReferences(
+            symbol.outgoingCalls,
+            calls
+          );
+          callCount +=
+            symbol.outgoingCalls.length -
+            previousOutgoingCount;
+          if (
+            input.session.incomingCallHierarchySupported
+          ) {
+            try {
+              const incomingResponse =
+                await input.session.client.request(
+                  "callHierarchy/incomingCalls",
+                  { item },
+                  input.timeoutMs,
+                  input.signal
+                );
+              const incomingCalls =
+                parseIncomingCalls(incomingResponse);
+              const previousIncomingCount =
+                symbol.incomingCalls.length;
+              symbol.incomingCalls =
+                mergeIncomingCallReferences(
+                  symbol.incomingCalls,
+                  incomingCalls
+                );
+              callCount +=
+                symbol.incomingCalls.length -
+                previousIncomingCount;
+            } catch (error) {
+              if (input.signal?.aborted) {
+                throw error;
+              }
+              if (isMethodUnsupported(error)) {
+                input.session.incomingCallHierarchySupported =
+                  false;
+              }
+            }
+          }
+        }
+        consecutiveFailures = 0;
+      } catch (error) {
+        if (input.signal?.aborted) {
+          throw error;
+        }
+        if (isMethodUnsupported(error)) {
+          unsupported = true;
+          stopRequested = true;
+          return;
+        }
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= 3) {
+          stoppedEarly = true;
+          stopRequested = true;
+        }
+      }
+    }
+  );
   return {
     attempted,
     callCount,
-    supported: true
+    supported: !unsupported,
+    budgetExhausted:
+      !unsupported &&
+      !stoppedEarly &&
+      budget < workItems.length &&
+      attempted >= Math.min(budget, workItems.length),
+    stoppedEarly
+  };
+}
+
+async function enrichReferences(input: {
+  session: PooledSession;
+  documents: PreparedLspDocument[];
+  budget: number;
+  maxReferencesPerSymbol: number;
+  concurrency: number;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<ReferenceEnrichmentResult> {
+  let attempted = 0;
+  let referenceCount = 0;
+  let consecutiveFailures = 0;
+  let unsupported = false;
+  let stopRequested = false;
+  let stoppedEarly = false;
+  const workItems = roundRobinSymbolWorkItems(
+    input.documents,
+    (symbols) =>
+      flattenSymbols(symbols)
+        .filter((symbol) =>
+          isReferenceableSymbolKind(symbol.kind)
+        )
+        .sort(
+          (left, right) =>
+            referenceSymbolPriority(left.kind) -
+              referenceSymbolPriority(right.kind) ||
+            left.line - right.line ||
+            left.character - right.character
+        )
+  );
+  const budget = Math.max(0, Math.floor(input.budget));
+  await mapWithConcurrency(
+    workItems.slice(0, budget),
+    input.concurrency,
+    async ({ uri, symbol }) => {
+      if (stopRequested) {
+        return;
+      }
+      attempted += 1;
+      throwIfAborted(input.signal);
+      const targetCanonicalPath = canonicalPathFromUri(uri);
+      try {
+        const response = await input.session.client.request(
+          "textDocument/references",
+          {
+            textDocument: { uri },
+            position: {
+              line: Math.max(0, symbol.line - 1),
+              character: Math.max(0, symbol.character)
+            },
+            context: {
+              includeDeclaration: false
+            }
+          },
+          input.timeoutMs,
+          input.signal
+        );
+        const references = parseReferenceLocations(
+          response,
+          input.maxReferencesPerSymbol
+        ).filter(
+          (reference) =>
+            !(
+              targetCanonicalPath &&
+              reference.sourceCanonicalPath ===
+                targetCanonicalPath &&
+              reference.line === symbol.line &&
+              reference.character === symbol.character
+            )
+        );
+        symbol.references = references;
+        referenceCount += references.length;
+        consecutiveFailures = 0;
+      } catch (error) {
+        if (input.signal?.aborted) {
+          throw error;
+        }
+        if (isMethodUnsupported(error)) {
+          unsupported = true;
+          stopRequested = true;
+          return;
+        }
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= 3) {
+          stoppedEarly = true;
+          stopRequested = true;
+        }
+      }
+    }
+  );
+  return {
+    attempted,
+    referenceCount,
+    supported: !unsupported,
+    budgetExhausted:
+      !unsupported &&
+      !stoppedEarly &&
+      budget < workItems.length &&
+      attempted >= Math.min(budget, workItems.length),
+    stoppedEarly
+  };
+}
+
+async function enrichTypeRelations(input: {
+  session: PooledSession;
+  documents: PreparedLspDocument[];
+  budget: number;
+  concurrency: number;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<TypeRelationEnrichmentResult> {
+  const initiallySupported =
+    input.session.typeHierarchySupported ||
+    input.session.implementationSupported;
+  const relations: LspSemanticRelation[] = [];
+  const seen = new Set<string>();
+  let attempted = 0;
+  let consecutiveFailures = 0;
+  let stopRequested = false;
+  let stoppedEarly = false;
+  const workItems = roundRobinSymbolWorkItems(
+    input.documents,
+    (symbols) =>
+      flattenSymbols(symbols).filter(
+        (symbol) =>
+          isTypeSymbolKind(symbol.kind) ||
+          isCallableLspSymbolKind(symbol.kind)
+      )
+  );
+  if (workItems.length === 0) {
+    return {
+      attempted: 0,
+      relationCount: 0,
+      relations: [],
+      supported: true,
+      budgetExhausted: false,
+      stoppedEarly: false
+    };
+  }
+  if (!initiallySupported) {
+    return {
+      attempted: 0,
+      relationCount: 0,
+      relations: [],
+      supported: false,
+      budgetExhausted: false,
+      stoppedEarly: false
+    };
+  }
+
+  const addRelation = (
+    relation: LspSemanticRelation
+  ): void => {
+    const key = [
+      relation.kind,
+      relation.sourceCanonicalPath,
+      String(relation.sourceLine),
+      relation.targetCanonicalPath,
+      String(relation.targetLine)
+    ].join("\0");
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    relations.push(relation);
+  };
+
+  const budget = Math.max(0, Math.floor(input.budget));
+  await mapWithConcurrency(
+    workItems.slice(0, budget),
+    input.concurrency,
+    async ({ uri, symbol }) => {
+      if (
+        stopRequested ||
+        (
+          !input.session.typeHierarchySupported &&
+          !input.session.implementationSupported
+        )
+      ) {
+        return;
+      }
+      attempted += 1;
+      throwIfAborted(input.signal);
+      let symbolSucceeded = false;
+      let symbolFailures = 0;
+
+      if (
+        input.session.typeHierarchySupported &&
+        isTypeSymbolKind(symbol.kind)
+      ) {
+        try {
+          const prepared =
+            await input.session.client.request(
+              "textDocument/prepareTypeHierarchy",
+              {
+                textDocument: { uri },
+                position: {
+                  line: Math.max(0, symbol.line - 1),
+                  character: Math.max(
+                    0,
+                    symbol.character
+                  )
+                }
+              },
+              input.timeoutMs,
+              input.signal
+            );
+          const items = parseTypeHierarchyItems(prepared);
+          for (const item of items) {
+            const supertypesResponse =
+              await input.session.client.request(
+                "typeHierarchy/supertypes",
+                { item: item.raw },
+                input.timeoutMs,
+                input.signal
+              );
+            for (const target of parseTypeHierarchyItems(
+              supertypesResponse
+            )) {
+              addRelation({
+                kind: typeRelationKind(
+                  item.kind,
+                  target.kind
+                ),
+                sourceName: item.name,
+                sourceCanonicalPath: item.canonicalPath,
+                sourceLine: item.line,
+                targetName: target.name,
+                targetCanonicalPath: target.canonicalPath,
+                targetLine: target.line,
+                evidence:
+                  "LSP Type Hierarchy supertypes"
+              });
+            }
+
+            const subtypesResponse =
+              await input.session.client.request(
+                "typeHierarchy/subtypes",
+                { item: item.raw },
+                input.timeoutMs,
+                input.signal
+              );
+            for (const source of parseTypeHierarchyItems(
+              subtypesResponse
+            )) {
+              addRelation({
+                kind: typeRelationKind(
+                  source.kind,
+                  item.kind
+                ),
+                sourceName: source.name,
+                sourceCanonicalPath:
+                  source.canonicalPath,
+                sourceLine: source.line,
+                targetName: item.name,
+                targetCanonicalPath:
+                  item.canonicalPath,
+                targetLine: item.line,
+                evidence:
+                  "LSP Type Hierarchy subtypes"
+              });
+            }
+          }
+          symbolSucceeded = true;
+        } catch (error) {
+          if (input.signal?.aborted) {
+            throw error;
+          }
+          if (isMethodUnsupported(error)) {
+            input.session.typeHierarchySupported = false;
+          } else {
+            symbolFailures += 1;
+          }
+        }
+      }
+
+      if (input.session.implementationSupported) {
+        try {
+          const response =
+            await input.session.client.request(
+              "textDocument/implementation",
+              {
+                textDocument: { uri },
+                position: {
+                  line: Math.max(0, symbol.line - 1),
+                  character: Math.max(
+                    0,
+                    symbol.character
+                  )
+                }
+              },
+              input.timeoutMs,
+              input.signal
+            );
+          const sourcePath = canonicalPathFromUri(uri);
+          if (sourcePath) {
+            for (const implementation of parseLocationTargets(
+              response
+            )) {
+              addRelation({
+                kind: isCallableLspSymbolKind(symbol.kind)
+                  ? "overrides"
+                  : symbol.kind === 11
+                    ? "implements"
+                    : "extends",
+                sourceName: symbol.name,
+                sourceCanonicalPath:
+                  implementation.canonicalPath,
+                sourceLine: implementation.line,
+                targetName: symbol.name,
+                targetCanonicalPath: sourcePath,
+                targetLine: symbol.line,
+                evidence:
+                  "LSP textDocument/implementation"
+              });
+            }
+          }
+          symbolSucceeded = true;
+        } catch (error) {
+          if (input.signal?.aborted) {
+            throw error;
+          }
+          if (isMethodUnsupported(error)) {
+            input.session.implementationSupported = false;
+          } else {
+            symbolFailures += 1;
+          }
+        }
+      }
+
+      if (symbolSucceeded) {
+        consecutiveFailures = 0;
+      } else {
+        consecutiveFailures += symbolFailures;
+      }
+      if (consecutiveFailures >= 3) {
+        stoppedEarly = true;
+        stopRequested = true;
+      }
+    }
+  );
+  const hasTypeWork = workItems.some(({ symbol }) =>
+    isTypeSymbolKind(symbol.kind)
+  );
+  const hasCallableWork = workItems.some(({ symbol }) =>
+    isCallableLspSymbolKind(symbol.kind)
+  );
+  const supported =
+    (
+      !hasTypeWork ||
+      input.session.typeHierarchySupported ||
+      input.session.implementationSupported
+    ) &&
+    (
+      !hasCallableWork ||
+      input.session.implementationSupported
+    );
+  return {
+    attempted,
+    relationCount: relations.length,
+    relations,
+    supported,
+    budgetExhausted:
+      !stoppedEarly &&
+      budget < workItems.length &&
+      attempted >= Math.min(budget, workItems.length),
+    stoppedEarly
   };
 }
 
 async function enrichDocumentation(input: {
   session: PooledSession;
-  uri: string;
-  symbols: LspDocumentSymbol[];
+  documents: PreparedLspDocument[];
   budget: number;
+  concurrency: number;
   timeoutMs: number;
   signal?: AbortSignal;
-}): Promise<{
-  attempted: number;
-  documented: number;
-  supported: boolean;
-}> {
+}): Promise<DocumentationEnrichmentResult> {
   let attempted = 0;
   let documented = 0;
   let consecutiveFailures = 0;
-  const documentableSymbols = flattenSymbols(
-    input.symbols
-  )
-    .filter(
-      (symbol) =>
-        symbol.kind === 5 ||
-        symbol.kind === 6 ||
-        symbol.kind === 12
-    )
-    .sort(
-      (left, right) =>
-        Number(left.kind === 5) -
-        Number(right.kind === 5)
-    );
-  for (const symbol of documentableSymbols) {
-    if (attempted >= input.budget) {
-      break;
+  let unsupported = false;
+  let stopRequested = false;
+  let stoppedEarly = false;
+  const workItems = roundRobinSymbolWorkItems(
+    input.documents,
+    (symbols) =>
+      flattenSymbols(symbols)
+        .filter(
+          (symbol) =>
+            symbol.kind === 2 ||
+            symbol.kind === 3 ||
+            symbol.kind === 4 ||
+            symbol.kind === 5 ||
+            symbol.kind === 6 ||
+            symbol.kind === 7 ||
+            symbol.kind === 8 ||
+            symbol.kind === 10 ||
+            symbol.kind === 11 ||
+            symbol.kind === 12
+        )
+        .sort(
+          (left, right) =>
+            Number(left.kind === 5) -
+            Number(right.kind === 5)
+        )
+  );
+  const budget = Math.max(0, Math.floor(input.budget));
+  await mapWithConcurrency(
+    workItems.slice(0, budget),
+    input.concurrency,
+    async ({ uri, symbol }) => {
+      if (stopRequested) {
+        return;
+      }
+      attempted += 1;
+      throwIfAborted(input.signal);
+      try {
+        const response = await input.session.client.request(
+          "textDocument/hover",
+          {
+            textDocument: { uri },
+            position: {
+              line: Math.max(0, symbol.line - 1),
+              character: Math.max(0, symbol.character)
+            }
+          },
+          input.timeoutMs,
+          input.signal
+        );
+        const documentation =
+          parseHoverDocumentation(response);
+        consecutiveFailures = 0;
+        if (documentation) {
+          symbol.documentation = documentation;
+          documented += 1;
+        }
+      } catch (error) {
+        if (input.signal?.aborted) {
+          throw error;
+        }
+        if (isMethodUnsupported(error)) {
+          unsupported = true;
+          stopRequested = true;
+          return;
+        }
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= 3) {
+          stoppedEarly = true;
+          stopRequested = true;
+        }
+      }
     }
-    attempted += 1;
-    throwIfAborted(input.signal);
-    try {
-      const response = await input.session.client.request(
-        "textDocument/hover",
-        {
-          textDocument: { uri: input.uri },
-          position: {
-            line: Math.max(0, symbol.line - 1),
-            character: Math.max(0, symbol.character)
-          }
-        },
-        Math.min(input.timeoutMs, 2_000),
-        input.signal
-      );
-      const documentation =
-        parseHoverDocumentation(response);
-      consecutiveFailures = 0;
-      if (documentation) {
-        symbol.documentation = documentation;
-        documented += 1;
-      }
-    } catch (error) {
-      if (input.signal?.aborted) {
-        throw error;
-      }
-      if (isMethodUnsupported(error)) {
-        return {
-          attempted,
-          documented,
-          supported: false
-        };
-      }
-      consecutiveFailures += 1;
-      if (
-        isRequestTimeout(error, "textDocument/hover") ||
-        consecutiveFailures >= 3
-      ) {
-        return {
-          attempted,
-          documented,
-          supported: false
-        };
-      }
-    }
-  }
+  );
   return {
     attempted,
     documented,
-    supported: true
+    supported: !unsupported,
+    budgetExhausted:
+      !unsupported &&
+      !stoppedEarly &&
+      budget < workItems.length &&
+      attempted >= Math.min(budget, workItems.length),
+    stoppedEarly
   };
 }
 
@@ -1099,11 +2280,225 @@ function flattenSymbols(
   ]);
 }
 
-function firstCallHierarchyItem(
+function isTypeSymbolKind(kind: number): boolean {
+  return (
+    kind === 5 ||
+    kind === 10 ||
+    kind === 11 ||
+    kind === 23
+  );
+}
+
+function isCallableLspSymbolKind(kind: number): boolean {
+  return kind === 6 || kind === 9 || kind === 12;
+}
+
+function isReferenceableSymbolKind(kind: number): boolean {
+  return (
+    kind === 5 ||
+    kind === 6 ||
+    kind === 7 ||
+    kind === 8 ||
+    kind === 9 ||
+    kind === 10 ||
+    kind === 11 ||
+    kind === 12 ||
+    kind === 13 ||
+    kind === 14 ||
+    kind === 22 ||
+    kind === 23
+  );
+}
+
+function referenceSymbolPriority(kind: number): number {
+  return kind === 7 ||
+    kind === 8 ||
+    kind === 13 ||
+    kind === 14 ||
+    kind === 22
+    ? 0
+    : kind === 5 ||
+        kind === 10 ||
+        kind === 11 ||
+        kind === 23
+      ? 1
+      : 2;
+}
+
+function callHierarchyItems(
   value: unknown
-): Record<string, unknown> | undefined {
-  const candidate = Array.isArray(value) ? value[0] : value;
-  return isRecord(candidate) ? candidate : undefined;
+): Record<string, unknown>[] {
+  const candidates = Array.isArray(value) ? value : [value];
+  return candidates.filter(isRecord);
+}
+
+function mergeCallReferences(
+  existing: LspCallReference[],
+  incoming: LspCallReference[]
+): LspCallReference[] {
+  return mergeByKey(
+    existing,
+    incoming,
+    (item) =>
+      `${item.name}\0${item.line}\0${
+        item.targetCanonicalPath ?? ""
+      }\0${item.targetLine ?? ""}`
+  );
+}
+
+function mergeIncomingCallReferences(
+  existing: LspIncomingCallReference[],
+  incoming: LspIncomingCallReference[]
+): LspIncomingCallReference[] {
+  return mergeByKey(
+    existing,
+    incoming,
+    (item) =>
+      `${item.name}\0${item.line}\0${
+        item.sourceCanonicalPath ?? ""
+      }\0${item.sourceLine ?? ""}`
+  );
+}
+
+function mergeByKey<Item>(
+  existing: Item[],
+  incoming: Item[],
+  keyFor: (item: Item) => string
+): Item[] {
+  const merged = [...existing];
+  const seen = new Set(existing.map(keyFor));
+  for (const item of incoming) {
+    const key = keyFor(item);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
+}
+
+interface ParsedTypeHierarchyItem {
+  name: string;
+  kind: number;
+  canonicalPath: string;
+  line: number;
+  raw: Record<string, unknown>;
+}
+
+function parseTypeHierarchyItems(
+  value: unknown
+): ParsedTypeHierarchyItem[] {
+  const candidates = Array.isArray(value) ? value : [value];
+  return candidates.flatMap((candidate) => {
+    if (!isRecord(candidate)) {
+      return [];
+    }
+    const name = candidate.name;
+    const kind = candidate.kind;
+    const uri = candidate.uri;
+    const range = isRecord(candidate.selectionRange)
+      ? candidate.selectionRange
+      : isRecord(candidate.range)
+        ? candidate.range
+        : undefined;
+    const start =
+      range && isRecord(range.start)
+        ? range.start
+        : undefined;
+    if (
+      typeof name !== "string" ||
+      !Number.isSafeInteger(kind) ||
+      typeof uri !== "string" ||
+      !start ||
+      !isNonNegativeSafeInteger(start.line)
+    ) {
+      return [];
+    }
+    const canonicalPath = canonicalPathFromUri(uri);
+    if (!canonicalPath) {
+      return [];
+    }
+    return [
+      {
+        name,
+        kind: kind as number,
+        canonicalPath,
+        line: start.line + 1,
+        raw: candidate
+      }
+    ];
+  });
+}
+
+interface ParsedLocationTarget {
+  canonicalPath: string;
+  line: number;
+}
+
+function parseLocationTargets(
+  value: unknown
+): ParsedLocationTarget[] {
+  const candidates = Array.isArray(value) ? value : [value];
+  const targets: ParsedLocationTarget[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (!isRecord(candidate)) {
+      continue;
+    }
+    const uri =
+      typeof candidate.targetUri === "string"
+        ? candidate.targetUri
+        : typeof candidate.uri === "string"
+          ? candidate.uri
+          : undefined;
+    const range = isRecord(candidate.targetSelectionRange)
+      ? candidate.targetSelectionRange
+      : isRecord(candidate.targetRange)
+        ? candidate.targetRange
+        : isRecord(candidate.range)
+          ? candidate.range
+          : undefined;
+    const start =
+      range && isRecord(range.start)
+        ? range.start
+        : undefined;
+    if (
+      !uri ||
+      !start ||
+      !isNonNegativeSafeInteger(start.line)
+    ) {
+      continue;
+    }
+    const canonicalPath = canonicalPathFromUri(uri);
+    if (!canonicalPath) {
+      continue;
+    }
+    const line = start.line + 1;
+    const key = `${canonicalPath}\0${line}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    targets.push({ canonicalPath, line });
+  }
+  return targets;
+}
+
+function typeRelationKind(
+  sourceKind: number,
+  targetKind: number
+): LspSemanticRelation["kind"] {
+  return (
+    (
+      sourceKind === 5 ||
+      sourceKind === 10 ||
+      sourceKind === 23
+    ) &&
+    targetKind === 11
+  )
+    ? "implements"
+    : "extends";
 }
 
 function parseOutgoingCalls(
@@ -1161,6 +2556,116 @@ function parseOutgoingCalls(
   });
 }
 
+export function parseIncomingCalls(
+  value: unknown
+): LspIncomingCallReference[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((candidate) => {
+    if (!isRecord(candidate) || !isRecord(candidate.from)) {
+      return [];
+    }
+    const source = candidate.from;
+    const name = source.name;
+    const uri = source.uri;
+    const selectionRange = isRecord(source.selectionRange)
+      ? source.selectionRange
+      : isRecord(source.range)
+        ? source.range
+        : undefined;
+    const sourceStart =
+      selectionRange && isRecord(selectionRange.start)
+        ? selectionRange.start
+        : undefined;
+    const callRange = Array.isArray(candidate.fromRanges)
+      ? candidate.fromRanges.find(isRecord)
+      : undefined;
+    const callStart =
+      callRange && isRecord(callRange.start)
+        ? callRange.start
+        : undefined;
+    if (typeof name !== "string") {
+      return [];
+    }
+    const sourceCanonicalPath =
+      typeof uri === "string"
+        ? canonicalPathFromUri(uri)
+        : undefined;
+    return [
+      {
+        name,
+        line:
+          callStart && typeof callStart.line === "number"
+            ? callStart.line + 1
+            : sourceStart &&
+                typeof sourceStart.line === "number"
+              ? sourceStart.line + 1
+              : 1,
+        ...(sourceCanonicalPath
+          ? { sourceCanonicalPath }
+          : {}),
+        ...(sourceStart &&
+        typeof sourceStart.line === "number"
+          ? { sourceLine: sourceStart.line + 1 }
+          : {})
+      }
+    ];
+  });
+}
+
+export function parseReferenceLocations(
+  value: unknown,
+  maxReferences = DEFAULT_LSP_REFERENCES_PER_SYMBOL
+): LspReferenceLocation[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const references: LspReferenceLocation[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    if (
+      !isRecord(candidate) ||
+      typeof candidate.uri !== "string" ||
+      !isRecord(candidate.range) ||
+      !isRecord(candidate.range.start)
+    ) {
+      continue;
+    }
+    const start = candidate.range.start;
+    if (
+      !isNonNegativeSafeInteger(start.line) ||
+      !isNonNegativeSafeInteger(start.character)
+    ) {
+      continue;
+    }
+    const sourceCanonicalPath = canonicalPathFromUri(
+      candidate.uri
+    );
+    if (!sourceCanonicalPath) {
+      continue;
+    }
+    const line = start.line + 1;
+    const character = start.character;
+    const key = `${sourceCanonicalPath}\0${line}\0${character}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    references.push({
+      sourceCanonicalPath,
+      line,
+      character
+    });
+    if (
+      references.length >= maxReferences
+    ) {
+      break;
+    }
+  }
+  return references;
+}
+
 function canonicalPathFromUri(
   uri: string
 ): string | undefined {
@@ -1182,15 +2687,6 @@ function isMethodUnsupported(error: unknown): boolean {
   );
 }
 
-function isRequestTimeout(
-  error: unknown,
-  method: string
-): boolean {
-  return errorMessage(error).includes(
-    `LSP 请求 ${method} 超时`
-  );
-}
-
 function serverSupportsHover(value: unknown): boolean {
   if (
     !isRecord(value) ||
@@ -1199,6 +2695,50 @@ function serverSupportsHover(value: unknown): boolean {
     return false;
   }
   const provider = value.capabilities.hoverProvider;
+  return provider === true || isRecord(provider);
+}
+
+function serverSupportsReferences(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.capabilities)
+  ) {
+    return false;
+  }
+  const provider = value.capabilities.referencesProvider;
+  return provider === true || isRecord(provider);
+}
+
+function serverSupportsTypeHierarchy(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.capabilities)
+  ) {
+    return false;
+  }
+  const provider = value.capabilities.typeHierarchyProvider;
+  return provider === true || isRecord(provider);
+}
+
+function serverSupportsImplementation(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.capabilities)
+  ) {
+    return false;
+  }
+  const provider = value.capabilities.implementationProvider;
+  return provider === true || isRecord(provider);
+}
+
+function serverSupportsWorkspaceSymbols(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.capabilities)
+  ) {
+    return false;
+  }
+  const provider = value.capabilities.workspaceSymbolProvider;
   return provider === true || isRecord(provider);
 }
 
@@ -1725,6 +3265,19 @@ export class JsonRpcClient {
     method: string,
     params: unknown
   ): void {
+    if (method === "tsserver/request") {
+      const requestId = vueTsserverRequestId(params);
+      if (requestId !== undefined) {
+        // Vue Language Server 3.x asks an editor-hosted
+        // TypeScript plugin for project metadata. GitNest does not
+        // host tsserver, so an explicit null response selects the
+        // server's standalone language-service fallback instead of
+        // leaving the document request pending forever.
+        this.notify("tsserver/response", [
+          [requestId, null]
+        ]);
+      }
+    }
     if (method === "language/status") {
       const retained = retainJavaLanguageStatus(params);
       if (retained) {
@@ -2280,6 +3833,23 @@ function serverRequestResponse(
   return { ok: false };
 }
 
+function vueTsserverRequestId(
+  params: unknown
+): number | string | undefined {
+  if (!Array.isArray(params)) {
+    return undefined;
+  }
+  const tuple =
+    params.length === 1 && Array.isArray(params[0])
+      ? params[0]
+      : params;
+  const requestId = tuple[0];
+  return typeof requestId === "number" ||
+    typeof requestId === "string"
+    ? requestId
+    : undefined;
+}
+
 async function openOrUpdateDocument(
   session: PooledSession,
   uri: string,
@@ -2295,7 +3865,9 @@ async function openOrUpdateDocument(
     session.client.notify("textDocument/didOpen", {
       textDocument: {
         uri,
-        languageId: languageId(document.file.language),
+        languageId: resolveLspLanguageId(
+          document.file.language
+        ),
         version: 1,
         text: document.content
       }
@@ -2316,14 +3888,30 @@ async function openOrUpdateDocument(
   await delayWithSignal(Math.min(timeoutMs, 80), signal);
 }
 
+function closeUnusedDocuments(
+  session: PooledSession,
+  retainedUris: ReadonlySet<string>
+): void {
+  for (const uri of session.opened.keys()) {
+    if (retainedUris.has(uri)) {
+      continue;
+    }
+    session.client.notify("textDocument/didClose", {
+      textDocument: { uri }
+    });
+    session.opened.delete(uri);
+  }
+}
+
 export function parseDocumentSymbols(
-  value: unknown
+  value: unknown,
+  maxSymbols = DEFAULT_LSP_SYMBOLS_PER_DOCUMENT
 ): {
   symbols: LspDocumentSymbol[];
   truncated: boolean;
 } {
   const budget = {
-    remaining: MAX_LSP_SYMBOLS_PER_DOCUMENT,
+    remaining: maxSymbols,
     truncated: false
   };
   if (!Array.isArray(value)) {
@@ -2343,6 +3931,118 @@ export function parseDocumentSymbols(
     symbols,
     truncated: budget.truncated
   };
+}
+
+export function parseWorkspaceSymbols(
+  value: unknown,
+  allowedPaths: ReadonlySet<string>,
+  existingPaths: ReadonlySet<string> = new Set(),
+  maxSymbols = DEFAULT_LSP_SYMBOLS_PER_DOCUMENT
+): {
+  symbolsByPath: Map<string, LspDocumentSymbol[]>;
+  symbolCount: number;
+  truncated: boolean;
+} {
+  const symbolsByPath = new Map<
+    string,
+    LspDocumentSymbol[]
+  >();
+  if (!Array.isArray(value) || maxSymbols <= 0) {
+    return {
+      symbolsByPath,
+      symbolCount: 0,
+      truncated: Array.isArray(value) && value.length > 0
+    };
+  }
+  let symbolCount = 0;
+  let truncated = false;
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    if (symbolCount >= maxSymbols) {
+      truncated = true;
+      break;
+    }
+    if (!isRecord(candidate)) {
+      continue;
+    }
+    const location = isRecord(candidate.location)
+      ? candidate.location
+      : candidate;
+    const uri =
+      typeof location.uri === "string"
+        ? location.uri
+        : undefined;
+    const range = isRecord(location.range)
+      ? location.range
+      : undefined;
+    const start =
+      range && isRecord(range.start)
+        ? range.start
+        : undefined;
+    const end =
+      range && isRecord(range.end)
+        ? range.end
+        : undefined;
+    const name = candidate.name;
+    const kind = candidate.kind;
+    if (
+      typeof name !== "string" ||
+      !Number.isSafeInteger(kind) ||
+      !uri ||
+      !start ||
+      !end ||
+      !isNonNegativeSafeInteger(start.line) ||
+      !isNonNegativeSafeInteger(end.line)
+    ) {
+      continue;
+    }
+    const canonicalPath = canonicalPathFromUri(uri);
+    if (
+      !canonicalPath ||
+      !allowedPaths.has(canonicalPath) ||
+      existingPaths.has(canonicalPath)
+    ) {
+      continue;
+    }
+    const character = isNonNegativeSafeInteger(start.character)
+      ? start.character
+      : 0;
+    const key = `${canonicalPath}\0${name}\0${kind}\0${
+      start.line
+    }\0${character}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const symbol: LspDocumentSymbol = {
+      name: name.slice(0, MAX_LSP_SYMBOL_NAME_CHARACTERS),
+      kind: kind as number,
+      line: start.line + 1,
+      character,
+      endLine: end.line + 1,
+      ...(isNonNegativeSafeInteger(end.character)
+        ? { endCharacter: end.character }
+        : {}),
+      ...(typeof candidate.containerName === "string" &&
+      candidate.containerName
+        ? {
+            containerName: candidate.containerName.slice(
+              0,
+              MAX_LSP_SYMBOL_NAME_CHARACTERS
+            )
+          }
+        : {}),
+      children: [],
+      outgoingCalls: [],
+      incomingCalls: [],
+      references: []
+    };
+    const existing = symbolsByPath.get(canonicalPath) ?? [];
+    existing.push(symbol);
+    symbolsByPath.set(canonicalPath, existing);
+    symbolCount += 1;
+  }
+  return { symbolsByPath, symbolCount, truncated };
 }
 
 function parseDocumentSymbol(
@@ -2371,6 +4071,13 @@ function parseDocumentSymbol(
   const input = value as Record<string, unknown>;
   const name = input.name;
   const kind = input.kind;
+  const detail =
+    typeof input.detail === "string"
+      ? input.detail.slice(
+          0,
+          MAX_LSP_SYMBOL_NAME_CHARACTERS
+        )
+      : undefined;
   const range = isRecord(input.range)
     ? input.range
     : isRecord(input.location) &&
@@ -2426,8 +4133,14 @@ function parseDocumentSymbol(
           ? start.character
           : 0,
       endLine: end.line + 1,
+      ...(isNonNegativeSafeInteger(end.character)
+        ? { endCharacter: end.character }
+        : {}),
+      ...(detail ? { detail } : {}),
       children,
-      outgoingCalls: []
+      outgoingCalls: [],
+      incomingCalls: [],
+      references: []
     }
   ];
 }
@@ -2548,22 +4261,36 @@ function countSymbols(symbols: LspDocumentSymbol[]): number {
   );
 }
 
-function belongsToLsp(
-  lsp: "typescript" | "java",
+export function resolveLspLanguageId(
   language: CodeAnalysisLanguage
-): boolean {
-  return lsp === "java"
-    ? language === "java"
-    : language !== "java";
-}
-
-function languageId(language: CodeAnalysisLanguage): string {
+): string {
   return {
     typescript: "typescript",
     javascript: "javascript",
     vue: "vue",
-    java: "java"
+    java: "java",
+    python: "python",
+    go: "go",
+    kotlin: "kotlin",
+    csharp: "csharp",
+    rust: "rust"
   }[language];
+}
+
+function languageServerSettings(
+  settings: CodeAnalysisSettings,
+  language: LanguageServerLanguage
+): LanguageServerCommandSettings {
+  if (language === "typescript") {
+    return settings.typescript;
+  }
+  if (language === "java") {
+    return settings.java;
+  }
+  return (
+    settings[language] ??
+    OPTIONAL_LANGUAGE_SERVER_DEFAULTS[language]
+  );
 }
 
 function stablePathSegment(value: string): string {
@@ -2759,4 +4486,39 @@ function delayWithSignal(
       once: true
     });
   });
+}
+
+async function mapWithConcurrency<Item, Result>(
+  items: readonly Item[],
+  requestedConcurrency: number,
+  worker: (item: Item, index: number) => Promise<Result>
+): Promise<Result[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const concurrency = Math.min(
+    items.length,
+    Math.max(
+      1,
+      Number.isSafeInteger(requestedConcurrency)
+        ? requestedConcurrency
+        : 1
+    )
+  );
+  const results = new Array<Result>(items.length);
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: concurrency }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const item = items[index];
+        if (item === undefined) {
+          continue;
+        }
+        results[index] = await worker(item, index);
+      }
+    })
+  );
+  return results;
 }

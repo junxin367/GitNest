@@ -25,7 +25,7 @@ export function repositoryTargetsEqual(
 export function listEntryTargets(
   entry: WorkspaceEntry
 ): RepositoryTarget[] {
-  return [
+  const targets = [
     ...(entry.kind === "workspace-meta-repository"
       ? [entry.rootTarget]
       : entry.kind === "standalone-repository"
@@ -33,6 +33,16 @@ export function listEntryTargets(
         : []),
     ...entry.groups.flatMap((group) => group.targets)
   ];
+  const uniqueTargets = new Map<string, RepositoryTarget>();
+
+  for (const target of targets) {
+    const key = repositoryTargetKey(target);
+    if (!uniqueTargets.has(key)) {
+      uniqueTargets.set(key, target);
+    }
+  }
+
+  return [...uniqueTargets.values()];
 }
 
 export function listWorkspaceTargets(

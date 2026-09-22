@@ -3,6 +3,7 @@ import type {
   AnalysisSourceFile,
   ParsedCall,
   ParsedClientRequest,
+  ParsedReference,
   ParsedRemoteBoundary,
   ParsedServerEndpoint,
   ParsedSourceFile,
@@ -31,9 +32,23 @@ export function parseSourceFile(
   file: AnalysisSourceFile,
   content: string
 ): ParsedSourceFile {
-  return file.language === "java"
-    ? parseJava(file, content)
-    : parseJavaScriptLike(file, content);
+  if (file.language === "java") {
+    return parseJava(file, content);
+  }
+  if (
+    file.language === "typescript" ||
+    file.language === "javascript" ||
+    file.language === "vue"
+  ) {
+    return parseJavaScriptLike(file, content);
+  }
+  return {
+    file,
+    symbols: [],
+    clientRequests: [],
+    serverEndpoints: [],
+    remoteBoundaries: []
+  };
 }
 
 function parseJavaScriptLike(
@@ -41,6 +56,10 @@ function parseJavaScriptLike(
   content: string
 ): ParsedSourceFile {
   const lineStarts = createLineStarts(content);
+  const codeOffsets = createSourceCodeOffsets(
+    content,
+    file.language === "vue"
+  );
   const symbols: ParsedSymbol[] = [];
   const occupied = new Set<string>();
   const classBlocks: Array<{
@@ -55,7 +74,11 @@ function parseJavaScriptLike(
   for (const match of content.matchAll(classPattern)) {
     const name = match[1];
     const start = match.index;
-    if (!name || start === undefined) {
+    if (
+      !name ||
+      start === undefined ||
+      !codeOffsets.isCode(capturedGroupOffset(match, 1))
+    ) {
       continue;
     }
     const braceIndex = start + match[0].lastIndexOf("{");
@@ -93,7 +116,11 @@ function parseJavaScriptLike(
       if (
         !name ||
         localStart === undefined ||
-        CALL_KEYWORDS.has(name)
+        CALL_KEYWORDS.has(name) ||
+        !codeOffsets.isCode(
+          classBlock.bodyStart +
+            capturedGroupOffset(match, 1)
+        )
       ) {
         continue;
       }
@@ -135,7 +162,11 @@ function parseJavaScriptLike(
     for (const match of content.matchAll(pattern)) {
       const name = match[1];
       const start = match.index;
-      if (!name || start === undefined) {
+      if (
+        !name ||
+        start === undefined ||
+        !codeOffsets.isCode(capturedGroupOffset(match, 1))
+      ) {
         continue;
       }
       const braceIndex = start + match[0].lastIndexOf("{");
@@ -172,7 +203,11 @@ function parseJavaScriptLike(
     for (const match of content.matchAll(pattern)) {
       const name = match[1];
       const start = match.index;
-      if (!name || start === undefined) {
+      if (
+        !name ||
+        start === undefined ||
+        !codeOffsets.isCode(capturedGroupOffset(match, 1))
+      ) {
         continue;
       }
       const expressionStart = start + match[0].length;
@@ -204,7 +239,8 @@ function parseJavaScriptLike(
   const clientRequests = extractClientRequests(
     content,
     lineStarts,
-    symbols
+    symbols,
+    codeOffsets
   );
 
   return {
@@ -216,44 +252,146 @@ function parseJavaScriptLike(
   };
 }
 
+interface JavaTypeBlock {
+  name: string;
+  qualifiedName: string;
+  kind: "class" | "interface" | "enum";
+  declarationStart: number;
+  bodyStart: number;
+  bodyEnd: number;
+  annotations: string;
+  parentQualifiedName?: string;
+}
+
 function parseJava(
   file: AnalysisSourceFile,
   content: string
 ): ParsedSourceFile {
   const lineStarts = createLineStarts(content);
+  const codeOffsets = createSourceCodeOffsets(content);
   const symbols: ParsedSymbol[] = [];
   const serverEndpoints: ParsedServerEndpoint[] = [];
   const remoteBoundaries: ParsedRemoteBoundary[] = [];
   const packageName =
-    /\bpackage\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;/.exec(
-      content
+    firstCodeMatch(
+      content,
+      /\bpackage\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;/g,
+      codeOffsets,
+      1
     )?.[1] ?? "";
-  const imports = extractJavaImports(content);
-  const receiverTypes = extractJavaVariableTypes(content);
-  const annotationSpans = extractJavaAnnotationSpans(content);
-  const classMatch =
-    /((?:^[ \t]*@[^\r\n]+[\r\n]+)*)^[ \t]*(?:public\s+|protected\s+|private\s+|abstract\s+|final\s+)*(?:class|interface|record|enum)\s+([A-Za-z_$][\w$]*)[^{]*\{/m.exec(
-      content
+  if (packageName) {
+    const packageMatch = firstCodeMatch(
+      content,
+      /\bpackage\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;/g,
+      codeOffsets,
+      1
     );
-  let className = "";
-  let classRoute = "";
-  let classBodyStart = -1;
-  let classBodyEnd = -1;
-
-  if (classMatch) {
-    className = classMatch[2] ?? "";
-    const start = classMatch.index;
-    const braceIndex = start + classMatch[0].lastIndexOf("{");
-    const end = findMatchingBrace(content, braceIndex);
-    classBodyStart = braceIndex + 1;
-    classBodyEnd = end;
-    classRoute = annotationRoute(classMatch[1] ?? "");
     symbols.push({
-      name: className,
-      qualifiedName: className,
-      kind: "class",
+      name: packageName.split(".").at(-1) ?? packageName,
+      qualifiedName: packageName,
+      kind: "package",
+      line: lineForOffset(
+        lineStarts,
+        packageMatch?.index ?? 0
+      ),
+      endLine: lineForOffset(
+        lineStarts,
+        (packageMatch?.index ?? 0) +
+          (packageMatch?.[0].length ?? 0)
+      ),
+      calls: [],
+      source: "builtin"
+    });
+  }
+  const moduleMatch = firstCodeMatch(
+    content,
+    /\bmodule\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\{/g,
+    codeOffsets,
+    1
+  );
+  if (moduleMatch?.[1]) {
+    const start = moduleMatch.index ?? 0;
+    const braceIndex =
+      start + moduleMatch[0].lastIndexOf("{");
+    const end = findMatchingBrace(content, braceIndex);
+    symbols.push({
+      name: moduleMatch[1],
+      qualifiedName: moduleMatch[1],
+      kind: "module",
       line: lineForOffset(lineStarts, start),
       endLine: lineForOffset(lineStarts, end),
+      calls: [],
+      source: "builtin"
+    });
+  }
+  const imports = extractJavaImports(content, codeOffsets);
+  const receiverTypes = extractJavaVariableTypes(content);
+  const annotationSpans = extractJavaAnnotationSpans(
+    content,
+    codeOffsets
+  );
+  const typeBlocks = extractJavaTypeBlocks(
+    content,
+    codeOffsets
+  );
+  for (const typeBlock of typeBlocks) {
+    symbols.push({
+      name: typeBlock.name,
+      qualifiedName: typeBlock.qualifiedName,
+      kind: typeBlock.kind,
+      line: lineForOffset(
+        lineStarts,
+        typeBlock.declarationStart
+      ),
+      endLine: lineForOffset(
+        lineStarts,
+        typeBlock.bodyEnd
+      ),
+      ...(typeBlock.parentQualifiedName
+        ? {
+            parentQualifiedName:
+              typeBlock.parentQualifiedName
+          }
+        : {}),
+      ...documentationField(
+        content,
+        typeBlock.declarationStart
+      ),
+      calls: [],
+      source: "builtin"
+    });
+  }
+
+  const fieldPattern =
+    /^[ \t]*(?:(?:public|protected|private|static|final|transient|volatile)\s+)*(?:[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*(?:\s*<[^;{}()]+>)?(?:\s*\[\s*\])*)\s+([A-Za-z_$][\w$]*)\s*(?:=[^;]*)?;/gm;
+  for (const match of content.matchAll(fieldPattern)) {
+    const name = match[1];
+    const start = match.index;
+    if (
+      !name ||
+      start === undefined ||
+      !codeOffsets.isCode(capturedGroupOffset(match, 1))
+    ) {
+      continue;
+    }
+    const owner = javaTypeOwnerAtOffset(
+      content,
+      typeBlocks,
+      start
+    );
+    if (!owner) {
+      continue;
+    }
+    symbols.push({
+      name,
+      qualifiedName: `${owner.qualifiedName}.${name}`,
+      kind: "property",
+      line: lineForOffset(lineStarts, start),
+      endLine: lineForOffset(
+        lineStarts,
+        start + match[0].length
+      ),
+      parentQualifiedName: owner.qualifiedName,
       ...documentationField(content, start),
       calls: [],
       source: "builtin"
@@ -269,16 +407,22 @@ function parseJava(
     if (
       !name ||
       start === undefined ||
-      name === className ||
-      CALL_KEYWORDS.has(name)
+      CALL_KEYWORDS.has(name) ||
+      !codeOffsets.isCode(capturedGroupOffset(match, 1))
     ) {
+      continue;
+    }
+    const owner = javaTypeOwnerAtOffset(
+      content,
+      typeBlocks,
+      start
+    );
+    if (!owner || name === owner.name) {
       continue;
     }
     const braceIndex = start + match[0].lastIndexOf("{");
     const end = findMatchingBrace(content, braceIndex);
-    const qualifiedName = className
-      ? `${className}.${name}`
-      : name;
+    const qualifiedName = `${owner.qualifiedName}.${name}`;
     const annotationBlock = leadingJavaAnnotationBlock(
       content,
       start,
@@ -287,16 +431,6 @@ function parseJava(
     const symbolStart = annotationBlock?.start ?? start;
     const line = lineForOffset(lineStarts, symbolStart);
     const annotations = annotationBlock?.text ?? "";
-    if (
-      !isTopLevelTypeMember(
-        content,
-        classBodyStart,
-        classBodyEnd,
-        start
-      )
-    ) {
-      continue;
-    }
     const methodReceiverTypes = new Map(receiverTypes);
     for (const [receiver, type] of extractJavaVariableTypes(
       content.slice(start, end + 1)
@@ -310,14 +444,20 @@ function parseJava(
       kind: "method",
       line,
       endLine: lineForOffset(lineStarts, end),
-      ...(className
-        ? { parentQualifiedName: className }
-        : {}),
+      parentQualifiedName: owner.qualifiedName,
+      signature: javaMethodSignature(name, match[0]),
       ...documentationField(content, symbolStart),
       calls: extractCalls(
         content.slice(braceIndex + 1, end),
         lineForOffset(lineStarts, braceIndex + 1),
         methodReceiverTypes
+      ),
+      ...referenceField(
+        extractJavaQualifiedReferences(
+          content.slice(braceIndex + 1, end),
+          lineForOffset(lineStarts, braceIndex + 1),
+          imports
+        )
       ),
       source: "builtin"
     });
@@ -334,7 +474,7 @@ function parseJava(
 
     for (const endpoint of extractSpringEndpoints(
       annotations,
-      classRoute
+      annotationRoutes(owner.annotations)
     )) {
       serverEndpoints.push({
         ...endpoint,
@@ -355,20 +495,20 @@ function parseJava(
     if (
       !name ||
       start === undefined ||
-      name === className ||
       CALL_KEYWORDS.has(name) ||
-      !isTopLevelTypeMember(
-        content,
-        classBodyStart,
-        classBodyEnd,
-        start
-      )
+      !codeOffsets.isCode(capturedGroupOffset(match, 1))
     ) {
       continue;
     }
-    const qualifiedName = className
-      ? `${className}.${name}`
-      : name;
+    const owner = javaTypeOwnerAtOffset(
+      content,
+      typeBlocks,
+      start
+    );
+    if (!owner || name === owner.name) {
+      continue;
+    }
+    const qualifiedName = `${owner.qualifiedName}.${name}`;
     const annotationBlock = leadingJavaAnnotationBlock(
       content,
       start,
@@ -389,9 +529,8 @@ function parseJava(
       kind: "method",
       line,
       endLine: lineForOffset(lineStarts, end),
-      ...(className
-        ? { parentQualifiedName: className }
-        : {}),
+      parentQualifiedName: owner.qualifiedName,
+      signature: javaMethodSignature(name, match[0]),
       ...documentationField(content, annotationBlock.start),
       calls: [],
       source: "builtin"
@@ -409,7 +548,7 @@ function parseJava(
   }
 
   const functionalRoutePattern =
-    /\b(GET|POST|PUT|DELETE|PATCH)\s*\(\s*(["'`])([^"'`]+)\2\s*\)\s*,\s*([A-Za-z_$][\w$]*)(?:::|\.)([A-Za-z_$][\w$]*)/g;
+    /\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*(["'`])([^"'`]+)\2\s*\)\s*,\s*([A-Za-z_$][\w$]*)(?:::|\.)([A-Za-z_$][\w$]*)/g;
   for (const match of content.matchAll(
     functionalRoutePattern
   )) {
@@ -422,7 +561,8 @@ function parseJava(
       !rawRoute ||
       !owner ||
       !handler ||
-      match.index === undefined
+      match.index === undefined ||
+      !codeOffsets.isCode(match.index)
     ) {
       continue;
     }
@@ -436,6 +576,23 @@ function parseJava(
     });
   }
 
+  for (const symbol of symbols) {
+    if (
+      packageName &&
+      symbol.kind !== "package" &&
+      symbol.kind !== "module"
+    ) {
+      symbol.packageName = packageName;
+    }
+    symbol.semanticId = [
+      symbol.packageName ?? "",
+      symbol.qualifiedName,
+      symbol.kind,
+      symbol.signature ?? "",
+      String(symbol.line)
+    ].join("\0");
+  }
+
   return {
     file,
     symbols,
@@ -445,13 +602,189 @@ function parseJava(
   };
 }
 
+function extractJavaTypeBlocks(
+  content: string,
+  codeOffsets: SourceCodeOffsets
+): JavaTypeBlock[] {
+  const blocks: JavaTypeBlock[] = [];
+  const pattern =
+    /((?:^[ \t]*@[^\r\n]+[\r\n]+)*)^[ \t]*(?:(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\s+)*(class|interface|record|enum)\s+([A-Za-z_$][\w$]*)[^{;]*\{/gm;
+  for (const match of content.matchAll(pattern)) {
+    const declarationKind = match[2];
+    const name = match[3];
+    const declarationStart = match.index;
+    if (
+      !declarationKind ||
+      !name ||
+      declarationStart === undefined ||
+      !codeOffsets.isCode(capturedGroupOffset(match, 3))
+    ) {
+      continue;
+    }
+    const braceIndex =
+      declarationStart + match[0].lastIndexOf("{");
+    const bodyEnd = findMatchingBrace(content, braceIndex);
+    const parent = [...blocks]
+      .reverse()
+      .find(
+        (candidate) =>
+          declarationStart >= candidate.bodyStart &&
+          declarationStart < candidate.bodyEnd
+      );
+    if (
+      parent &&
+      !isTopLevelTypeMember(
+        content,
+        parent.bodyStart,
+        parent.bodyEnd,
+        declarationStart
+      )
+    ) {
+      continue;
+    }
+    const qualifiedName = parent
+      ? `${parent.qualifiedName}.${name}`
+      : name;
+    blocks.push({
+      name,
+      qualifiedName,
+      kind:
+        declarationKind === "interface"
+          ? "interface"
+          : declarationKind === "enum"
+            ? "enum"
+            : "class",
+      declarationStart,
+      bodyStart: braceIndex + 1,
+      bodyEnd,
+      annotations: match[1] ?? "",
+      ...(parent
+        ? { parentQualifiedName: parent.qualifiedName }
+        : {})
+    });
+  }
+  return blocks;
+}
+
+function javaTypeOwnerAtOffset(
+  content: string,
+  blocks: JavaTypeBlock[],
+  offset: number
+): JavaTypeBlock | undefined {
+  return [...blocks]
+    .reverse()
+    .find(
+      (block) =>
+        offset >= block.bodyStart &&
+        offset < block.bodyEnd &&
+        isTopLevelTypeMember(
+          content,
+          block.bodyStart,
+          block.bodyEnd,
+          offset
+        )
+    );
+}
+
+function extractJavaQualifiedReferences(
+  content: string,
+  startingLine: number,
+  imports: ReadonlyMap<string, string>
+): ParsedReference[] {
+  const references: ParsedReference[] = [];
+  const lineStarts = createLineStarts(content);
+  const codeOffsets = createSourceCodeOffsets(content);
+  const seen = new Set<string>();
+  const pattern =
+    /\b([A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)+)\b/g;
+  for (const match of content.matchAll(pattern)) {
+    const rawQualifiedName = match[1];
+    const start = match.index;
+    if (
+      !rawQualifiedName ||
+      start === undefined ||
+      !codeOffsets.isCode(start)
+    ) {
+      continue;
+    }
+    const rawTargetQualifiedName =
+      rawQualifiedName.replace(/\s+/g, "");
+    const firstSegment =
+      rawTargetQualifiedName.split(".")[0] ?? "";
+    const importedType = imports.get(firstSegment);
+    const targetQualifiedName = importedType
+      ? `${importedType}${rawTargetQualifiedName.slice(
+          firstSegment.length
+        )}`
+      : rawTargetQualifiedName;
+    const name = targetQualifiedName.split(".").at(-1);
+    const nextOffset = skipWhitespace(
+      content,
+      start + match[0].length
+    );
+    if (
+      !name ||
+      name === "class" ||
+      content[nextOffset] === "("
+    ) {
+      continue;
+    }
+    const line =
+      startingLine +
+      lineForOffset(lineStarts, start) -
+      1;
+    const key = `${targetQualifiedName}\0${line}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    references.push({
+      name,
+      targetQualifiedName,
+      line,
+      source: "builtin",
+      evidence: `静态限定引用 ${targetQualifiedName}`
+    });
+  }
+  return references;
+}
+
+function javaMethodSignature(
+  name: string,
+  declaration: string
+): string {
+  const open = declaration.indexOf("(");
+  const close = declaration.lastIndexOf(")");
+  if (open < 0 || close <= open) {
+    return `${name}()`;
+  }
+  const parameters = declaration
+    .slice(open + 1, close)
+    .replace(/\s+/g, " ")
+    .trim();
+  return `${name}(${parameters})`;
+}
+
+function referenceField(
+  references: ParsedReference[]
+): Pick<ParsedSymbol, "references"> | Record<string, never> {
+  return references.length > 0 ? { references } : {};
+}
+
 function extractJavaImports(
-  content: string
+  content: string,
+  codeOffsets: SourceCodeOffsets
 ): ReadonlyMap<string, string> {
   const imports = new Map<string, string>();
   const pattern =
     /\bimport\s+(?!static\b)([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)\s*;/g;
   for (const match of content.matchAll(pattern)) {
+    if (
+      match.index === undefined ||
+      !codeOffsets.isCode(match.index)
+    ) {
+      continue;
+    }
     const qualifiedName = match[1];
     const simpleName = qualifiedName?.split(".").at(-1);
     if (qualifiedName && simpleName) {
@@ -468,7 +801,8 @@ interface JavaAnnotationSpan {
 }
 
 function extractJavaAnnotationSpans(
-  content: string
+  content: string,
+  codeOffsets: SourceCodeOffsets
 ): JavaAnnotationSpan[] {
   const spans: JavaAnnotationSpan[] = [];
   const pattern =
@@ -476,6 +810,9 @@ function extractJavaAnnotationSpans(
   for (const match of content.matchAll(pattern)) {
     const start = match.index;
     if (start === undefined) {
+      continue;
+    }
+    if (!codeOffsets.isCode(start)) {
       continue;
     }
     let end = start + match[0].length;
@@ -601,7 +938,11 @@ function findMatchingDelimiter(
       index += 1;
       continue;
     }
-    if (current === '"' || current === "'") {
+    if (
+      current === '"' ||
+      current === "'" ||
+      current === "`"
+    ) {
       quote = current;
       continue;
     }
@@ -622,12 +963,18 @@ function extractJavaVariableTypes(
 ): ReadonlyMap<string, string> {
   const types = new Map<string, string>();
   const ambiguous = new Set<string>();
+  const codeOffsets = createSourceCodeOffsets(content);
   const pattern =
     /\b([A-Z][A-Za-z0-9_$.]*(?:\s*<[^;={}()]+>)?(?:\s*\[\s*\])*)\s+([A-Za-z_$][\w$]*)\s*(?=[=;,)])/g;
   for (const match of content.matchAll(pattern)) {
     const rawType = match[1];
     const variable = match[2];
-    if (!rawType || !variable || ambiguous.has(variable)) {
+    if (
+      !rawType ||
+      !variable ||
+      ambiguous.has(variable) ||
+      !codeOffsets.isCode(capturedGroupOffset(match, 2))
+    ) {
       continue;
     }
     const type = rawType
@@ -721,10 +1068,19 @@ function isTopLevelTypeMember(
 function extractClientRequests(
   content: string,
   lineStarts: number[],
-  symbols: ParsedSymbol[]
+  symbols: ParsedSymbol[],
+  codeOffsets: SourceCodeOffsets
 ): ParsedClientRequest[] {
   const requests: ParsedClientRequest[] = [];
-  const imports = extractRequestImports(content);
+  const constants = extractStaticStringConstants(
+    content,
+    codeOffsets
+  );
+  const imports = extractRequestImports(
+    content,
+    codeOffsets,
+    constants
+  );
 
   for (const [helperName, method] of imports.directMethods) {
     const pattern = new RegExp(
@@ -732,7 +1088,10 @@ function extractClientRequests(
       "g"
     );
     for (const match of content.matchAll(pattern)) {
-      if (match.index === undefined) {
+      if (
+        match.index === undefined ||
+        !codeOffsets.isCode(match.index)
+      ) {
         continue;
       }
       const previous = previousNonWhitespace(
@@ -749,9 +1108,10 @@ function extractClientRequests(
       if (openingParenthesis < 0) {
         continue;
       }
-      const rawRoute = readQuotedArgument(
+      const rawRoute = readStaticRouteArgument(
         content,
-        openingParenthesis + 1
+        openingParenthesis + 1,
+        constants
       );
       if (rawRoute === undefined) {
         continue;
@@ -769,7 +1129,7 @@ function extractClientRequests(
   }
 
   const receiverPattern =
-    /\b([A-Za-z_$][\w$]*)\s*\.\s*(get|post|put|delete|del|patch|postForm|postJson|post_json)\b/gi;
+    /\b([A-Za-z_$][\w$]*)\s*\.\s*(get|post|put|delete|del|patch|head|options|postForm|postJson|post_json)\b/gi;
   for (const match of content.matchAll(receiverPattern)) {
     const receiver = match[1];
     const helperName = match[2];
@@ -777,6 +1137,7 @@ function extractClientRequests(
       !receiver ||
       !helperName ||
       match.index === undefined ||
+      !codeOffsets.isCode(match.index) ||
       !imports.receivers.has(receiver)
     ) {
       continue;
@@ -792,9 +1153,10 @@ function extractClientRequests(
     if (openingParenthesis < 0) {
       continue;
     }
-    const rawRoute = readQuotedArgument(
+    const rawRoute = readStaticRouteArgument(
       content,
-      openingParenthesis + 1
+      openingParenthesis + 1,
+      constants
     );
     if (rawRoute === undefined) {
       continue;
@@ -806,30 +1168,59 @@ function extractClientRequests(
       lineStarts,
       match.index,
       method,
-      rawRoute
+      applyRequestBaseRoute(
+        imports.baseRoutes.get(receiver),
+        rawRoute
+      )
     );
   }
 
-  const fetchPattern =
-    /\bfetch\s*\(\s*(["'`])([\s\S]*?)\1\s*(?:,\s*\{([\s\S]*?)\})?/g;
+  const fetchPattern = /\bfetch\b/g;
   for (const match of content.matchAll(fetchPattern)) {
-    const rawRoute = match[2];
     if (
-      rawRoute === undefined ||
-      match.index === undefined
+      match.index === undefined ||
+      !codeOffsets.isCode(match.index)
     ) {
       continue;
     }
-    const options = match[3] ?? "";
-    const methodMatch =
-      /\bmethod\s*:\s*(["'`])([A-Za-z]+)\1/i.exec(options);
+    const openingParenthesis = findCallOpeningParenthesis(
+      content,
+      match.index + match[0].length
+    );
+    if (openingParenthesis < 0) {
+      continue;
+    }
+    const rawRoute = readStaticRouteArgument(
+      content,
+      openingParenthesis + 1,
+      constants
+    );
+    if (rawRoute === undefined) {
+      continue;
+    }
+    const closingParenthesis = findMatchingDelimiter(
+      content,
+      openingParenthesis,
+      "(",
+      ")"
+    );
+    const callArguments = content.slice(
+      openingParenthesis + 1,
+      closingParenthesis
+    );
+    const method =
+      readStaticObjectProperty(
+        callArguments,
+        "method",
+        constants
+      ) ?? "GET";
     pushClientRequest(
       requests,
       content,
       symbols,
       lineStarts,
       match.index,
-      methodMatch?.[2] ?? "GET",
+      method,
       rawRoute
     );
   }
@@ -839,7 +1230,11 @@ function extractClientRequests(
   for (const match of content.matchAll(configCallPattern)) {
     const receiver = match[1];
     const member = match[2];
-    if (!receiver || match.index === undefined) {
+    if (
+      !receiver ||
+      match.index === undefined ||
+      !codeOffsets.isCode(match.index)
+    ) {
       continue;
     }
     const configCallable = member
@@ -865,21 +1260,31 @@ function extractClientRequests(
     }
     const objectEnd = findMatchingBrace(content, objectStart);
     const config = content.slice(objectStart + 1, objectEnd);
-    const urlMatch =
-      /\burl\s*:\s*(["'`])([\s\S]*?)\1/.exec(config);
-    if (!urlMatch?.[2]) {
+    const rawRoute = readStaticObjectProperty(
+      config,
+      "url",
+      constants
+    );
+    if (rawRoute === undefined) {
       continue;
     }
-    const methodMatch =
-      /\bmethod\s*:\s*(["'`])([A-Za-z]+)\1/i.exec(config);
+    const method =
+      readStaticObjectProperty(
+        config,
+        "method",
+        constants
+      ) ?? "GET";
     pushClientRequest(
       requests,
       content,
       symbols,
       lineStarts,
       match.index,
-      (methodMatch?.[2] ?? "GET").toUpperCase(),
-      urlMatch[2]
+      method.toUpperCase(),
+      applyRequestBaseRoute(
+        imports.baseRoutes.get(receiver),
+        rawRoute
+      )
     );
   }
 
@@ -890,10 +1295,13 @@ interface RequestImportInfo {
   directMethods: Map<string, string>;
   receivers: Set<string>;
   configCallables: Set<string>;
+  baseRoutes: Map<string, string>;
 }
 
 function extractRequestImports(
-  content: string
+  content: string,
+  codeOffsets: SourceCodeOffsets,
+  constants: ReadonlyMap<string, string>
 ): RequestImportInfo {
   const directMethods = new Map<string, string>();
   const receivers = new Set([
@@ -904,10 +1312,17 @@ function extractRequestImports(
     "client"
   ]);
   const configCallables = new Set(["axios"]);
+  const baseRoutes = new Map<string, string>();
   const importPattern =
     /\bimport\s+([\s\S]*?)\s+from\s*(["'])([^"']+)\2\s*;?/g;
 
   for (const match of content.matchAll(importPattern)) {
+    if (
+      match.index === undefined ||
+      !codeOffsets.isCode(match.index)
+    ) {
+      continue;
+    }
     const clause = match[1]?.trim();
     const source = match[3];
     if (
@@ -975,10 +1390,53 @@ function extractRequestImports(
     }
   }
 
+  const instancePattern =
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*\.\s*create\b/g;
+  for (const match of content.matchAll(instancePattern)) {
+    const instance = match[1];
+    const factory = match[2];
+    if (
+      !instance ||
+      !factory ||
+      match.index === undefined ||
+      !codeOffsets.isCode(capturedGroupOffset(match, 1)) ||
+      !receivers.has(factory)
+    ) {
+      continue;
+    }
+    const openingParenthesis = findCallOpeningParenthesis(
+      content,
+      match.index + match[0].length
+    );
+    if (openingParenthesis < 0) {
+      continue;
+    }
+    receivers.add(instance);
+    configCallables.add(instance);
+    const objectStart = skipWhitespace(
+      content,
+      openingParenthesis + 1
+    );
+    if (content[objectStart] !== "{") {
+      continue;
+    }
+    const objectEnd = findMatchingBrace(content, objectStart);
+    const config = content.slice(objectStart + 1, objectEnd);
+    const baseRoute = readStaticObjectProperty(
+      config,
+      "baseURL",
+      constants
+    );
+    if (baseRoute !== undefined) {
+      baseRoutes.set(instance, baseRoute);
+    }
+  }
+
   return {
     directMethods,
     receivers,
-    configCallables
+    configCallables,
+    baseRoutes
   };
 }
 
@@ -1022,7 +1480,9 @@ function requestMethodForHelper(
     delete: "DELETE",
     del: "DELETE",
     patch: "PATCH",
-    patchjson: "PATCH"
+    patchjson: "PATCH",
+    head: "HEAD",
+    options: "OPTIONS"
   }[normalized];
 }
 
@@ -1126,6 +1586,117 @@ function readQuotedArgument(
   return undefined;
 }
 
+function extractStaticStringConstants(
+  content: string,
+  codeOffsets: SourceCodeOffsets
+): ReadonlyMap<string, string> {
+  const constants = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  const pattern =
+    /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*/g;
+  for (const match of content.matchAll(pattern)) {
+    const name = match[1];
+    if (
+      !name ||
+      match.index === undefined ||
+      !codeOffsets.isCode(capturedGroupOffset(match, 1)) ||
+      ambiguous.has(name)
+    ) {
+      continue;
+    }
+    const value = readQuotedArgument(
+      content,
+      match.index + match[0].length
+    );
+    if (value === undefined) {
+      continue;
+    }
+    const existing = constants.get(name);
+    if (existing !== undefined && existing !== value) {
+      constants.delete(name);
+      ambiguous.add(name);
+      continue;
+    }
+    constants.set(name, value);
+  }
+  return constants;
+}
+
+function readStaticRouteArgument(
+  content: string,
+  start: number,
+  constants: ReadonlyMap<string, string>
+): string | undefined {
+  const index = skipWhitespace(content, start);
+  const quoted = readQuotedArgument(content, index);
+  if (quoted !== undefined) {
+    return quoted;
+  }
+
+  const newUrlMatch = /^new\s+URL\b/.exec(
+    content.slice(index)
+  );
+  if (newUrlMatch) {
+    const openingParenthesis = findCallOpeningParenthesis(
+      content,
+      index + newUrlMatch[0].length
+    );
+    return openingParenthesis < 0
+      ? undefined
+      : readStaticRouteArgument(
+          content,
+          openingParenthesis + 1,
+          constants
+        );
+  }
+
+  const identifier =
+    /^[A-Za-z_$][\w$]*/.exec(content.slice(index))?.[0];
+  return identifier ? constants.get(identifier) : undefined;
+}
+
+function readStaticObjectProperty(
+  content: string,
+  property: string,
+  constants: ReadonlyMap<string, string>
+): string | undefined {
+  const codeOffsets = createSourceCodeOffsets(content);
+  const pattern = new RegExp(
+    `\\b${escapeRegExp(property)}\\s*:\\s*`,
+    "g"
+  );
+  for (const match of content.matchAll(pattern)) {
+    if (
+      match.index === undefined ||
+      !codeOffsets.isCode(match.index)
+    ) {
+      continue;
+    }
+    const value = readStaticRouteArgument(
+      content,
+      match.index + match[0].length,
+      constants
+    );
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function applyRequestBaseRoute(
+  baseRoute: string | undefined,
+  route: string
+): string {
+  if (
+    !baseRoute ||
+    /^[A-Za-z][A-Za-z\d+.-]*:\/\//.test(route)
+  ) {
+    return route;
+  }
+  return joinRoutes(baseRoute, route);
+}
+
 function skipWhitespace(
   content: string,
   start: number
@@ -1160,7 +1731,7 @@ function escapeRegExp(value: string): string {
 
 function extractSpringEndpoints(
   annotations: string,
-  classRoute: string
+  classRoutes: string[]
 ): Array<
   Omit<
     ParsedServerEndpoint,
@@ -1181,14 +1752,23 @@ function extractSpringEndpoints(
       continue;
     }
     const method = methodPrefix.toUpperCase();
-    const methodRoute = firstQuotedValue(match[2] ?? "");
-    const rawRoute = joinRoutes(classRoute, methodRoute);
-    endpoints.push({
-      method,
-      route: normalizeRoute(rawRoute),
-      rawRoute,
-      annotation: `@${methodPrefix}Mapping`
-    });
+    const methodRoutes = extractMappingRoutes(
+      match[2] ?? ""
+    );
+    for (const classRoute of classRoutes) {
+      for (const methodRoute of methodRoutes) {
+        const rawRoute = joinRoutes(
+          classRoute,
+          methodRoute
+        );
+        endpoints.push({
+          method,
+          route: normalizeRoute(rawRoute),
+          rawRoute,
+          annotation: `@${methodPrefix}Mapping`
+        });
+      }
+    }
   }
 
   const requestMappingPattern =
@@ -1197,31 +1777,85 @@ function extractSpringEndpoints(
     requestMappingPattern
   )) {
     const argumentsText = match[1] ?? "";
-    const methodMatch =
-      /RequestMethod\.(GET|POST|PUT|DELETE|PATCH)/.exec(
-        argumentsText
-      );
-    const methodRoute = firstQuotedValue(argumentsText);
-    const rawRoute = joinRoutes(classRoute, methodRoute);
-    endpoints.push({
-      method: methodMatch?.[1] ?? "ANY",
-      route: normalizeRoute(rawRoute),
-      rawRoute,
-      annotation: "@RequestMapping"
-    });
+    const methods = extractRequestMappingMethods(
+      argumentsText
+    );
+    const methodRoutes =
+      extractMappingRoutes(argumentsText);
+    for (const classRoute of classRoutes) {
+      for (const methodRoute of methodRoutes) {
+        const rawRoute = joinRoutes(
+          classRoute,
+          methodRoute
+        );
+        for (const method of methods) {
+          endpoints.push({
+            method,
+            route: normalizeRoute(rawRoute),
+            rawRoute,
+            annotation: "@RequestMapping"
+          });
+        }
+      }
+    }
   }
 
-  return endpoints;
+  return [
+    ...new Map(
+      endpoints.map((endpoint) => [
+        `${endpoint.method}\0${endpoint.route}\0${endpoint.annotation}`,
+        endpoint
+      ])
+    ).values()
+  ];
 }
 
-function annotationRoute(annotations: string): string {
+function annotationRoutes(annotations: string): string[] {
   const match =
     /@RequestMapping\s*(?:\(([^)]*)\))?/.exec(annotations);
-  return firstQuotedValue(match?.[1] ?? "");
+  return extractMappingRoutes(match?.[1] ?? "");
 }
 
-function firstQuotedValue(text: string): string {
-  return /["']([^"']+)["']/.exec(text)?.[1] ?? "";
+function extractMappingRoutes(argumentsText: string): string[] {
+  const attribute =
+    /\b(?:value|path)\s*=\s*/.exec(argumentsText);
+  const start = attribute
+    ? attribute.index + attribute[0].length
+    : 0;
+  const index = skipWhitespace(argumentsText, start);
+  if (argumentsText[index] === "{") {
+    const end = findMatchingDelimiter(
+      argumentsText,
+      index,
+      "{",
+      "}"
+    );
+    const values = extractQuotedValues(
+      argumentsText.slice(index + 1, end)
+    );
+    return values.length > 0 ? values : [""];
+  }
+  const route = readQuotedArgument(argumentsText, index);
+  return route === undefined ? [""] : [route];
+}
+
+function extractRequestMappingMethods(
+  argumentsText: string
+): string[] {
+  const methods = [
+    ...argumentsText.matchAll(
+      /RequestMethod\.(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE)/g
+    )
+  ].flatMap((match) => (match[1] ? [match[1]] : []));
+  return methods.length > 0 ? [...new Set(methods)] : ["ANY"];
+}
+
+function extractQuotedValues(text: string): string[] {
+  return [
+    ...text.matchAll(/(["'])([\s\S]*?)\1/g)
+  ].flatMap((match) =>
+    match[2] === undefined ? [] : [match[2]]
+  );
 }
 
 function joinRoutes(prefix: string, suffix: string): string {
@@ -1263,6 +1897,7 @@ function extractCalls(
 ): ParsedCall[] {
   const calls: ParsedCall[] = [];
   const lineStarts = createLineStarts(body);
+  const codeOffsets = createSourceCodeOffsets(body);
   const pattern =
     /\b(?:(?<receiver>[A-Za-z_$][\w$]*)\s*\.\s*)?(?<name>[A-Za-z_$][\w$]*)\s*\(/g;
   for (const match of body.matchAll(pattern)) {
@@ -1270,7 +1905,10 @@ function extractCalls(
     if (
       !name ||
       CALL_KEYWORDS.has(name) ||
-      match.index === undefined
+      match.index === undefined ||
+      !codeOffsets.isCode(
+        match.index + match[0].lastIndexOf(name)
+      )
     ) {
       continue;
     }
@@ -1288,7 +1926,11 @@ function extractCalls(
       line:
         startingLine +
         lineForOffset(lineStarts, match.index) -
-        1
+        1,
+      source: "builtin",
+      evidence: receiver
+        ? `静态调用表达式 ${receiver}.${name}(…)`
+        : `静态调用表达式 ${name}(…)`
     });
   }
   return calls;
@@ -1304,7 +1946,8 @@ function containerField(
   const container = symbols
     .filter(
       (symbol) =>
-        symbol.kind !== "class" &&
+        (symbol.kind === "function" ||
+          symbol.kind === "method") &&
         line >= symbol.line &&
         line <= symbol.endLine
     )
@@ -1342,14 +1985,16 @@ function deduplicateRequests(
   requests: ParsedClientRequest[]
 ): ParsedClientRequest[] {
   const seen = new Set<string>();
-  return requests.filter((request) => {
-    const key = `${request.method}:${request.route}:${request.line}`;
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
+  return requests
+    .filter((request) => {
+      const key = `${request.method}:${request.route}:${request.line}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) => left.line - right.line);
 }
 
 function documentationField(
@@ -1475,6 +2120,170 @@ function summarizeDocumentation(
   return value
     ? value.slice(0, MAX_CODE_DOCUMENTATION_CHARACTERS)
     : undefined;
+}
+
+interface SourceCodeOffsets {
+  isCode(offset: number): boolean;
+}
+
+function createSourceCodeOffsets(
+  content: string,
+  vueScriptOnly = false
+): SourceCodeOffsets {
+  const flags = new Uint8Array(content.length);
+  const ranges = vueScriptOnly
+    ? vueScriptRanges(content)
+    : [{ start: 0, end: content.length }];
+  for (const range of ranges) {
+    markLexicalCode(
+      content,
+      flags,
+      range.start,
+      range.end
+    );
+  }
+  return {
+    isCode(offset: number): boolean {
+      return (
+        Number.isSafeInteger(offset) &&
+        offset >= 0 &&
+        offset < flags.length &&
+        flags[offset] === 1
+      );
+    }
+  };
+}
+
+function vueScriptRanges(
+  content: string
+): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  const openingPattern = /<script\b[^>]*>/gi;
+  const closingPattern = /<\/script\s*>/gi;
+  let opening = openingPattern.exec(content);
+  while (opening) {
+    const start = opening.index + opening[0].length;
+    closingPattern.lastIndex = start;
+    const closing = closingPattern.exec(content);
+    ranges.push({
+      start,
+      end: closing?.index ?? content.length
+    });
+    if (!closing) {
+      break;
+    }
+    openingPattern.lastIndex =
+      closing.index + closing[0].length;
+    opening = openingPattern.exec(content);
+  }
+  if (
+    ranges.length === 0 &&
+    !/<(?:template|style)\b/i.test(content)
+  ) {
+    return [{ start: 0, end: content.length }];
+  }
+  return ranges;
+}
+
+function markLexicalCode(
+  content: string,
+  flags: Uint8Array,
+  start: number,
+  end: number
+): void {
+  flags.fill(1, start, end);
+  let quote = "";
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let index = start; index < end; index += 1) {
+    const current = content[index] ?? "";
+    const next = content[index + 1] ?? "";
+
+    if (lineComment) {
+      flags[index] = 0;
+      if (current === "\n") {
+        lineComment = false;
+      }
+      continue;
+    }
+    if (blockComment) {
+      flags[index] = 0;
+      if (current === "*" && next === "/") {
+        if (index + 1 < end) {
+          flags[index + 1] = 0;
+        }
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote) {
+      flags[index] = 0;
+      if (escaped) {
+        escaped = false;
+      } else if (current === "\\") {
+        escaped = true;
+      } else if (current === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (current === "/" && next === "/") {
+      flags[index] = 0;
+      if (index + 1 < end) {
+        flags[index + 1] = 0;
+      }
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (current === "/" && next === "*") {
+      flags[index] = 0;
+      if (index + 1 < end) {
+        flags[index + 1] = 0;
+      }
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+    if (
+      current === '"' ||
+      current === "'" ||
+      current === "`"
+    ) {
+      flags[index] = 0;
+      quote = current;
+    }
+  }
+}
+
+function capturedGroupOffset(
+  match: RegExpMatchArray,
+  group: number
+): number {
+  const start = match.index ?? 0;
+  const value = match[group];
+  if (!value) {
+    return start;
+  }
+  const relative = match[0].lastIndexOf(value);
+  return start + Math.max(0, relative);
+}
+
+function firstCodeMatch(
+  content: string,
+  pattern: RegExp,
+  codeOffsets: SourceCodeOffsets,
+  group: number
+): RegExpMatchArray | undefined {
+  for (const match of content.matchAll(pattern)) {
+    if (codeOffsets.isCode(capturedGroupOffset(match, group))) {
+      return match;
+    }
+  }
+  return undefined;
 }
 
 function isInsideAnyClass(

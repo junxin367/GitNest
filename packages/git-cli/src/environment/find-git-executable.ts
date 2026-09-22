@@ -2,12 +2,16 @@ import { access, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
-import { GitError } from "@gitnest/git-core";
+import {
+  GitError,
+  type GitReadPriority
+} from "@gitnest/git-core";
 
 import { runProcess } from "../process/git-process-runner";
 
 export async function findGitExecutable(
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  priority?: GitReadPriority
 ): Promise<string> {
   const configuredPath = process.env.GITNEST_GIT_PATH;
 
@@ -24,7 +28,7 @@ export async function findGitExecutable(
     }
   }
 
-  const located = await findOnPath(signal);
+  const located = await findOnPath(signal, priority);
 
   if (located) {
     return located;
@@ -43,13 +47,15 @@ export async function findGitExecutable(
 }
 
 async function findOnPath(
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  priority?: GitReadPriority
 ): Promise<string | undefined> {
   const locator = process.platform === "win32" ? "where.exe" : "which";
   const result = await runProcess({
     executable: locator,
     args: ["git"],
     signal,
+    priority,
     timeoutMs: 5_000,
     outputLimitBytes: 64 * 1024,
     allowFailure: true

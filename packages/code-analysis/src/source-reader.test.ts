@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import {
   mkdtemp,
   rm,
   stat,
+  utimes,
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -50,6 +52,24 @@ describe("readBoundedSourceFile", () => {
 
     await expect(
       readBoundedSourceFile(file, 64)
+    ).rejects.toThrow("changed after discovery");
+  });
+
+  it("rejects changed content even when size and modified time match", async () => {
+    const file = await createSourceFile("first");
+    const originalModifiedAt = new Date(file.modifiedAtMs);
+    file.fingerprint = `sha256:${createHash("sha256")
+      .update("first")
+      .digest("hex")}`;
+    await writeFile(file.absolutePath, "other", "utf8");
+    await utimes(
+      file.absolutePath,
+      originalModifiedAt,
+      originalModifiedAt
+    );
+
+    await expect(
+      readBoundedSourceFile(file, file.size)
     ).rejects.toThrow("changed after discovery");
   });
 

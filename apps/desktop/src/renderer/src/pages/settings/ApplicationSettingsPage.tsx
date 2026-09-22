@@ -11,6 +11,28 @@ import type {
   GitReadErrorDto,
   WorkspaceDetailsDto
 } from "@gitnest/contracts";
+import {
+  MAX_CODE_ANALYSIS_DIAGNOSTICS,
+  MAX_CODE_ANALYSIS_GRAPH_EDGES,
+  MAX_CODE_ANALYSIS_GRAPH_NODES,
+  MAX_CODE_ANALYSIS_REQUEST_CHAINS,
+  MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+  MAX_LSP_DOCUMENTS,
+  MAX_LSP_REFERENCES_PER_SYMBOL,
+  MAX_LSP_REQUESTS,
+  MAX_LSP_SYMBOLS_PER_DOCUMENT,
+  MIN_CODE_ANALYSIS_DIAGNOSTICS,
+  MIN_CODE_ANALYSIS_GRAPH_EDGES,
+  MIN_CODE_ANALYSIS_GRAPH_NODES,
+  MIN_CODE_ANALYSIS_REQUEST_CHAINS,
+  MIN_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+  MIN_LSP_DOCUMENTS,
+  MIN_LSP_REFERENCES_PER_SYMBOL,
+  MIN_LSP_REQUESTS,
+  MIN_LSP_SYMBOLS_PER_DOCUMENT,
+  createDefaultCodeAnalysisSettings,
+  type LanguageServerCommandSettingsDto
+} from "@gitnest/contracts";
 
 import type { AccountController } from "../../features/account-manage/useAccounts";
 import type { AppSettingsController } from "../../features/settings/useAppSettings";
@@ -82,6 +104,72 @@ const SETTINGS_SECTIONS: Array<{
   }
 ];
 
+const LANGUAGE_SERVER_CONFIGURATIONS = [
+  {
+    id: "typescript",
+    label: "TypeScript",
+    title: "TypeScript Language Server",
+    description:
+      "用于 JavaScript、TypeScript、TSX 和 JSX 的符号增强。",
+    commandPlaceholder: "typescript-language-server"
+  },
+  {
+    id: "java",
+    label: "Java",
+    title: "Java Language Server",
+    description:
+      "用于 Java/Spring 的符号和调用层级增强；GitNest 会自动设置独立 -data 目录。",
+    commandPlaceholder: "jdtls"
+  },
+  {
+    id: "vue",
+    label: "Vue",
+    title: "Vue Language Server",
+    description:
+      "用于 Vue 单文件组件的符号和调用层级增强，与 TypeScript Language Server 独立运行。",
+    commandPlaceholder: "vue-language-server"
+  },
+  {
+    id: "python",
+    label: "Python",
+    title: "Python Language Server",
+    description:
+      "用于 Python 文件的符号和调用层级增强；默认命令兼容 Pyright。",
+    commandPlaceholder: "pyright-langserver"
+  },
+  {
+    id: "go",
+    label: "Go",
+    title: "Go Language Server",
+    description: "用于 Go 文件的符号和调用层级增强。",
+    commandPlaceholder: "gopls"
+  },
+  {
+    id: "kotlin",
+    label: "Kotlin",
+    title: "Kotlin Language Server",
+    description: "用于 Kotlin 文件的符号和调用层级增强。",
+    commandPlaceholder: "kotlin-lsp"
+  },
+  {
+    id: "csharp",
+    label: "C#",
+    title: "C# Language Server",
+    description: "用于 C# 文件的符号和调用层级增强。",
+    commandPlaceholder: "csharp-ls"
+  },
+  {
+    id: "rust",
+    label: "Rust",
+    title: "Rust Language Server",
+    description: "用于 Rust 文件的符号和调用层级增强。",
+    commandPlaceholder: "rust-analyzer"
+  }
+] as const;
+
+type LanguageServerId =
+  (typeof LANGUAGE_SERVER_CONFIGURATIONS)[number]["id"];
+
 export function ApplicationSettingsPage({
   workspace,
   gitEnvironment,
@@ -120,6 +208,8 @@ export function ApplicationSettingsPage({
         appSettings.settings.codeAnalysis
       )
     );
+  const [selectedLanguageServer, setSelectedLanguageServer] =
+    useState<LanguageServerId>("typescript");
   const aiDraftDirtyRef = useRef(false);
   const analysisDraftDirtyRef = useRef(false);
   const aiDraftVersionRef = useRef(0);
@@ -893,38 +983,12 @@ export function ApplicationSettingsPage({
                     <div>
                       <strong>Workspace 保持只读</strong>
                       <p>
-                        源码只执行目录遍历与读取；分析缓存和 Java LSP
+                        源码只执行目录遍历与读取；分析缓存和各语言 LSP
                         数据统一保存在 GitNest 应用数据目录。
                       </p>
                     </div>
                   </div>
                 </SettingsCard>
-
-                <LanguageServerSettingsCard
-                  description="用于 JavaScript、TypeScript、TSX、JSX 和 Vue 的符号增强。"
-                  disabled={appSettings.saving}
-                  label="TypeScript Language Server"
-                  settings={analysisDraft.typescript}
-                  onChange={(typescript) =>
-                    updateAnalysisDraft((current) => ({
-                      ...current,
-                      typescript
-                    }))
-                  }
-                />
-
-                <LanguageServerSettingsCard
-                  description="用于 Java/Spring 的符号和调用层级增强；GitNest 会自动设置独立 -data 目录。"
-                  disabled={appSettings.saving}
-                  label="Java Language Server"
-                  settings={analysisDraft.java}
-                  onChange={(java) =>
-                    updateAnalysisDraft((current) => ({
-                      ...current,
-                      java
-                    }))
-                  }
-                />
 
                 <SettingsCard
                   description="限制大型项目的文件读取、内存占用和关系图展开规模。"
@@ -943,6 +1007,7 @@ export function ApplicationSettingsPage({
                           maxFiles: Number(event.target.value)
                         }))
                       }
+                      reserveHelpSpace
                       type="number"
                       value={analysisDraft.maxFiles}
                     />
@@ -960,8 +1025,108 @@ export function ApplicationSettingsPage({
                           )
                         }))
                       }
+                      reserveHelpSpace
                       type="number"
                       value={analysisDraft.maxFileSizeKb}
+                    />
+                    <Input
+                      fullWidth
+                      helpText="限制本轮读取的源码总量，避免大型 Workspace 占用过多内存。"
+                      id="analysis-max-total-source"
+                      label="源码总量上限（MiB）"
+                      max={MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB}
+                      min={MIN_CODE_ANALYSIS_TOTAL_SOURCE_MB}
+                      onChange={(event) =>
+                        updateAnalysisDraft((current) => ({
+                          ...current,
+                          maxTotalSourceMb: Number(
+                            event.target.value
+                          )
+                        }))
+                      }
+                      reserveHelpSpace
+                      type="number"
+                      value={analysisDraft.maxTotalSourceMb}
+                    />
+                    <Input
+                      fullWidth
+                      helpText="提高上限会增加分析耗时、内存占用和快照体积。"
+                      id="analysis-max-graph-nodes"
+                      label="关系图节点上限"
+                      max={MAX_CODE_ANALYSIS_GRAPH_NODES}
+                      min={MIN_CODE_ANALYSIS_GRAPH_NODES}
+                      onChange={(event) =>
+                        updateAnalysisDraft((current) => ({
+                          ...current,
+                          maxGraphNodes: Number(
+                            event.target.value
+                          )
+                        }))
+                      }
+                      reserveHelpSpace
+                      step={1000}
+                      type="number"
+                      value={analysisDraft.maxGraphNodes}
+                    />
+                    <Input
+                      fullWidth
+                      helpText="限制调用、引用、包含等关系边总量。"
+                      id="analysis-max-graph-edges"
+                      label="关系图边上限"
+                      max={MAX_CODE_ANALYSIS_GRAPH_EDGES}
+                      min={MIN_CODE_ANALYSIS_GRAPH_EDGES}
+                      onChange={(event) =>
+                        updateAnalysisDraft((current) => ({
+                          ...current,
+                          maxGraphEdges: Number(
+                            event.target.value
+                          )
+                        }))
+                      }
+                      reserveHelpSpace
+                      step={1000}
+                      type="number"
+                      value={analysisDraft.maxGraphEdges}
+                    />
+                    <Input
+                      fullWidth
+                      helpText="限制最终保存并展示的请求链数量。"
+                      id="analysis-max-request-chains"
+                      label="请求链上限"
+                      max={MAX_CODE_ANALYSIS_REQUEST_CHAINS}
+                      min={MIN_CODE_ANALYSIS_REQUEST_CHAINS}
+                      onChange={(event) =>
+                        updateAnalysisDraft((current) => ({
+                          ...current,
+                          maxRequestChains: Number(
+                            event.target.value
+                          )
+                        }))
+                      }
+                      reserveHelpSpace
+                      step={100}
+                      type="number"
+                      value={analysisDraft.maxRequestChains}
+                    />
+                    <Input
+                      fullWidth
+                      helpText="限制本轮保留的分析提示和诊断数量。"
+                      id="analysis-max-diagnostics"
+                      label="分析提示上限"
+                      max={MAX_CODE_ANALYSIS_DIAGNOSTICS}
+                      min={MIN_CODE_ANALYSIS_DIAGNOSTICS}
+                      onChange={(event) =>
+                        updateAnalysisDraft((current) => ({
+                          ...current,
+                          maxDiagnostics: Number(
+                            event.target.value
+                          )
+                        }))
+                      }
+                      reserveHelpSpace
+                      step={100}
+                      type="number"
+                      value={analysisDraft.maxDiagnostics}
                     />
                     <Input
                       fullWidth
@@ -977,6 +1142,7 @@ export function ApplicationSettingsPage({
                           )
                         }))
                       }
+                      reserveHelpSpace
                       type="number"
                       value={analysisDraft.readConcurrency}
                     />
@@ -994,6 +1160,7 @@ export function ApplicationSettingsPage({
                           )
                         }))
                       }
+                      reserveHelpSpace
                       type="number"
                       value={analysisDraft.graphDepth}
                     />
@@ -1011,6 +1178,7 @@ export function ApplicationSettingsPage({
                           )
                         }))
                       }
+                      reserveHelpSpace
                       type="number"
                       value={analysisDraft.lspTimeoutMs}
                     />
@@ -1052,6 +1220,24 @@ export function ApplicationSettingsPage({
                     </Button>
                   </div>
                 </SettingsCard>
+
+                <LanguageServerSettingsPanel
+                  disabled={appSettings.saving}
+                  onChange={(language, settings) =>
+                    updateAnalysisDraft((current) =>
+                      updateLanguageServerSettings(
+                        current,
+                        language,
+                        settings
+                      )
+                    )
+                  }
+                  onSelectLanguage={(language) =>
+                    setSelectedLanguageServer(language)
+                  }
+                  selectedLanguage={selectedLanguageServer}
+                  settings={analysisDraft}
+                />
               </>
             )}
 
@@ -1139,88 +1325,317 @@ function ApplicationSettingsSkeleton() {
   );
 }
 
-function LanguageServerSettingsCard({
-  label,
-  description,
+function LanguageServerSettingsPanel({
   settings,
+  selectedLanguage,
   disabled,
+  onSelectLanguage,
   onChange
 }: {
-  label: string;
-  description: string;
-  settings: CodeAnalysisSettingsDto["typescript"];
+  settings: CodeAnalysisSettingsDto;
+  selectedLanguage: LanguageServerId;
   disabled: boolean;
+  onSelectLanguage(language: LanguageServerId): void;
   onChange(
-    settings: CodeAnalysisSettingsDto["typescript"]
+    language: LanguageServerId,
+    settings: LanguageServerCommandSettingsDto
   ): void;
 }) {
+  const configuration =
+    LANGUAGE_SERVER_CONFIGURATIONS.find(
+      ({ id }) => id === selectedLanguage
+    ) ?? LANGUAGE_SERVER_CONFIGURATIONS[0];
+  const languageSettings = resolvedLanguageServerSettings(
+    settings,
+    selectedLanguage
+  );
+  const fieldId = `${configuration.id}-language-server`;
+
   return (
     <SettingsCard
-      action={
-        <button
-          aria-label={`启用 ${label}`}
-          aria-pressed={settings.enabled}
-          className={`settings-switch${
-            settings.enabled ? " active" : ""
-          }`}
-          disabled={disabled}
-          onClick={() =>
-            onChange({
-              ...settings,
-              enabled: !settings.enabled
-            })
-          }
-          type="button"
-        >
-          <span className="settings-switch-thumb" />
-        </button>
-      }
-      description={description}
-      title={label}
+      description="在同一区域切换并配置各语言 Server；未显示的配置和未保存草稿会继续保留。"
+      title="Language Server 配置"
     >
-      <Input
-        autoComplete="off"
-        fullWidth
-        id={`lsp-command-${label
-          .toLocaleLowerCase("en-US")
-          .replaceAll(" ", "-")}`}
-        label="启动命令"
-        maxLength={2048}
-        onChange={(event) =>
-          onChange({
-            ...settings,
-            command: event.target.value
-          })
-        }
-        placeholder={
-          label.startsWith("Java")
-            ? "jdtls"
-            : "typescript-language-server"
-        }
-        spellCheck={false}
-        value={settings.command}
-      />
-      <Textarea
-        fullWidth
-        helpText="每行一个参数；进程通过 stdio 启动，不使用 Shell 拼接。"
-        id={`lsp-args-${label
-          .toLocaleLowerCase("en-US")
-          .replaceAll(" ", "-")}`}
-        label="启动参数"
-        onChange={(event) =>
-          onChange({
-            ...settings,
-            args: splitLines(event.target.value)
-          })
-        }
-        placeholder={
-          label.startsWith("Java")
-            ? "通常留空，GitNest 会自动追加 -data"
-            : "--stdio"
-        }
-        rows={4}
-        value={settings.args.join("\n")}
-      />
+      <nav
+        aria-label="Language Server 配置导航"
+        className="settings-lsp-breadcrumb"
+      >
+        <ol>
+          {LANGUAGE_SERVER_CONFIGURATIONS.map(
+            (server, index) => {
+              const serverSettings =
+                resolvedLanguageServerSettings(
+                  settings,
+                  server.id
+                );
+              return (
+                <li key={server.id}>
+                  {index > 0 && (
+                    <span
+                      aria-hidden="true"
+                      className="settings-lsp-breadcrumb-separator"
+                    >
+                      &gt;
+                    </span>
+                  )}
+                  <button
+                    aria-current={
+                      server.id === selectedLanguage
+                        ? "page"
+                        : undefined
+                    }
+                    aria-label={`${server.label}，${
+                      serverSettings.enabled
+                        ? "已启用"
+                        : "已停用"
+                    }`}
+                    data-language-server-id={server.id}
+                    onClick={() =>
+                      onSelectLanguage(server.id)
+                    }
+                    type="button"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`settings-lsp-breadcrumb-state${
+                        serverSettings.enabled
+                          ? " enabled"
+                          : ""
+                      }`}
+                    />
+                    <span>{server.label}</span>
+                  </button>
+                </li>
+              );
+            }
+          )}
+        </ol>
+      </nav>
+
+      <div
+        aria-label={`${configuration.title} 配置`}
+        className="settings-lsp-editor"
+        role="region"
+      >
+        <div className="settings-lsp-editor-header">
+          <div>
+            <h3 className="settings-lsp-editor-title">
+              {configuration.title}
+            </h3>
+            <p className="settings-lsp-editor-description">
+              {configuration.description}
+            </p>
+          </div>
+          <button
+            aria-label={`启用 ${configuration.title}`}
+            aria-pressed={languageSettings.enabled}
+            className={`settings-switch${
+              languageSettings.enabled ? " active" : ""
+            }`}
+            disabled={disabled}
+            onClick={() =>
+              onChange(selectedLanguage, {
+                ...languageSettings,
+                enabled: !languageSettings.enabled
+              })
+            }
+            type="button"
+          >
+            <span className="settings-switch-thumb" />
+          </button>
+        </div>
+
+        <div className="settings-lsp-editor-fields">
+          <Input
+            autoComplete="off"
+            fullWidth
+            id={`lsp-command-${fieldId}`}
+            label="启动命令"
+            maxLength={2048}
+            onChange={(event) =>
+              onChange(selectedLanguage, {
+                ...languageSettings,
+                command: event.target.value
+              })
+            }
+            placeholder={configuration.commandPlaceholder}
+            spellCheck={false}
+            value={languageSettings.command}
+          />
+          <Textarea
+            fullWidth
+            helpText="每行一个参数；自定义命令保存时需在系统窗口确认，进程通过 stdio 启动。"
+            id={`lsp-args-${fieldId}`}
+            label="启动参数"
+            onChange={(event) =>
+              onChange(selectedLanguage, {
+                ...languageSettings,
+                args: splitLines(event.target.value)
+              })
+            }
+            placeholder={
+              configuration.id === "java"
+                ? "通常留空，GitNest 会自动追加 -data"
+                : "--stdio"
+            }
+            rows={4}
+            value={languageSettings.args.join("\n")}
+          />
+
+          <section
+            aria-label={`${configuration.title} 高级预算`}
+            className="settings-lsp-budget"
+          >
+            <div className="settings-lsp-budget-heading">
+              <h4>高级预算</h4>
+              <p>
+                控制该语言每轮分析的文档覆盖和语义请求数量；达到上限后会在分析状态中提示。
+              </p>
+            </div>
+            <div className="analysis-settings-number-grid">
+              <Input
+                fullWidth
+                helpText="本轮最多送入该 Language Server 的文件数。"
+                id={`lsp-max-documents-${fieldId}`}
+                label="文档上限"
+                max={MAX_LSP_DOCUMENTS}
+                min={MIN_LSP_DOCUMENTS}
+                onChange={(event) =>
+                  onChange(selectedLanguage, {
+                    ...languageSettings,
+                    maxDocuments: Number(event.target.value)
+                  })
+                }
+                reserveHelpSpace
+                type="number"
+                value={languageSettings.maxDocuments}
+              />
+              <Input
+                fullWidth
+                helpText="限制单个文件接收并保留的符号数量。"
+                id={`lsp-max-symbols-${fieldId}`}
+                label="单文档符号上限"
+                max={MAX_LSP_SYMBOLS_PER_DOCUMENT}
+                min={MIN_LSP_SYMBOLS_PER_DOCUMENT}
+                onChange={(event) =>
+                  onChange(selectedLanguage, {
+                    ...languageSettings,
+                    maxSymbolsPerDocument: Number(
+                      event.target.value
+                    )
+                  })
+                }
+                reserveHelpSpace
+                step={100}
+                type="number"
+                value={languageSettings.maxSymbolsPerDocument}
+              />
+              <Input
+                fullWidth
+                helpText="限制调用层级查询次数，0 表示本轮不发起调用层级查询。"
+                id={`lsp-max-call-hierarchy-${fieldId}`}
+                label="调用层级请求上限"
+                max={MAX_LSP_REQUESTS}
+                min={MIN_LSP_REQUESTS}
+                onChange={(event) =>
+                  onChange(selectedLanguage, {
+                    ...languageSettings,
+                    maxCallHierarchyRequests: Number(
+                      event.target.value
+                    )
+                  })
+                }
+                reserveHelpSpace
+                type="number"
+                value={
+                  languageSettings.maxCallHierarchyRequests
+                }
+              />
+              <Input
+                fullWidth
+                helpText="限制类型层级和实现关系查询次数，0 表示本轮不补充继承、实现和重写关系。"
+                id={`lsp-max-type-hierarchy-${fieldId}`}
+                label="类型关系请求上限"
+                max={MAX_LSP_REQUESTS}
+                min={MIN_LSP_REQUESTS}
+                onChange={(event) =>
+                  onChange(selectedLanguage, {
+                    ...languageSettings,
+                    maxTypeHierarchyRequests: Number(
+                      event.target.value
+                    )
+                  })
+                }
+                reserveHelpSpace
+                type="number"
+                value={
+                  languageSettings.maxTypeHierarchyRequests ??
+                  languageSettings.maxCallHierarchyRequests
+                }
+              />
+              <Input
+                fullWidth
+                helpText="限制查找引用请求次数，0 表示本轮不发起引用查询。"
+                id={`lsp-max-reference-requests-${fieldId}`}
+                label="引用查询请求上限"
+                max={MAX_LSP_REQUESTS}
+                min={MIN_LSP_REQUESTS}
+                onChange={(event) =>
+                  onChange(selectedLanguage, {
+                    ...languageSettings,
+                    maxReferenceRequests: Number(
+                      event.target.value
+                    )
+                  })
+                }
+                reserveHelpSpace
+                type="number"
+                value={languageSettings.maxReferenceRequests}
+              />
+              <Input
+                fullWidth
+                helpText="限制悬停文档查询次数，0 表示本轮不补充文档说明。"
+                id={`lsp-max-documentation-${fieldId}`}
+                label="文档查询请求上限"
+                max={MAX_LSP_REQUESTS}
+                min={MIN_LSP_REQUESTS}
+                onChange={(event) =>
+                  onChange(selectedLanguage, {
+                    ...languageSettings,
+                    maxDocumentationRequests: Number(
+                      event.target.value
+                    )
+                  })
+                }
+                reserveHelpSpace
+                type="number"
+                value={
+                  languageSettings.maxDocumentationRequests
+                }
+              />
+              <Input
+                fullWidth
+                helpText="限制单个符号返回并保留的引用位置数量。"
+                id={`lsp-max-references-per-symbol-${fieldId}`}
+                label="单符号引用上限"
+                max={MAX_LSP_REFERENCES_PER_SYMBOL}
+                min={MIN_LSP_REFERENCES_PER_SYMBOL}
+                onChange={(event) =>
+                  onChange(selectedLanguage, {
+                    ...languageSettings,
+                    maxReferencesPerSymbol: Number(
+                      event.target.value
+                    )
+                  })
+                }
+                reserveHelpSpace
+                type="number"
+                value={languageSettings.maxReferencesPerSymbol}
+              />
+            </div>
+          </section>
+        </div>
+      </div>
     </SettingsCard>
   );
 }
@@ -1260,6 +1675,7 @@ function SettingsCard({
 function cloneCodeAnalysisSettings(
   settings: CodeAnalysisSettingsDto
 ): CodeAnalysisSettingsDto {
+  const defaults = createDefaultCodeAnalysisSettings();
   return {
     ...settings,
     ignoreDirectories: [...settings.ignoreDirectories],
@@ -1270,7 +1686,56 @@ function cloneCodeAnalysisSettings(
     java: {
       ...settings.java,
       args: [...settings.java.args]
-    }
+    },
+    vue: cloneLanguageServerSettings(
+      settings.vue ?? defaults.vue!
+    ),
+    python: cloneLanguageServerSettings(
+      settings.python ?? defaults.python!
+    ),
+    go: cloneLanguageServerSettings(
+      settings.go ?? defaults.go!
+    ),
+    kotlin: cloneLanguageServerSettings(
+      settings.kotlin ?? defaults.kotlin!
+    ),
+    csharp: cloneLanguageServerSettings(
+      settings.csharp ?? defaults.csharp!
+    ),
+    rust: cloneLanguageServerSettings(
+      settings.rust ?? defaults.rust!
+    )
+  };
+}
+
+function cloneLanguageServerSettings(
+  settings: LanguageServerCommandSettingsDto
+): LanguageServerCommandSettingsDto {
+  return {
+    ...settings,
+    args: [...settings.args]
+  };
+}
+
+function resolvedLanguageServerSettings(
+  settings: CodeAnalysisSettingsDto,
+  language: LanguageServerId
+): LanguageServerCommandSettingsDto {
+  const defaults = createDefaultCodeAnalysisSettings();
+  return (
+    settings[language] ??
+    defaults[language]!
+  );
+}
+
+function updateLanguageServerSettings(
+  settings: CodeAnalysisSettingsDto,
+  language: LanguageServerId,
+  languageSettings: LanguageServerCommandSettingsDto
+): CodeAnalysisSettingsDto {
+  return {
+    ...settings,
+    [language]: languageSettings
   };
 }
 

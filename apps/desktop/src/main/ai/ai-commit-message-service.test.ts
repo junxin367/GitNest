@@ -218,6 +218,7 @@ describe("AiCommitMessageService", () => {
         expect(
           new Headers(init?.headers).get("Authorization")
         ).toBe("Bearer temporary-key");
+        expect(init?.redirect).toBe("error");
         return completionResponse("OK");
       }
     );
@@ -239,6 +240,76 @@ describe("AiCommitMessageService", () => {
     });
     expect(getInternalAiSettings).toHaveBeenCalledWith({
       includeApiKey: false
+    });
+  });
+
+  it("does not reuse a saved key for a different connection-test endpoint", async () => {
+    const fetchImpl = vi.fn(async () => completionResponse("OK"));
+    const getInternalAiSettings = vi.fn(
+      async (options?: { includeApiKey?: boolean }) => ({
+        ...baseSettings(),
+        apiUrl: "https://saved.example.test/v1",
+        apiKey:
+          options?.includeApiKey === false ? "" : "saved-key"
+      })
+    );
+    const service = createService({
+      fetchImpl,
+      getInternalAiSettings
+    });
+
+    await expect(
+      service.testConnection({
+        apiUrl: "https://attacker.example.test/v1",
+        model: "connection-model"
+      })
+    ).rejects.toMatchObject({
+      code: "AUTHENTICATION_FAILED"
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(getInternalAiSettings).toHaveBeenCalledTimes(1);
+    expect(getInternalAiSettings).toHaveBeenCalledWith({
+      includeApiKey: false
+    });
+  });
+
+  it("reuses the saved key for an equivalent normalized endpoint", async () => {
+    const getInternalAiSettings = vi.fn(
+      async (options?: { includeApiKey?: boolean }) => ({
+        ...baseSettings(),
+        apiUrl: "https://ai.example.test/v1/",
+        apiKey:
+          options?.includeApiKey === false ? "" : "saved-key"
+      })
+    );
+    const fetchImpl = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        expect(
+          new Headers(init?.headers).get("Authorization")
+        ).toBe("Bearer saved-key");
+        return completionResponse("OK");
+      }
+    );
+    const service = createService({
+      fetchImpl,
+      getInternalAiSettings
+    });
+
+    await expect(
+      service.testConnection({
+        apiUrl:
+          "https://ai.example.test/v1/chat/completions/",
+        model: "connection-model"
+      })
+    ).resolves.toMatchObject({
+      endpoint:
+        "https://ai.example.test/v1/chat/completions"
+    });
+    expect(getInternalAiSettings).toHaveBeenNthCalledWith(1, {
+      includeApiKey: false
+    });
+    expect(getInternalAiSettings).toHaveBeenNthCalledWith(2, {
+      includeApiKey: true
     });
   });
 });

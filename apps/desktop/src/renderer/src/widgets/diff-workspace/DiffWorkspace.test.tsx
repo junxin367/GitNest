@@ -191,7 +191,7 @@ describe("DiffWorkspace", () => {
     expect(container.textContent).toBe("visible");
   });
 
-  it("keeps a displayed skeleton visible for at least 500ms", () => {
+  it("keeps a displayed skeleton visible for at least 100ms", () => {
     vi.useFakeTimers();
     try {
       act(() => {
@@ -206,7 +206,7 @@ describe("DiffWorkspace", () => {
         root.render(<DelayedLoadingHarness loading={false} />);
       });
       act(() => {
-        vi.advanceTimersByTime(449);
+        vi.advanceTimersByTime(49);
       });
       expect(container.textContent).toBe("visible");
 
@@ -277,7 +277,7 @@ describe("DiffWorkspace", () => {
         root.render(
           <SkeletonBoundaryHarness loading={false} />
         );
-        vi.advanceTimersByTime(499);
+        vi.advanceTimersByTime(99);
       });
       expect(
         container.querySelector('[role="status"]')
@@ -637,6 +637,51 @@ describe("DiffWorkspace", () => {
     });
     expect(onToggle).toHaveBeenCalledTimes(2);
     expect(onSelectedFileChange).toHaveBeenCalledWith(files[1]);
+  });
+
+  it("keeps the auxiliary view open for automatic file selection and closes it for a file click", () => {
+    const onToggle = vi.fn();
+    const onSelectedFileChange = vi.fn();
+
+    act(() => {
+      root.render(
+        <DiffWorkspace
+          auxiliaryView={{
+            active: true,
+            content: (
+              <div data-testid="stash-browser">
+                Stash browser
+              </div>
+            ),
+            count: 2,
+            label: "储藏的变更",
+            onToggle
+          }}
+          configuration={repositoryDiffWorkspaceConfiguration}
+          externalApplications={externalApplications}
+          files={[files[1]!]}
+          onSelectedFileChange={onSelectedFileChange}
+          panelProps={{ content }}
+          selectedFileKey={files[0]?.key}
+        />
+      );
+    });
+
+    expect(onSelectedFileChange).toHaveBeenCalledWith(files[1]);
+    expect(onToggle).not.toHaveBeenCalled();
+
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="src/components/Button.tsx"]'
+        )
+        ?.click();
+    });
+
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onSelectedFileChange).toHaveBeenLastCalledWith(
+      files[1]
+    );
   });
 
   it("keeps the auxiliary entry available when the working tree is clean", () => {
@@ -1235,9 +1280,21 @@ function findButton(
   root: ParentNode,
   text: string
 ): HTMLButtonElement {
-  const button = Array.from(
+  const buttons = Array.from(
     root.querySelectorAll<HTMLButtonElement>("button")
-  ).find((candidate) => candidate.textContent?.trim() === text);
+  );
+  const button =
+    buttons.find(
+      (candidate) => candidate.textContent?.trim() === text
+    ) ??
+    buttons.find(
+      (candidate) =>
+        candidate
+          .querySelector(
+            ".diff-workspace-file-section-label"
+          )
+          ?.textContent?.trim() === text
+    );
   if (!button) {
     throw new Error(`Button not found: ${text}`);
   }

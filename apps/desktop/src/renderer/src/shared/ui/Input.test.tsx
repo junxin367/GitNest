@@ -74,4 +74,31 @@ describe("Input", () => {
     act(() => root.unmount());
     container.remove();
   });
+
+  it("can reserve a help line without exposing empty text", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <Input
+          id="node-limit"
+          label="节点上限"
+          onChange={() => undefined}
+          reserveHelpSpace
+          value="50000"
+        />
+      );
+    });
+
+    const help = container.querySelector(
+      ".gn-input-field__help"
+    );
+    expect(help).not.toBeNull();
+    expect(help?.getAttribute("aria-hidden")).toBe("true");
+
+    act(() => root.unmount());
+    container.remove();
+  });
 });

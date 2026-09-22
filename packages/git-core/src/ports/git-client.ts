@@ -15,7 +15,13 @@ import type {
 export interface GitReadOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
+  priority?: GitReadPriority;
 }
+
+export type GitReadPriority =
+  | "interactive"
+  | "foreground"
+  | "background";
 
 export interface InspectRepositoryOptions extends GitReadOptions {
   historyLimit?: number;

@@ -400,6 +400,88 @@ describe("renderer design-system guardrails", () => {
     }
   });
 
+  it("reserves one truncated help line below analysis budget inputs", () => {
+    expect(
+      applicationSettingsPageSource.match(
+        /reserveHelpSpace/g
+      )
+    ).toHaveLength(17);
+    expect(
+      prototypeShellHtml.match(
+        /reserveHelpSpace:\s*true/g
+      )
+    ).toHaveLength(10);
+
+    for (const source of [
+      sharedButtonCss,
+      prototypeInputCss
+    ]) {
+      const helpRule = [
+        ...source.matchAll(
+          /\.gn-input-field__help\s*\{([^}]*)\}/g
+        )
+      ]
+        .map((match) => match[1] ?? "")
+        .find((rule) => rule.includes("height: 1lh"));
+
+      expect(helpRule).toContain("overflow: hidden");
+      expect(helpRule).toContain("text-overflow: ellipsis");
+      expect(helpRule).toContain("white-space: nowrap");
+    }
+  });
+
+  it("keeps the prototype analysis budgets aligned with the application", () => {
+    for (const fieldId of [
+      "analysis-max-files",
+      "analysis-max-file-size",
+      "analysis-max-total-source",
+      "analysis-max-graph-nodes",
+      "analysis-max-graph-edges",
+      "analysis-max-request-chains",
+      "analysis-max-diagnostics",
+      "analysis-concurrency",
+      "analysis-graph-depth",
+      "analysis-lsp-timeout"
+    ]) {
+      expect(prototypeShellHtml).toContain(
+        `id: "${fieldId}"`
+      );
+    }
+    expect(prototypeShellHtml).toContain(
+      "analysisMaxGraphEdges: 100000"
+    );
+    expect(prototypeShellHtml).toContain(
+      "analysisConcurrency: 4"
+    );
+    expect(prototypeShellHtml).toContain(
+      "analysisGraphDepth: 8"
+    );
+    expect(prototypeShellHtml).toContain(
+      'min="5000" max="200000"'
+    );
+    expect(
+      prototypeShellHtml.indexOf(
+        '<div class="settings-card-title">性能预算</div>'
+      )
+    ).toBeLessThan(
+      prototypeShellHtml.indexOf(
+        "${renderAnalysisLanguageServerSettings()}"
+      )
+    );
+
+    for (const source of [css, prototypeShellHtml]) {
+      expect(source).toContain(
+        "container: settings-content / inline-size"
+      );
+      expect(source).toMatch(
+        /@container settings-content \(min-width: 700px\)[\s\S]*?\.analysis-settings-number-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/
+      );
+      expect(source).toMatch(
+        /\.analysis-settings-number-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/
+      );
+    }
+  });
+
   it("auto-fits compact settings preference groups to the available width", () => {
     for (const source of [css, prototypeShellHtml]) {
       const preferenceGridRules = [
@@ -550,6 +632,12 @@ describe("renderer design-system guardrails", () => {
   });
 
   it("keeps code-analysis progress information on one line", () => {
+    expect(codeAnalysisPageSource).toContain(
+      "执行时间 {formatExecutionTime(elapsedTime)}"
+    );
+    expect(prototypeShellHtml).toContain(
+      "执行时间 ${formatAnalysisExecutionTime"
+    );
     for (const source of [css, prototypeShellHtml]) {
       expect(source).toMatch(
         /\.analysis-progress-copy\s*\{[^}]*min-width:\s*0;[^}]*white-space:\s*nowrap;/
@@ -640,8 +728,8 @@ describe("renderer design-system guardrails", () => {
   });
 
   it("keeps the prototype request-chain focus mirrored in the graph", () => {
-    expect(prototypeShellHtml).toContain(
-      "const graphSelected = selected || chain?.nodes[0] || null;"
+    expect(prototypeShellHtml).toMatch(
+      /const graphSelected = state\.analysisGraphSelectionCleared\s*\?\s*null\s*:\s*selected \|\| chain\?\.nodes\[0\] \|\| null;/
     );
     expect(prototypeShellHtml).toContain(
       "renderAnalysisFlow(chain, graphSelected)"
@@ -770,6 +858,26 @@ describe("renderer design-system guardrails", () => {
     );
   });
 
+  it("keeps blank relationship-graph clicks in an explicit unselected state", () => {
+    expect(codeAnalysisPageSource).toContain(
+      "const graphSelectedNodeId = graphSelectionCleared"
+    );
+    expect(codeAnalysisPageSource).toContain(
+      "setGraphSelectionCleared(true);"
+    );
+    expect(prototypeShellHtml).toContain(
+      "analysisGraphSelectionCleared: false"
+    );
+    expect(prototypeShellHtml).toContain(
+      "state.analysisGraphSelectionCleared = true;"
+    );
+    expect(
+      prototypeShellHtml.match(
+        /const graphSelected = state\.analysisGraphSelectionCleared/g
+      )
+    ).toHaveLength(2);
+  });
+
   it("keeps the analysis node action area fixed below the scrollable details", () => {
     expect(css).toMatch(
       /\.analysis-chain-panel\.is-node-detail\s*\{\s*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto;/
@@ -855,7 +963,7 @@ describe("renderer design-system guardrails", () => {
     );
   });
 
-  it("keeps analysis warnings beside Java LSP at the runtime row height", () => {
+  it("keeps analysis warnings beside the aggregated LSP state at the runtime row height", () => {
     const runtimeStripStart = prototypeShellHtml.indexOf(
       '<div class="analysis-runtime-strip">'
     );
@@ -863,18 +971,24 @@ describe("renderer design-system guardrails", () => {
       runtimeStripStart,
       runtimeStripStart + 900
     );
-    const javaStateIndex = runtimeStrip.indexOf(
-      'renderAnalysisLanguageServerState("java", "Java LSP")'
+    const serverStateIndex = runtimeStrip.indexOf(
+      "renderAnalysisLanguageServerStates()"
     );
     const warningIndex = runtimeStrip.indexOf(
       'class="analysis-warning-panel"'
     );
 
-    expect(javaStateIndex).toBeGreaterThan(-1);
-    expect(warningIndex).toBeGreaterThan(javaStateIndex);
+    expect(serverStateIndex).toBeGreaterThan(-1);
+    expect(warningIndex).toBeGreaterThan(serverStateIndex);
+    expect(codeAnalysisPageSource).toContain(
+      "LSP：{connectedLanguageServers.length} 个已连接"
+    );
+    expect(prototypeShellHtml).toContain(
+      "LSP：${connectedServers.length} 个已连接"
+    );
     for (const source of [css, prototypeShellHtml]) {
       expect(source).toMatch(
-        /\.analysis-runtime-strip\s*>\s*span,\s*\.analysis-warning-panel\s*>\s*summary\s*\{[\s\S]*?height:\s*28px;/
+        /\.analysis-runtime-strip\s*>\s*span,\s*\.analysis-warning-panel\s*>\s*summary(?:,\s*[^{}]+)?\s*\{[\s\S]*?height:\s*28px;/
       );
       expect(source).toMatch(
         /\.analysis-warning-panel\s*>\s*\.analysis-warning-menu\s*\{[\s\S]*?position:\s*absolute;/

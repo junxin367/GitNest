@@ -75,6 +75,7 @@ describe("RepositoryQueryService", () => {
         mode: "unstaged",
         contextLines: 13,
         includeMedia: true,
+        priority: "interactive",
         signal: expect.any(AbortSignal)
       }
     ]);
@@ -211,6 +212,7 @@ describe("RepositoryQueryService", () => {
         path: "src/app.ts",
         contextLines: 13,
         includeMedia: true,
+        priority: "interactive",
         signal: expect.any(AbortSignal)
       }
     ]);
@@ -243,6 +245,7 @@ describe("RepositoryQueryService", () => {
         path: "src/app.ts",
         contextLines: 13,
         includeMedia: true,
+        priority: "interactive",
         signal: expect.any(AbortSignal)
       }
     ]);
@@ -263,6 +266,7 @@ class FakeGitClient
     mode: ReadRepositoryDiffOptions["mode"];
     contextLines: number | undefined;
     includeMedia: boolean | undefined;
+    priority: GitReadOptions["priority"];
     signal: AbortSignal;
   }> = [];
   readonly historyCalls: Array<{
@@ -278,6 +282,7 @@ class FakeGitClient
     path: string;
     contextLines: number | undefined;
     includeMedia: boolean | undefined;
+    priority: GitReadOptions["priority"];
     signal: AbortSignal;
   }> = [];
   branchCalls = 0;
@@ -297,6 +302,7 @@ class FakeGitClient
     path: string;
     contextLines: number | undefined;
     includeMedia: boolean | undefined;
+    priority: GitReadOptions["priority"];
     signal: AbortSignal;
   }> = [];
   readonly snapshotStarted: Promise<void>;
@@ -364,6 +370,7 @@ class FakeGitClient
       mode: options.mode,
       contextLines: options.contextLines,
       includeMedia: options.includeMedia,
+      priority: options.priority,
       signal
     });
     return Promise.resolve({
@@ -412,6 +419,7 @@ class FakeGitClient
       path: options.path,
       contextLines: options.contextLines,
       includeMedia: options.includeMedia,
+      priority: options.priority,
       signal:
         options.signal ?? new AbortController().signal
     });
@@ -474,6 +482,7 @@ class FakeGitClient
       path: options.path,
       contextLines: options.contextLines,
       includeMedia: options.includeMedia,
+      priority: options.priority,
       signal:
         options.signal ?? new AbortController().signal
     });

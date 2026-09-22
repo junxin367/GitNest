@@ -19,6 +19,12 @@ import {
 } from "@gitnest/workspace-core";
 
 import type { InternalAiSettings } from "../settings/app-settings";
+import {
+  aiEndpointsMatch,
+  normalizeAiEndpoint
+} from "./ai-endpoint";
+
+export { normalizeAiEndpoint } from "./ai-endpoint";
 
 const MAX_AI_RESPONSE_BYTES = 1_048_576;
 const MAX_GENERATED_MESSAGE_LENGTH = 100_000;
@@ -65,17 +71,26 @@ export class AiCommitMessageService {
   async testConnection(
     request: TestAiConnectionRequest
   ): Promise<AiConnectionTestResultDto> {
-    const saved =
+    const endpoint = normalizeAiEndpoint(request.apiUrl);
+    const savedMetadata =
       await this.#settings.getInternalAiSettings({
-        includeApiKey: !request.apiKey
+        includeApiKey: false
       });
+    let saved = savedMetadata;
+    if (!request.apiKey) {
+      assertSavedAiEndpoint(savedMetadata.apiUrl, endpoint);
+      saved =
+        await this.#settings.getInternalAiSettings({
+          includeApiKey: true
+        });
+      assertSavedAiEndpoint(saved.apiUrl, endpoint);
+    }
     const configuration = resolveConfiguration({
       ...saved,
       apiUrl: request.apiUrl,
       model: request.model,
       ...(request.apiKey ? { apiKey: request.apiKey } : {})
     });
-    const endpoint = normalizeAiEndpoint(configuration.apiUrl);
     await requestCompletion(
       this.#fetch,
       endpoint,
@@ -249,41 +264,6 @@ function selectCommitScope(
   return entries;
 }
 
-export function normalizeAiEndpoint(value: string): string {
-  let url: URL;
-  try {
-    url = new URL(value.trim());
-  } catch {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "The AI API URL is invalid."
-    );
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "The AI API URL must use HTTP or HTTPS."
-    );
-  }
-  if (url.username || url.password || url.hash) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "The AI API URL cannot contain credentials or a fragment."
-    );
-  }
-
-  const normalizedPath = url.pathname.replace(/\/+$/, "");
-  if (!normalizedPath.endsWith("/chat/completions")) {
-    url.pathname = `${normalizedPath}/chat/completions`.replace(
-      /^\/+/,
-      "/"
-    );
-  } else {
-    url.pathname = normalizedPath;
-  }
-  return url.toString();
-}
-
 function resolveConfiguration(
   settings: InternalAiSettings,
   requireEnabled = false
@@ -403,6 +383,7 @@ async function requestCompletion(
         model: settings.model,
         messages
       }),
+      redirect: "error",
       signal: controller.signal
     });
     const body = await readBoundedResponse(response);
@@ -465,6 +446,19 @@ async function requestCompletion(
   } finally {
     clearTimeout(timer);
   }
+}
+
+function assertSavedAiEndpoint(
+  savedApiUrl: string,
+  requestedEndpoint: string
+): void {
+  if (aiEndpointsMatch(savedApiUrl, requestedEndpoint)) {
+    return;
+  }
+  throw new GitError(
+    "AUTHENTICATION_FAILED",
+    "Re-enter the AI API Key after changing the API URL."
+  );
 }
 
 async function readBoundedResponse(

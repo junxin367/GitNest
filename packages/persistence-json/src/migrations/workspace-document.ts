@@ -351,6 +351,11 @@ function normalizeRepositoryGroups(
   entry: WorkspaceEntry
 ): RepositoryGroup[] {
   const groups = entry.groups.map(rebuildRepositoryGroup);
+
+  if (entry.kind === "standalone-repository") {
+    return [];
+  }
+
   const defaultGroup = groups.find(
     (group) =>
       group.name === DEFAULT_ROOT_REPOSITORY_GROUP_NAME ||

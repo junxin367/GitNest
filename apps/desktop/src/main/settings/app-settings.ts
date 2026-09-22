@@ -1,16 +1,40 @@
 import {
   DEFAULT_DIFF_COMMIT_PANEL_HEIGHT,
+  MAX_CODE_ANALYSIS_DIAGNOSTICS,
+  MAX_CODE_ANALYSIS_GRAPH_EDGES,
+  MAX_CODE_ANALYSIS_GRAPH_NODES,
+  MAX_CODE_ANALYSIS_REQUEST_CHAINS,
+  MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+  MAX_LSP_DOCUMENTS,
+  MAX_LSP_REFERENCES_PER_SYMBOL,
+  MAX_LSP_REQUESTS,
+  MAX_LSP_SYMBOLS_PER_DOCUMENT,
   MAX_DIFF_COMMIT_PANEL_HEIGHT,
+  MIN_CODE_ANALYSIS_DIAGNOSTICS,
+  MIN_CODE_ANALYSIS_GRAPH_EDGES,
+  MIN_CODE_ANALYSIS_GRAPH_NODES,
+  MIN_CODE_ANALYSIS_REQUEST_CHAINS,
+  MIN_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+  MIN_LSP_DOCUMENTS,
+  MIN_LSP_REFERENCES_PER_SYMBOL,
+  MIN_LSP_REQUESTS,
+  MIN_LSP_SYMBOLS_PER_DOCUMENT,
   MIN_DIFF_COMMIT_PANEL_HEIGHT,
+  LANGUAGE_SERVER_LANGUAGES,
   createDefaultAppSettings,
+  createDefaultCodeAnalysisSettings,
   type CodeAnalysisSettingsDto,
   type AppSettingsDto,
   type AppSettingsLoadDto,
+  type LanguageServerCommandSettingsDto,
+  type LanguageServerLanguageDto,
   type UpdateAppSettingsRequest
 } from "@gitnest/contracts";
 import { AtomicJsonStore } from "@gitnest/persistence-json";
 import { WorkspaceError } from "@gitnest/workspace-core";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+
+import { aiEndpointsMatch } from "../ai/ai-endpoint";
 
 export const APP_SETTINGS_SCHEMA_VERSION = 3;
 const MAX_AI_API_URL_LENGTH = 2_048;
@@ -66,15 +90,89 @@ interface AppSettingsDocument {
   git: AppSettingsDto["git"];
   ai: StoredAiSettings;
   codeAnalysis: CodeAnalysisSettingsDto;
+  languageServerLaunchApprovals: LanguageServerLaunchApprovals;
   navigation: AppSettingsDto["navigation"];
   updatedAt: string;
 }
 
 interface AppSettingsDocumentV3Input
-  extends Omit<AppSettingsDocument, "ai"> {
+  extends Omit<
+    AppSettingsDocument,
+    "ai" | "codeAnalysis" | "languageServerLaunchApprovals"
+  > {
   ai: StoredAiSettings & {
     apiKey?: string;
   };
+  codeAnalysis: StoredCodeAnalysisSettings;
+  languageServerLaunchApprovals?: LanguageServerLaunchApprovals;
+}
+
+type StoredLanguageServerSettings = Omit<
+  LanguageServerCommandSettingsDto,
+  | "maxDocuments"
+  | "maxSymbolsPerDocument"
+  | "maxCallHierarchyRequests"
+  | "maxTypeHierarchyRequests"
+  | "maxReferenceRequests"
+  | "maxDocumentationRequests"
+  | "maxReferencesPerSymbol"
+> &
+  Partial<
+    Pick<
+      LanguageServerCommandSettingsDto,
+      | "maxDocuments"
+      | "maxSymbolsPerDocument"
+      | "maxCallHierarchyRequests"
+      | "maxTypeHierarchyRequests"
+      | "maxReferenceRequests"
+      | "maxDocumentationRequests"
+      | "maxReferencesPerSymbol"
+    >
+  >;
+
+type StoredCodeAnalysisSettings = Omit<
+  CodeAnalysisSettingsDto,
+  | "maxTotalSourceMb"
+  | "maxGraphNodes"
+  | "maxGraphEdges"
+  | "maxRequestChains"
+  | "maxDiagnostics"
+  | LanguageServerLanguageDto
+> & {
+  maxTotalSourceMb?: number;
+  maxGraphNodes?: number;
+  maxGraphEdges?: number;
+  maxRequestChains?: number;
+  maxDiagnostics?: number;
+  typescript: StoredLanguageServerSettings;
+  java: StoredLanguageServerSettings;
+  vue?: StoredLanguageServerSettings;
+  python?: StoredLanguageServerSettings;
+  go?: StoredLanguageServerSettings;
+  kotlin?: StoredLanguageServerSettings;
+  csharp?: StoredLanguageServerSettings;
+  rust?: StoredLanguageServerSettings;
+};
+
+type LanguageServerLaunchApprovals = Partial<
+  Record<LanguageServerLanguageDto, string>
+>;
+
+type LanguageServerSettingsSource = Partial<
+  Record<
+    LanguageServerLanguageDto,
+    LanguageServerCommandSettingsDto
+  >
+>;
+
+export interface LanguageServerLaunchApprovalRequest {
+  language: LanguageServerLanguageDto;
+  command: string;
+  args: string[];
+}
+
+export interface AppSettingsUpdateOptions {
+  approvedLanguageServerLaunches?: readonly LanguageServerLaunchApprovalRequest[];
 }
 
 interface AppSettingsDocumentV2 {
@@ -84,7 +182,7 @@ interface AppSettingsDocumentV2 {
   diff: AppSettingsDiffDocument;
   git: AppSettingsDto["git"];
   ai: LegacyAiSettings;
-  codeAnalysis: CodeAnalysisSettingsDto;
+  codeAnalysis: StoredCodeAnalysisSettings;
   navigation: AppSettingsDto["navigation"];
   updatedAt: string;
 }
@@ -137,12 +235,31 @@ export class AppSettingsService {
   }
 
   update(
-    patch: UpdateAppSettingsRequest
+    patch: UpdateAppSettingsRequest,
+    options: AppSettingsUpdateOptions = {}
   ): Promise<AppSettingsDto> {
     return this.#enqueue(async () => {
       const current = await this.#load();
       const next = mergeSettings(current, patch, this.#clock());
+      const approvedLanguageServerLaunches =
+        options.approvedLanguageServerLaunches ?? [];
+      assertApprovedLanguageServerLaunchesMatch(
+        next.codeAnalysis,
+        approvedLanguageServerLaunches
+      );
+      next.languageServerLaunchApprovals =
+        updateLanguageServerLaunchApprovals(
+          current,
+          next,
+          approvedLanguageServerLaunches
+        );
       const apiKey = requestedApiKey(patch);
+      const aiEndpointChanged =
+        typeof patch.ai?.apiUrl === "string" &&
+        !aiEndpointsMatch(
+          patch.ai.apiUrl,
+          current.ai.apiUrl
+        );
       let newCredentialRef: string | undefined;
 
       if (apiKey !== undefined) {
@@ -162,6 +279,8 @@ export class AppSettingsService {
           ...next.ai,
           apiKeyCredentialRef: newCredentialRef
         };
+      } else if (aiEndpointChanged) {
+        next.ai = withoutAiCredential(next.ai);
       }
 
       try {
@@ -178,9 +297,9 @@ export class AppSettingsService {
       const oldCredentialRef =
         current.ai.apiKeyCredentialRef;
       if (
-        newCredentialRef &&
         oldCredentialRef &&
-        oldCredentialRef !== newCredentialRef
+        oldCredentialRef !== newCredentialRef &&
+        (newCredentialRef !== undefined || aiEndpointChanged)
       ) {
         await this.#secretVault
           .delete(oldCredentialRef)
@@ -190,6 +309,65 @@ export class AppSettingsService {
       this.#storageState = "persisted";
       return toPublicSettings(next);
     });
+  }
+
+  async languageServerLaunchesRequiringApproval(
+    patch: UpdateAppSettingsRequest
+  ): Promise<LanguageServerLaunchApprovalRequest[]> {
+    if (!patch.codeAnalysis) {
+      return [];
+    }
+    const current = await this.#load();
+    const next = mergeSettings(
+      current,
+      patch,
+      current.updatedAt
+    );
+    return LANGUAGE_SERVER_LANGUAGES.flatMap((language) => {
+      const launch = resolvedLanguageServerLaunch(
+        next.codeAnalysis,
+        language
+      );
+      if (
+        !launch.enabled ||
+        isDefaultLanguageServerLaunch(language, launch) ||
+        current.languageServerLaunchApprovals[language] ===
+          languageServerLaunchFingerprint(language, launch)
+      ) {
+        return [];
+      }
+      return [
+        {
+          language,
+          command: launch.command,
+          args: [...launch.args]
+        }
+      ];
+    });
+  }
+
+  async assertLanguageServerLaunchesApproved(
+    settings: LanguageServerSettingsSource
+  ): Promise<void> {
+    const document = await this.#load();
+    for (const language of LANGUAGE_SERVER_LANGUAGES) {
+      const launch = resolvedLanguageServerLaunch(
+        settings,
+        language
+      );
+      if (
+        !launch.enabled ||
+        isDefaultLanguageServerLaunch(language, launch) ||
+        document.languageServerLaunchApprovals[language] ===
+          languageServerLaunchFingerprint(language, launch)
+      ) {
+        continue;
+      }
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        `${languageServerLabel(language)} Language Server 的自定义启动命令尚未获得本机确认。请在设置中重新保存并确认后再运行分析。`
+      );
+    }
   }
 
   async clearAiApiKey(
@@ -349,6 +527,7 @@ function createDefaultDocument(now: string): AppSettingsDocument {
     codeAnalysis: cloneCodeAnalysisSettings(
       defaults.codeAnalysis
     ),
+    languageServerLaunchApprovals: {},
     navigation: { ...defaults.navigation },
     updatedAt: now
   };
@@ -508,6 +687,10 @@ function cloneDocument(
     codeAnalysis: cloneCodeAnalysisSettings(
       document.codeAnalysis
     ),
+    languageServerLaunchApprovals:
+      cloneLanguageServerLaunchApprovals(
+        document.languageServerLaunchApprovals ?? {}
+      ),
     navigation: {
       lastContentView: document.navigation.lastContentView,
       workspaceTab: document.navigation.workspaceTab,
@@ -531,6 +714,10 @@ function isAppSettingsDocument(
     isGitSettings(value.git) &&
     isAiSettings(value.ai) &&
     isCodeAnalysisSettings(value.codeAnalysis) &&
+    (value.languageServerLaunchApprovals === undefined ||
+      isLanguageServerLaunchApprovals(
+        value.languageServerLaunchApprovals
+      )) &&
     isNavigationSettings(value.navigation) &&
     typeof value.updatedAt === "string"
   );
@@ -696,7 +883,7 @@ function assertCredentialRef(value: string): void {
 
 function isCodeAnalysisSettings(
   value: unknown
-): value is CodeAnalysisSettingsDto {
+): value is StoredCodeAnalysisSettings {
   return (
     isRecord(value) &&
     typeof value.enabled === "boolean" &&
@@ -704,6 +891,36 @@ function isCodeAnalysisSettings(
       value.defaultScope === "workspace") &&
     typeof value.staticFallback === "boolean" &&
     isIntegerInRange(value.maxFiles, 100, 50_000) &&
+    (value.maxTotalSourceMb === undefined ||
+      isIntegerInRange(
+        value.maxTotalSourceMb,
+        MIN_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+        MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB
+      )) &&
+    (value.maxGraphNodes === undefined ||
+      isIntegerInRange(
+        value.maxGraphNodes,
+        MIN_CODE_ANALYSIS_GRAPH_NODES,
+        MAX_CODE_ANALYSIS_GRAPH_NODES
+      )) &&
+    (value.maxGraphEdges === undefined ||
+      isIntegerInRange(
+        value.maxGraphEdges,
+        MIN_CODE_ANALYSIS_GRAPH_EDGES,
+        MAX_CODE_ANALYSIS_GRAPH_EDGES
+      )) &&
+    (value.maxRequestChains === undefined ||
+      isIntegerInRange(
+        value.maxRequestChains,
+        MIN_CODE_ANALYSIS_REQUEST_CHAINS,
+        MAX_CODE_ANALYSIS_REQUEST_CHAINS
+      )) &&
+    (value.maxDiagnostics === undefined ||
+      isIntegerInRange(
+        value.maxDiagnostics,
+        MIN_CODE_ANALYSIS_DIAGNOSTICS,
+        MAX_CODE_ANALYSIS_DIAGNOSTICS
+      )) &&
     isIntegerInRange(value.maxFileSizeKb, 64, 4_096) &&
     isIntegerInRange(value.readConcurrency, 1, 4) &&
     isIntegerInRange(value.graphDepth, 1, 12) &&
@@ -714,7 +931,22 @@ function isCodeAnalysisSettings(
       255
     ) &&
     isLanguageServerSettings(value.typescript) &&
-    isLanguageServerSettings(value.java)
+    isLanguageServerSettings(value.java) &&
+    isOptionalLanguageServerSettings(value.vue) &&
+    isOptionalLanguageServerSettings(value.python) &&
+    isOptionalLanguageServerSettings(value.go) &&
+    isOptionalLanguageServerSettings(value.kotlin) &&
+    isOptionalLanguageServerSettings(value.csharp) &&
+    isOptionalLanguageServerSettings(value.rust)
+  );
+}
+
+function isOptionalLanguageServerSettings(
+  value: unknown
+): boolean {
+  return (
+    value === undefined ||
+    isLanguageServerSettings(value)
   );
 }
 
@@ -726,7 +958,42 @@ function isLanguageServerSettings(
     typeof value.enabled === "boolean" &&
     isBoundedStoredString(value.command, 2_048) &&
     Boolean(value.command.trim()) &&
-    isStoredStringArray(value.args, 64, 2_048)
+    isStoredStringArray(value.args, 64, 2_048) &&
+    isOptionalIntegerInRange(
+      value.maxDocuments,
+      MIN_LSP_DOCUMENTS,
+      MAX_LSP_DOCUMENTS
+    ) &&
+    isOptionalIntegerInRange(
+      value.maxSymbolsPerDocument,
+      MIN_LSP_SYMBOLS_PER_DOCUMENT,
+      MAX_LSP_SYMBOLS_PER_DOCUMENT
+    ) &&
+    isOptionalIntegerInRange(
+      value.maxCallHierarchyRequests,
+      MIN_LSP_REQUESTS,
+      MAX_LSP_REQUESTS
+    ) &&
+    isOptionalIntegerInRange(
+      value.maxTypeHierarchyRequests,
+      MIN_LSP_REQUESTS,
+      MAX_LSP_REQUESTS
+    ) &&
+    isOptionalIntegerInRange(
+      value.maxReferenceRequests,
+      MIN_LSP_REQUESTS,
+      MAX_LSP_REQUESTS
+    ) &&
+    isOptionalIntegerInRange(
+      value.maxDocumentationRequests,
+      MIN_LSP_REQUESTS,
+      MAX_LSP_REQUESTS
+    ) &&
+    isOptionalIntegerInRange(
+      value.maxReferencesPerSymbol,
+      MIN_LSP_REFERENCES_PER_SYMBOL,
+      MAX_LSP_REFERENCES_PER_SYMBOL
+    )
   );
 }
 
@@ -802,6 +1069,17 @@ function isIntegerInRange(
   );
 }
 
+function isOptionalIntegerInRange(
+  value: unknown,
+  minimum: number,
+  maximum: number
+): boolean {
+  return (
+    value === undefined ||
+    isIntegerInRange(value, minimum, maximum)
+  );
+}
+
 function isStoredStringArray(
   value: unknown,
   maximumItems: number,
@@ -819,29 +1097,315 @@ function isStoredStringArray(
 }
 
 function cloneCodeAnalysisSettings(
-  settings: CodeAnalysisSettingsDto
+  settings: StoredCodeAnalysisSettings
 ): CodeAnalysisSettingsDto {
+  const defaults = createDefaultCodeAnalysisSettings();
   return {
     enabled: settings.enabled,
     defaultScope: settings.defaultScope,
     staticFallback: settings.staticFallback,
     maxFiles: settings.maxFiles,
+    maxTotalSourceMb:
+      settings.maxTotalSourceMb ??
+      defaults.maxTotalSourceMb,
+    maxGraphNodes:
+      settings.maxGraphNodes ?? defaults.maxGraphNodes,
+    maxGraphEdges:
+      settings.maxGraphEdges ?? defaults.maxGraphEdges,
+    maxRequestChains:
+      settings.maxRequestChains ??
+      defaults.maxRequestChains,
+    maxDiagnostics:
+      settings.maxDiagnostics ?? defaults.maxDiagnostics,
     maxFileSizeKb: settings.maxFileSizeKb,
     readConcurrency: settings.readConcurrency,
     graphDepth: settings.graphDepth,
     lspTimeoutMs: settings.lspTimeoutMs,
     ignoreDirectories: [...settings.ignoreDirectories],
-    typescript: {
-      enabled: settings.typescript.enabled,
-      command: settings.typescript.command,
-      args: [...settings.typescript.args]
-    },
-    java: {
-      enabled: settings.java.enabled,
-      command: settings.java.command,
-      args: [...settings.java.args]
-    }
+    typescript: cloneLanguageServerSettings(
+      settings.typescript,
+      defaults.typescript
+    ),
+    java: cloneLanguageServerSettings(
+      settings.java,
+      defaults.java
+    ),
+    vue: cloneLanguageServerSettings(
+      settings.vue ?? defaults.vue!,
+      defaults.vue!
+    ),
+    python: cloneLanguageServerSettings(
+      settings.python ?? defaults.python!,
+      defaults.python!
+    ),
+    go: cloneLanguageServerSettings(
+      settings.go ?? defaults.go!,
+      defaults.go!
+    ),
+    kotlin: cloneLanguageServerSettings(
+      settings.kotlin ?? defaults.kotlin!,
+      defaults.kotlin!
+    ),
+    csharp: cloneLanguageServerSettings(
+      settings.csharp ?? defaults.csharp!,
+      defaults.csharp!
+    ),
+    rust: cloneLanguageServerSettings(
+      settings.rust ?? defaults.rust!,
+      defaults.rust!
+    )
   };
+}
+
+function cloneLanguageServerSettings(
+  settings: StoredLanguageServerSettings,
+  defaults: LanguageServerCommandSettingsDto
+): NonNullable<CodeAnalysisSettingsDto["vue"]> {
+  return {
+    enabled: settings.enabled,
+    command: settings.command,
+    args: [...settings.args],
+    maxDocuments:
+      settings.maxDocuments ?? defaults.maxDocuments,
+    maxSymbolsPerDocument:
+      settings.maxSymbolsPerDocument ??
+      defaults.maxSymbolsPerDocument,
+    maxCallHierarchyRequests:
+      settings.maxCallHierarchyRequests ??
+      defaults.maxCallHierarchyRequests,
+    maxTypeHierarchyRequests:
+      settings.maxTypeHierarchyRequests ??
+      defaults.maxTypeHierarchyRequests ??
+      defaults.maxCallHierarchyRequests,
+    maxReferenceRequests:
+      settings.maxReferenceRequests ??
+      defaults.maxReferenceRequests,
+    maxDocumentationRequests:
+      settings.maxDocumentationRequests ??
+      defaults.maxDocumentationRequests,
+    maxReferencesPerSymbol:
+      settings.maxReferencesPerSymbol ??
+      defaults.maxReferencesPerSymbol
+  };
+}
+
+function updateLanguageServerLaunchApprovals(
+  current: AppSettingsDocument,
+  next: AppSettingsDocument,
+  approvedLaunches: readonly LanguageServerLaunchApprovalRequest[]
+): LanguageServerLaunchApprovals {
+  const approvals = cloneLanguageServerLaunchApprovals(
+    current.languageServerLaunchApprovals
+  );
+  const approvedFingerprints = new Map(
+    approvedLaunches.map((launch) => [
+      launch.language,
+      languageServerLaunchFingerprint(launch.language, launch)
+    ])
+  );
+  for (const language of LANGUAGE_SERVER_LANGUAGES) {
+    const currentLaunch = resolvedLanguageServerLaunch(
+      current.codeAnalysis,
+      language
+    );
+    const nextLaunch = resolvedLanguageServerLaunch(
+      next.codeAnalysis,
+      language
+    );
+    if (isDefaultLanguageServerLaunch(language, nextLaunch)) {
+      delete approvals[language];
+      continue;
+    }
+    const nextFingerprint =
+      languageServerLaunchFingerprint(language, nextLaunch);
+    if (
+      approvedFingerprints.get(language) === nextFingerprint
+    ) {
+      approvals[language] = nextFingerprint;
+      continue;
+    }
+    if (!languageServerLaunchesEqual(currentLaunch, nextLaunch)) {
+      delete approvals[language];
+    }
+  }
+  return approvals;
+}
+
+function assertApprovedLanguageServerLaunchesMatch(
+  settings: LanguageServerSettingsSource,
+  approvedLaunches: readonly LanguageServerLaunchApprovalRequest[]
+): void {
+  for (const approvedLaunch of approvedLaunches) {
+    const actualLaunch = resolvedLanguageServerLaunch(
+      settings,
+      approvedLaunch.language
+    );
+    if (
+      languageServerLaunchFingerprint(
+        approvedLaunch.language,
+        actualLaunch
+      ) ===
+      languageServerLaunchFingerprint(
+        approvedLaunch.language,
+        approvedLaunch
+      )
+    ) {
+      continue;
+    }
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      `${languageServerLabel(approvedLaunch.language)} Language Server 配置在确认期间发生了变化，请重新检查命令与参数。`
+    );
+  }
+}
+
+function resolvedLanguageServerLaunch(
+  settings: LanguageServerSettingsSource,
+  language: LanguageServerLanguageDto
+): LanguageServerCommandSettingsDto {
+  const configured = settings[language];
+  if (configured) {
+    return {
+      ...configured,
+      args: [...configured.args]
+    };
+  }
+  const defaults = createDefaultCodeAnalysisSettings();
+  const defaultSettings =
+    defaults[language] as LanguageServerCommandSettingsDto;
+  return cloneLanguageServerSettings(
+    defaultSettings,
+    defaultSettings
+  );
+}
+
+function isDefaultLanguageServerLaunch(
+  language: LanguageServerLanguageDto,
+  launch: LanguageServerCommandSettingsDto
+): boolean {
+  const defaults = resolvedLanguageServerLaunch(
+    createDefaultCodeAnalysisSettings(),
+    language
+  );
+  return languageServerLaunchesEqual(defaults, launch);
+}
+
+function languageServerLaunchesEqual(
+  left: LanguageServerCommandSettingsDto,
+  right: LanguageServerCommandSettingsDto
+): boolean {
+  return (
+    left.command === right.command &&
+    left.args.length === right.args.length &&
+    left.args.every(
+      (argument, index) => argument === right.args[index]
+    )
+  );
+}
+
+function languageServerLaunchFingerprint(
+  language: LanguageServerLanguageDto,
+  launch: Pick<
+    LanguageServerCommandSettingsDto,
+    "command" | "args"
+  >
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        language,
+        command: launch.command,
+        args: launch.args
+      })
+    )
+    .digest("hex");
+}
+
+function cloneLanguageServerLaunchApprovals(
+  approvals: LanguageServerLaunchApprovals
+): LanguageServerLaunchApprovals {
+  return Object.fromEntries(
+    LANGUAGE_SERVER_LANGUAGES.flatMap((language) => {
+      const fingerprint = approvals[language];
+      return fingerprint
+        ? [[language, fingerprint] as const]
+        : [];
+    })
+  );
+}
+
+function isLanguageServerLaunchApprovals(
+  value: unknown
+): value is LanguageServerLaunchApprovals {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const supported = new Set<string>(
+    LANGUAGE_SERVER_LANGUAGES
+  );
+  return Object.entries(value).every(
+    ([language, fingerprint]) =>
+      supported.has(language) &&
+      typeof fingerprint === "string" &&
+      /^[a-f0-9]{64}$/u.test(fingerprint)
+  );
+}
+
+function languageServerLabel(
+  language: LanguageServerLanguageDto
+): string {
+  return {
+    typescript: "TypeScript",
+    vue: "Vue",
+    java: "Java",
+    python: "Python",
+    go: "Go",
+    kotlin: "Kotlin",
+    csharp: "C#",
+    rust: "Rust"
+  }[language];
+}
+
+function mergeLanguageServerSettings(
+  current: NonNullable<CodeAnalysisSettingsDto["vue"]>,
+  patch:
+    | Partial<
+        NonNullable<CodeAnalysisSettingsDto["vue"]>
+      >
+    | undefined
+): NonNullable<CodeAnalysisSettingsDto["vue"]> {
+  return {
+    ...current,
+    ...patch,
+    args:
+      patch?.args === undefined
+        ? [...current.args]
+        : [...patch.args]
+  };
+}
+
+function resolvedAdditionalLanguageServer(
+  settings: CodeAnalysisSettingsDto,
+  language:
+    | "vue"
+    | "python"
+    | "go"
+    | "kotlin"
+    | "csharp"
+    | "rust"
+): NonNullable<CodeAnalysisSettingsDto["vue"]> {
+  const defaults = createDefaultCodeAnalysisSettings();
+  const current =
+    settings[language] ??
+    (defaults[language] as NonNullable<
+      CodeAnalysisSettingsDto["vue"]
+    >);
+  return cloneLanguageServerSettings(
+    current,
+    defaults[language] as NonNullable<
+      CodeAnalysisSettingsDto["vue"]
+    >
+  );
 }
 
 function mergeCodeAnalysisSettings(
@@ -873,7 +1437,31 @@ function mergeCodeAnalysisSettings(
         patch.java?.args === undefined
           ? [...current.java.args]
           : [...patch.java.args]
-    }
+    },
+    vue: mergeLanguageServerSettings(
+      resolvedAdditionalLanguageServer(current, "vue"),
+      patch.vue
+    ),
+    python: mergeLanguageServerSettings(
+      resolvedAdditionalLanguageServer(current, "python"),
+      patch.python
+    ),
+    go: mergeLanguageServerSettings(
+      resolvedAdditionalLanguageServer(current, "go"),
+      patch.go
+    ),
+    kotlin: mergeLanguageServerSettings(
+      resolvedAdditionalLanguageServer(current, "kotlin"),
+      patch.kotlin
+    ),
+    csharp: mergeLanguageServerSettings(
+      resolvedAdditionalLanguageServer(current, "csharp"),
+      patch.csharp
+    ),
+    rust: mergeLanguageServerSettings(
+      resolvedAdditionalLanguageServer(current, "rust"),
+      patch.rust
+    )
   };
 }
 
@@ -948,6 +1536,7 @@ function migrateV2Document(
     codeAnalysis: cloneCodeAnalysisSettings(
       document.codeAnalysis
     ),
+    languageServerLaunchApprovals: {},
     navigation: {
       lastContentView: document.navigation.lastContentView,
       workspaceTab: document.navigation.workspaceTab,

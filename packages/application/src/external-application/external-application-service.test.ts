@@ -81,6 +81,39 @@ describe("ExternalApplicationService", () => {
     ]);
   });
 
+  it("passes a validated file position to editor adapters", async () => {
+    const applications = new FakeApplicationPort();
+    const service = new ExternalApplicationService(
+      {
+        getCurrent: async () => createWorkspace()
+      },
+      applications
+    );
+
+    await service.open(
+      {
+        scope: "file",
+        target: TARGET,
+        path: "src/index.ts",
+        line: 42,
+        column: 7
+      },
+      "vscode"
+    );
+
+    expect(applications.launches).toEqual([
+      {
+        profile: applications.profiles[0],
+        workingDirectory: WORKTREE_PATH,
+        filePath: "src/index.ts",
+        position: {
+          line: 42,
+          column: 7
+        }
+      }
+    ]);
+  });
+
   it("rejects unavailable applications and unregistered targets", async () => {
     const applications = new FakeApplicationPort();
     const service = new ExternalApplicationService(
@@ -128,6 +161,11 @@ class FakeApplicationPort implements ExternalApplicationPort {
   readonly launches: Array<{
     profile: ExternalApplicationProfile;
     workingDirectory: string;
+    filePath?: string;
+    position?: {
+      line: number;
+      column: number;
+    };
   }> = [];
 
   async listAvailable(): Promise<
@@ -138,11 +176,18 @@ class FakeApplicationPort implements ExternalApplicationPort {
 
   async launch(
     profile: ExternalApplicationProfile,
-    workingDirectory: string
+    workingDirectory: string,
+    filePath?: string,
+    position?: {
+      line: number;
+      column: number;
+    }
   ): Promise<void> {
     this.launches.push({
       profile: structuredClone(profile),
-      workingDirectory
+      workingDirectory,
+      ...(filePath ? { filePath } : {}),
+      ...(position ? { position: { ...position } } : {})
     });
   }
 }

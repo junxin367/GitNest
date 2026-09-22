@@ -382,6 +382,11 @@ function createInput(
       enabled: true,
       staticFallback: true,
       maxFiles: 100,
+      maxTotalSourceBytes: 128 * 1_024 * 1_024,
+      maxGraphNodes: 30_000,
+      maxGraphEdges: 100_000,
+      maxRequestChains: 5_000,
+      maxDiagnostics: 2_000,
       maxFileSizeBytes: 64 * 1_024,
       readConcurrency: 1,
       graphDepth: 3,
@@ -390,12 +395,24 @@ function createInput(
       typescript: {
         enabled: false,
         command: "typescript-language-server",
-        args: []
+        args: [],
+        maxDocuments: 120,
+        maxSymbolsPerDocument: 5_000,
+        maxCallHierarchyRequests: 50,
+        maxReferenceRequests: 50,
+        maxDocumentationRequests: 50,
+        maxReferencesPerSymbol: 500
       },
       java: {
         enabled: false,
         command: "jdtls",
-        args: []
+        args: [],
+        maxDocuments: 80,
+        maxSymbolsPerDocument: 5_000,
+        maxCallHierarchyRequests: 40,
+        maxReferenceRequests: 1_000,
+        maxDocumentationRequests: 40,
+        maxReferencesPerSymbol: 500
       }
     }
   };

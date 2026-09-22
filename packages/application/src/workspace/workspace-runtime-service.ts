@@ -251,6 +251,10 @@ export class WorkspaceRuntimeService {
     string,
     string
   >();
+  readonly #snapshotChangedPaths = new Map<
+    string,
+    Set<string>
+  >();
   readonly #inFlight = new Map<
     string,
     Promise<RepositoryStatusSnapshot>
@@ -847,6 +851,7 @@ export class WorkspaceRuntimeService {
     this.#refreshScheduler.updateWorkspace(workspace);
     this.#snapshots.clear();
     this.#snapshotContentSignatures.clear();
+    this.#snapshotChangedPaths.clear();
     this.#operations = [];
     this.#operationSequence = 0;
     this.#monitor = {
@@ -1499,7 +1504,10 @@ export class WorkspaceRuntimeService {
     const snapshot =
       await this.#gitClient.readRepositorySnapshot(
         worktree.path,
-        { signal }
+        {
+          signal,
+          priority: "background"
+        }
       );
     const key = repositoryTargetKey(target);
     const signature = repositorySnapshotContentSignature(snapshot);
@@ -1515,6 +1523,13 @@ export class WorkspaceRuntimeService {
         contentVersion
       );
     }
+    this.#snapshotChangedPaths.set(
+      key,
+      repositorySnapshotChangedPaths(
+        worktree.path,
+        snapshot
+      )
+    );
     const nextContentVersion =
       forceContentVersion || existingSignature !== signature
         ? contentVersion + 1
@@ -1991,6 +2006,7 @@ export class WorkspaceRuntimeService {
       if (!available.has(key)) {
         this.#snapshots.delete(key);
         this.#snapshotContentSignatures.delete(key);
+        this.#snapshotChangedPaths.delete(key);
       }
     }
 
@@ -2062,6 +2078,12 @@ export class WorkspaceRuntimeService {
           if (targets.length === 0) {
             return;
           }
+          const forceContentVersion = targets.some((target) =>
+            this.#watchEventMayChangeContent(
+              event.path,
+              target
+            )
+          );
           this.#monitor = {
             ...this.#monitor,
             lastEventAt: this.#clock()
@@ -2069,7 +2091,7 @@ export class WorkspaceRuntimeService {
           this.#refreshScheduler.request(
             targets,
             "watcher",
-            true
+            forceContentVersion
           );
         },
         (error) => {
@@ -2088,8 +2110,8 @@ export class WorkspaceRuntimeService {
       this.#watchHandle = handle;
       this.#monitor = {
         mode: "watching",
-        watchedTargets: uniqueTargets(
-          registrations.map((registration) => registration.target)
+        watchedTargets: listWorkspaceTargets(
+          this.#workspace
         ).length,
         message: `正在监听 ${registrations.length} 个工作目录与 Git 元数据路径。`
       };
@@ -2154,19 +2176,16 @@ export class WorkspaceRuntimeService {
       return [];
     }
 
-    const targets = this.#repositoryTargets(
-      event.target.repositoryId
-    );
-    const repository = workspace.repositories.find(
-      (candidate) =>
-        candidate.id === event.target.repositoryId
-    );
-    const worktrees = targets
+    const worktrees = listWorkspaceTargets(workspace)
       .map((target) => ({
         target,
         worktree: workspace.worktrees.find(
           (candidate) =>
             candidate.id === target.worktreeId
+        ),
+        repository: workspace.repositories.find(
+          (candidate) =>
+            candidate.id === target.repositoryId
         )
       }))
       .filter(
@@ -2175,14 +2194,23 @@ export class WorkspaceRuntimeService {
         ): candidate is {
           target: RepositoryTarget;
           worktree: Workspace["worktrees"][number];
+          repository:
+            | Workspace["repositories"][number]
+            | undefined;
         } => Boolean(candidate.worktree)
       );
 
     if (
       isTransientGitLockPath(
         event.path,
-        repository?.commonDir,
-        worktrees.map(({ worktree }) => worktree.gitDir)
+        [
+          ...workspace.repositories.map(
+            (repository) => repository.commonDir
+          ),
+          ...workspace.worktrees.map(
+            (worktree) => worktree.gitDir
+          )
+        ]
       )
     ) {
       return [];
@@ -2190,7 +2218,7 @@ export class WorkspaceRuntimeService {
 
     const linkedGitTarget = worktrees
       .filter(
-        ({ worktree }) =>
+        ({ worktree, repository }) =>
           Boolean(worktree.gitDir) &&
           !pathsEqual(
             worktree.gitDir as string,
@@ -2207,11 +2235,24 @@ export class WorkspaceRuntimeService {
       return [linkedGitTarget.target];
     }
 
-    if (
-      repository?.commonDir &&
-      pathContains(repository.commonDir, event.path)
-    ) {
-      return targets;
+    const commonDirRepository = workspace.repositories
+      .filter(
+        (repository) =>
+          Boolean(repository.commonDir) &&
+          pathContains(
+            repository.commonDir as string,
+            event.path
+          )
+      )
+      .sort(
+        (left, right) =>
+          (right.commonDir?.length ?? 0) -
+          (left.commonDir?.length ?? 0)
+      )[0];
+    if (commonDirRepository) {
+      return this.#repositoryTargets(
+        commonDirRepository.id
+      );
     }
 
     const worktreeTarget = worktrees
@@ -2223,9 +2264,54 @@ export class WorkspaceRuntimeService {
           right.worktree.path.length -
           left.worktree.path.length
       )[0];
-    return worktreeTarget
-      ? [worktreeTarget.target]
-      : [event.target];
+    if (worktreeTarget) {
+      return [worktreeTarget.target];
+    }
+
+    const fallback = listWorkspaceTargets(workspace).find(
+      (target) =>
+        repositoryTargetsEqual(target, event.target)
+    );
+    return fallback ? [fallback] : [];
+  }
+
+  #watchEventMayChangeContent(
+    eventPath: string,
+    target: RepositoryTarget
+  ): boolean {
+    const workspace = this.#workspace;
+    if (!workspace) {
+      return false;
+    }
+
+    const repository = workspace.repositories.find(
+      (candidate) =>
+        candidate.id === target.repositoryId
+    );
+    const worktree = workspace.worktrees.find(
+      (candidate) =>
+        candidate.id === target.worktreeId &&
+        candidate.repositoryId === target.repositoryId
+    );
+    if (
+      [repository?.commonDir, worktree?.gitDir].some(
+        (root) =>
+          Boolean(root) &&
+          pathContains(root as string, eventPath)
+      )
+    ) {
+      return true;
+    }
+
+    const changedPaths = this.#snapshotChangedPaths.get(
+      repositoryTargetKey(target)
+    );
+    return Boolean(
+      changedPaths &&
+        [...changedPaths].some((changedPath) =>
+          watchPathsOverlap(changedPath, eventPath)
+        )
+    );
   }
 
   async #stopMonitoring(): Promise<void> {
@@ -2787,93 +2873,81 @@ function createFailedSnapshot(
 function createWatchRegistrations(
   workspace: Workspace
 ): WorkspaceWatchRegistration[] {
-  const registrations = new Map<
+  const candidates = new Map<
     string,
     WorkspaceWatchRegistration
   >();
-  const targetsByRepository = new Map<
-    string,
-    RepositoryTarget[]
-  >();
-
   for (const target of listWorkspaceTargets(workspace)) {
-    const targets =
-      targetsByRepository.get(target.repositoryId) ?? [];
-    targets.push(target);
-    targetsByRepository.set(target.repositoryId, targets);
-  }
-
-  for (const [repositoryId, targets] of targetsByRepository) {
     const repository = workspace.repositories.find(
-      (candidate) => candidate.id === repositoryId
+      (candidate) =>
+        candidate.id === target.repositoryId
     );
-    const worktrees = targets
-      .map((target) => ({
-        target,
-        worktree: workspace.worktrees.find(
-          (candidate) =>
-            candidate.id === target.worktreeId
-        )
-      }))
-      .filter(
-        (
-          candidate
-        ): candidate is {
-          target: RepositoryTarget;
-          worktree: Workspace["worktrees"][number];
-        } => Boolean(candidate.worktree)
-      );
-
-    for (const { target, worktree } of worktrees) {
-      addRegistration(worktree.path, target);
+    const worktree = workspace.worktrees.find(
+      (candidate) =>
+        candidate.id === target.worktreeId &&
+        candidate.repositoryId === target.repositoryId
+    );
+    if (!worktree) {
+      continue;
     }
 
-    const gitRoots = repository?.commonDir
-      ? [repository.commonDir]
-      : worktrees
-          .map(({ worktree }) => worktree.gitDir)
-          .filter(
-            (path): path is string => Boolean(path)
-          );
-    for (const gitRoot of gitRoots) {
-      const covered = [...registrations.values()].some(
-        (registration) =>
-          registration.target.repositoryId === repositoryId &&
-          registration.recursive &&
-          pathContains(registration.path, gitRoot)
-      );
-      if (!covered && targets[0]) {
-        addRegistration(gitRoot, targets[0]);
-      }
+    addRegistration(worktree.path, target);
+    if (repository?.commonDir) {
+      addRegistration(repository.commonDir, target);
     }
-
-    function addRegistration(
-      path: string,
-      target: RepositoryTarget
-    ): void {
-      const key = `${repositoryId}\0${normalizeWatchPath(path)}`;
-      registrations.set(key, {
-        path,
-        target,
-        recursive: true
-      });
+    if (worktree.gitDir) {
+      addRegistration(worktree.gitDir, target);
     }
   }
 
-  return [...registrations.values()];
+  const registrations: WorkspaceWatchRegistration[] = [];
+  for (const candidate of [...candidates.values()].sort(
+    (left, right) =>
+      normalizeWatchPath(left.path).length -
+        normalizeWatchPath(right.path).length ||
+      normalizeWatchPath(left.path).localeCompare(
+        normalizeWatchPath(right.path)
+      )
+  )) {
+    if (
+      registrations.some(
+        (registration) =>
+          registration.recursive &&
+          pathContains(registration.path, candidate.path)
+      )
+    ) {
+      continue;
+    }
+    registrations.push(candidate);
+  }
+  return registrations;
+
+  function addRegistration(
+    path: string,
+    target: RepositoryTarget
+  ): void {
+    const key = normalizeWatchPath(path);
+    if (candidates.has(key)) {
+      return;
+    }
+    candidates.set(key, {
+      path,
+      target,
+      recursive: true
+    });
+  }
 }
 
 function isTransientGitLockPath(
   path: string,
-  commonDir: string | undefined,
-  gitDirs: Array<string | undefined>
+  metadataRoots: Array<string | undefined>
 ): boolean {
   const normalizedPath = normalizeWatchPath(path);
   if (!normalizedPath.endsWith(".lock")) {
     return false;
   }
 
-  return [commonDir, ...gitDirs].some(
+  return metadataRoots.some(
     (root): root is string =>
       Boolean(root) && pathContains(root as string, path)
   );
@@ -2899,11 +2973,43 @@ function pathContains(root: string, candidate: string): boolean {
   );
 }
 
+function watchPathsOverlap(
+  left: string,
+  right: string
+): boolean {
+  return pathContains(left, right) || pathContains(right, left);
+}
+
 function normalizeWatchPath(path: string): string {
   return path
     .replace(/[\\/]+/gu, "\\")
     .replace(/\\+$/u, "")
     .toLocaleLowerCase("en-US");
+}
+
+function repositorySnapshotChangedPaths(
+  worktreePath: string,
+  snapshot: RepositorySnapshot
+): Set<string> {
+  const result = new Set<string>();
+  for (const change of snapshot.changes) {
+    result.add(joinWatchPath(worktreePath, change.path));
+    if (change.originalPath) {
+      result.add(
+        joinWatchPath(worktreePath, change.originalPath)
+      );
+    }
+  }
+  return result;
+}
+
+function joinWatchPath(root: string, path: string): string {
+  return normalizeWatchPath(
+    `${root.replace(/[\\/]+$/u, "")}\\${path.replace(
+      /^[\\/]+/u,
+      ""
+    )}`
+  );
 }
 
 function backgroundRefreshReasonLabel(

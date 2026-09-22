@@ -498,7 +498,7 @@ export function App() {
       </a>
       <AppTitlebar
         onCreateWorkspace={() =>
-          void workspace.chooseDirectory()
+          void workspace.createWorkspace()
         }
         onNavigate={navigate}
         onOpenSearch={() => setGlobalSearchOpen(true)}

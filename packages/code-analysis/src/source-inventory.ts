@@ -1,4 +1,9 @@
-import { lstat, opendir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import {
+  lstat,
+  open,
+  opendir
+} from "node:fs/promises";
 import {
   extname,
   isAbsolute,
@@ -27,10 +32,19 @@ const SUPPORTED_EXTENSIONS = new Map<
   [".mjs", "javascript"],
   [".cjs", "javascript"],
   [".vue", "vue"],
-  [".java", "java"]
+  [".java", "java"],
+  [".py", "python"],
+  [".pyi", "python"],
+  [".go", "go"],
+  [".kt", "kotlin"],
+  [".kts", "kotlin"],
+  [".cs", "csharp"],
+  [".csx", "csharp"],
+  [".rs", "rust"]
 ]);
 export const DEFAULT_MAX_TOTAL_SOURCE_BYTES =
   128 * 1_024 * 1_024;
+const FINGERPRINT_READ_CHUNK_BYTES = 64 * 1_024;
 
 export async function discoverSourceFiles(input: {
   roots: AnalysisRoot[];
@@ -44,12 +58,14 @@ export async function discoverSourceFiles(input: {
   const files: AnalysisSourceFile[] = [];
   const seen = new Set<string>();
   let skippedFiles = 0;
+  let configuredSkippedFiles = 0;
+  let inspectionFailureCount = 0;
   let truncated = false;
   let totalBytes = 0;
   let truncationReason: "files" | "bytes" | undefined;
   const maxTotalSizeBytes =
     input.maxTotalSizeBytes ??
-    DEFAULT_MAX_TOTAL_SOURCE_BYTES;
+    input.settings.maxTotalSourceBytes;
 
   const addFile = (
     descriptor: AnalysisSourceFile
@@ -86,21 +102,31 @@ export async function discoverSourceFiles(input: {
       const absolutePath = resolve(root.path, changedPath.path);
       if (!isWithin(root.path, absolutePath)) {
         skippedFiles += 1;
+        inspectionFailureCount += 1;
         warnings.push(
           `已跳过超出 Worktree 的变动路径：${changedPath.path}`
         );
         continue;
       }
-      const descriptor = await inspectSourceFile(
+      const inspection = await inspectSourceFile(
         root,
         absolutePath,
         true,
-        input.settings.maxFileSizeBytes
+        input.settings.maxFileSizeBytes,
+        input.signal
       );
-      if (!descriptor) {
+      if (inspection.kind !== "included") {
         skippedFiles += 1;
+        if (inspection.kind === "configured-skip") {
+          configuredSkippedFiles += 1;
+          warnings.push(inspection.warning);
+        } else if (inspection.kind === "failure") {
+          inspectionFailureCount += 1;
+          warnings.push(inspection.warning);
+        }
         continue;
       }
+      const descriptor = inspection.file;
       if (seen.has(descriptor.canonicalPath)) {
         continue;
       }
@@ -118,6 +144,8 @@ export async function discoverSourceFiles(input: {
       files,
       totalBytes,
       skippedFiles,
+      configuredSkippedFiles,
+      inspectionFailureCount,
       truncated,
       warnings
     };
@@ -143,6 +171,7 @@ export async function discoverSourceFiles(input: {
       try {
         handle = await opendir(directory);
       } catch (error) {
+        inspectionFailureCount += 1;
         warnings.push(
           `无法读取目录 ${displayRelative(root.path, directory)}：${errorMessage(error)}`
         );
@@ -179,16 +208,25 @@ export async function discoverSourceFiles(input: {
         if (!language) {
           continue;
         }
-        const descriptor = await inspectSourceFile(
+        const inspection = await inspectSourceFile(
           root,
           absolutePath,
           false,
-          input.settings.maxFileSizeBytes
+          input.settings.maxFileSizeBytes,
+          input.signal
         );
-        if (!descriptor) {
+        if (inspection.kind !== "included") {
           skippedFiles += 1;
+          if (inspection.kind === "configured-skip") {
+            configuredSkippedFiles += 1;
+            warnings.push(inspection.warning);
+          } else if (inspection.kind === "failure") {
+            inspectionFailureCount += 1;
+            warnings.push(inspection.warning);
+          }
           continue;
         }
+        const descriptor = inspection.file;
         if (seen.has(descriptor.canonicalPath)) {
           continue;
         }
@@ -217,6 +255,8 @@ export async function discoverSourceFiles(input: {
     files,
     totalBytes,
     skippedFiles,
+    configuredSkippedFiles,
+    inspectionFailureCount,
     truncated,
     warnings
   };
@@ -253,40 +293,144 @@ async function inspectSourceFile(
   root: AnalysisRoot,
   absolutePath: string,
   changed: boolean,
-  maxFileSizeBytes: number
-): Promise<AnalysisSourceFile | null> {
+  maxFileSizeBytes: number,
+  signal?: AbortSignal
+): Promise<SourceInspectionResult> {
   const language = languageForPath(absolutePath);
   if (!language) {
-    return null;
+    return { kind: "excluded" };
   }
 
   let details;
   try {
     details = await lstat(absolutePath);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isMissingFilesystemEntry(error)) {
+      return { kind: "excluded" };
+    }
+    return {
+      kind: "failure",
+      warning: `无法检查源文件 ${displayRelative(root.path, absolutePath)}：${errorMessage(error)}`
+    };
   }
-  if (
-    !details.isFile() ||
-    details.size > maxFileSizeBytes
-  ) {
-    return null;
+  if (!details.isFile()) {
+    return { kind: "excluded" };
+  }
+  if (details.size > maxFileSizeBytes) {
+    return {
+      kind: "configured-skip",
+      warning: `已跳过超过单文件大小限制的源文件 ${displayRelative(root.path, absolutePath)}。`
+    };
+  }
+  let fingerprint: string;
+  try {
+    fingerprint = await fingerprintSourceFile(
+      absolutePath,
+      {
+        size: details.size,
+        modifiedAtMs: details.mtimeMs
+      },
+      signal
+    );
+  } catch (error) {
+    throwIfAborted(signal);
+    if (isMissingFilesystemEntry(error)) {
+      return { kind: "excluded" };
+    }
+    return {
+      kind: "failure",
+      warning: `无法检查源文件 ${displayRelative(root.path, absolutePath)}：${errorMessage(error)}`
+    };
   }
 
   const resolvedPath = resolve(absolutePath);
   return {
-    absolutePath: resolvedPath,
-    canonicalPath: canonicalPath(resolvedPath),
-    relativePath: displayRelative(root.path, resolvedPath),
-    repositoryId: root.repositoryId,
-    worktreeId: root.worktreeId,
-    rootPath: resolve(root.path),
-    language,
-    size: details.size,
-    modifiedAtMs: details.mtimeMs,
-    fingerprint: `${details.size}:${Math.trunc(details.mtimeMs)}`,
-    changed
+    kind: "included",
+    file: {
+      absolutePath: resolvedPath,
+      canonicalPath: canonicalPath(resolvedPath),
+      relativePath: displayRelative(root.path, resolvedPath),
+      repositoryId: root.repositoryId,
+      worktreeId: root.worktreeId,
+      rootPath: resolve(root.path),
+      language,
+      size: details.size,
+      modifiedAtMs: details.mtimeMs,
+      fingerprint,
+      changed
+    }
   };
+}
+
+type SourceInspectionResult =
+  | {
+      kind: "included";
+      file: AnalysisSourceFile;
+    }
+  | {
+      kind: "excluded";
+    }
+  | {
+      kind: "configured-skip";
+      warning: string;
+    }
+  | {
+      kind: "failure";
+      warning: string;
+    };
+
+async function fingerprintSourceFile(
+  filePath: string,
+  expected: {
+    size: number;
+    modifiedAtMs: number;
+  },
+  signal?: AbortSignal
+): Promise<string> {
+  const handle = await open(filePath, "r");
+  const hash = createHash("sha256");
+  const chunk = Buffer.allocUnsafe(
+    FINGERPRINT_READ_CHUNK_BYTES
+  );
+  try {
+    const before = await handle.stat();
+    if (
+      !before.isFile() ||
+      before.size !== expected.size ||
+      Math.trunc(before.mtimeMs) !==
+        Math.trunc(expected.modifiedAtMs)
+    ) {
+      throw new Error(
+        "Source file changed while its fingerprint was being calculated."
+      );
+    }
+    while (true) {
+      throwIfAborted(signal);
+      const { bytesRead } = await handle.read(
+        chunk,
+        0,
+        chunk.length,
+        null
+      );
+      if (bytesRead === 0) {
+        break;
+      }
+      hash.update(chunk.subarray(0, bytesRead));
+    }
+    const after = await handle.stat();
+    if (
+      after.size !== before.size ||
+      Math.trunc(after.mtimeMs) !==
+        Math.trunc(before.mtimeMs)
+    ) {
+      throw new Error(
+        "Source file changed while its fingerprint was being calculated."
+      );
+    }
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+  return `sha256:${hash.digest("hex")}`;
 }
 
 function languageForPath(
@@ -348,4 +492,13 @@ function yieldToEventLoop(): Promise<void> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingFilesystemEntry(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
 }

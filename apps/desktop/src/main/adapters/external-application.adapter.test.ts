@@ -52,6 +52,64 @@ describe("buildExternalApplicationLaunch", () => {
       cwd: WORKING_DIRECTORY
     });
   });
+
+  it.each<{
+    kind: Exclude<
+      ExternalApplicationKind,
+      "file-explorer" | "terminal" | "git-bash"
+    >;
+    args: string[];
+  }>([
+    {
+      kind: "vscode",
+      args: [
+        "--reuse-window",
+        "--goto",
+        "C:\\workspace\\repository\\src\\index.ts:42:7"
+      ]
+    },
+    {
+      kind: "cursor",
+      args: [
+        "--reuse-window",
+        "--goto",
+        "C:\\workspace\\repository\\src\\index.ts:42:7"
+      ]
+    },
+    {
+      kind: "intellij-idea",
+      args: [
+        "--line",
+        "42",
+        "--column",
+        "7",
+        "C:\\workspace\\repository\\src\\index.ts"
+      ]
+    },
+    {
+      kind: "sublime-text",
+      args: [
+        "C:\\workspace\\repository\\src\\index.ts:42:7"
+      ]
+    }
+  ])(
+    "builds an exact file position for $kind",
+    ({ kind, args }) => {
+      expect(
+        buildExternalApplicationLaunch(
+          kind,
+          `C:\\Apps\\${kind}.exe`,
+          WORKING_DIRECTORY,
+          "C:\\workspace\\repository\\src\\index.ts",
+          { line: 42, column: 7 }
+        )
+      ).toEqual({
+        executable: `C:\\Apps\\${kind}.exe`,
+        args,
+        cwd: WORKING_DIRECTORY
+      });
+    }
+  );
 });
 
 describe("WindowsExternalApplicationAdapter", () => {

@@ -23,6 +23,7 @@ import {
 import { DiffDiscardConfirmationDialog } from "./DiffDiscardConfirmationDialog";
 import {
   DiffFileNavigator,
+  type DiffFileSelectionOrigin,
   type DiffWorkspaceMessage,
   type DiffWorkspaceTreePreference
 } from "./DiffFileNavigator";
@@ -189,8 +190,14 @@ export function DiffWorkspace({
     setDiscardRequest(null);
   }, []);
   const selectFile = useCallback(
-    (file: DiffViewerFile) => {
-      if (auxiliaryView?.active) {
+    (
+      file: DiffViewerFile,
+      origin: DiffFileSelectionOrigin
+    ) => {
+      if (
+        origin === "user" &&
+        auxiliaryView?.active
+      ) {
         auxiliaryView.onToggle();
       }
       onSelectedFileChange(file);
@@ -215,7 +222,7 @@ export function DiffWorkspace({
           event.clientY
         )
       );
-      selectFile(file);
+      selectFile(file, "user");
     },
     [selectFile]
   );

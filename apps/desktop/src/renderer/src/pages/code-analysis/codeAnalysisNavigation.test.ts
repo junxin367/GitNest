@@ -7,10 +7,13 @@ import {
 import type { CodeGraphNodeDto } from "@gitnest/contracts";
 
 import {
+  codeNodeDisplayName,
   countSearchableCodeNodes,
   filterChains,
   filterChainsWithMetadata,
-  searchCodeNodes
+  MAX_VISIBLE_CODE_NODES,
+  searchCodeNodes,
+  searchCodeNodesWithMetadata
 } from "./codeAnalysisNavigation";
 
 describe("code analysis node search", () => {
@@ -62,11 +65,11 @@ describe("code analysis node search", () => {
     ).toBe("endpoint");
   });
 
-  it("keeps files out of function results", () => {
-    expect(countSearchableCodeNodes(nodes)).toBe(5);
+  it("includes every supported node kind in code-node results", () => {
+    expect(countSearchableCodeNodes(nodes)).toBe(6);
     expect(
       searchCodeNodes(nodes, "").map((result) => result.id)
-    ).not.toContain("file");
+    ).toContain("file");
   });
 
   it("searches RPC nodes and chain profile metadata", () => {
@@ -147,6 +150,98 @@ describe("code analysis node search", () => {
       filterChains(chains, nodes, "materialservice", "all")
     ).toEqual([]);
   });
+
+  it("finds nested Java symbols by their qualified owner name", () => {
+    const nestedField = node(
+      "open-guide",
+      "OPEN_GUIDE",
+      "property",
+      "src/main/java/fai/app/ScProfDef.java",
+      "ScProfDef.Flag.OPEN_GUIDE"
+    );
+
+    expect(
+      searchCodeNodes(
+        [...nodes, nestedField],
+        "ScProfDef.Flag"
+      ).map((result) => result.id)
+    ).toContain("open-guide");
+  });
+
+  it("shows qualified owners for nested types and properties", () => {
+    expect(
+      codeNodeDisplayName(
+        node(
+          "flag",
+          "Flag",
+          "class",
+          "ScProfDef.java",
+          "ScProfDef.Flag"
+        )
+      )
+    ).toBe("ScProfDef.Flag");
+    expect(
+      codeNodeDisplayName(
+        node(
+          "open-guide",
+          "OPEN_GUIDE",
+          "property",
+          "ScProfDef.java",
+          "ScProfDef.Flag.OPEN_GUIDE"
+        )
+      )
+    ).toBe("ScProfDef.Flag.OPEN_GUIDE");
+    expect(
+      codeNodeDisplayName(
+        node(
+          "enabled",
+          "enabled",
+          "method",
+          "ScProfServiceImpl.java",
+          "ScProfServiceImpl.enabled"
+        )
+      )
+    ).toBe("enabled");
+  });
+
+  it("reports code-node truncation only when the filtered matches exceed the visible limit", () => {
+    const manyNodes = Array.from(
+      { length: MAX_VISIBLE_CODE_NODES + 1 },
+      (_, index) =>
+        node(
+          `node-${index}`,
+          `Node ${index}`,
+          "function",
+          `src/node-${index}.ts`
+        )
+    );
+
+    const truncated = searchCodeNodesWithMetadata(
+      manyNodes,
+      ""
+    );
+    expect(truncated.nodes).toHaveLength(
+      MAX_VISIBLE_CODE_NODES
+    );
+    expect(truncated.truncated).toBe(true);
+
+    const exact = searchCodeNodesWithMetadata(
+      manyNodes.slice(0, MAX_VISIBLE_CODE_NODES),
+      ""
+    );
+    expect(exact.nodes).toHaveLength(
+      MAX_VISIBLE_CODE_NODES
+    );
+    expect(exact.truncated).toBe(false);
+
+    const narrowed = searchCodeNodesWithMetadata(
+      manyNodes,
+      "node 120"
+    );
+    expect(narrowed.nodes).toHaveLength(1);
+    expect(narrowed.truncated).toBe(false);
+  });
+
 });
 
 function node(

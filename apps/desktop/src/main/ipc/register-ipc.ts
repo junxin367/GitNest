@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   shell,
   type IpcMainInvokeEvent
@@ -17,10 +18,29 @@ import {
 } from "node:path";
 
 import {
+  MAX_CODE_ANALYSIS_DIAGNOSTICS,
+  MAX_CODE_ANALYSIS_GRAPH_EDGES,
+  MAX_CODE_ANALYSIS_GRAPH_NODES,
+  MAX_CODE_ANALYSIS_REQUEST_CHAINS,
+  MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+  MAX_LSP_DOCUMENTS,
+  MAX_LSP_REFERENCES_PER_SYMBOL,
+  MAX_LSP_REQUESTS,
+  MAX_LSP_SYMBOLS_PER_DOCUMENT,
   MAX_DIFF_COMMIT_PANEL_HEIGHT,
+  MIN_CODE_ANALYSIS_DIAGNOSTICS,
+  MIN_CODE_ANALYSIS_GRAPH_EDGES,
+  MIN_CODE_ANALYSIS_GRAPH_NODES,
+  MIN_CODE_ANALYSIS_REQUEST_CHAINS,
+  MIN_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+  MIN_LSP_DOCUMENTS,
+  MIN_LSP_REFERENCES_PER_SYMBOL,
+  MIN_LSP_REQUESTS,
+  MIN_LSP_SYMBOLS_PER_DOCUMENT,
   MIN_DIFF_COMMIT_PANEL_HEIGHT,
   IPC_CHANNELS,
   IPC_EVENTS,
+  LANGUAGE_SERVER_LANGUAGES,
   type AiCommitMessageDto,
   type AiConnectionTestResultDto,
   type AccountRemovalImpactRequest,
@@ -106,6 +126,7 @@ import { GitError } from "@gitnest/git-core";
 import { WorkspaceError } from "@gitnest/workspace-core";
 
 import type { ApplicationServices } from "../bootstrap/register-services";
+import type { LanguageServerLaunchApprovalRequest } from "../settings/app-settings";
 import {
   selectWorkspaceDirectory,
   selectWorktreeDirectory
@@ -161,6 +182,7 @@ const MAX_AI_PROMPT_LENGTH = 12_000;
 const MAX_LSP_COMMAND_LENGTH = 2_048;
 const MAX_LSP_ARGUMENTS = 64;
 const MAX_LSP_ARGUMENT_LENGTH = 2_048;
+const MAX_LSP_APPROVAL_DETAIL_LENGTH = 8_000;
 const MAX_ANALYSIS_IGNORE_DIRECTORIES = 100;
 const MAX_ANALYSIS_IGNORE_LENGTH = 255;
 const MAX_ANALYSIS_NODE_ID_LENGTH = 512;
@@ -190,10 +212,9 @@ const CODE_ANALYSIS_SCOPES = new Set([
   "changed",
   "workspace"
 ]);
-const INSTALLABLE_LANGUAGE_SERVERS = new Set([
-  "typescript",
-  "java"
-]);
+const INSTALLABLE_LANGUAGE_SERVERS = new Set<string>(
+  LANGUAGE_SERVER_LANGUAGES
+);
 
 export function registerIpcHandlers(
   services: ApplicationServices
@@ -213,14 +234,26 @@ export function registerIpcHandlers(
   registerHandler(
     IPC_CHANNELS.settingsUpdate,
     (
-      _event,
+      event,
       request
     ): Promise<GitReadResult<AppSettingsDto>> =>
-      captureAppSettingsMutation(() =>
-        services.settings.update(
-          validateUpdateAppSettingsRequest(request)
-        )
-      )
+      captureAppSettingsMutation(async () => {
+        const patch =
+          validateUpdateAppSettingsRequest(request);
+        const launches =
+          await services.settings.languageServerLaunchesRequiringApproval(
+            patch
+          );
+        if (launches.length > 0) {
+          await confirmLanguageServerLaunches(
+            getSenderWindow(event),
+            launches
+          );
+        }
+        return services.settings.update(patch, {
+          approvedLanguageServerLaunches: launches
+        });
+      })
   );
 
   registerHandler(
@@ -1042,6 +1075,68 @@ function getSenderWindow(event: IpcMainInvokeEvent): BrowserWindow {
   return window;
 }
 
+async function confirmLanguageServerLaunches(
+  window: BrowserWindow,
+  launches: readonly LanguageServerLaunchApprovalRequest[]
+): Promise<void> {
+  const detail =
+    formatLanguageServerLaunchApprovalDetail(launches);
+  const result = await dialog.showMessageBox(window, {
+    type: "warning",
+    title: "确认 Language Server 启动命令",
+    message:
+      "自定义 Language Server 配置可以在本机启动程序。",
+    detail: `${detail}\n\n仅在你信任以上程序与参数时允许。`,
+    buttons: ["允许并保存", "取消"],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true
+  });
+  if (result.response !== 0) {
+    throw new GitError(
+      "COMMAND_CANCELLED",
+      "Language Server 启动命令未获确认。"
+    );
+  }
+}
+
+export function formatLanguageServerLaunchApprovalDetail(
+  launches: readonly LanguageServerLaunchApprovalRequest[]
+): string {
+  const detail = launches
+    .map(
+      (launch) =>
+        `${languageServerDisplayName(launch.language)}\n命令：${
+          JSON.stringify(launch.command)
+        }\n参数：${
+          JSON.stringify(launch.args)
+        }`
+    )
+    .join("\n\n");
+  if (detail.length > MAX_LSP_APPROVAL_DETAIL_LENGTH) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      `Language Server 启动命令与参数过长，无法在确认框中完整展示；请缩短到 ${MAX_LSP_APPROVAL_DETAIL_LENGTH} 个字符以内后重试。`
+    );
+  }
+  return detail;
+}
+
+function languageServerDisplayName(
+  language: InstallableLanguageServerDto
+): string {
+  return {
+    typescript: "TypeScript",
+    vue: "Vue",
+    java: "Java",
+    python: "Python",
+    go: "Go",
+    kotlin: "Kotlin",
+    csharp: "C#",
+    rust: "Rust"
+  }[language];
+}
+
 type IpcHandler<Channel extends IpcChannel> = (
   event: IpcMainInvokeEvent,
   ...args: IpcArguments<Channel>
@@ -1422,6 +1517,43 @@ export function validateUpdateAppSettingsRequest(
         50_000
       );
     }
+    if ("maxTotalSourceMb" in request.codeAnalysis) {
+      codeAnalysis.maxTotalSourceMb =
+        requireIntegerInRange(
+          request.codeAnalysis.maxTotalSourceMb,
+          MIN_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+          MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB
+        );
+    }
+    if ("maxGraphNodes" in request.codeAnalysis) {
+      codeAnalysis.maxGraphNodes = requireIntegerInRange(
+        request.codeAnalysis.maxGraphNodes,
+        MIN_CODE_ANALYSIS_GRAPH_NODES,
+        MAX_CODE_ANALYSIS_GRAPH_NODES
+      );
+    }
+    if ("maxGraphEdges" in request.codeAnalysis) {
+      codeAnalysis.maxGraphEdges = requireIntegerInRange(
+        request.codeAnalysis.maxGraphEdges,
+        MIN_CODE_ANALYSIS_GRAPH_EDGES,
+        MAX_CODE_ANALYSIS_GRAPH_EDGES
+      );
+    }
+    if ("maxRequestChains" in request.codeAnalysis) {
+      codeAnalysis.maxRequestChains =
+        requireIntegerInRange(
+          request.codeAnalysis.maxRequestChains,
+          MIN_CODE_ANALYSIS_REQUEST_CHAINS,
+          MAX_CODE_ANALYSIS_REQUEST_CHAINS
+        );
+    }
+    if ("maxDiagnostics" in request.codeAnalysis) {
+      codeAnalysis.maxDiagnostics = requireIntegerInRange(
+        request.codeAnalysis.maxDiagnostics,
+        MIN_CODE_ANALYSIS_DIAGNOSTICS,
+        MAX_CODE_ANALYSIS_DIAGNOSTICS
+      );
+    }
     if ("maxFileSizeKb" in request.codeAnalysis) {
       codeAnalysis.maxFileSizeKb = requireIntegerInRange(
         request.codeAnalysis.maxFileSizeKb,
@@ -1468,6 +1600,42 @@ export function validateUpdateAppSettingsRequest(
       codeAnalysis.java =
         validateLanguageServerSettingsPatch(
           request.codeAnalysis.java
+        );
+    }
+    if ("vue" in request.codeAnalysis) {
+      codeAnalysis.vue =
+        validateLanguageServerSettingsPatch(
+          request.codeAnalysis.vue
+        );
+    }
+    if ("python" in request.codeAnalysis) {
+      codeAnalysis.python =
+        validateLanguageServerSettingsPatch(
+          request.codeAnalysis.python
+        );
+    }
+    if ("go" in request.codeAnalysis) {
+      codeAnalysis.go =
+        validateLanguageServerSettingsPatch(
+          request.codeAnalysis.go
+        );
+    }
+    if ("kotlin" in request.codeAnalysis) {
+      codeAnalysis.kotlin =
+        validateLanguageServerSettingsPatch(
+          request.codeAnalysis.kotlin
+        );
+    }
+    if ("csharp" in request.codeAnalysis) {
+      codeAnalysis.csharp =
+        validateLanguageServerSettingsPatch(
+          request.codeAnalysis.csharp
+        );
+    }
+    if ("rust" in request.codeAnalysis) {
+      codeAnalysis.rust =
+        validateLanguageServerSettingsPatch(
+          request.codeAnalysis.rust
         );
     }
     result.codeAnalysis = codeAnalysis;
@@ -2731,13 +2899,43 @@ export function validateOpenExternalApplicationRequest(
               ),
               path: validateRelativeWorktreeFilePath(
                 request.context.path
-              )
+              ),
+              ...("line" in request.context &&
+              request.context.line !== undefined
+                ? {
+                    line: requireIntegerInRange(
+                      request.context.line,
+                      1,
+                      10_000_000
+                    )
+                  }
+                : {}),
+              ...("column" in request.context &&
+              request.context.column !== undefined
+                ? {
+                    column: requireIntegerInRange(
+                      request.context.column,
+                      1,
+                      100_000
+                    )
+                  }
+                : {})
             }
         : undefined;
   if (!context) {
     throw new GitError(
       "INVALID_REQUEST",
       "External applications support only Workspace, repository, and file contexts."
+    );
+  }
+  if (
+    context.scope === "file" &&
+    context.column !== undefined &&
+    context.line === undefined
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Opening an editor column requires a line number."
     );
   }
 
@@ -3487,6 +3685,60 @@ function validateLanguageServerSettingsPatch(
       MAX_LSP_ARGUMENTS,
       MAX_LSP_ARGUMENT_LENGTH
     );
+  }
+  if ("maxDocuments" in value) {
+    result.maxDocuments = requireIntegerInRange(
+      value.maxDocuments,
+      MIN_LSP_DOCUMENTS,
+      MAX_LSP_DOCUMENTS
+    );
+  }
+  if ("maxSymbolsPerDocument" in value) {
+    result.maxSymbolsPerDocument =
+      requireIntegerInRange(
+        value.maxSymbolsPerDocument,
+        MIN_LSP_SYMBOLS_PER_DOCUMENT,
+        MAX_LSP_SYMBOLS_PER_DOCUMENT
+      );
+  }
+  if ("maxCallHierarchyRequests" in value) {
+    result.maxCallHierarchyRequests =
+      requireIntegerInRange(
+        value.maxCallHierarchyRequests,
+        MIN_LSP_REQUESTS,
+        MAX_LSP_REQUESTS
+      );
+  }
+  if ("maxTypeHierarchyRequests" in value) {
+    result.maxTypeHierarchyRequests =
+      requireIntegerInRange(
+        value.maxTypeHierarchyRequests,
+        MIN_LSP_REQUESTS,
+        MAX_LSP_REQUESTS
+      );
+  }
+  if ("maxReferenceRequests" in value) {
+    result.maxReferenceRequests = requireIntegerInRange(
+      value.maxReferenceRequests,
+      MIN_LSP_REQUESTS,
+      MAX_LSP_REQUESTS
+    );
+  }
+  if ("maxDocumentationRequests" in value) {
+    result.maxDocumentationRequests =
+      requireIntegerInRange(
+        value.maxDocumentationRequests,
+        MIN_LSP_REQUESTS,
+        MAX_LSP_REQUESTS
+      );
+  }
+  if ("maxReferencesPerSymbol" in value) {
+    result.maxReferencesPerSymbol =
+      requireIntegerInRange(
+        value.maxReferencesPerSymbol,
+        MIN_LSP_REFERENCES_PER_SYMBOL,
+        MAX_LSP_REFERENCES_PER_SYMBOL
+      );
   }
   return result;
 }

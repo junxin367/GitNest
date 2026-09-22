@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createReadOnlyProcessEnvironment,
   createWritableProcessEnvironment,
+  GitProcessScheduler,
   runProcess,
   runProcessBuffer
 } from "./git-process-runner";
@@ -128,5 +129,88 @@ describe("createReadOnlyProcessEnvironment", () => {
     expect(result.stdout).toEqual(
       Buffer.from([0, 255, 1, 128])
     );
+  });
+});
+
+describe("GitProcessScheduler", () => {
+  it("starts an interactive command while the shared lane is occupied", async () => {
+    const scheduler = new GitProcessScheduler({
+      interactiveConcurrency: 1,
+      sharedConcurrency: 1
+    });
+    const started: string[] = [];
+    let releaseBackground!: () => void;
+    const firstBackground = scheduler.run(
+      "background",
+      undefined,
+      () =>
+        new Promise<void>((resolve) => {
+          started.push("background-1");
+          releaseBackground = resolve;
+        })
+    );
+    await Promise.resolve();
+    const secondBackground = scheduler.run(
+      "background",
+      undefined,
+      async () => {
+        started.push("background-2");
+      }
+    );
+    const interactive = scheduler.run(
+      "interactive",
+      undefined,
+      async () => {
+        started.push("interactive");
+      }
+    );
+
+    await interactive;
+    expect(started).toEqual([
+      "background-1",
+      "interactive"
+    ]);
+
+    releaseBackground();
+    await Promise.all([firstBackground, secondBackground]);
+    expect(started).toEqual([
+      "background-1",
+      "interactive",
+      "background-2"
+    ]);
+  });
+
+  it("does not start a queued command after it is cancelled", async () => {
+    const scheduler = new GitProcessScheduler({
+      sharedConcurrency: 1
+    });
+    let releaseBackground!: () => void;
+    let queuedStarted = false;
+    const firstBackground = scheduler.run(
+      "background",
+      undefined,
+      () =>
+        new Promise<void>((resolve) => {
+          releaseBackground = resolve;
+        })
+    );
+    await Promise.resolve();
+    const controller = new AbortController();
+    const queued = scheduler.run(
+      "background",
+      controller.signal,
+      async () => {
+        queuedStarted = true;
+      }
+    );
+
+    controller.abort();
+
+    await expect(queued).rejects.toMatchObject({
+      code: "COMMAND_CANCELLED"
+    });
+    releaseBackground();
+    await firstBackground;
+    expect(queuedStarted).toBe(false);
   });
 });

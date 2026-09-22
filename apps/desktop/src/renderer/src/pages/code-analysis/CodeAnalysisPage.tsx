@@ -7,14 +7,20 @@ import {
 
 import type {
   AppSettingsDto,
+  CodeAnalysisDiagnosticDto,
+  CodeAnalysisSnapshotDto,
   CodeAnalysisScopeDto,
   CodeGraphNodeDto,
   CodeRequestChainDto,
+  ExternalApplicationKindDto,
+  InstallableLanguageServerDto,
+  LanguageServerLanguageDto,
   RepositoryDiffDto,
   WorkspaceDetailsDto
 } from "@gitnest/contracts";
 
 import { useCodeAnalysis } from "../../entities/code-analysis/useCodeAnalysis";
+import { useExternalApplications } from "../../features/external-application/useExternalApplications";
 import { Button } from "../../shared/ui/Button";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
@@ -34,10 +40,13 @@ import {
 } from "../../widgets/diff-workspace/DiffPanel";
 import { repositoryDiffWorkspaceConfiguration } from "../../widgets/diff-workspace/diffWorkspaceConfiguration";
 import {
+  codeNodeDisplayName,
   countSearchableCodeNodes,
+  deduplicateRequestChains,
   filterChainsWithMetadata,
+  MAX_VISIBLE_CODE_NODES,
   MAX_VISIBLE_REQUEST_CHAINS,
-  searchCodeNodes
+  searchCodeNodesWithMetadata
 } from "./codeAnalysisNavigation";
 import { CodeRelationGraph } from "./CodeRelationGraph";
 import { NodeSourceViewer } from "./NodeSourceViewer";
@@ -55,10 +64,17 @@ type AnalysisNavigationMode = "chains" | "symbols";
 interface AnalysisProgressPresentation {
   stage: string;
   message: string;
+  startedAt: string | undefined;
   completed: number;
   total: number;
   ratio: number;
   countLabel: string;
+}
+
+interface AnalysisNotice {
+  title: string;
+  message: string;
+  tone: "success" | "error" | "info";
 }
 
 const ANALYSIS_METHOD_OPTIONS = [
@@ -102,6 +118,10 @@ export function CodeAnalysisPage({
   const nodeFilterRef = useRef<HTMLInputElement>(null);
   const [graphFocus, setGraphFocus] =
     useState<AnalysisFocus>(null);
+  const [
+    graphSelectionCleared,
+    setGraphSelectionCleared
+  ] = useState(false);
   const [inspectedNodeId, setInspectedNodeId] = useState<
     string | null
   >(null);
@@ -113,6 +133,8 @@ export function CodeAnalysisPage({
     title: string;
     message: string;
   } | null>(null);
+  const [actionNotice, setActionNotice] =
+    useState<AnalysisNotice | null>(null);
   const selectedEntry =
     workspace?.entries.find(
       (entry) => entry.id === workspace.selectedEntryId
@@ -135,33 +157,47 @@ export function CodeAnalysisPage({
     )
       ? availableSnapshot
       : null;
+  const requestChains = useMemo(
+    () =>
+      deduplicateRequestChains(
+        snapshot?.requestChains ?? []
+      ),
+    [snapshot?.requestChains]
+  );
   const chainFilterResult = useMemo(
     () =>
       filterChainsWithMetadata(
-        snapshot?.requestChains ?? [],
+        requestChains,
         snapshot?.nodes ?? [],
         chainQuery,
-        method
+        method,
+        MAX_VISIBLE_REQUEST_CHAINS
       ),
     [
       chainQuery,
       method,
-      snapshot?.nodes,
-      snapshot?.requestChains
+      requestChains,
+      snapshot?.nodes
     ]
   );
   const chains = chainFilterResult.chains;
-  const nodeResults = useMemo(
-    () => searchCodeNodes(snapshot?.nodes ?? [], nodeQuery),
+  const nodeFilterResult = useMemo(
+    () =>
+      searchCodeNodesWithMetadata(
+        snapshot?.nodes ?? [],
+        nodeQuery,
+        MAX_VISIBLE_CODE_NODES
+      ),
     [nodeQuery, snapshot?.nodes]
   );
+  const nodeResults = nodeFilterResult.nodes;
   const searchableNodeCount = useMemo(
     () => countSearchableCodeNodes(snapshot?.nodes ?? []),
     [snapshot?.nodes]
   );
   const selectedChain =
     graphFocus?.kind === "chain"
-      ? snapshot?.requestChains.find(
+      ? requestChains.find(
           (chain) => chain.id === graphFocus.id
         ) ?? null
       : null;
@@ -169,9 +205,43 @@ export function CodeAnalysisPage({
     graphFocus?.kind === "node"
       ? graphFocus.id
       : selectedChain?.clientNodeId ?? null;
+  const graphFocusNode =
+    snapshot?.nodes.find(
+      (node) => node.id === graphFocusNodeId
+    ) ?? null;
   const selectedNode = snapshot?.nodes.find(
     (node) => node.id === inspectedNodeId
   ) ?? null;
+  const graphSelectedNodeId = graphSelectionCleared
+    ? null
+    : selectedNode?.id ?? graphFocusNodeId;
+  const externalApplications = useExternalApplications(
+    selectedNode
+      ? {
+          scope: "repository",
+          target: {
+            repositoryId:
+              selectedNode.location.repositoryId,
+            worktreeId: selectedNode.location.worktreeId
+          }
+        }
+      : undefined
+  );
+  const editorProfile = useMemo(() => {
+    const editors = externalApplications.profiles.filter(
+      (profile) => isEditorApplication(profile.kind)
+    );
+    return (
+      editors.find(
+        (profile) =>
+          profile.kind ===
+          externalApplications.preferredProfile?.kind
+      ) ?? editors[0]
+    );
+  }, [
+    externalApplications.preferredProfile?.kind,
+    externalApplications.profiles
+  ]);
 
   useEffect(() => {
     if (!availableSnapshot) {
@@ -211,18 +281,20 @@ export function CodeAnalysisPage({
   useEffect(() => {
     if (!snapshot) {
       setGraphFocus(null);
+      setGraphSelectionCleared(false);
       setInspectedNodeId(null);
       setNodeFileExpanded(false);
       setGraphFullscreen(false);
       return;
     }
-    const nextChain = snapshot.requestChains[0];
+    const nextChain = requestChains[0];
     if (nextChain) {
       setNavigationMode("chains");
       setGraphFocus({
         kind: "chain",
         id: nextChain.id
       });
+      setGraphSelectionCleared(false);
       setInspectedNodeId(null);
       setNodeFileExpanded(false);
       return;
@@ -242,6 +314,7 @@ export function CodeAnalysisPage({
           }
         : null
     );
+    setGraphSelectionCleared(false);
     setInspectedNodeId(null);
     setNodeFileExpanded(false);
   }, [snapshot?.analysisId]);
@@ -265,6 +338,16 @@ export function CodeAnalysisPage({
   }, [graphFullscreen]);
 
   const running = analysis.state.state === "running";
+  const connectedLanguageServers =
+    snapshot?.languageServers.filter(
+      (server) => server.state === "connected"
+    ) ?? [];
+  const visibleLanguageServers =
+    connectedLanguageServers.length > 1
+      ? (snapshot?.languageServers.filter(
+          (server) => server.state !== "connected"
+        ) ?? [])
+      : (snapshot?.languageServers ?? []);
   const scopeDataPending =
     availableSnapshot !== null &&
     availableSnapshot.scope !== scope;
@@ -291,6 +374,7 @@ export function CodeAnalysisPage({
               : analysis.action === "cancelling"
                 ? "正在取消代码分析"
                 : "正在准备代码分析"),
+          startedAt: analysis.state.startedAt,
           completed: progress?.completed ?? 0,
           total: progress?.total ?? 1,
           ratio: progressRatio,
@@ -305,6 +389,7 @@ export function CodeAnalysisPage({
       kind: "chain",
       id: chain.id
     });
+    setGraphSelectionCleared(false);
     setInspectedNodeId(null);
     setNodeFileExpanded(false);
   };
@@ -314,6 +399,7 @@ export function CodeAnalysisPage({
       kind: "node",
       id: nodeId
     });
+    setGraphSelectionCleared(false);
     setInspectedNodeId(nodeId);
     setNodeFileExpanded(false);
   };
@@ -321,9 +407,11 @@ export function CodeAnalysisPage({
     if (nodeId !== inspectedNodeId) {
       setNodeFileExpanded(false);
     }
+    setGraphSelectionCleared(false);
     setInspectedNodeId(nodeId);
   };
   const clearNodeInspection = () => {
+    setGraphSelectionCleared(true);
     setInspectedNodeId(null);
     setNodeFileExpanded(false);
   };
@@ -345,6 +433,7 @@ export function CodeAnalysisPage({
     setNodeQuery("");
     setMethod("all");
     setGraphFocus(null);
+    setGraphSelectionCleared(false);
     setInspectedNodeId(null);
     setNodeFileExpanded(false);
     setGraphFullscreen(false);
@@ -362,7 +451,7 @@ export function CodeAnalysisPage({
     }
   };
   const installLanguageServer = async (
-    language: "typescript" | "java"
+    language: InstallableLanguageServerDto
   ) => {
     const result =
       await analysis.installLanguageServer(language);
@@ -374,10 +463,49 @@ export function CodeAnalysisPage({
         result.status === "already-installed"
           ? "Language Server 已检测到"
           : "Language Server 安装完成",
-      message: `${result.message} 正在重新运行代码分析。`
+      message: `${result.message} 请手动运行代码分析以使用该服务。`
     });
     await onReloadSettings();
-    await analysis.start(snapshot?.scope ?? scope);
+  };
+  const buildFullIndex = async () => {
+    if (running || analysis.action === "starting") {
+      return;
+    }
+    const previousScope = scope;
+    setScope("workspace");
+    setNavigationMode("chains");
+    setChainQuery("");
+    setNodeQuery("");
+    setMethod("all");
+    setGraphFocus(null);
+    setGraphSelectionCleared(false);
+    setInspectedNodeId(null);
+    setNodeFileExpanded(false);
+    setGraphFullscreen(false);
+    const started = await analysis.start("workspace");
+    if (!started) {
+      setScope(previousScope);
+    }
+  };
+  const openSelectedNodeInEditor = async () => {
+    if (!selectedNode || !editorProfile) {
+      return;
+    }
+    const opened = await externalApplications.openFile(
+      editorProfile.kind,
+      selectedNode.location.path,
+      selectedNode.location.line,
+      selectedNode.location.column
+    );
+    if (!opened) {
+      setActionNotice({
+        title: "无法在编辑器中定位",
+        message:
+          externalApplications.error?.message ??
+          `未能通过 ${editorProfile.label} 打开该代码位置。`,
+        tone: "error"
+      });
+    }
   };
 
   const content = (
@@ -400,6 +528,15 @@ export function CodeAnalysisPage({
             onClose={() => setInstallNotice(null)}
             title={installNotice.title}
             tone="success"
+          />
+        )}
+        {actionNotice && (
+          <Toast
+            closeLabel="关闭操作提示"
+            message={actionNotice.message}
+            onClose={() => setActionNotice(null)}
+            title={actionNotice.title}
+            tone={actionNotice.tone}
           />
         )}
       </ToastViewport>
@@ -523,7 +660,7 @@ export function CodeAnalysisPage({
             />
             <SummaryCard
               label="代码节点"
-              value={snapshot.stats.symbolCount}
+              value={searchableNodeCount}
             />
             <SummaryCard
               label="关系边"
@@ -531,7 +668,7 @@ export function CodeAnalysisPage({
             />
             <SummaryCard
               label="请求链"
-              value={snapshot.stats.requestChainCount}
+              value={requestChains.length}
             />
             <SummaryCard
               label="缓存复用"
@@ -554,25 +691,45 @@ export function CodeAnalysisPage({
             <span>
               耗时 {formatDuration(snapshot.stats.durationMs)}
             </span>
-            {snapshot.languageServers.map((server) => (
+            {connectedLanguageServers.length > 1 && (
+              <span
+                aria-label={`已连接的 Language Server：${connectedLanguageServers
+                  .map((server) =>
+                    languageServerName(server.language)
+                  )
+                  .join("、")}`}
+                className="analysis-server-state state-connected"
+                title={`已连接：${connectedLanguageServers
+                  .map((server) =>
+                    languageServerName(server.language)
+                  )
+                  .join("、")}`}
+              >
+                LSP：{connectedLanguageServers.length} 个已连接
+              </span>
+            )}
+            {visibleLanguageServers.map((server) => (
               <span
                 className={`analysis-server-state state-${server.state}`}
                 key={server.language}
                 title={server.message}
               >
                 <span>
-                  {server.language === "typescript"
-                    ? "TS LSP"
-                    : "Java LSP"}
+                  {languageServerLabel(server.language)}
                   ：{serverStateLabel(server.state)}
                 </span>
-                {server.state === "unavailable" && (
+                {(server.state === "unavailable" ||
+                  (server.state === "disabled" &&
+                    settings.codeAnalysis[server.language]
+                      ?.enabled === false)) && (
                   <Button
-                    aria-label={`安装${
-                      server.language === "typescript"
-                        ? " TypeScript"
-                        : " Java"
-                    } Language Server`}
+                    aria-label={`${
+                      server.state === "disabled"
+                        ? "安装并启用"
+                        : "安装"
+                    } ${languageServerName(
+                      server.language
+                    )} Language Server`}
                     className="analysis-server-install"
                     disabled={
                       running ||
@@ -596,7 +753,9 @@ export function CodeAnalysisPage({
                     {analysis.installingLanguage ===
                     server.language
                       ? "安装中…"
-                      : "安装"}
+                      : server.state === "disabled"
+                        ? "安装并启用"
+                        : "安装"}
                   </Button>
                 )}
               </span>
@@ -618,10 +777,25 @@ export function CodeAnalysisPage({
                 </ul>
               </details>
             )}
-            {snapshot.stats.truncated && (
-              <span className="analysis-truncated">
-                结果已按性能上限截断
-              </span>
+            {snapshot.indexStatus?.resultCompleteness ===
+            "partial" ? (
+              <AnalysisIndexStatusMenu
+                disabled={
+                  running ||
+                  analysis.action === "starting"
+                }
+                onBuildFullIndex={() =>
+                  void buildFullIndex()
+                }
+                status={snapshot.indexStatus}
+                truncated={snapshot.stats.truncated}
+              />
+            ) : (
+              snapshot.stats.truncated && (
+                <span className="analysis-truncated">
+                  结果已按性能上限截断
+                </span>
+              )
             )}
           </section>
 
@@ -658,8 +832,24 @@ export function CodeAnalysisPage({
                     />
                   </header>
                   <NodeDetails
+                    diagnostics={diagnosticsForNode(
+                      snapshot,
+                      selectedNode.id
+                    )}
+                    editorBusy={
+                      externalApplications.loading ||
+                      externalApplications.active !== null
+                    }
+                    {...(editorProfile
+                      ? {
+                          editorLabel: editorProfile.label
+                        }
+                      : {})}
                     fileExpanded={nodeFileExpanded}
                     node={selectedNode}
+                    onOpenInEditor={() =>
+                      void openSelectedNodeInEditor()
+                    }
                     onToggleFile={() =>
                       setNodeFileExpanded(
                         (current) => !current
@@ -700,7 +890,7 @@ export function CodeAnalysisPage({
                   >
                     请求链
                     <span>
-                      {snapshot.requestChains.length}
+                      {requestChains.length}
                     </span>
                   </button>
                   <button
@@ -718,7 +908,7 @@ export function CodeAnalysisPage({
                     role="tab"
                     type="button"
                   >
-                    函数 / 接口
+                    代码节点
                     <span>{searchableNodeCount}</span>
                   </button>
                 </div>
@@ -755,8 +945,8 @@ export function CodeAnalysisPage({
                   </>
                 ) : (
                   <Input
-                    aria-label="搜索函数或接口"
-                    clearLabel="清空函数或接口筛选"
+                    aria-label="搜索代码节点"
+                    clearLabel="清空代码节点筛选"
                     fieldClassName="analysis-chain-filter"
                     fullWidth
                     leading={<Icon name="search" size={14} />}
@@ -782,7 +972,7 @@ export function CodeAnalysisPage({
                         focusNode(nodeResults[0].id);
                       }
                     }}
-                    placeholder="搜索函数、方法或接口"
+                    placeholder="搜索节点名称、限定名或文件路径"
                     ref={nodeFilterRef}
                     size="small"
                     value={nodeQuery}
@@ -870,7 +1060,9 @@ export function CodeAnalysisPage({
                         <span
                           className={`analysis-node-dot node-${node.kind}`}
                         />
-                        <strong>{node.name}</strong>
+                        <strong title={node.qualifiedName}>
+                          {codeNodeDisplayName(node)}
+                        </strong>
                         <small>
                           {nodeKindLabel(node)} ·{" "}
                           {node.location.path}:
@@ -881,7 +1073,7 @@ export function CodeAnalysisPage({
                     {nodeResults.length === 0 && (
                       <div className="analysis-list-empty">
                         <Icon name="search" size={20} />
-                        <strong>没有匹配的函数或接口</strong>
+                        <strong>没有匹配的代码节点</strong>
                         <p>
                           可按名称、限定名或文件路径搜索。
                         </p>
@@ -928,14 +1120,10 @@ export function CodeAnalysisPage({
                     <span>
                       {selectedChain
                         ? selectedChain.title
-                        : graphFocusNodeId
-                          ? `${
-                              snapshot.nodes.find(
-                                (node) =>
-                                  node.id ===
-                                  graphFocusNodeId
-                              )?.name ?? "代码节点"
-                            } 的上下游`
+                        : graphFocusNode
+                          ? `${codeNodeDisplayName(
+                              graphFocusNode
+                            )} 的上下游`
                           : "代码节点上下游"}
                     </span>
                   </div>
@@ -980,9 +1168,7 @@ export function CodeAnalysisPage({
                   focusNodeId={graphFocusNodeId}
                   onClearSelection={clearNodeInspection}
                   onSelectNode={inspectNode}
-                  selectedNodeId={
-                    selectedNode?.id ?? graphFocusNodeId
-                  }
+                  selectedNodeId={graphSelectedNodeId}
                   snapshot={snapshot}
                 />
               </section>
@@ -1041,6 +1227,9 @@ function AnalysisProgressPanel({
   fullPage?: boolean;
 }) {
   const percentage = Math.round(presentation.ratio * 100);
+  const elapsedTime = useAnalysisElapsedTime(
+    presentation.startedAt
+  );
 
   return (
     <section
@@ -1067,7 +1256,10 @@ function AnalysisProgressPanel({
           {presentation.stage}
           <strong>{presentation.message}</strong>
         </span>
-        <span>{presentation.countLabel}</span>
+        <span aria-live="off">
+          执行时间 {formatExecutionTime(elapsedTime)} ·{" "}
+          {presentation.countLabel}
+        </span>
       </div>
       <div
         aria-label="代码分析完成进度"
@@ -1088,6 +1280,123 @@ function AnalysisProgressPanel({
         />
       </div>
     </section>
+  );
+}
+
+function useAnalysisElapsedTime(
+  startedAt?: string
+): number {
+  const [fallbackStartedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(fallbackStartedAt);
+
+  useEffect(() => {
+    const update = () => setNow(Date.now());
+    update();
+    const timer = window.setInterval(update, 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const parsedStartedAt = startedAt
+    ? Date.parse(startedAt)
+    : Number.NaN;
+  return Math.max(
+    0,
+    now -
+      (Number.isFinite(parsedStartedAt)
+        ? parsedStartedAt
+        : fallbackStartedAt)
+  );
+}
+
+function AnalysisIndexStatusMenu({
+  status,
+  truncated,
+  disabled,
+  onBuildFullIndex
+}: {
+  status: NonNullable<
+    CodeAnalysisSnapshotDto["indexStatus"]
+  >;
+  truncated: boolean;
+  disabled: boolean;
+  onBuildFullIndex(): void;
+}) {
+  return (
+    <details className="analysis-index-status-menu">
+      <summary
+        aria-label="查看代码索引状态"
+        title={status.message}
+      >
+        {truncated
+          ? "结果已按性能上限截断"
+          : "局部索引"}
+      </summary>
+      <div className="analysis-index-status-popover menu-surface">
+        <strong>局部索引</strong>
+        <span>{status.message}</span>
+        {status.lastFullIndexAt && (
+          <small>
+            上次完整索引：
+            {new Date(
+              status.lastFullIndexAt
+            ).toLocaleString()}
+          </small>
+        )}
+        <Button
+          disabled={disabled}
+          onClick={onBuildFullIndex}
+          size="small"
+          type="button"
+        >
+          <Icon name="refresh" size={14} />
+          建立完整索引
+        </Button>
+      </div>
+    </details>
+  );
+}
+
+function DiagnosticList({
+  diagnostics
+}: {
+  diagnostics: CodeAnalysisDiagnosticDto[];
+}) {
+  if (diagnostics.length === 0) {
+    return null;
+  }
+  return (
+    <section className="analysis-diagnostics">
+      <h3>断链诊断</h3>
+      <ul>
+        {diagnostics.map((diagnostic) => (
+          <li key={diagnostic.id}>
+            <Icon
+              name={
+                diagnostic.severity === "warning"
+                  ? "warning"
+                  : "operations"
+              }
+              size={13}
+            />
+            <div>
+              <strong>{diagnostic.message}</strong>
+              <span>{diagnostic.evidence}</span>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function diagnosticsForNode(
+  snapshot: CodeAnalysisSnapshotDto,
+  nodeId: string
+): CodeAnalysisDiagnosticDto[] {
+  return (snapshot.diagnostics ?? []).filter(
+    (diagnostic) =>
+      diagnostic.nodeId === nodeId ||
+      diagnostic.relatedNodeIds.includes(nodeId)
   );
 }
 
@@ -1369,11 +1678,19 @@ function AnalysisMethodDropdown({
 
 function NodeDetails({
   node,
+  diagnostics,
+  editorBusy,
+  editorLabel,
   fileExpanded,
+  onOpenInEditor,
   onToggleFile
 }: {
   node: CodeGraphNodeDto;
+  diagnostics: CodeAnalysisDiagnosticDto[];
+  editorBusy: boolean;
+  editorLabel?: string;
   fileExpanded: boolean;
+  onOpenInEditor(): void;
   onToggleFile(): void;
 }) {
   const endLine =
@@ -1437,34 +1754,49 @@ function NodeDetails({
               ))}
             </section>
           )}
+          <DiagnosticList diagnostics={diagnostics} />
         </div>
       </div>
       <section className="analysis-node-diff-trigger">
-        <Button
-          aria-controls="analysis-node-diff-drawer"
-          aria-expanded={fileExpanded}
-          onClick={onToggleFile}
-          size="small"
-          type="button"
-        >
-          <Icon
-            name={
-              fileExpanded
-                ? "close"
-                : node.changed
-                  ? "diff"
-                  : "fileCode"
-            }
-            size={14}
-          />
-          {fileExpanded
-            ? node.changed
-              ? "收起文件 Diff"
-              : "收起代码"
-            : node.changed
-              ? "查看文件 Diff"
-              : "查看代码"}
-        </Button>
+        <div className="analysis-node-actions">
+          <Button
+            aria-controls="analysis-node-diff-drawer"
+            aria-expanded={fileExpanded}
+            onClick={onToggleFile}
+            size="small"
+            type="button"
+          >
+            <Icon
+              name={
+                fileExpanded
+                  ? "close"
+                  : node.changed
+                    ? "diff"
+                    : "fileCode"
+              }
+              size={14}
+            />
+            {fileExpanded
+              ? node.changed
+                ? "收起文件 Diff"
+                : "收起代码"
+              : node.changed
+                ? "查看文件 Diff"
+                : "查看代码"}
+          </Button>
+          {editorLabel && (
+            <Button
+              disabled={editorBusy}
+              loading={editorBusy}
+              onClick={onOpenInEditor}
+              size="small"
+              type="button"
+            >
+              <Icon name="external" size={14} />
+              在 {editorLabel} 中定位
+            </Button>
+          )}
+        </div>
         <p>
           节点范围 L{node.location.line}
           {endLine > node.location.line
@@ -1705,10 +2037,36 @@ function serverStateLabel(
   }[state];
 }
 
+function languageServerLabel(
+  language: LanguageServerLanguageDto
+): string {
+  return `${languageServerName(language)} LSP`;
+}
+
+function languageServerName(
+  language: LanguageServerLanguageDto
+): string {
+  return {
+    typescript: "TypeScript",
+    vue: "Vue",
+    java: "Java",
+    python: "Python",
+    go: "Go",
+    kotlin: "Kotlin",
+    csharp: "C#",
+    rust: "Rust"
+  }[language];
+}
+
 function nodeKindLabel(node: CodeGraphNodeDto): string {
   return {
     file: "文件",
+    module: "模块",
+    package: "包",
     class: "类",
+    interface: "接口",
+    enum: "枚举",
+    property: "属性",
     function: "函数",
     method: "方法",
     "client-request": "前端请求",
@@ -1736,6 +2094,17 @@ function confidenceLabel(
     probable: "高概率",
     heuristic: "启发式"
   }[value];
+}
+
+function isEditorApplication(
+  kind: ExternalApplicationKindDto
+): boolean {
+  return (
+    kind === "vscode" ||
+    kind === "cursor" ||
+    kind === "intellij-idea" ||
+    kind === "sublime-text"
+  );
 }
 
 function diffModeLabel(
@@ -1792,4 +2161,23 @@ function formatDuration(milliseconds: number): string {
     return `${milliseconds} ms`;
   }
   return `${(milliseconds / 1_000).toFixed(1)} s`;
+}
+
+function formatExecutionTime(milliseconds: number): string {
+  const totalSeconds = Math.max(
+    0,
+    Math.floor(milliseconds / 1_000)
+  );
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor(
+    (totalSeconds % 3_600) / 60
+  );
+  const seconds = totalSeconds % 60;
+  const parts =
+    hours > 0
+      ? [hours, minutes, seconds]
+      : [minutes, seconds];
+  return parts
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
 }

@@ -2,7 +2,26 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createDefaultAppSettings,
+  LANGUAGE_SERVER_LANGUAGES,
+  MAX_CODE_ANALYSIS_DIAGNOSTICS,
+  MAX_CODE_ANALYSIS_GRAPH_EDGES,
+  MAX_CODE_ANALYSIS_GRAPH_NODES,
+  MAX_CODE_ANALYSIS_REQUEST_CHAINS,
+  MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+  MAX_LSP_DOCUMENTS,
+  MAX_LSP_REFERENCES_PER_SYMBOL,
+  MAX_LSP_REQUESTS,
+  MAX_LSP_SYMBOLS_PER_DOCUMENT,
   MAX_DIFF_COMMIT_PANEL_HEIGHT,
+  MIN_CODE_ANALYSIS_DIAGNOSTICS,
+  MIN_CODE_ANALYSIS_GRAPH_EDGES,
+  MIN_CODE_ANALYSIS_GRAPH_NODES,
+  MIN_CODE_ANALYSIS_REQUEST_CHAINS,
+  MIN_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+  MIN_LSP_DOCUMENTS,
+  MIN_LSP_REFERENCES_PER_SYMBOL,
+  MIN_LSP_REQUESTS,
+  MIN_LSP_SYMBOLS_PER_DOCUMENT,
   MIN_DIFF_COMMIT_PANEL_HEIGHT,
   type AppSettingsDto
 } from "@gitnest/contracts";
@@ -10,6 +29,7 @@ import {
 import {
   broadcastAppSettingsChanged,
   captureAppSettingsMutation,
+  formatLanguageServerLaunchApprovalDetail,
   isTrustedSenderUrl,
   validateAccountRemovalImpactRequest,
   validateBindAccountRequest,
@@ -351,6 +371,40 @@ describe("repository command IPC validation", () => {
       },
       kind: "file-explorer"
     });
+    expect(
+      validateOpenExternalApplicationRequest({
+        context: {
+          scope: "file",
+          target,
+          path: "src/index.ts",
+          line: 42,
+          column: 7
+        },
+        kind: "cursor"
+      })
+    ).toEqual({
+      context: {
+        scope: "file",
+        target,
+        path: "src/index.ts",
+        line: 42,
+        column: 7
+      },
+      kind: "cursor"
+    });
+    expect(() =>
+      validateOpenExternalApplicationRequest({
+        context: {
+          scope: "file",
+          target,
+          path: "src/index.ts",
+          column: 7
+        },
+        kind: "cursor"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
     expect(() =>
       validateOpenExternalApplicationRequest({
         context: {
@@ -473,22 +527,45 @@ describe("repository command IPC validation", () => {
 });
 
 describe("Language Server installation IPC validation", () => {
-  it("accepts only the fixed installable languages", () => {
-    expect(
-      validateInstallLanguageServerRequest({
-        language: "typescript"
-      })
-    ).toEqual({ language: "typescript" });
-    expect(
-      validateInstallLanguageServerRequest({
-        language: "java"
-      })
-    ).toEqual({ language: "java" });
+  it("accepts every supported Language Server language", () => {
+    for (const language of LANGUAGE_SERVER_LANGUAGES) {
+      expect(
+        validateInstallLanguageServerRequest({
+          language
+        })
+      ).toEqual({ language });
+    }
     expect(() =>
       validateInstallLanguageServerRequest({
-        language: "python",
+        language: "ruby",
         command: "powershell.exe"
       })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+
+  it("never approves Language Server arguments that cannot be shown in full", () => {
+    expect(
+      formatLanguageServerLaunchApprovalDetail([
+        {
+          language: "typescript",
+          command: "custom-language-server",
+          args: ["--stdio", "--reviewed"]
+        }
+      ])
+    ).toContain(
+      '参数：["--stdio","--reviewed"]'
+    );
+
+    expect(() =>
+      formatLanguageServerLaunchApprovalDetail([
+        {
+          language: "typescript",
+          command: "custom-language-server",
+          args: ["x".repeat(8_000)]
+        }
+      ])
     ).toThrowError(
       expect.objectContaining({ code: "INVALID_REQUEST" })
     );
@@ -515,6 +592,7 @@ describe("code analysis file IPC validation", () => {
       expect.objectContaining({ code: "INVALID_REQUEST" })
     );
   });
+
 });
 
 describe("repository history IPC validation", () => {
@@ -1008,6 +1086,107 @@ describe("application settings and AI IPC validation", () => {
       expect(() =>
         validateUpdateAppSettingsRequest({
           diff: { commitPanelHeight }
+        })
+      ).toThrowError(
+        expect.objectContaining({ code: "INVALID_REQUEST" })
+      );
+    }
+  });
+
+  it("validates the configurable relationship graph node limit", () => {
+    for (const maxGraphNodes of [
+      MIN_CODE_ANALYSIS_GRAPH_NODES,
+      MAX_CODE_ANALYSIS_GRAPH_NODES
+    ]) {
+      expect(
+        validateUpdateAppSettingsRequest({
+          codeAnalysis: { maxGraphNodes }
+        })
+      ).toEqual({
+        codeAnalysis: { maxGraphNodes }
+      });
+    }
+
+    for (const maxGraphNodes of [
+      MIN_CODE_ANALYSIS_GRAPH_NODES - 1,
+      MAX_CODE_ANALYSIS_GRAPH_NODES + 1,
+      30_000.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY
+    ]) {
+      expect(() =>
+        validateUpdateAppSettingsRequest({
+          codeAnalysis: { maxGraphNodes }
+        })
+      ).toThrowError(
+        expect.objectContaining({ code: "INVALID_REQUEST" })
+      );
+    }
+  });
+
+  it("validates configurable analysis and language-server budgets", () => {
+    const codeAnalysis = {
+      maxTotalSourceMb: MIN_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+      maxGraphEdges: MAX_CODE_ANALYSIS_GRAPH_EDGES,
+      maxRequestChains: MIN_CODE_ANALYSIS_REQUEST_CHAINS,
+      maxDiagnostics: MAX_CODE_ANALYSIS_DIAGNOSTICS,
+      java: {
+        maxDocuments: MAX_LSP_DOCUMENTS,
+        maxSymbolsPerDocument:
+          MIN_LSP_SYMBOLS_PER_DOCUMENT,
+        maxCallHierarchyRequests: MIN_LSP_REQUESTS,
+        maxTypeHierarchyRequests: MAX_LSP_REQUESTS,
+        maxReferenceRequests: MAX_LSP_REQUESTS,
+        maxDocumentationRequests: MIN_LSP_REQUESTS,
+        maxReferencesPerSymbol:
+          MIN_LSP_REFERENCES_PER_SYMBOL
+      }
+    };
+
+    expect(
+      validateUpdateAppSettingsRequest({ codeAnalysis })
+    ).toEqual({ codeAnalysis });
+
+    const invalidPatches = [
+      {
+        maxTotalSourceMb:
+          MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB + 1
+      },
+      { maxGraphEdges: MIN_CODE_ANALYSIS_GRAPH_EDGES - 1 },
+      {
+        maxRequestChains:
+          MAX_CODE_ANALYSIS_REQUEST_CHAINS + 1
+      },
+      { maxDiagnostics: MIN_CODE_ANALYSIS_DIAGNOSTICS - 1 },
+      { java: { maxDocuments: MIN_LSP_DOCUMENTS - 1 } },
+      {
+        java: {
+          maxSymbolsPerDocument:
+            MAX_LSP_SYMBOLS_PER_DOCUMENT + 1
+        }
+      },
+      {
+        java: {
+          maxTypeHierarchyRequests: MAX_LSP_REQUESTS + 1
+        }
+      },
+      {
+        java: {
+          maxReferenceRequests: MAX_LSP_REQUESTS + 1
+        }
+      },
+      {
+        java: {
+          maxReferencesPerSymbol:
+            MAX_LSP_REFERENCES_PER_SYMBOL + 1
+        }
+      }
+    ];
+
+    for (const patch of invalidPatches) {
+      expect(() =>
+        validateUpdateAppSettingsRequest({
+          codeAnalysis: patch
         })
       ).toThrowError(
         expect.objectContaining({ code: "INVALID_REQUEST" })

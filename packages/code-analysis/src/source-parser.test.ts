@@ -273,6 +273,91 @@ describe("parseSourceFile client requests", () => {
       containerQualifiedName: "preloadUser"
     });
   });
+
+  it("ignores request-like text inside comments, strings, and Vue templates", () => {
+    const parsed = parseSourceFile(
+      sourceFile("UsersPage.vue", "vue"),
+      [
+        "<template>",
+        "  <button @click=\"fetch('/api/template')\">Load</button>",
+        "</template>",
+        '<script setup lang="ts">',
+        "import axios from 'axios';",
+        "",
+        "const fixture = `fetch('/api/fixture')`;",
+        "// axios.get('/api/commented');",
+        "/* fetch('/api/block-commented'); */",
+        "",
+        "export function loadUsers() {",
+        "  const example = 'hiddenCall()';",
+        "  return axios.get('/api/users');",
+        "}",
+        "</script>"
+      ].join("\n")
+    );
+
+    expect(
+      parsed.clientRequests.map((request) => [
+        request.method,
+        request.route
+      ])
+    ).toEqual([["GET", "/api/users"]]);
+    expect(
+      parsed.symbols.find(
+        (symbol) => symbol.name === "loadUsers"
+      )?.calls.map((call) => call.name)
+    ).not.toContain("hiddenCall");
+  });
+
+  it("resolves local route constants, URL objects, and Axios instances", () => {
+    const parsed = parseSourceFile(
+      sourceFile("users-api.ts"),
+      [
+        "import axios from 'axios';",
+        "",
+        "const API_ROOT = '/api';",
+        "const USERS = '/users';",
+        "const apiClient = axios.create({ baseURL: API_ROOT });",
+        "",
+        "export async function loadUsers() {",
+        "  await apiClient.get(USERS);",
+        "  await apiClient.head('/health');",
+        "  await apiClient.request({",
+        "    url: '/settings',",
+        "    method: 'PATCH',",
+        "  });",
+        "  return fetch(new URL('/api/audit', window.location.origin));",
+        "}"
+      ].join("\n")
+    );
+
+    expect(
+      parsed.clientRequests.map((request) => [
+        request.method,
+        request.route
+      ])
+    ).toEqual([
+      ["GET", "/api/users"],
+      ["HEAD", "/api/health"],
+      ["PATCH", "/api/settings"],
+      ["GET", "/api/audit"]
+    ]);
+  });
+
+  it("does not treat mutable route variables as static constants", () => {
+    const parsed = parseSourceFile(
+      sourceFile("mutable-route.ts"),
+      [
+        "let route = '/api/first';",
+        "route = '/api/second';",
+        "export function load() {",
+        "  return fetch(route);",
+        "}"
+      ].join("\n")
+    );
+
+    expect(parsed.clientRequests).toEqual([]);
+  });
 });
 
 describe("parseSourceFile symbol documentation", () => {
@@ -347,6 +432,55 @@ describe("parseSourceFile symbol documentation", () => {
       parsed.symbols.find((symbol) => symbol.name === "getUser")
         ?.documentation
     ).toBe("Returns a user by identifier.");
+  });
+});
+
+describe("parseSourceFile Java nested symbols", () => {
+  it("indexes nested types, constant fields, and qualified field usages without LSP", () => {
+    const parsed = parseSourceFile(
+      sourceFile("ScProfDef.java", "java"),
+      [
+        "package fai.app;",
+        "public class ScProfDef {",
+        "  public static final class Flag {",
+        "    public static final int OPEN_GUIDE = 1;",
+        "  }",
+        "",
+        "  public boolean enabled(int flag) {",
+        "    return Misc.checkBit(flag, ScProfDef.Flag.OPEN_GUIDE);",
+        "  }",
+        "}"
+      ].join("\n")
+    );
+
+    expect(parsed.symbols).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Flag",
+          qualifiedName: "ScProfDef.Flag",
+          kind: "class",
+          parentQualifiedName: "ScProfDef"
+        }),
+        expect.objectContaining({
+          name: "OPEN_GUIDE",
+          qualifiedName: "ScProfDef.Flag.OPEN_GUIDE",
+          kind: "property",
+          parentQualifiedName: "ScProfDef.Flag"
+        })
+      ])
+    );
+    expect(
+      parsed.symbols.find(
+        (symbol) => symbol.name === "enabled"
+      )?.references
+    ).toEqual([
+      expect.objectContaining({
+        name: "OPEN_GUIDE",
+        targetQualifiedName:
+          "ScProfDef.Flag.OPEN_GUIDE",
+        source: "builtin"
+      })
+    ]);
   });
 });
 
@@ -436,6 +570,73 @@ describe("parseSourceFile fai-cli-rpc profile", () => {
     );
 
     expect(parsed.remoteBoundaries).toEqual([]);
+  });
+
+  it("ignores package declarations inside comments", () => {
+    const parsed = parseSourceFile(
+      sourceFile("LocalPort.java", "java"),
+      [
+        "// package misleading.comment;",
+        "package example.client;",
+        "",
+        "public interface LocalPort {",
+        "  @GeneratedOutbound(LocalDef.Protocol.Cmd.ADD)",
+        "  Result add();",
+        "}"
+      ].join("\n")
+    );
+
+    expect(parsed.remoteBoundaries).toEqual([
+      expect.objectContaining({
+        operationKey:
+          "example.client.LocalDef.Protocol.Cmd.ADD",
+        serviceKey: "example.client.LocalDef",
+        confidence: "exact"
+      })
+    ]);
+  });
+});
+
+describe("parseSourceFile Spring endpoints", () => {
+  it("expands class paths, method paths, and RequestMapping methods", () => {
+    const parsed = parseSourceFile(
+      sourceFile("UserController.java", "java"),
+      [
+        "package example;",
+        "",
+        "@RestController",
+        '@RequestMapping({"/api", "/v2"})',
+        "public class UserController {",
+        '  @GetMapping(path = {"/users", "/members"})',
+        "  public Object list() {",
+        "    return null;",
+        "  }",
+        "",
+        '  @RequestMapping(value = "/items", method = {RequestMethod.GET, RequestMethod.POST, RequestMethod.HEAD})',
+        "  public Object items() {",
+        "    return null;",
+        "  }",
+        "}"
+      ].join("\n")
+    );
+
+    expect(
+      parsed.serverEndpoints.map((endpoint) => [
+        endpoint.method,
+        endpoint.route
+      ])
+    ).toEqual([
+      ["GET", "/api/users"],
+      ["GET", "/api/members"],
+      ["GET", "/v2/users"],
+      ["GET", "/v2/members"],
+      ["GET", "/api/items"],
+      ["POST", "/api/items"],
+      ["HEAD", "/api/items"],
+      ["GET", "/v2/items"],
+      ["POST", "/v2/items"],
+      ["HEAD", "/v2/items"]
+    ]);
   });
 });
 

@@ -181,7 +181,11 @@ export class WindowsExternalApplicationAdapter
   async launch(
     profile: ExternalApplicationProfile,
     workingDirectory: string,
-    filePath?: string
+    filePath?: string,
+    position?: {
+      line: number;
+      column: number;
+    }
   ): Promise<void> {
     const cwd = normalize(workingDirectory);
     if (
@@ -264,7 +268,8 @@ export class WindowsExternalApplicationAdapter
         profile.kind,
         profile.executablePath,
         cwd,
-        targetPath
+        targetPath,
+        position
       )
     );
   }
@@ -274,7 +279,11 @@ export function buildExternalApplicationLaunch(
   kind: EditorApplicationKind,
   executablePath: string,
   workingDirectory: string,
-  openTarget: string = workingDirectory
+  openTarget: string = workingDirectory,
+  position?: {
+    line: number;
+    column: number;
+  }
 ): ExternalApplicationLaunch {
   const cwd = normalize(workingDirectory);
   switch (kind) {
@@ -282,14 +291,37 @@ export function buildExternalApplicationLaunch(
     case "cursor":
       return {
         executable: executablePath,
-        args: ["--reuse-window", openTarget],
+        args: position
+          ? [
+              "--reuse-window",
+              "--goto",
+              `${openTarget}:${position.line}:${position.column}`
+            ]
+          : ["--reuse-window", openTarget],
         cwd
       };
     case "intellij-idea":
+      return {
+        executable: executablePath,
+        args: position
+          ? [
+              "--line",
+              String(position.line),
+              "--column",
+              String(position.column),
+              openTarget
+            ]
+          : [openTarget],
+        cwd
+      };
     case "sublime-text":
       return {
         executable: executablePath,
-        args: [openTarget],
+        args: [
+          position
+            ? `${openTarget}:${position.line}:${position.column}`
+            : openTarget
+        ],
         cwd
       };
   }

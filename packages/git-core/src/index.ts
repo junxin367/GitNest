@@ -70,6 +70,7 @@ export type {
 export type {
   GitClient,
   GitReadOptions,
+  GitReadPriority,
   InspectRepositoryOptions,
   ReadCommitHistoryOptions,
   ReadRepositorySnapshotOptions,

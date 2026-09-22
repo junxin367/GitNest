@@ -186,8 +186,15 @@
 }
 
 .gn-input-field__help {
+  display: block;
+  min-width: 0;
+  height: 1lh;
+  overflow: hidden;
   color: var(--muted);
   font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .gn-input-field__help[data-state="error"] {
