@@ -42,6 +42,7 @@ export type IconName =
   | "sun"
   | "tag"
   | "terminal"
+  | "trash"
   | "upload"
   | "undo"
   | "warning"
@@ -357,6 +358,16 @@ function renderIcon(name: IconName): ReactNode {
         <>
           <path d="m5 7 4 4-4 4" />
           <path d="M11 17h8" />
+        </>
+      );
+    case "trash":
+      return (
+        <>
+          <path d="M4 7h16" />
+          <path d="M9 7V4h6v3" />
+          <path d="m7 7 1 13h8l1-13" />
+          <path d="M10 11v5" />
+          <path d="M14 11v5" />
         </>
       );
     case "upload":

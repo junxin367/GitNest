@@ -66,6 +66,7 @@ export interface Workspace {
   path?: string;
   canonicalPath?: string;
   excludes: string[];
+  additionalRoots?: WorkspaceRoot[];
   groups: RepositoryGroup[];
   scanIssues: WorkspaceScanIssue[];
   lastScannedAt?: string;
@@ -112,4 +113,34 @@ export function summarizeWorkspace(
     name: workspace.name,
     updatedAt: workspace.updatedAt
   };
+}
+
+export function listWorkspaceRoots(
+  workspace: Workspace
+): WorkspaceRoot[] {
+  const roots: WorkspaceRoot[] = [];
+  const canonicalPaths = new Set<string>();
+
+  if (workspace.path && workspace.canonicalPath) {
+    roots.push({
+      path: workspace.path,
+      canonicalPath: workspace.canonicalPath,
+      excludes: [...workspace.excludes]
+    });
+    canonicalPaths.add(workspace.canonicalPath);
+  }
+
+  for (const root of workspace.additionalRoots ?? []) {
+    if (canonicalPaths.has(root.canonicalPath)) {
+      continue;
+    }
+    roots.push({
+      path: root.path,
+      canonicalPath: root.canonicalPath,
+      excludes: [...root.excludes]
+    });
+    canonicalPaths.add(root.canonicalPath);
+  }
+
+  return roots;
 }

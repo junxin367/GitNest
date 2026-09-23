@@ -74,6 +74,12 @@ export interface RepositoryGroupDto {
   collapsed: boolean;
 }
 
+export interface WorkspaceRootDto {
+  path: string;
+  canonicalPath: string;
+  excludes: string[];
+}
+
 export interface WorkspaceDetailsDto {
   schemaVersion: 2;
   id: string;
@@ -81,6 +87,7 @@ export interface WorkspaceDetailsDto {
   path?: string;
   canonicalPath?: string;
   excludes: string[];
+  additionalRoots?: WorkspaceRootDto[];
   groups: RepositoryGroupDto[];
   scanIssues: WorkspaceScanIssueDto[];
   lastScannedAt?: string;
@@ -112,6 +119,15 @@ export interface RenameWorkspaceRequest {
 
 export interface DeleteWorkspaceRequest {
   workspaceId: string;
+}
+
+export interface AddWorkspaceDirectoryRequest {
+  path: string;
+}
+
+export interface AddWorkspaceDirectoryResultDto {
+  workspace: WorkspaceDetailsDto;
+  duplicate: boolean;
 }
 
 export interface RemoveWorkspaceRepositoryRequest {

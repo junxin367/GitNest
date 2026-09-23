@@ -65,6 +65,7 @@ describe("ApplicationSettingsPage", () => {
         "通用",
         "AI 提交信息",
         "LSP 与代码分析",
+        "MCP",
         "Git",
         "账号与认证"
       ]);
@@ -846,6 +847,320 @@ describe("ApplicationSettingsPage", () => {
           notice: expect.stringContaining("代码分析设置已保存")
         })
       );
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("exposes MCP controls separately and saves only MCP settings", async () => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const update = vi.fn(async () => true);
+
+    try {
+      await act(async () => {
+        root.render(
+          <ApplicationSettingsPage
+            accounts={emptyAccounts()}
+            appSettings={settingsController({ update })}
+            gitEnvironment={null}
+            initialSection="mcp"
+            terminalProfiles={[]}
+            workspace={null}
+          />
+        );
+      });
+      expect(
+        container.querySelector(
+          'nav[aria-label="设置分组"] button[aria-current="page"] .settings-nav-item-title'
+        )?.textContent
+      ).toBe("MCP");
+      expect(container.querySelector("#analysis-max-graph-nodes"))
+        .toBeNull();
+      const responseLimit =
+        container.querySelector<HTMLInputElement>(
+          "#analysis-mcp-response-kb"
+        );
+      expect(responseLimit?.value).toBe("256");
+      expect(responseLimit?.min).toBe("64");
+      expect(responseLimit?.max).toBe("1024");
+      const toggle = (label: string) =>
+        container.querySelector<HTMLButtonElement>(
+          `button[aria-label="${label}"]`
+        );
+      act(() => {
+        toggle("启用 MCP 服务")?.click();
+        setNativeInputValue(responseLimit, "512");
+        responseLimit?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+      });
+      expect(toggle("允许返回源码片段")).toBeNull();
+      const save = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button")
+      ).find((button) =>
+        button.textContent?.includes("保存 MCP 设置")
+      );
+      await act(async () => {
+        save?.click();
+        await Promise.resolve();
+      });
+
+      expect(update).toHaveBeenCalledWith(
+        {
+          codeAnalysis: {
+            mcp: {
+              enabled: false,
+              allowSourceSnippets: true,
+              maxResponseKb: 512
+            }
+          }
+        },
+        { notice: "MCP 设置已保存。" }
+      );
+      act(() => {
+        setNativeInputValue(responseLimit, "0");
+        responseLimit?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+      });
+      expect(responseLimit?.getAttribute("aria-invalid")).toBe(
+        "true"
+      );
+      expect(save?.disabled).toBe(true);
+      expect(update).toHaveBeenCalledTimes(1);
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps an unsaved LSP draft when MCP settings are saved", async () => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const update = vi.fn(async () => true);
+    const initial = settingsController({ update });
+    const render = (appSettings: AppSettingsController) =>
+      root.render(
+        <ApplicationSettingsPage
+          accounts={emptyAccounts()}
+          appSettings={appSettings}
+          gitEnvironment={null}
+          initialSection="analysis"
+          terminalProfiles={[]}
+          workspace={null}
+        />
+      );
+
+    try {
+      act(() => render(initial));
+      const lspCommand =
+        container.querySelector<HTMLInputElement>(
+          "#lsp-command-typescript-language-server"
+        );
+      act(() => {
+        setNativeInputValue(lspCommand, "pending-lsp-command");
+        lspCommand?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+        Array.from(
+          container.querySelectorAll<HTMLButtonElement>(
+            'nav[aria-label="设置分组"] button'
+          )
+        ).find((button) =>
+          button.textContent?.includes("MCP")
+        )?.click();
+      });
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>(
+          'button[aria-label="启用 MCP 服务"]'
+        )?.click();
+        Array.from(
+          container.querySelectorAll<HTMLButtonElement>("button")
+        ).find((button) =>
+          button.textContent?.includes("保存 MCP 设置")
+        )?.click();
+        await Promise.resolve();
+      });
+      const persisted = {
+        ...initial,
+        settings: {
+          ...initial.settings,
+          codeAnalysis: {
+            ...initial.settings.codeAnalysis,
+            mcp: {
+              ...initial.settings.codeAnalysis.mcp,
+              enabled: false
+            }
+          }
+        }
+      };
+      act(() => render(persisted));
+      act(() => {
+        Array.from(
+          container.querySelectorAll<HTMLButtonElement>(
+            'nav[aria-label="设置分组"] button'
+          )
+        ).find((button) =>
+          button.textContent?.includes("LSP 与代码分析")
+        )?.click();
+      });
+      expect(
+        container.querySelector<HTMLInputElement>(
+          "#lsp-command-typescript-language-server"
+        )?.value
+      ).toBe("pending-lsp-command");
+      await act(async () => {
+        Array.from(
+          container.querySelectorAll<HTMLButtonElement>("button")
+        ).find((button) =>
+          button.textContent?.includes("保存代码分析设置")
+        )?.click();
+        await Promise.resolve();
+      });
+      expect(update).toHaveBeenLastCalledWith(
+        {
+          codeAnalysis: expect.objectContaining({
+            mcp: expect.objectContaining({ enabled: false }),
+            typescript: expect.objectContaining({
+              command: "pending-lsp-command"
+            })
+          })
+        },
+        expect.anything()
+      );
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows Codex registration status and invokes registration explicitly", async () => {
+    vi.stubGlobal("React", React);
+    const registration = {
+      executablePath: "C:\\GitNest\\GitNest.exe",
+      entryScriptPath: "C:\\GitNest\\resources\\mcp\\gitnest-mcp.mjs",
+      dataDirectory: "C:\\Users\\test\\AppData\\GitNest",
+      command: "codex mcp add gitnest -- ...",
+      configSnippet: "[mcp_servers.gitnest]",
+      registered: false,
+      codexAvailable: true,
+      serverAvailable: true,
+      message: "尚未注册。"
+    };
+    const setMcpRegistration = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        ...registration,
+        registered: true,
+        message: "已注册，重新启动 Codex 后生效。"
+      }
+    }));
+    vi.stubGlobal("gitnest", {
+      codeAnalysis: {
+        getMcpRegistration: vi.fn(async () => ({
+          ok: true,
+          value: registration
+        })),
+        setMcpRegistration
+      }
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(
+          <ApplicationSettingsPage
+            accounts={emptyAccounts()}
+            appSettings={settingsController()}
+            gitEnvironment={null}
+            initialSection="mcp"
+            terminalProfiles={[]}
+            workspace={null}
+          />
+        );
+      });
+      expect(container.textContent).toContain(registration.dataDirectory);
+      expect(container.textContent).toContain(registration.command);
+      await act(async () => {
+        Array.from(
+          container.querySelectorAll<HTMLButtonElement>("button")
+        ).find((button) =>
+          button.textContent?.includes("一键注册")
+        )?.click();
+        await Promise.resolve();
+      });
+      expect(setMcpRegistration).toHaveBeenCalledWith({
+        registered: true
+      });
+      expect(container.textContent).toContain("已注册到本机 Codex");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not offer an invalid registration command in a development build", async () => {
+    vi.stubGlobal("React", React);
+    const setMcpRegistration = vi.fn();
+    vi.stubGlobal("gitnest", {
+      codeAnalysis: {
+        getMcpRegistration: vi.fn(async () => ({
+          ok: true,
+          value: {
+            executablePath: "C:\\GitNest\\electron.exe",
+            entryScriptPath: "C:\\GitNest\\resources\\mcp\\gitnest-mcp.mjs",
+            dataDirectory: "C:\\GitNest\\user-data",
+            command: "invalid development command",
+            configSnippet: "invalid config",
+            registered: false,
+            codexAvailable: true,
+            serverAvailable: false,
+            message: "开发版不提供可注册的 MCP 入口。"
+          }
+        })),
+        setMcpRegistration
+      }
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(
+          <ApplicationSettingsPage
+            accounts={emptyAccounts()}
+            appSettings={settingsController()}
+            gitEnvironment={null}
+            initialSection="mcp"
+            terminalProfiles={[]}
+            workspace={null}
+          />
+        );
+      });
+      const register = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button")
+      ).find((button) =>
+        button.textContent?.includes("一键注册")
+      );
+      expect(register?.disabled).toBe(true);
+      expect(container.textContent).toContain("开发版不提供");
+      expect(container.textContent).not.toContain(
+        "invalid development command"
+      );
+      expect(setMcpRegistration).not.toHaveBeenCalled();
     } finally {
       act(() => root.unmount());
       container.remove();

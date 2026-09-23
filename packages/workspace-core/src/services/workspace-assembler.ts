@@ -23,7 +23,8 @@ const LEGACY_ROOT_REPOSITORY_GROUP_NAME = "根目录仓库";
 
 export interface AssembleWorkspaceInput {
   current: Workspace;
-  scan: WorkspaceRootScan;
+  scan?: WorkspaceRootScan;
+  scans?: readonly WorkspaceRootScan[];
   updatedAt: string;
 }
 
@@ -34,29 +35,23 @@ export class WorkspaceAssembler {
     this.#fileSystem = fileSystem;
   }
 
-  assemble({
-    current,
-    scan,
-    updatedAt
-  }: AssembleWorkspaceInput): Workspace {
-    const root = scan.root;
-
-    if (
-      scan.repositories.length === 0 &&
-      scan.issues.length > 0 &&
-      current.path
-    ) {
-      return {
-        ...current,
-        path: root.path,
-        canonicalPath: root.canonicalPath,
-        excludes: [...root.excludes],
-        scanIssues: scan.issues,
-        lastScannedAt: scan.scannedAt,
-        updatedAt
-      };
+  assemble(input: AssembleWorkspaceInput): Workspace {
+    const { current, updatedAt } = input;
+    const scans = input.scans
+      ? [...input.scans]
+      : input.scan
+        ? [input.scan]
+        : [];
+    if (scans.length === 0) {
+      throw new Error(
+        "Workspace assembly requires at least one root scan."
+      );
     }
-
+    const roots = scans.map((scan) => scan.root);
+    const discoveriesByRoot = assignDiscoveriesToRoots(
+      scans,
+      this.#fileSystem
+    );
     const repositoryRegistry = new Map<
       string,
       WorkspaceRepository
@@ -67,32 +62,77 @@ export class WorkspaceAssembler {
       RepositoryTarget
     >();
 
-    for (const discovery of scan.repositories) {
-      targetByDiscovery.set(
-        discovery,
-        registerRepository(
+    for (const scan of scans) {
+      const discoveries =
+        discoveriesByRoot.get(scan.root.canonicalPath) ?? [];
+      for (const discovery of discoveries) {
+        targetByDiscovery.set(
           discovery,
+          registerRepository(
+            discovery,
+            this.#fileSystem,
+            repositoryRegistry,
+            worktreeRegistry
+          )
+        );
+      }
+
+      if (isOfflineScan(scan)) {
+        registerPreviousTopologyForRoot(
+          current,
+          scan.root,
+          roots,
           this.#fileSystem,
           repositoryRegistry,
           worktreeRegistry
-        )
-      );
+        );
+      }
     }
 
-    const groups = createGroups(
-      root,
-      scan.repositories,
-      targetByDiscovery,
-      current.groups
+    const groups = scans.flatMap((scan) => {
+      if (isOfflineScan(scan)) {
+        return preserveGroupsForRoot(
+          current,
+          scan.root,
+          roots,
+          this.#fileSystem
+        );
+      }
+      return createGroups(
+        scan.root,
+        discoveriesByRoot.get(scan.root.canonicalPath) ?? [],
+        targetByDiscovery,
+        current.groups,
+        scans.length,
+        this.#fileSystem
+      );
+    });
+    const root = scans[0]?.root as WorkspaceRoot;
+    const additionalRoots = scans.slice(1).map((scan) => ({
+      path: scan.root.path,
+      canonicalPath: scan.root.canonicalPath,
+      excludes: [...scan.root.excludes]
+    }));
+    const lastScannedAt = scans.reduce(
+      (latest, scan) =>
+        scan.scannedAt > latest ? scan.scannedAt : latest,
+      scans[0]?.scannedAt ?? updatedAt
     );
+    const {
+      additionalRoots: _previousAdditionalRoots,
+      ...currentBase
+    } = current;
     const provisionalWorkspace: Workspace = {
-      ...current,
+      ...currentBase,
       path: root.path,
       canonicalPath: root.canonicalPath,
       excludes: [...root.excludes],
+      ...(additionalRoots.length > 0
+        ? { additionalRoots }
+        : {}),
       groups,
-      scanIssues: scan.issues,
-      lastScannedAt: scan.scannedAt,
+      scanIssues: scans.flatMap((scan) => scan.issues),
+      lastScannedAt,
       repositories: [...repositoryRegistry.values()],
       worktrees: [...worktreeRegistry.values()],
       updatedAt
@@ -129,6 +169,154 @@ export class WorkspaceAssembler {
       ...(selectedTarget ? { selectedTarget } : {})
     };
   }
+}
+
+function assignDiscoveriesToRoots(
+  scans: readonly WorkspaceRootScan[],
+  fileSystem: WorkspaceFileSystem
+): Map<string, DiscoveredRepository[]> {
+  const roots = scans.map((scan) => scan.root);
+  const assigned = new Map<
+    string,
+    Map<string, DiscoveredRepository>
+  >(
+    roots.map((root) => [
+      root.canonicalPath,
+      new Map<string, DiscoveredRepository>()
+    ])
+  );
+
+  for (const scan of scans) {
+    for (const discovery of scan.repositories) {
+      const owner = findOwningRoot(
+        roots,
+        discovery.path,
+        fileSystem
+      );
+      if (!owner) {
+        continue;
+      }
+      const discoveries = assigned.get(owner.canonicalPath);
+      const existing = discoveries?.get(discovery.canonicalPath);
+      if (
+        discoveries &&
+        (!existing ||
+          scan.root.canonicalPath === owner.canonicalPath)
+      ) {
+        discoveries.set(discovery.canonicalPath, discovery);
+      }
+    }
+  }
+
+  return new Map(
+    [...assigned].map(([canonicalPath, discoveries]) => [
+      canonicalPath,
+      [...discoveries.values()]
+    ])
+  );
+}
+
+function findOwningRoot(
+  roots: readonly WorkspaceRoot[],
+  path: string,
+  fileSystem: WorkspaceFileSystem
+): WorkspaceRoot | undefined {
+  return roots
+    .filter((root) => fileSystem.isWithin(root.path, path))
+    .sort(
+      (left, right) =>
+        right.canonicalPath.length - left.canonicalPath.length
+    )[0];
+}
+
+function isOfflineScan(scan: WorkspaceRootScan): boolean {
+  return (
+    scan.repositories.length === 0 &&
+    scan.issues.length > 0
+  );
+}
+
+function registerPreviousTopologyForRoot(
+  current: Workspace,
+  root: WorkspaceRoot,
+  roots: readonly WorkspaceRoot[],
+  fileSystem: WorkspaceFileSystem,
+  repositories: Map<string, WorkspaceRepository>,
+  worktrees: Map<string, WorkspaceWorktree>
+): void {
+  const targetKeys = new Set(
+    preserveGroupsForRoot(
+      current,
+      root,
+      roots,
+      fileSystem
+    )
+      .flatMap((group) => group.targets)
+      .map(repositoryTargetKey)
+  );
+  const repositoryIds = new Set(
+    current.worktrees
+      .filter((worktree) =>
+        targetKeys.has(
+          repositoryTargetKey({
+            repositoryId: worktree.repositoryId,
+            worktreeId: worktree.id
+          })
+        )
+      )
+      .map((worktree) => worktree.repositoryId)
+  );
+
+  for (const repository of current.repositories) {
+    if (repositoryIds.has(repository.id)) {
+      repositories.set(repository.id, {
+        ...repository,
+        worktreeIds: [...repository.worktreeIds]
+      });
+    }
+  }
+  for (const worktree of current.worktrees) {
+    if (repositoryIds.has(worktree.repositoryId)) {
+      worktrees.set(worktree.id, { ...worktree });
+    }
+  }
+}
+
+function preserveGroupsForRoot(
+  current: Workspace,
+  root: WorkspaceRoot,
+  roots: readonly WorkspaceRoot[],
+  fileSystem: WorkspaceFileSystem
+): RepositoryGroup[] {
+  const worktreeByTarget = new Map(
+    current.worktrees.map((worktree) => [
+      repositoryTargetKey({
+        repositoryId: worktree.repositoryId,
+        worktreeId: worktree.id
+      }),
+      worktree
+    ])
+  );
+
+  return current.groups.flatMap((group) => {
+    const targets = group.targets.filter((target) => {
+      const worktree = worktreeByTarget.get(
+        repositoryTargetKey(target)
+      );
+      const owner = worktree
+        ? findOwningRoot(roots, worktree.path, fileSystem)
+        : undefined;
+      return owner?.canonicalPath === root.canonicalPath;
+    });
+    return targets.length > 0
+      ? [
+          {
+            ...group,
+            targets: targets.map((target) => ({ ...target }))
+          }
+        ]
+      : [];
+  });
 }
 
 function registerRepository(
@@ -269,7 +457,9 @@ function createGroups(
   root: WorkspaceRoot,
   repositories: DiscoveredRepository[],
   targets: Map<DiscoveredRepository, RepositoryTarget>,
-  previousGroups: RepositoryGroup[]
+  previousGroups: RepositoryGroup[],
+  rootCount: number,
+  fileSystem: WorkspaceFileSystem
 ): RepositoryGroup[] {
   const collapsedById = new Map(
     previousGroups.map((group) => [group.id, group.collapsed])
@@ -331,7 +521,12 @@ function createGroups(
           : undefined;
       return {
         id,
-        name: group.name,
+        name:
+          rootCount > 1
+            ? group.name === DEFAULT_ROOT_REPOSITORY_GROUP_NAME
+              ? fileSystem.basename(root.path) || root.path
+              : `${fileSystem.basename(root.path) || root.path} / ${group.name}`
+            : group.name,
         targets: group.targets,
         collapsed:
           collapsedById.get(id) ??

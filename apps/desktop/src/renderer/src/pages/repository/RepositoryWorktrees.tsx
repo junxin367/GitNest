@@ -14,21 +14,31 @@ import type {
 } from "@gitnest/contracts";
 
 import type { WorktreeCommandController } from "../../features/worktree-command/useWorktreeCommands";
+import {
+  MAX_WORKTREE_BATCH_COMMANDS,
+  type WorkspaceWorktreeCommandController
+} from "../../features/worktree-command/useWorkspaceWorktreeCommands";
 import { Icon, type IconName } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import {
   WORKTREE_FACET_OPTIONS,
   activeWorktreeFilterCount,
+  buildWorktreeDeletePlan,
   createWorktreeFilterState,
   isWorktreeSnapshotDirty,
+  isWorktreeSnapshotReadyForDelete,
   matchesWorktreeFilters,
   toggleWorktreeFacet,
+  worktreeDeleteActionTitle,
   worktreeFacetIds,
+  worktreeStatusLabel,
+  worktreeStatusTone,
   type WorktreeFacet,
   type WorktreeFilterState
 } from "../../shared/lib/worktreeFilters";
 
 interface RepositoryWorktreesProps {
+  batchCommands: WorkspaceWorktreeCommandController;
   workspace: WorkspaceDetailsDto;
   repositoryId: string;
   worktreeId: string;
@@ -39,6 +49,7 @@ interface RepositoryWorktreesProps {
 }
 
 export function RepositoryWorktrees({
+  batchCommands,
   workspace,
   repositoryId,
   worktreeId,
@@ -57,6 +68,7 @@ export function RepositoryWorktrees({
     createWorktreeFilterState
   );
   const filterInputRef = useRef<HTMLInputElement>(null);
+  const filterTriggerRef = useRef<HTMLButtonElement>(null);
   const repository = useMemo(
     () =>
       workspace.repositories.find(
@@ -89,12 +101,6 @@ export function RepositoryWorktrees({
   const prunableCount = worktrees.filter(
     (worktree) => worktree.isPrunable
   ).length;
-  const pruneCandidateCount = worktrees.filter(
-    (worktree) =>
-      worktree.isPrunable &&
-      !worktree.isLocked &&
-      !worktree.isPrimary
-  ).length;
   const existingCount = worktrees.length - prunableCount;
   const detachedCount = worktrees.filter(
     (worktree) => worktree.isDetached || !worktree.branch
@@ -105,7 +111,17 @@ export function RepositoryWorktrees({
     matchesWorktreeFilters(worktree, snapshotFor(worktree), filters)
   );
   const activeFilterCount = activeWorktreeFilterCount(filters);
-  const facetCounts = worktrees.reduce<
+  const facetCountWorktrees = worktrees.filter((worktree) =>
+    matchesWorktreeFilters(
+      worktree,
+      snapshotFor(worktree),
+      {
+        ...filters,
+        facet: null
+      }
+    )
+  );
+  const facetCounts = facetCountWorktrees.reduce<
     Record<WorktreeFacet, number>
   >(
     (counts, worktree) => {
@@ -116,9 +132,36 @@ export function RepositoryWorktrees({
     },
     { primary: 0, linked: 0, detached: 0, locked: 0, prunable: 0 }
   );
-  const dirtyCount = worktrees.filter((worktree) =>
-    isWorktreeSnapshotDirty(snapshotFor(worktree))
+  const dirtyCount = worktrees.filter(
+    (worktree) =>
+      matchesWorktreeFilters(
+        worktree,
+        snapshotFor(worktree),
+        {
+          ...filters,
+          onlyDirty: false
+        }
+      ) &&
+      isWorktreeSnapshotDirty(snapshotFor(worktree))
   ).length;
+  const deletePlan = buildWorktreeDeletePlan(
+    visibleWorktrees,
+    snapshotFor,
+    filters.facet
+  );
+  const pruning = deletePlan.mode === "prune";
+  const worktreeBusy = commands.busy || batchCommands.busy;
+  const batchLimitExceeded =
+    deletePlan.commands.length >
+    MAX_WORKTREE_BATCH_COMMANDS;
+  const deleteActionTitle = batchLimitExceeded
+    ? `当前范围需要 ${deletePlan.commands.length} 个命令，一次最多处理 ${MAX_WORKTREE_BATCH_COMMANDS} 个；请缩小筛选范围`
+    : worktreeDeleteActionTitle(
+        deletePlan,
+        filters.facet,
+        worktreeBusy
+      );
+  const deleteStatusId = "repository-worktree-delete-status";
 
   useEffect(() => {
     setCreatePath("");
@@ -128,7 +171,26 @@ export function RepositoryWorktrees({
     setFilters(createWorktreeFilterState());
     setFilterOpen(false);
     commands.clearFeedback();
+    batchCommands.clearFeedback();
   }, [repositoryId]);
+
+  useEffect(() => {
+    setFilters((current) => {
+      const facet = current.facet;
+      if (
+        !facet ||
+        worktrees.some((worktree) =>
+          worktreeFacetIds(worktree).includes(facet)
+        )
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        facet: null
+      };
+    });
+  }, [worktrees]);
 
   const submitCreate = (event: FormEvent) => {
     event.preventDefault();
@@ -242,7 +304,7 @@ export function RepositoryWorktrees({
                 <div className="worktree-path-input">
                   <Input
                     aria-label="Worktree 目标绝对路径"
-                    disabled={commands.busy}
+                    disabled={worktreeBusy}
                     fullWidth
                     id="worktree-create-path"
                     onChange={(event) =>
@@ -254,7 +316,7 @@ export function RepositoryWorktrees({
                     value={createPath}
                   />
                   <Button size="small"
-                    disabled={commands.busy}
+                    disabled={worktreeBusy}
                     onClick={() => {
                       void commands
                         .chooseDirectory()
@@ -280,7 +342,7 @@ export function RepositoryWorktrees({
                     分支（可选）
                   </label>
                   <Input
-                    disabled={commands.busy}
+                    disabled={worktreeBusy}
                     fullWidth
                     id="worktree-create-branch"
                     onChange={(event) =>
@@ -297,7 +359,7 @@ export function RepositoryWorktrees({
                     起点（可选）
                   </label>
                   <Input
-                    disabled={commands.busy}
+                    disabled={worktreeBusy}
                     fullWidth
                     id="worktree-create-start-point"
                     onChange={(event) =>
@@ -316,7 +378,7 @@ export function RepositoryWorktrees({
                 </span>
                 <Button size="small" variant="primary"
                   aria-busy={commands.active === "create"}
-                  disabled={commands.busy || !createPath.trim()}
+                  disabled={worktreeBusy || !createPath.trim()}
                   type="submit"
                 >
                   <Icon
@@ -347,20 +409,6 @@ export function RepositoryWorktrees({
               <li>移动 / 移除不提供强制模式。</li>
               <li>清除只会移除失效 Git 登记，不会删除目录。</li>
             </ul>
-            <Button size="small"
-              aria-busy={commands.active === "prune"}
-              disabled={commands.busy || pruneCandidateCount === 0}
-              onClick={() =>
-                void commands.request({
-                  type: "prune",
-                  repositoryId
-                })
-              }
-              type="button"
-            >
-              <Icon name="refresh" />
-              预检清除 ({pruneCandidateCount})
-            </Button>
           </article>
         </section>
       )}
@@ -416,6 +464,9 @@ export function RepositoryWorktrees({
                     ...current,
                     query: ""
                   }));
+                  filterTriggerRef.current?.focus({
+                    preventScroll: true
+                  });
                 }}
                 placeholder="筛选分支、路径或状态"
                 ref={filterInputRef}
@@ -423,12 +474,51 @@ export function RepositoryWorktrees({
                 value={filters.query}
               />
             )}
+            <Button
+              aria-busy={worktreeBusy}
+              aria-describedby={deleteStatusId}
+              aria-label={
+                worktreeBusy
+                  ? "Worktree 操作处理中"
+                  : pruning
+                  ? "清除失效 Worktree 登记"
+                  : "删除筛选中的 Worktree"
+              }
+              className="worktree-delete-action"
+              disabled={
+                worktreeBusy ||
+                batchLimitExceeded ||
+                deletePlan.commands.length === 0
+              }
+              icon={
+                <Icon
+                  name={pruning ? "refresh" : "trash"}
+                  size={13}
+                />
+              }
+              onClick={() =>
+                void batchCommands.request(deletePlan.commands)
+              }
+              size="small"
+              title={deleteActionTitle}
+              type="button"
+              variant="danger"
+            >
+              {batchCommands.active !== null
+                ? "预检中…"
+                : batchCommands.busy
+                  ? "处理中…"
+                  : pruning
+                    ? `清除 (${deletePlan.eligibleCount})`
+                    : `删除 (${deletePlan.eligibleCount})`}
+            </Button>
             <Button size="small"
               aria-expanded={filterOpen}
               className={`panel-header-action${
                 filterOpen ? " worktree-filter-open" : ""
               }`}
               onClick={() => setFilterOpen((open) => !open)}
+              ref={filterTriggerRef}
               type="button"
             >
               <Icon name="filter" size={13} />
@@ -450,7 +540,9 @@ export function RepositoryWorktrees({
                   className={`worktree-filter-chip${
                     selected ? " selected" : ""
                   }`}
-                  disabled={facetCounts[option.id] === 0}
+                  disabled={
+                    facetCounts[option.id] === 0 && !selected
+                  }
                   key={option.id}
                   onClick={() =>
                     setFilters((current) => ({
@@ -495,12 +587,22 @@ export function RepositoryWorktrees({
                 onClick={() => {
                   setFilters(createWorktreeFilterState());
                   setFilterOpen(false);
+                  filterTriggerRef.current?.focus({
+                    preventScroll: true
+                  });
                 }}
                 type="button"
               >
                 清除筛选（{activeFilterCount}）
               </Button>
             )}
+          </div>
+          <div
+            className="worktree-delete-status"
+            id={deleteStatusId}
+            role="status"
+          >
+            {deleteActionTitle}
           </div>
 
           {visibleWorktrees.length > 0 ? (
@@ -510,16 +612,7 @@ export function RepositoryWorktrees({
                   current={worktree.id === worktreeId}
                   directoryOpening={directoryOpening}
                   key={worktree.id}
-                  onPrune={() =>
-                    void commands.request({
-                      type: "prune",
-                      repositoryId
-                    })
-                  }
                   onOpenDirectory={onOpenDirectory}
-                  pruneBusy={commands.busy}
-                  pruneCandidateCount={pruneCandidateCount}
-                  prunePending={commands.active === "prune"}
                   repositoryName={repository.name}
                   snapshot={snapshotFor(worktree)}
                   worktree={worktree}
@@ -582,10 +675,6 @@ function WorktreeSummaryCard({
   repositoryName,
   current,
   directoryOpening,
-  pruneBusy,
-  pruneCandidateCount,
-  prunePending,
-  onPrune,
   onOpenDirectory
 }: {
   worktree: WorkspaceWorktreeDto;
@@ -593,25 +682,28 @@ function WorktreeSummaryCard({
   repositoryName: string;
   current: boolean;
   directoryOpening: boolean;
-  pruneBusy: boolean;
-  pruneCandidateCount: number;
-  prunePending: boolean;
-  onPrune(): void;
   onOpenDirectory(worktreeId: string): void;
 }) {
   const changes = snapshot ? worktreeChangeCount(snapshot) : 0;
   const title = worktree.branch ?? "游离 HEAD";
   const statusLabel = worktreeStatusLabel(worktree);
   const statusTone = worktreeStatusTone(worktree);
-  const locationLabel = worktree.isPrunable
-    ? "目录不存在"
-    : "目录存在";
-  const pruneAvailable =
-    worktree.isPrunable &&
-    !worktree.isLocked &&
-    !worktree.isPrimary;
+  const snapshotReady =
+    isWorktreeSnapshotReadyForDelete(snapshot);
+  const interactive = !worktree.isPrunable && !worktree.isBare;
+  const locationLabel = worktree.isBare
+    ? "无工作目录"
+    : worktree.isPrunable
+      ? "目录不存在"
+      : "目录存在";
+  const stateDetail = [
+    changes > 0 ? `${changes} 项变更` : "",
+    interactive && !snapshotReady ? "状态未就绪" : ""
+  ]
+    .filter(Boolean)
+    .join("，");
   const activate = () => {
-    if (worktree.isPrunable) {
+    if (!interactive) {
       return;
     }
     if (!directoryOpening) {
@@ -622,33 +714,37 @@ function WorktreeSummaryCard({
   return (
     <article
       aria-busy={
-        !worktree.isPrunable && directoryOpening
+        interactive && directoryOpening
           ? true
           : undefined
       }
       aria-current={current ? "location" : undefined}
       aria-disabled={
-        !worktree.isPrunable && directoryOpening ? true : undefined
+        interactive && directoryOpening ? true : undefined
       }
-      aria-label={`${worktree.isPrunable ? "" : "打开 "}${title}，${statusLabel}，提交 ${shortWorktreeHead(
+      aria-label={`${interactive ? "打开 " : ""}${title}，${statusLabel}，提交 ${shortWorktreeHead(
         worktree.head
-      )}，${locationLabel}，${worktree.path}`}
+      )}，${locationLabel}${
+        stateDetail ? `，${stateDetail}` : ""
+      }，${worktree.path}`}
       className={`worktree-card worktree-summary-card${
         worktree.isPrimary ? " primary" : ""
-      }${worktree.isPrunable ? " prunable" : ""}`}
-      onClick={worktree.isPrunable ? undefined : activate}
+      }${worktree.isPrunable ? " prunable" : ""}${
+        worktree.isBare ? " bare" : ""
+      }`}
+      onClick={interactive ? activate : undefined}
       onKeyDown={
-        worktree.isPrunable
-          ? undefined
-          : (event) => {
+        interactive
+          ? (event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
                 activate();
               }
             }
+          : undefined
       }
-      role={worktree.isPrunable ? undefined : "button"}
-      tabIndex={worktree.isPrunable ? undefined : 0}
+      role={interactive ? "button" : undefined}
+      tabIndex={interactive ? 0 : undefined}
     >
       <div className="worktree-card-head">
         <span className="worktree-symbol">
@@ -689,25 +785,13 @@ function WorktreeSummaryCard({
             {changes} 项变更
           </span>
         )}
+        {interactive && !snapshotReady && (
+          <span className="worktree-status-unavailable">
+            状态未就绪
+          </span>
+        )}
         <span className="spacer" />
-        {worktree.isPrunable ? (
-          <Button variant="unstyled"
-            aria-busy={prunePending}
-            aria-label={`清除 ${title} 所在仓库的失效 Worktree 登记`}
-            className="worktree-clear-action"
-            disabled={pruneBusy || !pruneAvailable}
-            onClick={onPrune}
-            title={
-              pruneAvailable
-                ? `将先预检，再清除 ${repositoryName} 仓库中的 ${pruneCandidateCount} 条失效登记；不会删除目录`
-                : "该失效登记已锁定，需先解锁后才能清除"
-            }
-            type="button"
-          >
-            <Icon name="refresh" size={14} />
-            {prunePending ? "预检中…" : "清除"}
-          </Button>
-        ) : (
+        {interactive && (
           <span className="worktree-foot-action">
             <Icon name="external" size={16} />
             登记路径
@@ -716,39 +800,6 @@ function WorktreeSummaryCard({
       </div>
     </article>
   );
-}
-
-function worktreeStatusLabel(
-  worktree: WorkspaceWorktreeDto
-): string {
-  if (worktree.isPrunable) {
-    return "可清理登记";
-  }
-  if (worktree.isPrimary) {
-    return "主工作目录";
-  }
-  if (worktree.isDetached || !worktree.branch) {
-    return "游离 HEAD";
-  }
-  if (worktree.isLocked) {
-    return "已锁定";
-  }
-  return "已登记";
-}
-
-function worktreeStatusTone(
-  worktree: WorkspaceWorktreeDto
-): "green" | "neutral" | "red" | "yellow" {
-  if (worktree.isPrunable) {
-    return "red";
-  }
-  if (worktree.isDetached || !worktree.branch) {
-    return "yellow";
-  }
-  if (worktree.isPrimary) {
-    return "green";
-  }
-  return "neutral";
 }
 
 function worktreeChangeCount(

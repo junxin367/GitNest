@@ -52,7 +52,13 @@ describe("OperationCenterPage duration timer", () => {
     );
 
     act(() => {
-      render([]);
+      render(
+        [
+          createOperation("failed"),
+          createOperation("interrupted")
+        ],
+        workspace
+      );
     });
 
     expect(setIntervalSpy).not.toHaveBeenCalled();
@@ -110,6 +116,15 @@ describe("OperationCenterPage duration timer", () => {
         ".operation-metric-grid > .operation-metric"
       )
     ).toHaveLength(4);
+    expect(container.textContent).not.toContain(
+      "Workspace 批量同步"
+    );
+    expect(container.textContent).toContain(
+      "最近操作中的异常记录"
+    );
+    expect(container.textContent).not.toContain(
+      "需要人工处理"
+    );
     expect(
       container.querySelector(".operation-history-heading")
         ?.textContent
@@ -189,7 +204,6 @@ describe("OperationCenterPage duration timer", () => {
         loading={false}
         onOpenTarget={onOpenTarget}
         operations={operations}
-        snapshots={[]}
         workspace={activeWorkspace}
       />
     );

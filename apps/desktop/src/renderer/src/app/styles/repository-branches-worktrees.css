@@ -348,13 +348,24 @@
   margin-left: auto;
 }
 
-/* 筛选按钮在面板头部靠 auto 外边距右推；跟在输入框后时不再重复取剩余空间，
-   否则两者各占一半，输入框会与按钮脱开。
-*/
+.worktree-toolbar .worktree-delete-action {
+  margin-left: auto;
+}
+
 .worktree-toolbar
   .worktree-filter-field
+  + .worktree-delete-action,
+.worktree-toolbar
+  .worktree-delete-action
   + .panel-header-action {
   margin-left: 0;
+}
+
+.worktree-delete-action:disabled {
+  --gn-button-background: var(--surface-2);
+  color: var(--muted);
+  border-color: var(--border-soft);
+  opacity: 1;
 }
 
 .worktree-card:not(.worktree-summary-card) {
@@ -439,11 +450,13 @@
   cursor: wait;
 }
 
-.worktree-summary-card.prunable {
+.worktree-summary-card.prunable,
+.worktree-summary-card.bare {
   cursor: default;
 }
 
-.worktree-summary-card.prunable:active {
+.worktree-summary-card.prunable:active,
+.worktree-summary-card.bare:active {
   transform: none;
 }
 
@@ -603,6 +616,10 @@
   color: var(--green) !important;
 }
 
+.worktree-status-unavailable {
+  color: var(--yellow) !important;
+}
+
 .worktree-location-status.missing {
   color: var(--red);
 }
@@ -613,46 +630,6 @@
   flex: 0 0 auto;
   gap: var(--space-1);
   color: var(--muted);
-}
-
-.worktree-clear-action {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  gap: var(--space-1);
-  height: 26px;
-  padding: 0 var(--space-2);
-  color: var(--red);
-  background: var(--red-soft);
-  border: 1px solid
-    color-mix(in srgb, var(--red) 28%, var(--border-soft));
-  border-radius: var(--radius-small);
-  cursor: pointer;
-  font: inherit;
-  font-weight: var(--font-weight-semibold);
-}
-
-.worktree-clear-action:hover:not(:disabled) {
-  background: color-mix(
-    in srgb,
-    var(--red) 15%,
-    var(--surface)
-  );
-  border-color: color-mix(
-    in srgb,
-    var(--red) 44%,
-    var(--border)
-  );
-}
-
-.worktree-clear-action:focus-visible {
-  outline: 2px solid var(--red);
-  outline-offset: 2px;
-}
-
-.worktree-clear-action:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 .worktree-inventory-disclosure {
@@ -802,10 +779,6 @@
   line-height: 1.5;
 }
 
-.worktree-safety-panel > .gn-button {
-  margin: 0 var(--space-4);
-}
-
 .worktree-inventory {
   display: grid;
   gap: var(--space-3);
@@ -909,6 +882,13 @@
   background: var(--surface-hover);
 }
 
+.worktree-delete-status {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: 1.45;
+}
+
 .worktree-repo-menu-trigger {
   display: inline-flex;
   align-items: center;
@@ -998,6 +978,30 @@
 
 .worktree-filter-empty strong {
   color: var(--text);
+}
+
+@media (max-width: 960px) {
+  .worktree-toolbar {
+    flex-wrap: wrap;
+    padding-block: var(--space-2);
+  }
+
+  .worktree-toolbar-count {
+    margin-right: auto;
+  }
+
+  .worktree-toolbar .worktree-filter-field {
+    order: 2;
+    flex: 1 1 100%;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .worktree-toolbar
+    .worktree-filter-field
+    + .worktree-delete-action {
+    margin-left: auto;
+  }
 }
 
 .worktree-card.worktree-management-card {

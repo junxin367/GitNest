@@ -36,6 +36,7 @@ import {
   validateBindAccountRequest,
   validateCancelRepositoryOperationRequest,
   validateClearAiApiKeyRequest,
+  validateAddWorkspaceDirectoryRequest,
   validateCreateWorkspaceRequest,
   validateGenerateAiCommitMessageRequest,
   validateInstallLanguageServerRequest,
@@ -66,8 +67,45 @@ import {
   validateWorktreeCommandExecuteRequest,
   validateWorktreeCommandPreflightRequest
 } from "./register-ipc";
+import { McpRegistrationService } from "../code-analysis/mcp-registration";
+
+describe("MCP registration availability", () => {
+  it("does not register a development build without a bundled entry", async () => {
+    const registration = new McpRegistrationService({
+      executablePath: "C:\\GitNest\\electron.exe",
+      entryScriptPath: "C:\\GitNest\\resources\\mcp\\gitnest-mcp.mjs",
+      dataDirectory: "C:\\GitNest\\user-data",
+      packaged: false,
+      codexCommand: "missing-codex.exe"
+    });
+    const status = await registration.setRegistered(true);
+
+    expect(status.serverAvailable).toBe(false);
+    expect(status.registered).toBe(false);
+    expect(status.message).toContain("开发版");
+    expect(status.message).not.toContain("注册失败");
+  });
+});
 
 describe("Workspace IPC validation", () => {
+  it("validates an absolute directory added to the current Workspace", () => {
+    expect(
+      validateAddWorkspaceDirectoryRequest({
+        path: "D:\\shared\\tools"
+      })
+    ).toEqual({
+      path: "D:\\shared\\tools"
+    });
+
+    expect(() =>
+      validateAddWorkspaceDirectoryRequest({
+        path: "relative\\tools"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+
   it("validates Workspace creation without Entry request reuse", () => {
     expect(
       validateCreateWorkspaceRequest({

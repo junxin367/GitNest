@@ -43,8 +43,10 @@ export interface WorkspaceController {
     name: string
   ): Promise<boolean>;
   deleteWorkspace(workspaceId: string): Promise<boolean>;
+  chooseDirectory(): Promise<boolean>;
   refresh(): Promise<void>;
   rescan(): Promise<boolean>;
+  syncCurrentWorkspace(): Promise<boolean>;
   removeRepository(target: RepositoryTargetDto): Promise<boolean>;
   selectTarget(target: RepositoryTargetDto): Promise<boolean>;
   setGroupCollapsed(
@@ -221,6 +223,64 @@ export function useWorkspace(): WorkspaceController {
       setUnexpectedError
     ]
   );
+
+  const chooseDirectory = useCallback(async (): Promise<boolean> => {
+    const isCurrent = captureRequestScope();
+    if (!isCurrent()) {
+      return false;
+    }
+    setOperation("selecting");
+    setError(null);
+    setNotice(null);
+
+    try {
+      const selection =
+        await window.gitnest.workspace.selectDirectory();
+      if (!isCurrent()) {
+        return false;
+      }
+      if (!selection.ok) {
+        setError(selection.error);
+        return false;
+      }
+      if (selection.value.cancelled) {
+        return false;
+      }
+
+      setOperation("scanning");
+      const result = await window.gitnest.workspace.addDirectory({
+        path: selection.value.path
+      });
+      if (!isCurrent()) {
+        return false;
+      }
+      if (!result.ok) {
+        setError(result.error);
+        return false;
+      }
+
+      setWorkspace(result.value.workspace);
+      setNotice(
+        result.value.duplicate
+          ? "该目录已存在于当前 Workspace。"
+          : "目录已添加到当前 Workspace。"
+      );
+      return true;
+    } catch (reason) {
+      if (isCurrent()) {
+        setUnexpectedError(reason);
+      }
+      return false;
+    } finally {
+      if (isCurrent()) {
+        setOperation(null);
+      }
+    }
+  }, [
+    captureRequestScope,
+    setUnexpectedError,
+    setWorkspace
+  ]);
 
   const switchWorkspace = useCallback(
     async (workspaceId: string): Promise<boolean> => {
@@ -454,6 +514,37 @@ export function useWorkspace(): WorkspaceController {
     }
   }, [captureRequestScope, setUnexpectedError, setWorkspace]);
 
+  const syncCurrentWorkspace =
+    useCallback(async (): Promise<boolean> => {
+      const isCurrent = captureRequestScope();
+      if (!isCurrent()) {
+        return false;
+      }
+
+      try {
+        const result =
+          await window.gitnest.workspace.getCurrent();
+        if (!isCurrent()) {
+          return false;
+        }
+        if (result.ok) {
+          setWorkspace(result.value);
+          return true;
+        }
+        setError(result.error);
+        return false;
+      } catch (reason) {
+        if (isCurrent()) {
+          setUnexpectedError(reason);
+        }
+        return false;
+      }
+    }, [
+      captureRequestScope,
+      setUnexpectedError,
+      setWorkspace
+    ]);
+
   const removeRepository = useCallback(
     async (target: RepositoryTargetDto): Promise<boolean> => {
       const isCurrent = captureRequestScope();
@@ -596,8 +687,10 @@ export function useWorkspace(): WorkspaceController {
       switchWorkspace,
       renameWorkspace,
       deleteWorkspace,
+      chooseDirectory,
       refresh,
       rescan,
+      syncCurrentWorkspace,
       removeRepository,
       selectTarget,
       setGroupCollapsed,
@@ -617,8 +710,10 @@ export function useWorkspace(): WorkspaceController {
       switchWorkspace,
       renameWorkspace,
       deleteWorkspace,
+      chooseDirectory,
       refresh,
       rescan,
+      syncCurrentWorkspace,
       removeRepository,
       selectTarget,
       setGroupCollapsed,

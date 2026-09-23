@@ -400,8 +400,47 @@ function parseJava(
 
   const methodPattern =
     /^[ \t]*(?:(?:public|protected|private|static|final|abstract|synchronized|native|default)\s+)*(?:<[^>{}]+>\s+)?[A-Za-z_$][\w$<>\[\], ?.@]*(?:\s*\[\s*\])?\s+([A-Za-z_$][\w$]*)\s*\([^;{}]*\)\s*(?:throws\s+[^{}]+)?\{/gm;
+  const methodMatches = [...content.matchAll(methodPattern)];
+  const factoryReturnTypes = new Map<
+    string,
+    Map<string, string>
+  >();
+  for (const match of methodMatches) {
+    const name = match[1];
+    const start = match.index;
+    if (
+      !name ||
+      start === undefined ||
+      !codeOffsets.isCode(capturedGroupOffset(match, 1))
+    ) {
+      continue;
+    }
+    const owner = javaTypeOwnerAtOffset(
+      content,
+      typeBlocks,
+      start
+    );
+    if (!owner || name === owner.name) {
+      continue;
+    }
+    const returnType = javaNoArgReturnType(
+      match[0],
+      name
+    );
+    if (!returnType) {
+      continue;
+    }
+    const ownerFactories =
+      factoryReturnTypes.get(owner.qualifiedName) ??
+      new Map<string, string>();
+    ownerFactories.set(name, returnType);
+    factoryReturnTypes.set(
+      owner.qualifiedName,
+      ownerFactories
+    );
+  }
 
-  for (const match of content.matchAll(methodPattern)) {
+  for (const match of methodMatches) {
     const name = match[1];
     const start = match.index;
     if (
@@ -450,7 +489,8 @@ function parseJava(
       calls: extractCalls(
         content.slice(braceIndex + 1, end),
         lineForOffset(lineStarts, braceIndex + 1),
-        methodReceiverTypes
+        methodReceiverTypes,
+        factoryReturnTypes.get(owner.qualifiedName)
       ),
       ...referenceField(
         extractJavaQualifiedReferences(
@@ -763,6 +803,36 @@ function javaMethodSignature(
     .replace(/\s+/g, " ")
     .trim();
   return `${name}(${parameters})`;
+}
+
+function javaNoArgReturnType(
+  declaration: string,
+  name: string
+): string | undefined {
+  const open = declaration.indexOf("(");
+  const close = declaration.lastIndexOf(")");
+  if (
+    open < 0 ||
+    close < open ||
+    declaration.slice(open + 1, close).trim()
+  ) {
+    return undefined;
+  }
+  const beforeParameters = declaration
+    .slice(0, open)
+    .trimEnd();
+  if (!beforeParameters.endsWith(name)) {
+    return undefined;
+  }
+  const beforeName = beforeParameters
+    .slice(0, -name.length)
+    .trimEnd();
+  const returnType = beforeName.match(
+    /([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)$/
+  )?.[1];
+  return returnType && returnType !== "void"
+    ? returnType.split(".").at(-1)
+    : undefined;
 }
 
 function referenceField(
@@ -1893,7 +1963,8 @@ function normalizeClientRoute(route: string): string {
 function extractCalls(
   body: string,
   startingLine: number,
-  receiverTypes: ReadonlyMap<string, string> = new Map()
+  receiverTypes: ReadonlyMap<string, string> = new Map(),
+  factoryReturnTypes?: ReadonlyMap<string, string>
 ): ParsedCall[] {
   const calls: ParsedCall[] = [];
   const lineStarts = createLineStarts(body);
@@ -1912,17 +1983,41 @@ function extractCalls(
     ) {
       continue;
     }
-    const receiver = match.groups?.receiver;
+    const precedingExpression = body.slice(
+      Math.max(0, match.index - 128),
+      match.index
+    );
+    const factoryMatch =
+      factoryReturnTypes &&
+      !match.groups?.receiver
+        ? /([A-Za-z_$][\w$]*)\s*\(\s*\)\s*\.\s*$/.exec(
+            precedingExpression
+          )
+        : undefined;
+    const chainedFactory = factoryMatch?.[1];
+    const factoryQualifier = factoryMatch
+      ? precedingExpression
+          .slice(0, factoryMatch.index)
+          .trimEnd()
+      : "";
+    const localFactory =
+      chainedFactory &&
+      (!factoryQualifier.endsWith(".") ||
+        factoryQualifier.endsWith("this."));
+    const receiver =
+      match.groups?.receiver ??
+      (chainedFactory
+        ? `${chainedFactory}()`
+        : undefined);
+    const receiverType = localFactory
+      ? factoryReturnTypes?.get(chainedFactory)
+      : receiver
+        ? receiverTypes.get(receiver)
+        : undefined;
     calls.push({
       name,
       ...(receiver ? { receiver } : {}),
-      ...(receiver && receiverTypes.has(receiver)
-        ? {
-            receiverType: receiverTypes.get(
-              receiver
-            ) as string
-          }
-        : {}),
+      ...(receiverType ? { receiverType } : {}),
       line:
         startingLine +
         lineForOffset(lineStarts, match.index) -

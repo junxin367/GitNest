@@ -6,17 +6,13 @@ import {
 } from "react";
 
 import type {
-  RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
   WorkspaceDetailsDto,
   WorkspaceOperationDto
 } from "@gitnest/contracts";
 
 import type { RepositoryCommandController } from "../../features/repository-command/useRepositoryCommands";
-import {
-  listWorkspaceTargets,
-  resolveWorkspaceTarget
-} from "../../entities/workspace/model";
+import { resolveWorkspaceTarget } from "../../entities/workspace/model";
 import { Icon } from "../../shared/ui/Icon";
 import {
   Skeleton,
@@ -33,7 +29,6 @@ type OperationFilter =
 interface OperationCenterPageProps {
   loading: boolean;
   workspace: WorkspaceDetailsDto | null;
-  snapshots: RepositoryStatusSnapshotDto[];
   operations: WorkspaceOperationDto[];
   commands: RepositoryCommandController;
   onOpenTarget(target: RepositoryTargetDto): void;
@@ -42,7 +37,6 @@ interface OperationCenterPageProps {
 export function OperationCenterPage({
   loading,
   workspace,
-  snapshots,
   operations,
   commands,
   onOpenTarget
@@ -51,47 +45,6 @@ export function OperationCenterPage({
     useState<OperationFilter>("all");
   const [now, setNow] = useState(Date.now());
 
-  const targets = useMemo(
-    () => (workspace ? listWorkspaceTargets(workspace) : []),
-    [workspace]
-  );
-  const snapshotByTarget = useMemo(
-    () =>
-      new Map(
-        snapshots.map((snapshot) => [
-          operationTargetKey(snapshot),
-          snapshot
-        ])
-      ),
-    [snapshots]
-  );
-  const pullTargets = useMemo(
-    () =>
-      targets.filter((target) => {
-        const snapshot = snapshotByTarget.get(
-          operationTargetKey(target)
-        );
-        return Boolean(
-          snapshot?.upstream &&
-            snapshot.behind > 0 &&
-            snapshot.staged === 0 &&
-            snapshot.unstaged === 0 &&
-            snapshot.untracked === 0 &&
-            snapshot.conflicted === 0
-        );
-      }),
-    [snapshotByTarget, targets]
-  );
-  const pushTargets = useMemo(
-    () =>
-      targets.filter((target) => {
-        const snapshot = snapshotByTarget.get(
-          operationTargetKey(target)
-        );
-        return Boolean(snapshot?.branch && snapshot.ahead > 0);
-      }),
-    [snapshotByTarget, targets]
-  );
   const visibleOperations = useMemo(
     () =>
       operations.filter((operation) =>
@@ -211,7 +164,7 @@ export function OperationCenterPage({
           value={operationCounts.completed}
         />
         <OperationMetric
-          description="需要人工处理"
+          description="最近操作中的异常记录"
           icon="warning"
           label="失败"
           tone="yellow"
@@ -225,64 +178,6 @@ export function OperationCenterPage({
           value={operations.length}
         />
       </section>
-
-      <article className="panel bulk-sync-panel">
-        <header className="panel-header">
-          <div className="panel-title">
-            <Icon name="operations" />
-            Workspace 批量同步
-          </div>
-          <span className="panel-caption">
-            每个仓库独立入队并保留独立结果
-          </span>
-        </header>
-        <div className="bulk-sync-actions">
-          <Button size="small"
-            disabled={commands.busy || targets.length === 0}
-            onClick={() =>
-              void commands.request({
-                type: "fetch",
-                targets
-              })
-            }
-            type="button"
-          >
-            <Icon name="download" />
-            Fetch 全部 ({targets.length})
-          </Button>
-          <Button size="small"
-            disabled={
-              commands.busy || pullTargets.length === 0
-            }
-            onClick={() =>
-              void commands.request({
-                type: "pull",
-                targets: pullTargets,
-                strategy: "ff-only"
-              })
-            }
-            type="button"
-          >
-            <Icon name="download" />
-            Pull 可快进项 ({pullTargets.length})
-          </Button>
-          <Button size="small"
-            disabled={
-              commands.busy || pushTargets.length === 0
-            }
-            onClick={() =>
-              void commands.request({
-                type: "push",
-                targets: pushTargets
-              })
-            }
-            type="button"
-          >
-            <Icon name="upload" />
-            Push 领先项 ({pushTargets.length})
-          </Button>
-        </div>
-      </article>
 
       <article className="panel operation-history-panel">
         <header className="panel-header operation-history-header">
@@ -674,12 +569,6 @@ function operationMatchesFilter(
   return true;
 }
 
-function operationTargetKey(
-  target: RepositoryTargetDto
-): string {
-  return `${target.repositoryId}\u0000${target.worktreeId}`;
-}
-
 function isActive(
   state: WorkspaceOperationDto["state"]
 ): boolean {
@@ -749,7 +638,7 @@ function operationKindLabel(
     "worktree-move": "移动 Worktree",
     "worktree-repair": "修复 Worktree 登记",
     "worktree-prune": "清除失效 Worktree 登记",
-    "worktree-remove": "移除 Worktree"
+    "worktree-remove": "删除 Worktree"
   }[kind];
 }
 

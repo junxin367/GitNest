@@ -8,7 +8,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev --watch",
-    "build": "electron-vite build",
+    "build": "electron-vite build && vite build --config mcp.vite.config.ts",
     "dist:win": "node ../../scripts/build-windows-release.mjs",
     "preview": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit"

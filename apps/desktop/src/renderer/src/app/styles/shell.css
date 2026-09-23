@@ -534,24 +534,6 @@ p {
   background: var(--accent-soft);
 }
 
-.rail-badge {
-  position: absolute;
-  top: 0;
-  right: 0;
-  display: grid;
-  place-items: center;
-  min-width: var(--icon-regular);
-  height: var(--icon-regular);
-  padding: 0 var(--space-1);
-  color: #0c1413;
-  background: var(--accent);
-  border: 2px solid var(--rail);
-  border-radius: 999px;
-  font-size: var(--font-size-caption);
-  font-weight: var(--font-weight-semibold);
-  line-height: 1;
-}
-
 .workspace-sidebar {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

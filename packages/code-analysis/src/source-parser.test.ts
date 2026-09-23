@@ -484,6 +484,59 @@ describe("parseSourceFile Java nested symbols", () => {
   });
 });
 
+describe("parseSourceFile Java chained calls", () => {
+  it("retains the return type of a local factory", () => {
+    const parsed = parseSourceFile(
+      sourceFile("ScResTagCliUtil.java", "java"),
+      [
+        "class ScResTagCliUtil {",
+        "  private static ScResTagCli getScResTagCli() {",
+        "    return null;",
+        "  }",
+        "  static int getVideoTagList() {",
+        "    RemoteStandResult result = getScResTagCli().getResTagList(1);",
+        "    return result.getRt();",
+        "  }",
+        "  static int getOtherTagList() {",
+        "    return OtherFactory.getScResTagCli().getResTagList(1);",
+        "  }",
+        "}"
+      ].join("\n")
+    );
+    const calls = parsed.symbols.find(
+      (symbol) => symbol.name === "getVideoTagList"
+    )?.calls;
+
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        name: "getResTagList",
+        receiver: "getScResTagCli()",
+        receiverType: "ScResTagCli"
+      })
+    );
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        name: "getRt",
+        receiver: "result",
+        receiverType: "RemoteStandResult"
+      })
+    );
+    expect(
+      parsed.symbols.find(
+        (symbol) => symbol.name === "getOtherTagList"
+      )?.calls.find((call) => call.name === "getResTagList")
+    ).toMatchObject({
+      receiver: "getScResTagCli()"
+    });
+    expect(
+      parsed.symbols.find(
+        (symbol) => symbol.name === "getOtherTagList"
+      )?.calls.find((call) => call.name === "getResTagList")
+        ?.receiverType
+    ).toBeUndefined();
+  });
+});
+
 describe("parseSourceFile fai-cli-rpc profile", () => {
   it("identifies client and server boundaries by shared protocol identity instead of wrapper names", () => {
     const client = parseSourceFile(

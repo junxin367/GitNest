@@ -29,8 +29,8 @@ import {
   type DiffViewerFile,
   type DiffViewerMode
 } from "../../shared/model/diffViewModel";
-import { useMinimumLoadingIndicator } from "../../shared/lib/useMinimumLoadingIndicator";
 import { Icon } from "../../shared/ui/Icon";
+import { useSkeletonVisibility } from "../../shared/ui/Skeleton";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import {
   DEFAULT_DIFF_CONTEXT_LINES,
@@ -164,8 +164,9 @@ function DiffViewer({
       files
     ]
   );
-  const showChangesSkeleton = useMinimumLoadingIndicator(
-    changesLoading && !changesLoaded
+  const showChangesSkeleton = useSkeletonVisibility(
+    changesLoading,
+    changesLoaded
   );
 
   useEffect(() => {

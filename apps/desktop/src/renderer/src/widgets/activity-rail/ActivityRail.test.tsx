@@ -30,7 +30,6 @@ describe("ActivityRail", () => {
         onOpenTerminal={vi.fn()}
         onToggleSidebar={vi.fn()}
         onToggleTheme={vi.fn()}
-        operationAttentionCount={0}
         searchOpen={false}
         sidebarCollapsed={false}
         terminalDisabled={false}
@@ -47,6 +46,7 @@ describe("ActivityRail", () => {
 
     expect(analysisIndex).toBeGreaterThan(-1);
     expect(operationsIndex).toBeGreaterThan(analysisIndex);
+    expect(markup).not.toContain("rail-badge");
   });
 
   it("uses the four-node graph icon from the prototype", () => {

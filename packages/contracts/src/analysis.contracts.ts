@@ -72,6 +72,8 @@ export interface CodeAnalysisSettingsDto {
   enabled: boolean;
   defaultScope: CodeAnalysisScopeDto;
   staticFallback: boolean;
+  autoRefresh: CodeAnalysisAutoRefreshSettingsDto;
+  mcp: McpServerSettingsDto;
   maxFiles: number;
   maxTotalSourceMb: number;
   maxGraphNodes: number;
@@ -93,10 +95,23 @@ export interface CodeAnalysisSettingsDto {
   rust?: LanguageServerCommandSettingsDto;
 }
 
+export interface CodeAnalysisAutoRefreshSettingsDto {
+  enabled: boolean;
+  debounceMs: number;
+}
+
+export interface McpServerSettingsDto {
+  enabled: boolean;
+  allowSourceSnippets: boolean;
+  maxResponseKb: number;
+}
+
 export interface UpdateCodeAnalysisSettingsRequest {
   enabled?: boolean;
   defaultScope?: CodeAnalysisScopeDto;
   staticFallback?: boolean;
+  autoRefresh?: Partial<CodeAnalysisAutoRefreshSettingsDto>;
+  mcp?: Partial<McpServerSettingsDto>;
   maxFiles?: number;
   maxTotalSourceMb?: number;
   maxGraphNodes?: number;
@@ -322,6 +337,22 @@ export interface CodeAnalysisFileDto {
   truncated: boolean;
 }
 
+export interface McpRegistrationStatusDto {
+  executablePath: string;
+  entryScriptPath: string;
+  dataDirectory: string;
+  command: string;
+  configSnippet: string;
+  registered: boolean;
+  codexAvailable: boolean;
+  serverAvailable: boolean;
+  message: string;
+}
+
+export interface SetMcpRegistrationRequest {
+  registered: boolean;
+}
+
 export type InstallableLanguageServerDto =
   LanguageServerLanguageDto;
 
@@ -384,6 +415,12 @@ export const MAX_LSP_SYMBOLS_PER_DOCUMENT = 20_000;
 export const MIN_LSP_REQUESTS = 0;
 export const MAX_LSP_REQUESTS = 10_000;
 export const MIN_LSP_REFERENCES_PER_SYMBOL = 1;
+export const MIN_MCP_MAX_RESPONSE_KB = 64;
+export const MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS = 200;
+export const DEFAULT_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS = 1_500;
+export const MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS = 30_000;
+export const DEFAULT_MCP_MAX_RESPONSE_KB = 256;
+export const MAX_MCP_MAX_RESPONSE_KB = 1_024;
 export const DEFAULT_LSP_REFERENCES_PER_SYMBOL = 500;
 export const MAX_LSP_REFERENCES_PER_SYMBOL = 5_000;
 
@@ -392,6 +429,15 @@ export function createDefaultCodeAnalysisSettings(): CodeAnalysisSettingsDto {
     enabled: true,
     defaultScope: "changed",
     staticFallback: true,
+    autoRefresh: {
+      enabled: true,
+      debounceMs: DEFAULT_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS
+    },
+    mcp: {
+      enabled: true,
+      allowSourceSnippets: true,
+      maxResponseKb: DEFAULT_MCP_MAX_RESPONSE_KB
+    },
     maxFiles: 5_000,
     maxTotalSourceMb: DEFAULT_CODE_ANALYSIS_TOTAL_SOURCE_MB,
     maxGraphNodes: DEFAULT_CODE_ANALYSIS_GRAPH_NODES,

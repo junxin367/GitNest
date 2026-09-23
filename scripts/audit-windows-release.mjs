@@ -91,6 +91,23 @@ assert(
   !resourceEntries.includes("default_app.asar"),
   "Packaged resources retained Electron's default application."
 );
+const mcpScriptPath = join(
+  releaseDirectory,
+  "win-unpacked",
+  "resources",
+  "mcp",
+  "gitnest-mcp.mjs"
+);
+await assertFile(mcpScriptPath);
+// The MCP server is spawned as a plain Node process from
+// `resources/mcp`, and `extraResources` ships nothing else next to
+// it. A relative import therefore means the bundle was code-split
+// and the installed server would fail to start.
+const mcpScript = await readFile(mcpScriptPath, "utf8");
+assert(
+  !/(?:from|import)\s*\(?\s*["']\.\.?\//.test(mcpScript),
+  "Packaged MCP server imports a relative path that is not shipped alongside it."
+);
 const unpackedEntries = await readdir(
   join(releaseDirectory, "win-unpacked")
 );

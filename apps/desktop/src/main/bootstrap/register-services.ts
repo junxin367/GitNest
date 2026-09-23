@@ -8,6 +8,8 @@ import {
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  dirname,
+  join,
   normalize,
   resolve
 } from "node:path";
@@ -26,7 +28,10 @@ import {
   WorkspaceRuntimeService,
 } from "@gitnest/application";
 import { AnalysisSnapshotCache } from "@gitnest/code-analysis";
-import { IPC_EVENTS } from "@gitnest/contracts";
+import {
+  DEFAULT_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+  IPC_EVENTS
+} from "@gitnest/contracts";
 import {
   GitCliClient,
   type GitRemoteCommandEnvironmentProvider
@@ -47,10 +52,17 @@ import { WindowsExternalTerminalAdapter } from "../adapters/external-terminal.ad
 import { SafeStorageCredentialVault } from "../adapters/credential-vault.adapter";
 import { WindowsGitAskPassBroker } from "../adapters/git-askpass.adapter";
 import { NodeWorkspaceWatcher } from "../adapters/watcher.adapter";
+import {
+  CodeAnalysisAutoRefreshScheduler,
+  analysisSelectionKey,
+  shouldAutoRefresh,
+  waitForAnalysisCompletion
+} from "../code-analysis/auto-refresh";
 import { RotatingDiagnosticLogger } from "../adapters/diagnostic-logger.adapter";
 import { AiCommitMessageService } from "../ai/ai-commit-message-service";
 import codeAnalysisProcessPath from "../code-analysis/code-analysis-process-entry?modulePath";
 import { LanguageServerInstaller } from "../code-analysis/language-server-installer";
+import { McpRegistrationService } from "../code-analysis/mcp-registration";
 import { installedLanguageServerSettingsPatch } from "../code-analysis/language-server-settings";
 import { UtilityProcessCodeAnalysisRunner } from "../code-analysis/utility-process-code-analysis-runner";
 import { AppSettingsService } from "../settings/app-settings";
@@ -75,6 +87,7 @@ export interface ApplicationServices {
   externalTerminal: ExternalTerminalService;
   gitInspection: GitInspectionService;
   languageServerInstaller: LanguageServerInstaller;
+  mcpRegistration: McpRegistrationService;
   repositoryCommands: RepositoryCommandService;
   repositoryMutations: RepositoryMutationService;
   repositoryQueries: RepositoryQueryService;
@@ -210,6 +223,17 @@ export function registerServices(): ApplicationServices {
     });
   const codeAnalysisCacheDirectory =
     dataRegistry.paths.codeAnalysisIndex;
+  const mcpRegistration = new McpRegistrationService({
+    executablePath: process.execPath,
+    entryScriptPath: join(
+      dirname(process.execPath),
+      "resources",
+      "mcp",
+      "gitnest-mcp.mjs"
+    ),
+    dataDirectory: userDataPath,
+    packaged: app.isPackaged
+  });
   const codeAnalysis = new CodeAnalysisService(
     workspace,
     gitClient,
@@ -311,6 +335,64 @@ export function registerServices(): ApplicationServices {
       idFactory: randomUUID
     }
   );
+  // CA-5: keep the cached snapshot close to the working tree so
+  // MCP queries are normally fresh. Only the selected target's
+  // `changed` scope refreshes automatically; the full workspace
+  // scope stays a manual action.
+  const codeAnalysisAutoRefresh =
+    new CodeAnalysisAutoRefreshScheduler({
+      debounceMs:
+        DEFAULT_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+      enabled: async () => {
+        const preferences = (await settings.get()).settings
+          .codeAnalysis;
+        if (!preferences.enabled) {
+          return false;
+        }
+        codeAnalysisAutoRefresh.setDebounceMs(
+          preferences.autoRefresh.debounceMs
+        );
+        return preferences.autoRefresh.enabled;
+      },
+      run: async (signal) => {
+        let state = await codeAnalysis.getState();
+        if (signal.aborted) {
+          return;
+        }
+        // Only the incremental `changed` scope refreshes itself, and
+        // only while that is the scope on screen: the service holds
+        // one snapshot at a time, so refreshing a different scope
+        // would swap the graph the user is currently reading.
+        // A full `workspace` re-analysis stays a manual action.
+        if (state.scope !== "changed") {
+          return;
+        }
+        if (state.state === "running" && state.analysisId) {
+          await waitForAnalysisCompletion(
+            (listener) => codeAnalysis.subscribe(listener),
+            state.analysisId,
+            signal
+          );
+          if (signal.aborted) {
+            return;
+          }
+          state = await codeAnalysis.getState();
+          if (state.scope !== "changed" || state.state === "running") {
+            return;
+          }
+        }
+        if (signal.aborted) {
+          return;
+        }
+        const accepted = await codeAnalysis.start("changed");
+        await waitForAnalysisCompletion(
+          (listener) => codeAnalysis.subscribe(listener),
+          accepted.analysisId,
+          signal
+        );
+      },
+      onError: () => undefined
+    });
   const languageServerInstaller =
     new LanguageServerInstaller({
       runtimeDirectory: dataRegistry.paths.languageServers,
@@ -382,8 +464,31 @@ export function registerServices(): ApplicationServices {
   };
 
   const operationStates = new Map<string, string>();
+  let lastSelectionKey: string | undefined;
+  let lastWatchEventAt: string | undefined;
   workspace.subscribe((state) => {
     codeAnalysis.handleWorkspaceChanged(state.workspace);
+    const selectionKey = analysisSelectionKey(
+      state.workspace
+    );
+    if (
+      lastSelectionKey !== undefined &&
+      selectionKey !== lastSelectionKey
+    ) {
+      // The queued refresh belongs to the previous selection.
+      codeAnalysisAutoRefresh.cancel();
+    }
+    lastSelectionKey = selectionKey;
+    const lastEventAt = state.monitor.lastEventAt;
+    if (
+      lastEventAt !== undefined &&
+      lastEventAt !== lastWatchEventAt
+    ) {
+      lastWatchEventAt = lastEventAt;
+      if (shouldAutoRefresh(state.workspace)) {
+        codeAnalysisAutoRefresh.request();
+      }
+    }
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) {
         window.webContents.send(
@@ -475,6 +580,7 @@ export function registerServices(): ApplicationServices {
       gitClient
     ),
     settings,
+    mcpRegistration,
     worktreeCommands: new WorktreeCommandService(
       workspace,
       gitClient,

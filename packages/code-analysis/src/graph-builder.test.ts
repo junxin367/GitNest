@@ -1325,6 +1325,186 @@ describe("buildCodeGraph request chains", () => {
     }
   );
 
+  it("keeps a typed response getter separate from an unrelated same-named getter", () => {
+    const utility = parseSourceFile(
+      sourceFile(
+        "core/fai-cli-sc/src/ScProfClitUtil.java",
+        "java"
+      ),
+      [
+        "class ScProfClitUtil {",
+        "  static int getDuration() {",
+        "    RemoteStandResult result = cli.getDuration();",
+        "    return result.getRt();",
+        "  }",
+        "}"
+      ].join("\n")
+    );
+    const unrelated = parseSourceFile(
+      sourceFile(
+        "svr/ScCutSvr/src/ScDigitalHumanBatchQuery.java",
+        "java"
+      ),
+      [
+        "class ScDigitalHumanBatchQuery {",
+        "  static final class Result {",
+        "    int getRt() { return 0; }",
+        "  }",
+        "  int check(Result result) { return result.getRt(); }",
+        "}"
+      ].join("\n")
+    );
+    const graph = buildCodeGraph({
+      files: [utility, unrelated],
+      scope: "workspace",
+      graphDepth: 5
+    });
+    const duration = graph.nodes.find(
+      (node) => node.name === "getDuration"
+    );
+    const check = graph.nodes.find(
+      (node) => node.name === "check"
+    );
+    const getter = graph.nodes.find(
+      (node) => node.name === "getRt"
+    );
+
+    expect(graph.edges).not.toContainEqual(
+      expect.objectContaining({
+        from: duration?.id,
+        to: getter?.id,
+        kind: "calls"
+      })
+    );
+    expect(graph.diagnostics).toContainEqual(
+      expect.objectContaining({
+        kind: "unresolved-call",
+        nodeId: duration?.id,
+        message:
+          "未找到 RemoteStandResult.getRt 的兼容目标"
+      })
+    );
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        from: check?.id,
+        to: getter?.id,
+        kind: "calls"
+      })
+    );
+  });
+
+  it("continues an HTTP chain through a no-arg factory into a tag RPC", () => {
+    const frontend = parseSourceFile(
+      sourceFile("web/scportal-web/src/material.ts", "typescript"),
+      [
+        "import { GET } from '@/api/request';",
+        "export function getRecognitionList() {",
+        "  return GET('/api/resource/getRecognitionList');",
+        "}"
+      ].join("\n")
+    );
+    const controller = parseSourceFile(
+      sourceFile("web/scportal/src/ScResController.java", "java"),
+      [
+        '@RequestMapping("/resource")',
+        "class ScResController {",
+        "  private ScResService scResService;",
+        '  @GetMapping("/getRecognitionList")',
+        "  Object getRecognitionList() {",
+        "    return scResService.getRecognitionList();",
+        "  }",
+        "}"
+      ].join("\n")
+    );
+    const service = parseSourceFile(
+      sourceFile("web/scportal/src/ScResServiceImpl.java", "java"),
+      [
+        "class ScResServiceImpl {",
+        "  Object getRecognitionList() {",
+        "    return ScResTagCliUtil.getVideoTagList();",
+        "  }",
+        "}"
+      ].join("\n")
+    );
+    const utility = parseSourceFile(
+      sourceFile("core/fai-cli-sc/src/ScResTagCliUtil.java", "java"),
+      [
+        "class ScResTagCliUtil {",
+        "  private static ScResTagCli getScResTagCli() {",
+        "    return null;",
+        "  }",
+        "  static int getVideoTagList() {",
+        "    return getScResTagCli().getResTagList(1);",
+        "  }",
+        "}"
+      ].join("\n")
+    );
+    const client = parseSourceFile(
+      sourceFile("core/fai-cli-sc/src/ScResTagCli.java", "java"),
+      [
+        "package example.client;",
+        "import example.protocol.ScResTagDef;",
+        "interface ScResTagCli {",
+        "  @Cmd(ScResTagDef.Protocol.Cmd.GET_RES_TAG_LIST)",
+        "  int getResTagList(int aid);",
+        "}"
+      ].join("\n")
+    );
+    const handler = parseSourceFile(
+      sourceFile("svr/ScResTagSvr/src/ScResTagProc.java", "java"),
+      [
+        "package example.server;",
+        "import example.protocol.ScResTagDef;",
+        "class ScResTagProc {",
+        "  @HdCmd(ScResTagDef.Protocol.Cmd.GET_RES_TAG_LIST)",
+        "  int getResTagList(int aid) { return 0; }",
+        "}"
+      ].join("\n")
+    );
+    const graph = buildCodeGraph({
+      files: [
+        frontend,
+        controller,
+        service,
+        utility,
+        client,
+        handler
+      ],
+      scope: "workspace",
+      graphDepth: 8
+    });
+    const utilityNode = graph.nodes.find(
+      (node) => node.name === "getVideoTagList"
+    );
+    const rpcClient = graph.nodes.find(
+      (node) => node.kind === "rpc-client" &&
+        node.name === "getResTagList"
+    );
+    const rpcHandler = graph.nodes.find(
+      (node) => node.kind === "rpc-handler" &&
+        node.name === "getResTagList"
+    );
+    const httpChain = graph.requestChains.find(
+      (chain) => chain.profileId === "web-http"
+    );
+
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        from: utilityNode?.id,
+        to: rpcClient?.id,
+        kind: "calls"
+      })
+    );
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        from: rpcClient?.id,
+        to: rpcHandler?.id,
+        kind: "rpc-request"
+      })
+    );
+    expect(httpChain?.nodeIds).toContain(rpcHandler?.id);
+  });
+
   it("reports meaningful broken links without flagging ordinary library calls", () => {
     const frontend = parseSourceFile(
       sourceFile("client.ts", "typescript"),

@@ -9,6 +9,8 @@ import {
   MAX_LSP_REFERENCES_PER_SYMBOL,
   MAX_LSP_REQUESTS,
   MAX_LSP_SYMBOLS_PER_DOCUMENT,
+  MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+  MAX_MCP_MAX_RESPONSE_KB,
   MAX_DIFF_COMMIT_PANEL_HEIGHT,
   MIN_CODE_ANALYSIS_DIAGNOSTICS,
   MIN_CODE_ANALYSIS_GRAPH_EDGES,
@@ -19,6 +21,8 @@ import {
   MIN_LSP_REFERENCES_PER_SYMBOL,
   MIN_LSP_REQUESTS,
   MIN_LSP_SYMBOLS_PER_DOCUMENT,
+  MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+  MIN_MCP_MAX_RESPONSE_KB,
   MIN_DIFF_COMMIT_PANEL_HEIGHT,
   LANGUAGE_SERVER_LANGUAGES,
   createDefaultAppSettings,
@@ -28,6 +32,8 @@ import {
   type AppSettingsLoadDto,
   type LanguageServerCommandSettingsDto,
   type LanguageServerLanguageDto,
+  type CodeAnalysisAutoRefreshSettingsDto,
+  type McpServerSettingsDto,
   type UpdateAppSettingsRequest
 } from "@gitnest/contracts";
 import { AtomicJsonStore } from "@gitnest/persistence-json";
@@ -137,8 +143,12 @@ type StoredCodeAnalysisSettings = Omit<
   | "maxGraphEdges"
   | "maxRequestChains"
   | "maxDiagnostics"
+  | "mcp"
+  | "autoRefresh"
   | LanguageServerLanguageDto
 > & {
+  mcp?: McpServerSettingsDto;
+  autoRefresh?: CodeAnalysisAutoRefreshSettingsDto;
   maxTotalSourceMb?: number;
   maxGraphNodes?: number;
   maxGraphEdges?: number;
@@ -890,6 +900,9 @@ function isCodeAnalysisSettings(
     (value.defaultScope === "changed" ||
       value.defaultScope === "workspace") &&
     typeof value.staticFallback === "boolean" &&
+  (value.mcp === undefined || isMcpServerSettings(value.mcp)) &&
+    (value.autoRefresh === undefined ||
+      isAutoRefreshSettings(value.autoRefresh)) &&
     isIntegerInRange(value.maxFiles, 100, 50_000) &&
     (value.maxTotalSourceMb === undefined ||
       isIntegerInRange(
@@ -1096,6 +1109,31 @@ function isStoredStringArray(
   );
 }
 
+function isAutoRefreshSettings(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.enabled === "boolean" &&
+    isIntegerInRange(
+      value.debounceMs,
+      MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+      MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS
+    )
+  );
+}
+
+function isMcpServerSettings(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.enabled === "boolean" &&
+    typeof value.allowSourceSnippets === "boolean" &&
+    isIntegerInRange(
+      value.maxResponseKb,
+      MIN_MCP_MAX_RESPONSE_KB,
+      MAX_MCP_MAX_RESPONSE_KB
+    )
+  );
+}
+
 function cloneCodeAnalysisSettings(
   settings: StoredCodeAnalysisSettings
 ): CodeAnalysisSettingsDto {
@@ -1104,6 +1142,23 @@ function cloneCodeAnalysisSettings(
     enabled: settings.enabled,
     defaultScope: settings.defaultScope,
     staticFallback: settings.staticFallback,
+    autoRefresh: {
+      enabled:
+        settings.autoRefresh?.enabled ??
+        defaults.autoRefresh.enabled,
+      debounceMs:
+        settings.autoRefresh?.debounceMs ??
+        defaults.autoRefresh.debounceMs
+    },
+    mcp: {
+      enabled: settings.mcp?.enabled ?? defaults.mcp.enabled,
+      allowSourceSnippets:
+        settings.mcp?.allowSourceSnippets ??
+        defaults.mcp.allowSourceSnippets,
+      maxResponseKb:
+        settings.mcp?.maxResponseKb ??
+        defaults.mcp.maxResponseKb
+    },
     maxFiles: settings.maxFiles,
     maxTotalSourceMb:
       settings.maxTotalSourceMb ??
@@ -1418,6 +1473,14 @@ function mergeCodeAnalysisSettings(
   return {
     ...current,
     ...patch,
+    mcp: {
+      ...current.mcp,
+      ...patch.mcp
+    },
+    autoRefresh: {
+      ...current.autoRefresh,
+      ...patch.autoRefresh
+    },
     ignoreDirectories:
       patch.ignoreDirectories === undefined
         ? [...current.ignoreDirectories]

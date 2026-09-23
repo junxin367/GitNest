@@ -4,6 +4,7 @@ import {
   WorkspaceError,
   WorkspaceScanner,
   createEmptyWorkspace,
+  listWorkspaceRoots,
   listWorkspaceTargets,
   repositoryTargetKey,
   repositoryTargetsEqual,
@@ -23,6 +24,15 @@ export interface SetWorkspaceGroupCollapsedInput {
 
 export interface ExcludeWorkspaceRepositoryInput {
   target: RepositoryTarget;
+}
+
+export interface AddWorkspaceDirectoryInput {
+  path: string;
+}
+
+export interface AddWorkspaceDirectoryResult {
+  workspace: Workspace;
+  duplicate: boolean;
 }
 
 interface WorkspaceServiceOptions {
@@ -84,30 +94,11 @@ export class WorkspaceService {
       const scan = await this.#scanner.scanRoot(root, {
         scannedAt: now
       });
-
-      if (scan.repositories.length === 0) {
-        const rootIssue = scan.issues[0];
-        if (rootIssue) {
-          throw new WorkspaceError(
-            "DIRECTORY_UNAVAILABLE",
-            rootIssue.message,
-            {
-              path: root.path,
-              issueCount: scan.issues.length
-            }
-          );
-        }
-
-        throw new WorkspaceError(
-          "NO_REPOSITORIES_FOUND",
-          "No Git repositories were found in the selected directory.",
-          { path: root.path }
-        );
-      }
+      assertRootContainsRepositories(scan);
 
       const workspace = this.#assembler.assemble({
         current,
-        scan,
+        scans: [scan],
         updatedAt: now
       });
       await this.#save(workspace);
@@ -115,22 +106,68 @@ export class WorkspaceService {
     });
   }
 
+  addDirectory(
+    input: AddWorkspaceDirectoryInput
+  ): Promise<AddWorkspaceDirectoryResult> {
+    return this.#runExclusive(async () => {
+      const current = await this.#loadWorkspace();
+      const normalized = this.#fileSystem.normalizePath(input.path);
+      const roots = listWorkspaceRoots(current);
+      if (
+        roots.some(
+          (root) =>
+            root.canonicalPath === normalized.canonicalPath
+        )
+      ) {
+        return {
+          workspace: current,
+          duplicate: true
+        };
+      }
+
+      const root: WorkspaceRoot = {
+        path: normalized.path,
+        canonicalPath: normalized.canonicalPath,
+        excludes: []
+      };
+      const now = this.#clock();
+      const scan = await this.#scanner.scanRoot(root, {
+        scannedAt: now
+      });
+      assertRootContainsRepositories(scan);
+      const scans = await this.#scanRoots(roots, now);
+      scans.push(scan);
+      const workspace = this.#assembler.assemble({
+        current,
+        scans,
+        updatedAt: now
+      });
+
+      await this.#save(workspace);
+      return {
+        workspace,
+        duplicate: false
+      };
+    });
+  }
+
   rescan(signal?: AbortSignal): Promise<Workspace> {
     return this.#runExclusive(async () => {
       const current = await this.#loadWorkspace();
-      const root = toWorkspaceRoot(current);
-      if (!root) {
+      const roots = listWorkspaceRoots(current);
+      if (roots.length === 0) {
         return current;
       }
 
       const now = this.#clock();
-      const scan = await this.#scanner.scanRoot(root, {
-        scannedAt: now,
-        ...(signal ? { signal } : {})
-      });
+      const scans = await this.#scanRoots(
+        roots,
+        now,
+        signal
+      );
       const workspace = this.#assembler.assemble({
         current,
-        scan,
+        scans,
         updatedAt: now
       });
 
@@ -144,8 +181,8 @@ export class WorkspaceService {
   ): Promise<Workspace> {
     return this.#runExclusive(async () => {
       const current = await this.#loadWorkspace();
-      const root = toWorkspaceRoot(current);
-      if (!root) {
+      const roots = listWorkspaceRoots(current);
+      if (roots.length === 0) {
         throw new WorkspaceError(
           "INVALID_REQUEST",
           "The Workspace root is not configured."
@@ -176,10 +213,15 @@ export class WorkspaceService {
           "The repository worktree is no longer available."
         );
       }
-      if (!this.#fileSystem.isWithin(root.path, worktree.path)) {
+      const root = findOwningRoot(
+        roots,
+        worktree.path,
+        this.#fileSystem
+      );
+      if (!root) {
         throw new WorkspaceError(
           "INVALID_REQUEST",
-          "The repository is outside the Workspace root."
+          "The repository is outside the Workspace roots."
         );
       }
 
@@ -198,19 +240,24 @@ export class WorkspaceService {
           value.toLocaleLowerCase() ===
           excludedPath.toLocaleLowerCase()
       );
-      const nextRoot = alreadyExcluded
+      const nextRoot: WorkspaceRoot = alreadyExcluded
         ? root
         : {
             ...root,
             excludes: [...root.excludes, excludedPath]
           };
       const now = this.#clock();
-      const scan = await this.#scanner.scanRoot(nextRoot, {
-        scannedAt: now
-      });
+      const scans = await this.#scanRoots(
+        roots.map((candidate) =>
+          candidate.canonicalPath === root.canonicalPath
+            ? nextRoot
+            : candidate
+        ),
+        now
+      );
       const workspace = this.#assembler.assemble({
         current,
-        scan,
+        scans,
         updatedAt: now
       });
 
@@ -298,6 +345,23 @@ export class WorkspaceService {
     this.#workspace = workspace;
   }
 
+  async #scanRoots(
+    roots: readonly WorkspaceRoot[],
+    scannedAt: string,
+    signal?: AbortSignal
+  ) {
+    const scans = [];
+    for (const root of roots) {
+      scans.push(
+        await this.#scanner.scanRoot(root, {
+          scannedAt,
+          ...(signal ? { signal } : {})
+        })
+      );
+    }
+    return scans;
+  }
+
   #runExclusive<Result>(
     operation: () => Promise<Result>
   ): Promise<Result> {
@@ -310,22 +374,46 @@ export class WorkspaceService {
   }
 }
 
-function toWorkspaceRoot(
-  workspace: Workspace
-): WorkspaceRoot | undefined {
-  return workspace.path && workspace.canonicalPath
-    ? {
-        path: workspace.path,
-        canonicalPath: workspace.canonicalPath,
-        excludes: [...workspace.excludes]
+function assertRootContainsRepositories(
+  scan: Awaited<ReturnType<WorkspaceScanner["scanRoot"]>>
+): void {
+  if (scan.repositories.length > 0) {
+    return;
+  }
+  const rootIssue = scan.issues[0];
+  if (rootIssue) {
+    throw new WorkspaceError(
+      "DIRECTORY_UNAVAILABLE",
+      rootIssue.message,
+      {
+        path: scan.root.path,
+        issueCount: scan.issues.length
       }
-    : undefined;
+    );
+  }
+  throw new WorkspaceError(
+    "NO_REPOSITORIES_FOUND",
+    "No Git repositories were found in the selected directory.",
+    { path: scan.root.path }
+  );
+}
+
+function findOwningRoot(
+  roots: readonly WorkspaceRoot[],
+  path: string,
+  fileSystem: WorkspaceFileSystem
+): WorkspaceRoot | undefined {
+  return roots
+    .filter((root) => fileSystem.isWithin(root.path, path))
+    .sort(
+      (left, right) =>
+        right.canonicalPath.length - left.canonicalPath.length
+    )[0];
 }
 
 function isConfiguredWorkspace(workspace: Workspace): boolean {
   return Boolean(
-    workspace.path &&
-    workspace.canonicalPath &&
+    listWorkspaceRoots(workspace).length > 0 &&
     workspace.lastScannedAt
   );
 }
@@ -336,6 +424,7 @@ function isEmptyWorkspacePlaceholder(
   return (
     workspace.path === undefined &&
     workspace.canonicalPath === undefined &&
+    (workspace.additionalRoots?.length ?? 0) === 0 &&
     workspace.lastScannedAt === undefined &&
     workspace.excludes.length === 0 &&
     workspace.groups.length === 0 &&

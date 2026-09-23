@@ -521,6 +521,11 @@ export class CodeAnalysisEngine {
         relatedNodeIds: []
       });
     }
+    const changedPathsForFreshness = changedCanonicalPaths({
+      ...input,
+      changedPaths:
+        input.freshnessChangedPaths ?? input.changedPaths
+    });
     const snapshot = compactCodeAnalysisSnapshotPayload(
       {
         schemaVersion: 1,
@@ -529,6 +534,26 @@ export class CodeAnalysisEngine {
         scope: input.scope,
         generatedAt,
         roots: input.roots,
+        ...(input.worktreeStatuses
+          ? {
+              sourceState: {
+                worktreeStatuses: input.worktreeStatuses,
+                changedSourceFiles: inventory.files
+                  .filter((file) =>
+                    changedPathsForFreshness.has(
+                      file.canonicalPath
+                    )
+                  )
+                  .map((file) => ({
+                    repositoryId: file.repositoryId,
+                    worktreeId: file.worktreeId,
+                    path: file.relativePath,
+                    size: file.size,
+                    modifiedAtMs: file.modifiedAtMs
+                  }))
+              }
+            }
+          : {}),
         nodes: graph.nodes,
         edges: graph.edges,
         requestChains: graph.requestChains,

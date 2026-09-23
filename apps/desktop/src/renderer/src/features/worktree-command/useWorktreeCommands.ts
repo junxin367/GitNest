@@ -358,7 +358,7 @@ export function worktreeCommandLabel(
     move: "移动 Worktree",
     repair: "修复 Worktree 登记",
     prune: "清除失效 Worktree 登记",
-    remove: "移除 Worktree"
+    remove: "删除 Worktree"
   }[type];
 }
 

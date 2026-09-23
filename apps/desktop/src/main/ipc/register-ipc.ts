@@ -24,11 +24,15 @@ import {
   MAX_CODE_ANALYSIS_REQUEST_CHAINS,
   MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB,
   MAX_LSP_DOCUMENTS,
+  MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+  MAX_MCP_MAX_RESPONSE_KB,
   MAX_LSP_REFERENCES_PER_SYMBOL,
   MAX_LSP_REQUESTS,
   MAX_LSP_SYMBOLS_PER_DOCUMENT,
   MAX_DIFF_COMMIT_PANEL_HEIGHT,
   MIN_CODE_ANALYSIS_DIAGNOSTICS,
+  MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+  MIN_MCP_MAX_RESPONSE_KB,
   MIN_CODE_ANALYSIS_GRAPH_EDGES,
   MIN_CODE_ANALYSIS_GRAPH_NODES,
   MIN_CODE_ANALYSIS_REQUEST_CHAINS,
@@ -45,11 +49,13 @@ import {
   type AiConnectionTestResultDto,
   type AcknowledgeApplicationUpdatePromptRequest,
   type AccountRemovalImpactRequest,
+  type AddWorkspaceDirectoryRequest,
   type AppSettingsDto,
   type AppSettingsLoadDto,
   type AppThemeDto,
   type BindAccountRequest,
   type CancelCodeAnalysisRequest,
+  type McpRegistrationStatusDto,
   type CancelRepositoryOperationRequest,
   type CancelRepositoryQueryRequest,
   type ClearAiApiKeyRequest,
@@ -104,6 +110,7 @@ import {
   type RuntimeInfo,
   type RuntimePlatform,
   type SaveAccountRequest,
+  type SetMcpRegistrationRequest,
   type StartCodeAnalysisRequest,
   type RepositoryTargetDto,
   type SelectRepositoryTargetRequest,
@@ -394,6 +401,25 @@ export function registerIpcHandlers(
       nodeVersion: process.versions.node,
       platform: process.platform as RuntimePlatform
     })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.codeAnalysisGetMcpRegistration,
+    (): Promise<GitReadResult<McpRegistrationStatusDto>> =>
+      captureGitRead(() => services.mcpRegistration.status())
+  );
+
+  registerHandler(
+    IPC_CHANNELS.codeAnalysisSetMcpRegistration,
+    (
+      _event,
+      request
+    ): Promise<GitReadResult<McpRegistrationStatusDto>> =>
+      captureGitRead(() =>
+        services.mcpRegistration.setRegistered(
+          validateSetMcpRegistrationRequest(request).registered
+        )
+      )
   );
 
   registerHandler(
@@ -763,6 +789,16 @@ export function registerIpcHandlers(
     (event) =>
       captureWorkspace(() =>
         selectWorkspaceDirectory(getSenderWindow(event))
+      )
+  );
+
+  registerHandler(
+    IPC_CHANNELS.workspaceAddDirectory,
+    (_event, request) =>
+      captureWorkspace(() =>
+        services.workspace.addDirectory(
+          validateAddWorkspaceDirectoryRequest(request)
+        )
       )
   );
 
@@ -1536,6 +1572,51 @@ export function validateUpdateAppSettingsRequest(
         request.codeAnalysis.staticFallback
       );
     }
+    if ("mcp" in request.codeAnalysis) {
+      const mcp = request.codeAnalysis.mcp;
+      if (!isRecord(mcp)) {
+        throw invalidSettingsRequest();
+      }
+      const validated: NonNullable<
+        UpdateAppSettingsRequest["codeAnalysis"]
+      >["mcp"] = {};
+      if ("enabled" in mcp) {
+        validated.enabled = requireBoolean(mcp.enabled);
+      }
+      if ("allowSourceSnippets" in mcp) {
+        validated.allowSourceSnippets = requireBoolean(
+          mcp.allowSourceSnippets
+        );
+      }
+      if ("maxResponseKb" in mcp) {
+        validated.maxResponseKb = requireIntegerInRange(
+          mcp.maxResponseKb,
+          MIN_MCP_MAX_RESPONSE_KB,
+          MAX_MCP_MAX_RESPONSE_KB
+        );
+      }
+      codeAnalysis.mcp = validated;
+    }
+    if ("autoRefresh" in request.codeAnalysis) {
+      const autoRefresh = request.codeAnalysis.autoRefresh;
+      if (!isRecord(autoRefresh)) {
+        throw invalidSettingsRequest();
+      }
+      const validated: NonNullable<
+        UpdateAppSettingsRequest["codeAnalysis"]
+      >["autoRefresh"] = {};
+      if ("enabled" in autoRefresh) {
+        validated.enabled = requireBoolean(autoRefresh.enabled);
+      }
+      if ("debounceMs" in autoRefresh) {
+        validated.debounceMs = requireIntegerInRange(
+          autoRefresh.debounceMs,
+          MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+          MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS
+        );
+      }
+      codeAnalysis.autoRefresh = validated;
+    }
     if ("maxFiles" in request.codeAnalysis) {
       codeAnalysis.maxFiles = requireIntegerInRange(
         request.codeAnalysis.maxFiles,
@@ -1818,6 +1899,17 @@ export function validateReadCodeAnalysisFileRequest(
   return { nodeId };
 }
 
+export function validateSetMcpRegistrationRequest(
+  request: unknown
+): SetMcpRegistrationRequest {
+  if (!isRecord(request)) {
+    throw invalidSettingsRequest();
+  }
+  return {
+    registered: requireBoolean(request.registered)
+  };
+}
+
 export function validateInstallLanguageServerRequest(
   request: unknown
 ): InstallLanguageServerRequest {
@@ -2025,6 +2117,14 @@ export function validateCreateWorkspaceRequest(
 ): CreateWorkspaceRequest {
   return {
     name: readWorkspaceName(request),
+    path: readWorkspacePath(request)
+  };
+}
+
+export function validateAddWorkspaceDirectoryRequest(
+  request: unknown
+): AddWorkspaceDirectoryRequest {
+  return {
     path: readWorkspacePath(request)
   };
 }

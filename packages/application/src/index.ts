@@ -94,6 +94,8 @@ export {
 export { GitRepositoryProbe } from "./workspace/git-repository-probe";
 export {
   WorkspaceService,
+  type AddWorkspaceDirectoryInput,
+  type AddWorkspaceDirectoryResult,
   type ExcludeWorkspaceRepositoryInput,
   type SetWorkspaceGroupCollapsedInput,
 } from "./workspace/workspace-service";

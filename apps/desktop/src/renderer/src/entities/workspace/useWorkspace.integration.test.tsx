@@ -267,6 +267,65 @@ describe("useWorkspace integration", () => {
     expect(controller?.busy).toBe(false);
   });
 
+  it("adds a selected directory to the current Workspace", async () => {
+    const initial = workspaceWithTarget(TARGET_A);
+    const added: WorkspaceDetailsDto = {
+      ...initial,
+      additionalRoots: [
+        {
+          path: "D:\\shared\\tools",
+          canonicalPath: "d:\\shared\\tools",
+          excludes: []
+        }
+      ],
+      updatedAt: "2026-09-23T12:00:00.000Z"
+    };
+    const selectDirectory = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        cancelled: false as const,
+        path: "D:\\shared\\tools"
+      }
+    }));
+    const addDirectory = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        workspace: added,
+        duplicate: false
+      }
+    }));
+    installBridge({
+      addDirectory,
+      getState: vi.fn(async () => ({
+        ok: true as const,
+        value: createRuntimeState(initial)
+      })),
+      selectDirectory
+    });
+    await renderHarness();
+
+    let result!: Promise<boolean>;
+    act(() => {
+      result = controller!.chooseDirectory();
+    });
+    await act(async () => {
+      await result;
+      await flushAsyncWork();
+    });
+
+    await expect(result).resolves.toBe(true);
+    expect(selectDirectory).toHaveBeenCalledOnce();
+    expect(addDirectory).toHaveBeenCalledWith({
+      path: "D:\\shared\\tools"
+    });
+    expect(controller?.workspace?.additionalRoots).toEqual(
+      added.additionalRoots
+    );
+    expect(controller?.notice).toBe(
+      "目录已添加到当前 Workspace。"
+    );
+  });
+
   it("keeps the latest switch when returning to the visible Workspace", async () => {
     const first = deferred<
       Awaited<ReturnType<GitNestBridge["workspace"]["switch"]>>
@@ -590,6 +649,30 @@ describe("useWorkspace integration", () => {
     expect(controller?.workspace?.id).toBe("workspace-second");
   });
 
+  it("synchronizes the current Workspace topology after an asynchronous Worktree operation", async () => {
+    const updatedWorkspace = {
+      ...workspaceWithTarget(TARGET_A),
+      worktrees: workspaceWithTarget(TARGET_A).worktrees.slice(0, 1),
+      updatedAt: "2026-09-23T10:00:00.000Z"
+    } satisfies WorkspaceDetailsDto;
+    const getCurrent = vi.fn(async () => ({
+      ok: true as const,
+      value: updatedWorkspace
+    }));
+    installBridge({ getCurrent });
+    await renderHarness();
+
+    await act(async () => {
+      await controller!.syncCurrentWorkspace();
+    });
+
+    expect(getCurrent).toHaveBeenCalledTimes(1);
+    expect(controller?.workspace?.updatedAt).toBe(
+      "2026-09-23T10:00:00.000Z"
+    );
+    expect(controller?.workspace?.worktrees).toHaveLength(1);
+  });
+
   async function renderHarness() {
     await act(async () => {
       root.render(
@@ -649,6 +732,13 @@ function installBridge(
           ok: true as const,
           value: {
             cancelled: true as const
+          }
+        })),
+        addDirectory: vi.fn(async () => ({
+          ok: true as const,
+          value: {
+            workspace: state.workspace,
+            duplicate: true
           }
         })),
         rescan: vi.fn(async () => ({

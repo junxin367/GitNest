@@ -2,6 +2,7 @@ export {
   WORKSPACE_CATALOG_SCHEMA_VERSION,
   WORKSPACE_SCHEMA_VERSION,
   createEmptyWorkspace,
+  listWorkspaceRoots,
   summarizeWorkspace,
   type RepositoryGroup,
   type RepositoryTarget,

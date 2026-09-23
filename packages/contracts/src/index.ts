@@ -1,15 +1,18 @@
 export { IPC_CHANNELS, IPC_EVENTS } from "./channels";
 export {
   DEFAULT_CODE_ANALYSIS_DIAGNOSTICS,
+  DEFAULT_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
   DEFAULT_CODE_ANALYSIS_GRAPH_EDGES,
   DEFAULT_CODE_ANALYSIS_GRAPH_NODES,
   DEFAULT_CODE_ANALYSIS_IGNORES,
   DEFAULT_CODE_ANALYSIS_REQUEST_CHAINS,
   DEFAULT_CODE_ANALYSIS_TOTAL_SOURCE_MB,
   DEFAULT_LSP_REFERENCES_PER_SYMBOL,
+  DEFAULT_MCP_MAX_RESPONSE_KB,
   DEFAULT_LSP_SYMBOLS_PER_DOCUMENT,
   LANGUAGE_SERVER_LANGUAGES,
   MAX_CODE_ANALYSIS_DIAGNOSTICS,
+  MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
   MAX_CODE_ANALYSIS_GRAPH_EDGES,
   MAX_CODE_ANALYSIS_GRAPH_NODES,
   MAX_CODE_ANALYSIS_REQUEST_CHAINS,
@@ -18,7 +21,9 @@ export {
   MAX_LSP_REFERENCES_PER_SYMBOL,
   MAX_LSP_REQUESTS,
   MAX_LSP_SYMBOLS_PER_DOCUMENT,
+  MAX_MCP_MAX_RESPONSE_KB,
   MIN_CODE_ANALYSIS_DIAGNOSTICS,
+  MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
   MIN_CODE_ANALYSIS_GRAPH_EDGES,
   MIN_CODE_ANALYSIS_GRAPH_NODES,
   MIN_CODE_ANALYSIS_REQUEST_CHAINS,
@@ -27,12 +32,14 @@ export {
   MIN_LSP_REFERENCES_PER_SYMBOL,
   MIN_LSP_REQUESTS,
   MIN_LSP_SYMBOLS_PER_DOCUMENT,
+  MIN_MCP_MAX_RESPONSE_KB,
   createDefaultCodeAnalysisSettings
 } from "./analysis.contracts";
 export type {
   AnalysisConfidenceDto,
   CancelCodeAnalysisRequest,
   CodeAnalysisAcceptedDto,
+  CodeAnalysisAutoRefreshSettingsDto,
   CodeAnalysisFileDto,
   CodeAnalysisDiagnosticDto,
   CodeAnalysisDiagnosticKindDto,
@@ -57,13 +64,16 @@ export type {
   InstallableLanguageServerDto,
   InstallLanguageServerRequest,
   LanguageServerInstallResultDto,
+  McpRegistrationStatusDto,
   LanguageServerCommandSettingsDto,
   LanguageServerLanguageDto,
+  McpServerSettingsDto,
   LanguageServerStateDto,
   LanguageServerStatusDto,
   ReadCodeAnalysisFileRequest,
   RestoreCodeAnalysisSnapshotRequest,
   StartCodeAnalysisRequest,
+  SetMcpRegistrationRequest,
   UpdateCodeAnalysisSettingsRequest
 } from "./analysis.contracts";
 export type {
@@ -167,6 +177,8 @@ export type {
   RuntimePlatform
 } from "./system.contracts";
 export type {
+  AddWorkspaceDirectoryRequest,
+  AddWorkspaceDirectoryResultDto,
   CreateWorkspaceRequest,
   DeleteWorkspaceRequest,
   RepositoryGroupDto,
@@ -185,6 +197,7 @@ export type {
   WorkspaceOperationDto,
   WorkspaceRefreshAcceptedDto,
   WorkspaceRepositoryDto,
+  WorkspaceRootDto,
   WorkspaceResult,
   WorkspaceRuntimeStateDto,
   WorkspaceScanIssueDto,

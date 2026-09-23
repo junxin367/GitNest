@@ -11,6 +11,7 @@ import {
   type RepositoryTarget,
   type Workspace,
   type WorkspaceRepository,
+  type WorkspaceRoot,
   type WorkspaceScanIssue,
   type WorkspaceWorktree
 } from "@gitnest/workspace-core";
@@ -123,6 +124,9 @@ function parseCurrentWorkspaceDocument(
         !isTimestamp(value.lastScannedAt))) ||
     !Array.isArray(value.excludes) ||
     !value.excludes.every((item) => typeof item === "string") ||
+    (value.additionalRoots !== undefined &&
+      (!Array.isArray(value.additionalRoots) ||
+        !value.additionalRoots.every(isWorkspaceRoot))) ||
     !Array.isArray(value.groups) ||
     !value.groups.every(isRepositoryGroup) ||
     !Array.isArray(value.scanIssues) ||
@@ -139,6 +143,9 @@ function parseCurrentWorkspaceDocument(
   if (
     unconfigured &&
     ((value.excludes as string[]).length > 0 ||
+      (Array.isArray(value.additionalRoots)
+        ? value.additionalRoots.length > 0
+        : false) ||
       (value.groups as RepositoryGroup[]).length > 0 ||
       (value.scanIssues as WorkspaceScanIssue[]).length > 0 ||
       (value.repositories as WorkspaceRepository[]).length > 0 ||
@@ -159,6 +166,14 @@ function parseCurrentWorkspaceDocument(
         }
       : {}),
     excludes: [...value.excludes],
+    ...(Array.isArray(value.additionalRoots) &&
+    value.additionalRoots.length > 0
+      ? {
+          additionalRoots: (
+            value.additionalRoots as WorkspaceRoot[]
+          ).map(rebuildWorkspaceRoot)
+        }
+      : {}),
     groups: (value.groups as RepositoryGroup[]).map(
       rebuildRepositoryGroup
     ),
@@ -495,6 +510,16 @@ function isWorkspaceScanIssue(value: unknown): boolean {
   );
 }
 
+function isWorkspaceRoot(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.path) &&
+    isNonEmptyString(value.canonicalPath) &&
+    Array.isArray(value.excludes) &&
+    value.excludes.every((item) => typeof item === "string")
+  );
+}
+
 function isRepositoryGroup(value: unknown): boolean {
   return (
     isRecord(value) &&
@@ -617,6 +642,16 @@ function rebuildWorkspaceScanIssue(
   };
 }
 
+function rebuildWorkspaceRoot(
+  root: WorkspaceRoot
+): WorkspaceRoot {
+  return {
+    path: root.path,
+    canonicalPath: root.canonicalPath,
+    excludes: [...root.excludes]
+  };
+}
+
 function rebuildWorkspaceRepository(
   repository: WorkspaceRepository
 ): WorkspaceRepository {
@@ -661,7 +696,16 @@ function rebuildWorkspaceWorktree(
 function assertCurrentWorkspaceRelationships(
   workspace: Workspace
 ): void {
+  const rootCanonicalPaths = [
+    ...(workspace.canonicalPath
+      ? [workspace.canonicalPath]
+      : []),
+    ...(workspace.additionalRoots ?? []).map(
+      (root) => root.canonicalPath
+    )
+  ];
   if (
+    hasDuplicates(rootCanonicalPaths) ||
     hasDuplicates(workspace.groups.map((group) => group.id)) ||
     hasDuplicates(
       workspace.repositories.map((repository) => repository.id)

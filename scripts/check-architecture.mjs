@@ -44,6 +44,15 @@ const PACKAGE_RULES = new Map([
     ])
   ],
   ["code-analysis", new Set()],
+  [
+    "mcp-server",
+    new Set([
+      "@gitnest/code-analysis",
+      "@gitnest/git-core",
+      "@gitnest/persistence-json",
+      "@gitnest/workspace-core"
+    ])
+  ],
   ["contracts", new Set()],
   ["design-system", new Set()],
   ["git-cli", new Set(["@gitnest/git-core"])],

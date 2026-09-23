@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -72,6 +73,9 @@ export function NodeSourceViewer({
     searchHits.length === 0
       ? 0
       : Math.min(activeSearchHit, searchHits.length - 1);
+  const canSearch = Boolean(
+    source.file && lines.length > 0
+  );
   const targetLine = source.file
     ? Math.min(
         source.file.endLine,
@@ -85,11 +89,62 @@ export function NodeSourceViewer({
     setActiveSearchHit(0);
   }, [node.id]);
 
-  useEffect(() => {
-    if (searchOpen) {
-      searchInputRef.current?.focus();
+  const openSearch = useCallback(() => {
+    if (!canSearch) {
+      return;
     }
+    setSearchOpen(true);
+    if (searchOpen) {
+      searchInputRef.current?.focus({
+        preventScroll: true
+      });
+      searchInputRef.current?.select();
+    }
+  }, [canSearch, searchOpen]);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    window.requestAnimationFrame(() => {
+      viewportRef.current?.focus({
+        preventScroll: true
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!searchOpen) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus({
+        preventScroll: true
+      });
+      searchInputRef.current?.select();
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [searchOpen]);
+
+  useEffect(() => {
+    const handleFindShortcut = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        !(event.ctrlKey || event.metaKey) ||
+        event.key.toLocaleLowerCase() !== "f" ||
+        !canSearch
+      ) {
+        return;
+      }
+      event.preventDefault();
+      openSearch();
+    };
+
+    window.addEventListener("keydown", handleFindShortcut);
+    return () =>
+      window.removeEventListener(
+        "keydown",
+        handleFindShortcut
+      );
+  }, [canSearch, openSearch]);
 
   useLayoutEffect(() => {
     if (!source.file) {
@@ -158,9 +213,9 @@ export function NodeSourceViewer({
           )}
           <Button
             aria-label="搜索节点代码"
-            disabled={!source.file || lines.length === 0}
+            disabled={!canSearch}
             icon={<Icon name="search" size={14} />}
-            onClick={() => setSearchOpen(true)}
+            onClick={openSearch}
             size="small"
             title="搜索代码"
             variant="icon"
@@ -195,7 +250,7 @@ export function NodeSourceViewer({
               setSearchQuery(event.target.value);
               setActiveSearchHit(0);
             }}
-            onClose={() => setSearchOpen(false)}
+            onClose={closeSearch}
             onNext={() => moveSearchHit(1)}
             onPrevious={() => moveSearchHit(-1)}
             open={searchOpen && Boolean(source.file)}

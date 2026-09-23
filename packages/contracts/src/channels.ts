@@ -36,6 +36,10 @@ export const IPC_CHANNELS = {
   codeAnalysisReadFile: "code-analysis:read-file",
   codeAnalysisInstallLanguageServer:
     "code-analysis:install-language-server",
+  codeAnalysisGetMcpRegistration:
+    "code-analysis:get-mcp-registration",
+  codeAnalysisSetMcpRegistration:
+    "code-analysis:set-mcp-registration",
   windowIsMaximized: "window:is-maximized",
   windowMinimize: "window:minimize",
   windowToggleMaximize: "window:toggle-maximize",
@@ -50,6 +54,7 @@ export const IPC_CHANNELS = {
   workspaceRename: "workspace:rename",
   workspaceDelete: "workspace:delete",
   workspaceSelectDirectory: "workspace:select-directory",
+  workspaceAddDirectory: "workspace:add-directory",
   workspaceRescan: "workspace:rescan",
   workspaceRemoveRepository: "workspace:remove-repository",
   workspaceSetGroupCollapsed: "workspace:set-group-collapsed",

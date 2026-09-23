@@ -15,7 +15,6 @@ const primaryItems: Array<{
 
 interface ActivityRailProps {
   activeView: AppView;
-  operationAttentionCount: number;
   searchOpen: boolean;
   sidebarCollapsed: boolean;
   terminalDisabled: boolean;
@@ -30,7 +29,6 @@ interface ActivityRailProps {
 
 export function ActivityRail({
   activeView,
-  operationAttentionCount,
   searchOpen,
   sidebarCollapsed,
   terminalDisabled,
@@ -77,13 +75,6 @@ export function ActivityRail({
           type="button"
         >
           <Icon name={item.icon} size={20} />
-          {item.id === "operations" && operationAttentionCount > 0 ? (
-            <span className="rail-badge">
-              {operationAttentionCount > 99
-                ? "99+"
-                : operationAttentionCount}
-            </span>
-          ) : null}
         </Button>
       ))}
       <Button variant="unstyled"

@@ -17,6 +17,8 @@ import {
 
 import {
   WorkspaceService,
+  type AddWorkspaceDirectoryInput,
+  type AddWorkspaceDirectoryResult,
   type ExcludeWorkspaceRepositoryInput,
   type SetWorkspaceGroupCollapsedInput
 } from "./workspace-service";
@@ -147,6 +149,8 @@ export class WorkspaceCollectionService {
       if (!workspace) {
         throw invalidWorkspaceCatalog(workspaceId);
       }
+      const nextService = this.#createService(workspaceId);
+      const refreshedWorkspace = await nextService.rescan();
 
       if (catalog.activeWorkspaceId !== workspaceId) {
         const nextCatalog: WorkspaceCatalog = {
@@ -157,9 +161,9 @@ export class WorkspaceCollectionService {
         await this.#store.saveCatalog(nextCatalog);
         this.#catalog = nextCatalog;
       }
-      this.#activeService = this.#createService(workspaceId);
-      await this.#syncSummary(workspace);
-      return workspace;
+      this.#activeService = nextService;
+      await this.#syncSummary(refreshedWorkspace);
+      return refreshedWorkspace;
     });
   }
 
@@ -281,6 +285,18 @@ export class WorkspaceCollectionService {
       ).rescan(signal);
       await this.#syncSummary(workspace);
       return workspace;
+    });
+  }
+
+  addDirectory(
+    input: AddWorkspaceDirectoryInput
+  ): Promise<AddWorkspaceDirectoryResult> {
+    return this.#runExclusive(async () => {
+      const result = await (
+        await this.#getActiveService()
+      ).addDirectory(input);
+      await this.#syncSummary(result.workspace);
+      return result;
     });
   }
 

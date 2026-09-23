@@ -406,6 +406,9 @@ describe("createGitNestBridge", () => {
       workspaceId: "workspace_2"
     });
     await bridge.workspace.selectDirectory();
+    await bridge.workspace.addDirectory({
+      path: "D:\\shared\\tools"
+    });
     await bridge.workspace.rescan();
     await bridge.workspace.removeRepository({
       target: {
@@ -962,6 +965,10 @@ describe("createGitNestBridge", () => {
       {
         channel: IPC_CHANNELS.workspaceSelectDirectory,
         args: []
+      },
+      {
+        channel: IPC_CHANNELS.workspaceAddDirectory,
+        args: [{ path: "D:\\shared\\tools" }]
       },
       {
         channel: IPC_CHANNELS.workspaceRescan,

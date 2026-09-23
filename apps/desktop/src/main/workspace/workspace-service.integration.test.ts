@@ -150,11 +150,78 @@ describe("WorkspaceService integration", () => {
     }
   });
 
+  it("adds, deduplicates, and restores another directory in the current Workspace", async () => {
+    const localAppData =
+      await createTemporaryDirectoryFixture(
+        "additional-directory-app-data"
+      );
+    const localStorePath = join(
+      localAppData.path,
+      "default.workspace.json"
+    );
+    const createService = () =>
+      new WorkspaceService(
+        new GitCliClient(),
+        new NodeWorkspaceFileSystem(),
+        new JsonWorkspaceStore(localStorePath),
+        { clock }
+      );
+
+    try {
+      const localService = createService();
+      const configured = await localService.configureRoot(
+        fixture.metaRootPath
+      );
+      const added = await localService.addDirectory({
+        path: fixture.standaloneRepositoryPath
+      });
+
+      expect(added.duplicate).toBe(false);
+      expect(added.workspace.path).toBe(fixture.metaRootPath);
+      expect(added.workspace.additionalRoots).toEqual([
+        expect.objectContaining({
+          path: fixture.standaloneRepositoryPath,
+          excludes: []
+        })
+      ]);
+      expect(added.workspace.repositories).toHaveLength(
+        configured.repositories.length + 1
+      );
+      expect(
+        added.workspace.worktrees.some(
+          (worktree) =>
+            worktree.path ===
+            fixture.standaloneRepositoryPath
+        )
+      ).toBe(true);
+
+      const duplicate = await localService.addDirectory({
+        path: fixture.standaloneRepositoryPath
+      });
+      expect(duplicate).toEqual({
+        workspace: added.workspace,
+        duplicate: true
+      });
+
+      await expect(createService().getCurrent()).resolves.toEqual(
+        added.workspace
+      );
+    } finally {
+      await localAppData.dispose();
+    }
+  }, 15_000);
+
   it("creates, switches, restores, renames, and deletes independent multi-repository Workspaces", async () => {
     const localAppData =
       await createTemporaryDirectoryFixture(
         "workspace-collection-app-data"
       );
+    const externalWorktreePath = join(
+      localAppData.path,
+      "externally-created-worktree"
+    );
+    const gitClient = new GitCliClient();
+    let externalWorktreeCreated = false;
     const options = {
       catalogFilePath: join(
         localAppData.path,
@@ -242,6 +309,30 @@ describe("WorkspaceService integration", () => {
         first.groups.every((group) => !group.collapsed)
       ).toBe(true);
 
+      const standaloneSnapshot =
+        await gitClient.readRepositorySnapshot(
+          fixture.standaloneRepositoryPath
+        );
+      await gitClient.createWorktree(
+        fixture.standaloneRepositoryPath,
+        externalWorktreePath,
+        {
+          startPoint: standaloneSnapshot.head,
+          createBranch: false,
+          detached: true
+        }
+      );
+      externalWorktreeCreated = true;
+      expect(
+        (
+          await new JsonWorkspaceCollectionStore(
+            options
+          ).loadWorkspace("workspace_second")
+        )?.worktrees.some(
+          (worktree) => worktree.path === externalWorktreePath
+        )
+      ).toBe(false);
+
       const restoredSecond =
         await collection.switchWorkspace(
           "workspace_second"
@@ -250,6 +341,16 @@ describe("WorkspaceService integration", () => {
         fixture.standaloneRepositoryPath
       );
       expect(restoredSecond.groups[0]?.collapsed).toBe(true);
+      expect(
+        restoredSecond.worktrees.some(
+          (worktree) => worktree.path === externalWorktreePath
+        )
+      ).toBe(true);
+      await gitClient.removeWorktree(
+        fixture.standaloneRepositoryPath,
+        externalWorktreePath
+      );
+      externalWorktreeCreated = false;
       await collection.renameWorkspace({
         workspaceId: "workspace_second",
         name: "Renamed Workspace"
@@ -283,6 +384,14 @@ describe("WorkspaceService integration", () => {
         expect.objectContaining({ id: "default" })
       ]);
     } finally {
+      if (externalWorktreeCreated) {
+        await gitClient
+          .removeWorktree(
+            fixture.standaloneRepositoryPath,
+            externalWorktreePath
+          )
+          .catch(() => undefined);
+      }
       await localAppData.dispose();
     }
   }, 15_000);

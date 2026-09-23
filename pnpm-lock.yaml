@@ -111,6 +111,21 @@ importers:
 
   packages/git-core: {}
 
+  packages/mcp-server:
+    dependencies:
+      '@gitnest/code-analysis':
+        specifier: workspace:*
+        version: link:../code-analysis
+      '@gitnest/git-core':
+        specifier: workspace:*
+        version: link:../git-core
+      '@gitnest/persistence-json':
+        specifier: workspace:*
+        version: link:../persistence-json
+      '@gitnest/workspace-core':
+        specifier: workspace:*
+        version: link:../workspace-core
+
   packages/persistence-json:
     dependencies:
       '@gitnest/application':

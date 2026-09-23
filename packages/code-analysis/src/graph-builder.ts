@@ -1370,6 +1370,11 @@ function resolveCallTarget(
         )
       };
     }
+    // A known receiver type cannot be replaced by a lexical name match.
+    return undefined;
+  }
+  if (receiver?.includes("()")) {
+    return undefined;
   }
   if (receiver) {
     const direct = perFile.get(`${receiver}.${name}`);

@@ -26,6 +26,7 @@ import type { AppSettingsController } from "../../features/settings/useAppSettin
 import type { ExternalTerminalController } from "../../features/external-terminal/useExternalTerminals";
 import { WorktreeCommandDialog } from "../../features/worktree-command/WorktreeCommandDialog";
 import { useWorktreeCommands } from "../../features/worktree-command/useWorktreeCommands";
+import { useWorkspaceWorktreeCommands } from "../../features/worktree-command/useWorkspaceWorktreeCommands";
 import { useRepositoryMutations } from "../../entities/repository/useRepositoryMutations";
 import {
   findTargetSnapshot,
@@ -74,6 +75,7 @@ interface RepositoryPageProps {
   onCommitSelectionChange?(
     commit: RepositoryCommitDto["commit"] | null
   ): void;
+  onWorkspaceTopologyChanged?(): void | Promise<unknown>;
 }
 
 export function RepositoryPage({
@@ -89,7 +91,8 @@ export function RepositoryPage({
   changeSelectionRequest,
   onOpenTab,
   onChangeSelectionHandled,
-  onCommitSelectionChange
+  onCommitSelectionChange,
+  onWorkspaceTopologyChanged
 }: RepositoryPageProps) {
   const snapshot = findTargetSnapshot(snapshots, target);
   const statusRevision = getSnapshotContentRevision(snapshot);
@@ -116,6 +119,15 @@ export function RepositoryPage({
     target?.repositoryId,
     operations
   );
+  const worktreeBatchCommands =
+    useWorkspaceWorktreeCommands(
+      workspace && target
+        ? `${workspace.id}:${target.repositoryId}`
+        : undefined,
+      operations,
+      onWorkspaceTopologyChanged,
+      target?.repositoryId
+    );
   const mutationHooks = useMemo(
     () => ({
       beforeMutation: details.invalidate,
@@ -161,10 +173,14 @@ export function RepositoryPage({
   const handledCommandCompletion = useRef(
     commands.completionVersion
   );
+  const handledWorktreeCommandCompletion = useRef(
+    worktreeCommands.completionVersion
+  );
 
   useEffect(() => {
     mutations.clearFeedback();
     commands.clearFeedback();
+    worktreeBatchCommands.clearFeedback();
     terminals.clearFeedback();
     setDirectoryError(null);
     setCopyFeedback(null);
@@ -172,6 +188,8 @@ export function RepositoryPage({
     setAiFeedback(null);
     handledCommandCompletion.current =
       commands.completionVersion;
+    handledWorktreeCommandCompletion.current =
+      worktreeCommands.completionVersion;
   }, [mutations.clearFeedback, targetKey]);
 
   const generateAiCommitMessage = useCallback(async () => {
@@ -330,6 +348,21 @@ export function RepositoryPage({
     details.invalidate,
     details.reload,
     tab
+  ]);
+
+  useEffect(() => {
+    if (
+      handledWorktreeCommandCompletion.current ===
+      worktreeCommands.completionVersion
+    ) {
+      return;
+    }
+    handledWorktreeCommandCompletion.current =
+      worktreeCommands.completionVersion;
+    void onWorkspaceTopologyChanged?.();
+  }, [
+    onWorkspaceTopologyChanged,
+    worktreeCommands.completionVersion
   ]);
 
   if (!workspace || !target) {
@@ -526,6 +559,34 @@ export function RepositoryPage({
             tone={aiFeedback.tone}
           />
         )}
+        {(worktreeBatchCommands.error ||
+          worktreeBatchCommands.notice) && (
+          <Toast
+            closeLabel="关闭 Worktree 批量操作提示"
+            icon={
+              worktreeBatchCommands.error
+                ? "warning"
+                : "check"
+            }
+            key="worktree-batch-command-feedback"
+            message={
+              worktreeBatchCommands.error?.message ??
+              worktreeBatchCommands.notice ??
+              ""
+            }
+            onClose={worktreeBatchCommands.clearFeedback}
+            title={
+              worktreeBatchCommands.error
+                ? "Worktree 批量操作未完成"
+                : "Worktree 批量操作状态"
+            }
+            tone={
+              worktreeBatchCommands.error
+                ? "error"
+                : "success"
+            }
+          />
+        )}
       </ToastViewport>
 
       {tab === "overview" && (
@@ -588,6 +649,7 @@ export function RepositoryPage({
       )}
       {tab === "worktrees" && (
         <RepositoryWorktrees
+          batchCommands={worktreeBatchCommands}
           commands={worktreeCommands}
           directoryOpening={directoryOpening}
           onOpenDirectory={(worktreeId) =>
@@ -610,6 +672,19 @@ export function RepositoryPage({
             void worktreeCommands.confirm()
           }
           preflight={worktreeCommands.preflight}
+          workspace={workspace}
+        />
+      )}
+      {worktreeBatchCommands.preflights.length > 0 && (
+        <WorktreeCommandDialog
+          active={worktreeBatchCommands.active}
+          onCancel={
+            worktreeBatchCommands.dismissPreflight
+          }
+          onConfirm={() =>
+            void worktreeBatchCommands.confirm()
+          }
+          preflight={worktreeBatchCommands.preflights}
           workspace={workspace}
         />
       )}

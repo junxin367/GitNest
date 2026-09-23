@@ -261,6 +261,31 @@ describe("DiffWorkspace", () => {
     expect(container.textContent).toBe("content");
   });
 
+  it("removes a visible skeleton as soon as content arrives", () => {
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        root.render(<SkeletonBoundaryHarness loading />);
+      });
+      expect(
+        container.querySelector('[role="status"]')
+      ).not.toBeNull();
+
+      act(() => {
+        root.render(
+          <SkeletonBoundaryHarness hasContent loading />
+        );
+      });
+
+      expect(
+        container.querySelector('[role="status"]')
+      ).toBeNull();
+      expect(container.textContent).toBe("content");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses the shared minimum duration for empty loading boundaries", () => {
     vi.useFakeTimers();
     try {

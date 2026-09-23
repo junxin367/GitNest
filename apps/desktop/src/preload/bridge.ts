@@ -65,7 +65,14 @@ export function createGitNestBridge(
           IPC_CHANNELS.codeAnalysisInstallLanguageServer,
           request
         ),
-      onStateChanged: subscribeCodeAnalysisState
+      onStateChanged: subscribeCodeAnalysisState,
+      getMcpRegistration: () =>
+        invoke(IPC_CHANNELS.codeAnalysisGetMcpRegistration),
+      setMcpRegistration: (request) =>
+        invoke(
+          IPC_CHANNELS.codeAnalysisSetMcpRegistration,
+          request
+        )
     },
     settings: {
       get: () => invoke(IPC_CHANNELS.settingsGet),
@@ -217,6 +224,8 @@ export function createGitNestBridge(
         invoke(IPC_CHANNELS.workspaceDelete, request),
       selectDirectory: () =>
         invoke(IPC_CHANNELS.workspaceSelectDirectory),
+      addDirectory: (request) =>
+        invoke(IPC_CHANNELS.workspaceAddDirectory, request),
       rescan: () =>
         invoke(IPC_CHANNELS.workspaceRescan),
       removeRepository: (request) =>

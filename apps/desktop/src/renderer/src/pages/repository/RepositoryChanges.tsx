@@ -21,8 +21,8 @@ import {
 import type { ExternalApplicationController } from "../../features/external-application/useExternalApplications";
 import type { RepositoryCommandController } from "../../features/repository-command/useRepositoryCommands";
 import type { AppSettingsController } from "../../features/settings/useAppSettings";
-import { useMinimumLoadingIndicator } from "../../shared/lib/useMinimumLoadingIndicator";
 import { buildDiffViewerFiles } from "../../shared/model/diffViewModel";
+import { useSkeletonVisibility } from "../../shared/ui/Skeleton";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import {
   DEFAULT_DIFF_CONTEXT_LINES,
@@ -122,12 +122,13 @@ export function RepositoryChanges({
   const diffLoading =
     controller.loading.diff && !selectedDiff;
   const showChangesSkeleton =
-    useMinimumLoadingIndicator(
+    useSkeletonVisibility(
       shouldShowRepositoryChangesSkeleton({
         hasCurrentChanges: Boolean(currentChanges),
         hasError: Boolean(controller.error),
         scopeChanged
-      })
+      }),
+      Boolean(currentChanges)
     );
   const showDiffSkeleton = diffLoading;
   const workspaceFiles = useMemo(

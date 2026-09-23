@@ -1,4 +1,6 @@
 export const STATUS_ARGUMENTS = [
+  "-c",
+  "core.fsmonitor=false",
   "status",
   "--porcelain=v2",
   "--branch",

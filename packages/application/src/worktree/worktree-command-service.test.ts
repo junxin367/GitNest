@@ -44,6 +44,8 @@ const LINKED_TARGET: RepositoryTarget = {
 };
 const PRIMARY_PATH = "C:\\workspace\\repository";
 const LINKED_PATH = "C:\\workspace\\linked";
+const SECOND_LINKED_PATH = "C:\\workspace\\linked-two";
+const THIRD_LINKED_PATH = "C:\\workspace\\linked-three";
 const LOCAL_HEAD = "a".repeat(40);
 
 describe("WorktreeCommandService", () => {
@@ -180,6 +182,29 @@ describe("WorktreeCommandService", () => {
       code: "PREFLIGHT_CHANGED"
     });
     expect(fixture.runtime.queued).toHaveLength(0);
+  });
+
+  it("allows Worktree destinations inside an additional Workspace directory", async () => {
+    const fixture = createFixture();
+    fixture.runtime.workspace.additionalRoots = [
+      {
+        path: "D:\\shared",
+        canonicalPath: "d:\\shared",
+        excludes: []
+      }
+    ];
+
+    const preflight = await fixture.service.preflight({
+      type: "create",
+      repositoryId: "repository-1",
+      path: "D:\\shared\\new-worktree"
+    });
+
+    expect(preflight.warnings).not.toContainEqual(
+      expect.objectContaining({
+        code: "OUTSIDE_WORKSPACE"
+      })
+    );
   });
 
   it("rejects branch occupancy and prevents misleading start points for existing branches", async () => {
@@ -426,6 +451,61 @@ describe("WorktreeCommandService", () => {
     expect(fixture.git.pruneCalls).toBe(1);
   });
 
+  it("records the prunable Worktree targets instead of the repository anchor", async () => {
+    const fixture = createFixture();
+    const stalePath = "C:\\workspace\\missing-linked";
+    const staleTarget: RepositoryTarget = {
+      repositoryId: "repository-1",
+      worktreeId: "worktree-stale"
+    };
+    fixture.runtime.workspace.groups[0]?.targets.push(
+      staleTarget
+    );
+    fixture.runtime.workspace.repositories[0]?.worktreeIds.push(
+      staleTarget.worktreeId
+    );
+    fixture.runtime.workspace.worktrees.push({
+      id: staleTarget.worktreeId,
+      repositoryId: staleTarget.repositoryId,
+      name: "missing-linked",
+      path: stalePath,
+      canonicalPath:
+        stalePath.toLocaleLowerCase("en-US"),
+      gitDir:
+        "C:\\workspace\\repository\\.git\\worktrees\\missing-linked",
+      head: LOCAL_HEAD,
+      branch: "stale/missing-linked",
+      isPrimary: false,
+      isBare: false,
+      isDetached: false,
+      isLocked: false,
+      isPrunable: true,
+      pruneReason: "missing directory"
+    });
+    fixture.git.worktrees.push(
+      createPrunableWorktree(
+        stalePath,
+        "missing directory"
+      )
+    );
+
+    const preflight = await fixture.service.preflight({
+      type: "prune",
+      repositoryId: "repository-1"
+    });
+    await fixture.service.execute(
+      preflight.command,
+      preflight.preflightId,
+      true
+    );
+
+    expect(
+      fixture.runtime.queued[0]?.options.operationTargets
+    ).toEqual([staleTarget]);
+    await fixture.runtime.runQueued(0);
+    expect(fixture.git.pruneCalls).toBe(1);
+  });
+
   it("removes only clean, unlocked linked Worktrees and never requests force", async () => {
     const fixture = createFixture();
 
@@ -471,6 +551,345 @@ describe("WorktreeCommandService", () => {
       {
         repositoryPath: PRIMARY_PATH,
         worktreePath: LINKED_PATH
+      }
+    ]);
+  });
+
+  it("keeps queued removals valid when another Worktree in the same repository is removed first", async () => {
+    const fixture = createFixture();
+    fixture.paths.setInspection(SECOND_LINKED_PATH, {
+      exists: true,
+      kind: "directory",
+      empty: false
+    });
+    fixture.runtime.workspace.groups[0]?.targets.push({
+      repositoryId: "repository-1",
+      worktreeId: "worktree-linked-two"
+    });
+    fixture.runtime.workspace.repositories[0]?.worktreeIds.push(
+      "worktree-linked-two"
+    );
+    fixture.runtime.workspace.worktrees.push({
+      id: "worktree-linked-two",
+      repositoryId: "repository-1",
+      name: "linked-two",
+      path: SECOND_LINKED_PATH,
+      canonicalPath:
+        SECOND_LINKED_PATH.toLocaleLowerCase("en-US"),
+      gitDir:
+        "C:\\workspace\\repository\\.git\\worktrees\\linked-two",
+      head: LOCAL_HEAD,
+      branch: "feature/linked-two",
+      isPrimary: false,
+      isBare: false,
+      isDetached: false,
+      isLocked: false,
+      isPrunable: false
+    });
+    fixture.git.worktrees.push({
+      path: SECOND_LINKED_PATH,
+      head: LOCAL_HEAD,
+      branch: "feature/linked-two",
+      bare: false,
+      detached: false,
+      locked: false,
+      prunable: false,
+      primary: false
+    });
+
+    const first = await fixture.service.preflight({
+      type: "remove",
+      worktreeId: "worktree-linked"
+    });
+    const second = await fixture.service.preflight({
+      type: "remove",
+      worktreeId: "worktree-linked-two"
+    });
+    await fixture.service.execute(
+      first.command,
+      first.preflightId,
+      true
+    );
+    await fixture.service.execute(
+      second.command,
+      second.preflightId,
+      true
+    );
+
+    await fixture.runtime.runQueued(0);
+    fixture.runtime.workspace.groups[0]!.targets =
+      fixture.runtime.workspace.groups[0]!.targets.filter(
+        (target) => target.worktreeId !== "worktree-linked"
+      );
+    fixture.runtime.workspace.repositories[0]!.worktreeIds =
+      fixture.runtime.workspace.repositories[0]!.worktreeIds.filter(
+        (worktreeId) => worktreeId !== "worktree-linked"
+      );
+    fixture.runtime.workspace.worktrees =
+      fixture.runtime.workspace.worktrees.filter(
+        (worktree) => worktree.id !== "worktree-linked"
+      );
+    fixture.git.worktrees = fixture.git.worktrees.filter(
+      (worktree) => worktree.path !== LINKED_PATH
+    );
+
+    await expect(
+      fixture.runtime.runQueued(1)
+    ).resolves.toBeUndefined();
+    expect(fixture.git.removeCalls).toEqual([
+      {
+        repositoryPath: PRIMARY_PATH,
+        worktreePath: LINKED_PATH
+      },
+      {
+        repositoryPath: PRIMARY_PATH,
+        worktreePath: SECOND_LINKED_PATH
+      }
+    ]);
+  });
+
+  it("switches to another linked anchor when a queued removal outlives its original anchor", async () => {
+    const fixture = createFixture();
+    fixture.paths.setInspection(PRIMARY_PATH, {
+      exists: false,
+      kind: "missing",
+      empty: false
+    });
+    for (const linked of [
+      {
+        id: "worktree-linked-two",
+        name: "linked-two",
+        path: SECOND_LINKED_PATH,
+        branch: "feature/linked-two"
+      },
+      {
+        id: "worktree-linked-three",
+        name: "linked-three",
+        path: THIRD_LINKED_PATH,
+        branch: "feature/linked-three"
+      }
+    ]) {
+      fixture.paths.setInspection(linked.path, {
+        exists: true,
+        kind: "directory",
+        empty: false
+      });
+      fixture.runtime.workspace.groups[0]?.targets.push({
+        repositoryId: "repository-1",
+        worktreeId: linked.id
+      });
+      fixture.runtime.workspace.repositories[0]?.worktreeIds.push(
+        linked.id
+      );
+      fixture.runtime.workspace.worktrees.push({
+        id: linked.id,
+        repositoryId: "repository-1",
+        name: linked.name,
+        path: linked.path,
+        canonicalPath:
+          linked.path.toLocaleLowerCase("en-US"),
+        gitDir:
+          `C:\\workspace\\repository\\.git\\worktrees\\${linked.name}`,
+        head: LOCAL_HEAD,
+        branch: linked.branch,
+        isPrimary: false,
+        isBare: false,
+        isDetached: false,
+        isLocked: false,
+        isPrunable: false
+      });
+      fixture.git.worktrees.push({
+        path: linked.path,
+        head: LOCAL_HEAD,
+        branch: linked.branch,
+        bare: false,
+        detached: false,
+        locked: false,
+        prunable: false,
+        primary: false
+      });
+    }
+
+    const first = await fixture.service.preflight({
+      type: "remove",
+      worktreeId: "worktree-linked"
+    });
+    const second = await fixture.service.preflight({
+      type: "remove",
+      worktreeId: "worktree-linked-two"
+    });
+    await fixture.service.execute(
+      first.command,
+      first.preflightId,
+      true
+    );
+    await fixture.service.execute(
+      second.command,
+      second.preflightId,
+      true
+    );
+
+    expect(fixture.runtime.queued[0]?.target).toEqual({
+      repositoryId: "repository-1",
+      worktreeId: "worktree-linked-two"
+    });
+    expect(fixture.runtime.queued[1]?.target).toEqual(
+      LINKED_TARGET
+    );
+
+    await fixture.runtime.runQueued(0);
+    fixture.runtime.workspace.groups[0]!.targets =
+      fixture.runtime.workspace.groups[0]!.targets.filter(
+        (target) => target.worktreeId !== "worktree-linked"
+      );
+    fixture.runtime.workspace.repositories[0]!.worktreeIds =
+      fixture.runtime.workspace.repositories[0]!.worktreeIds.filter(
+        (worktreeId) => worktreeId !== "worktree-linked"
+      );
+    fixture.runtime.workspace.worktrees =
+      fixture.runtime.workspace.worktrees.filter(
+        (worktree) => worktree.id !== "worktree-linked"
+      );
+    fixture.git.worktrees = fixture.git.worktrees.filter(
+      (worktree) => worktree.path !== LINKED_PATH
+    );
+
+    await expect(
+      fixture.runtime.runQueued(1)
+    ).resolves.toBeUndefined();
+    expect(fixture.git.removeCalls).toEqual([
+      {
+        repositoryPath: SECOND_LINKED_PATH,
+        worktreePath: LINKED_PATH
+      },
+      {
+        repositoryPath: THIRD_LINKED_PATH,
+        worktreePath: SECOND_LINKED_PATH
+      }
+    ]);
+  });
+
+  it("replaces a stale removal anchor before queueing the next batch item", async () => {
+    const fixture = createFixture();
+    fixture.paths.setInspection(PRIMARY_PATH, {
+      exists: false,
+      kind: "missing",
+      empty: false
+    });
+    for (const linked of [
+      {
+        id: "worktree-linked-two",
+        name: "linked-two",
+        path: SECOND_LINKED_PATH,
+        branch: "feature/linked-two"
+      },
+      {
+        id: "worktree-linked-three",
+        name: "linked-three",
+        path: THIRD_LINKED_PATH,
+        branch: "feature/linked-three"
+      }
+    ]) {
+      fixture.paths.setInspection(linked.path, {
+        exists: true,
+        kind: "directory",
+        empty: false
+      });
+      fixture.runtime.workspace.groups[0]?.targets.push({
+        repositoryId: "repository-1",
+        worktreeId: linked.id
+      });
+      fixture.runtime.workspace.repositories[0]?.worktreeIds.push(
+        linked.id
+      );
+      fixture.runtime.workspace.worktrees.push({
+        id: linked.id,
+        repositoryId: "repository-1",
+        name: linked.name,
+        path: linked.path,
+        canonicalPath:
+          linked.path.toLocaleLowerCase("en-US"),
+        gitDir:
+          `C:\\workspace\\repository\\.git\\worktrees\\${linked.name}`,
+        head: LOCAL_HEAD,
+        branch: linked.branch,
+        isPrimary: false,
+        isBare: false,
+        isDetached: false,
+        isLocked: false,
+        isPrunable: false
+      });
+      fixture.git.worktrees.push({
+        path: linked.path,
+        head: LOCAL_HEAD,
+        branch: linked.branch,
+        bare: false,
+        detached: false,
+        locked: false,
+        prunable: false,
+        primary: false
+      });
+    }
+
+    const first = await fixture.service.preflight({
+      type: "remove",
+      worktreeId: "worktree-linked"
+    });
+    const second = await fixture.service.preflight({
+      type: "remove",
+      worktreeId: "worktree-linked-two"
+    });
+    await fixture.service.execute(
+      first.command,
+      first.preflightId,
+      true
+    );
+    await fixture.runtime.runQueued(0);
+    fixture.runtime.workspace.groups[0]!.targets =
+      fixture.runtime.workspace.groups[0]!.targets.filter(
+        (target) => target.worktreeId !== "worktree-linked"
+      );
+    fixture.runtime.workspace.repositories[0]!.worktreeIds =
+      fixture.runtime.workspace.repositories[0]!.worktreeIds.filter(
+        (worktreeId) => worktreeId !== "worktree-linked"
+      );
+    fixture.runtime.workspace.worktrees =
+      fixture.runtime.workspace.worktrees.filter(
+        (worktree) => worktree.id !== "worktree-linked"
+      );
+    fixture.git.worktrees = fixture.git.worktrees.filter(
+      (worktree) => worktree.path !== LINKED_PATH
+    );
+
+    await expect(
+      fixture.service.execute(
+        second.command,
+        second.preflightId,
+        true
+      )
+    ).resolves.toEqual({ operationId: "operation-2" });
+    expect(fixture.runtime.queued[1]?.target).toEqual({
+      repositoryId: "repository-1",
+      worktreeId: "worktree-linked-three"
+    });
+    expect(
+      fixture.runtime.queued[1]?.options.operationTargets
+    ).toEqual([
+      {
+        repositoryId: "repository-1",
+        worktreeId: "worktree-linked-two"
+      }
+    ]);
+
+    await fixture.runtime.runQueued(1);
+    expect(fixture.git.removeCalls).toEqual([
+      {
+        repositoryPath: SECOND_LINKED_PATH,
+        worktreePath: LINKED_PATH
+      },
+      {
+        repositoryPath: THIRD_LINKED_PATH,
+        worktreePath: SECOND_LINKED_PATH
       }
     ]);
   });
@@ -654,11 +1073,20 @@ class FakeRuntime implements WorktreeCommandRuntime {
     if (!queued) {
       throw new Error(`Queued operation ${index} is missing.`);
     }
-    const worktree = this.workspace.worktrees.find(
+    let worktree = this.workspace.worktrees.find(
       (candidate) =>
         candidate.repositoryId === queued.target.repositoryId &&
         candidate.id === queued.target.worktreeId
     );
+    if (!worktree && queued.options.allowTargetFallback) {
+      worktree = this.workspace.worktrees.find(
+        (candidate) =>
+          candidate.repositoryId ===
+            queued.target.repositoryId &&
+          !candidate.isBare &&
+          !candidate.isPrunable
+      );
+    }
     if (!worktree) {
       throw new Error("Queued anchor Worktree is missing.");
     }

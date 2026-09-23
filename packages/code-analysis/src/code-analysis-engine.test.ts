@@ -47,6 +47,47 @@ describe("CodeAnalysisEngine", () => {
     }
   });
 
+  it("records the analyzed change baseline for MCP freshness checks", async () => {
+    const fixture = await createFixture();
+    const engine = new CodeAnalysisEngine();
+    try {
+      const changed = changedPath(
+        fixture.frontendRoot,
+        "client.ts"
+      );
+      const snapshot = await engine.analyze({
+        ...analysisInput(fixture, {
+          analysisId: "freshness-baseline",
+          scope: "workspace",
+          changedPaths: []
+        }),
+        freshnessChangedPaths: [changed],
+        worktreeStatuses: [{
+          repositoryId: changed.repositoryId,
+          worktreeId: changed.worktreeId,
+          fingerprint: "status-fingerprint"
+        }]
+      });
+      expect(snapshot.sourceState?.worktreeStatuses).toEqual([{
+        repositoryId: changed.repositoryId,
+        worktreeId: changed.worktreeId,
+        fingerprint: "status-fingerprint"
+      }]);
+      expect(snapshot.sourceState?.changedSourceFiles).toEqual([
+        expect.objectContaining({
+          repositoryId: changed.repositoryId,
+          worktreeId: changed.worktreeId,
+          path: "client.ts",
+          size: expect.any(Number),
+          modifiedAtMs: expect.any(Number)
+        })
+      ]);
+    } finally {
+      await engine.dispose();
+      await fixture.dispose();
+    }
+  });
+
   it("reuses a complete index for changed request chains and invalidates it when roots change", async () => {
     const fixture = await createFixture();
     const engine = new CodeAnalysisEngine();

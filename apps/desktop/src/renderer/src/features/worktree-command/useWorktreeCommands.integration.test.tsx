@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { act } from "react";
+import React, { act } from "react";
 import {
   createRoot,
   type Root
@@ -25,6 +25,10 @@ import {
   useWorktreeCommands,
   type WorktreeCommandController
 } from "./useWorktreeCommands";
+import {
+  useWorkspaceWorktreeCommands,
+  type WorkspaceWorktreeCommandController
+} from "./useWorkspaceWorktreeCommands";
 
 const REPOSITORY_ID = "repository-1";
 
@@ -32,8 +36,13 @@ describe("useWorktreeCommands", () => {
   let container: HTMLDivElement;
   let root: Root;
   let controller: WorktreeCommandController | undefined;
+  let workspaceCommandController:
+    | WorkspaceWorktreeCommandController
+    | undefined;
+  let workspaceCommandsSettled: () => Promise<void>;
 
   beforeEach(() => {
+    vi.stubGlobal("React", React);
     (
       globalThis as typeof globalThis & {
         IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -42,12 +51,14 @@ describe("useWorktreeCommands", () => {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
+    workspaceCommandsSettled = vi.fn(async () => undefined);
   });
 
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("automatically executes lock commands that do not require confirmation", async () => {
@@ -191,6 +202,289 @@ describe("useWorktreeCommands", () => {
     );
   });
 
+  it("preflights and confirms Workspace prune commands across repositories", async () => {
+    let releaseTopologySync: () => void = () => undefined;
+    workspaceCommandsSettled = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseTopologySync = resolve;
+        })
+    );
+    const repositoryIds = ["repository-1", "repository-2"];
+    const preflightCommand = vi.fn(
+      async ({
+        command
+      }: {
+        command: WorktreeCommandDto;
+      }) => {
+        if (command.type !== "prune") {
+          throw new Error("Expected a prune command.");
+        }
+        return {
+          ok: true as const,
+          value: createPrunePreflight(
+            command,
+            repositoryIds.indexOf(command.repositoryId) + 1
+          )
+        };
+      }
+    );
+    const executeCommand = vi.fn(
+      async ({
+        command
+      }: {
+        command: WorktreeCommandDto;
+      }) => {
+        if (command.type !== "prune") {
+          throw new Error("Expected a prune command.");
+        }
+        return {
+          ok: true as const,
+          value: {
+            operationId: `operation-${command.repositoryId}`
+          }
+        };
+      }
+    );
+    installBridge({ preflightCommand, executeCommand });
+    await renderWorkspaceCommandHarness([]);
+
+    await act(async () => {
+      await workspaceCommandController?.request([
+        {
+          type: "prune",
+          repositoryId: "repository-1"
+        },
+        {
+          type: "prune",
+          repositoryId: "repository-2"
+        },
+        {
+          type: "prune",
+          repositoryId: "repository-1"
+        }
+      ]);
+    });
+
+    expect(preflightCommand).toHaveBeenCalledTimes(2);
+    expect(
+      workspaceCommandController?.preflights.map(
+        (preflight) =>
+          preflight.command.type === "prune"
+            ? preflight.command.repositoryId
+            : ""
+      )
+    ).toEqual(repositoryIds);
+
+    await act(async () => {
+      await workspaceCommandController?.confirm();
+    });
+
+    expect(executeCommand).toHaveBeenCalledTimes(2);
+    expect(workspaceCommandController?.preflights).toEqual([]);
+    expect(workspaceCommandController?.notice).toContain(
+      "2 个仓库"
+    );
+
+    await renderWorkspaceCommandHarness([
+      createPruneOperation(
+        "operation-repository-1",
+        "succeeded",
+        "repository-1"
+      ),
+      createPruneOperation(
+        "operation-repository-2",
+        "running",
+        "repository-2"
+      )
+    ]);
+    expect(workspaceCommandsSettled).not.toHaveBeenCalled();
+    expect(workspaceCommandController?.busy).toBe(true);
+
+    await renderWorkspaceCommandHarness([
+      createPruneOperation(
+        "operation-repository-1",
+        "succeeded",
+        "repository-1"
+      ),
+      createPruneOperation(
+        "operation-repository-2",
+        "succeeded",
+        "repository-2"
+      )
+    ]);
+    expect(workspaceCommandsSettled).toHaveBeenCalledTimes(1);
+    expect(workspaceCommandController?.busy).toBe(true);
+
+    await act(async () => {
+      releaseTopologySync();
+      await Promise.resolve();
+    });
+
+    expect(workspaceCommandController?.busy).toBe(false);
+    expect(workspaceCommandController?.notice).toContain(
+      "清除"
+    );
+  });
+
+  it("preflights and confirms Workspace remove commands", async () => {
+    const command: WorktreeCommandDto = {
+      type: "remove",
+      worktreeId: "worktree-linked"
+    };
+    const preflight = createPreflight(command, true);
+    const executeCommand = vi.fn(async () => ({
+      ok: true as const,
+      value: { operationId: "operation-remove" }
+    }));
+    installBridge({
+      preflightCommand: vi.fn(async () => ({
+        ok: true as const,
+        value: preflight
+      })),
+      executeCommand
+    });
+    await renderWorkspaceCommandHarness([]);
+
+    await act(async () => {
+      await workspaceCommandController?.request([command]);
+    });
+    expect(workspaceCommandController?.preflights).toEqual([
+      preflight
+    ]);
+
+    await act(async () => {
+      await workspaceCommandController?.confirm();
+    });
+
+    expect(executeCommand).toHaveBeenCalledWith({
+      command,
+      preflightId: "worktree_preflight_1",
+      confirmed: true
+    });
+    expect(workspaceCommandController?.notice).toContain(
+      "1 个 Worktree"
+    );
+  });
+
+  it("does not let another repository's operation block a repository-scoped controller", async () => {
+    installBridge({
+      preflightCommand: vi.fn(),
+      executeCommand: vi.fn()
+    });
+
+    await renderWorkspaceCommandHarness(
+      [
+        createPruneOperation(
+          "operation-repository-2",
+          "running",
+          "repository-2"
+        )
+      ],
+      REPOSITORY_ID
+    );
+    expect(workspaceCommandController?.busy).toBe(false);
+
+    await renderWorkspaceCommandHarness([
+      createPruneOperation(
+        "operation-repository-2",
+        "running",
+        "repository-2"
+      )
+    ]);
+    expect(workspaceCommandController?.busy).toBe(true);
+  });
+
+  it("settles after completed operation records are later trimmed", async () => {
+    const repositoryIds = ["repository-1", "repository-2"];
+    installBridge({
+      preflightCommand: vi.fn(async ({ command }) => {
+        if (command.type !== "prune") {
+          throw new Error("Expected prune.");
+        }
+        return {
+          ok: true as const,
+          value: createPrunePreflight(
+            command,
+            repositoryIds.indexOf(command.repositoryId) + 1
+          )
+        };
+      }),
+      executeCommand: vi.fn(async ({ command }) => {
+        if (command.type !== "prune") {
+          throw new Error("Expected prune.");
+        }
+        return {
+          ok: true as const,
+          value: {
+            operationId: `operation-${command.repositoryId}`
+          }
+        };
+      })
+    });
+    await renderWorkspaceCommandHarness([]);
+
+    await act(async () => {
+      await workspaceCommandController?.request(
+        repositoryIds.map((repositoryId) => ({
+          type: "prune" as const,
+          repositoryId
+        }))
+      );
+    });
+    await act(async () => {
+      await workspaceCommandController?.confirm();
+    });
+
+    await renderWorkspaceCommandHarness([
+      createPruneOperation(
+        "operation-repository-1",
+        "succeeded",
+        "repository-1"
+      ),
+      createPruneOperation(
+        "operation-repository-2",
+        "running",
+        "repository-2"
+      )
+    ]);
+    expect(workspaceCommandController?.busy).toBe(true);
+
+    await renderWorkspaceCommandHarness([
+      createPruneOperation(
+        "operation-repository-2",
+        "succeeded",
+        "repository-2"
+      )
+    ]);
+
+    expect(workspaceCommandsSettled).toHaveBeenCalledTimes(1);
+    expect(workspaceCommandController?.busy).toBe(false);
+  });
+
+  it("rejects a batch that could overflow runtime operation history", async () => {
+    const preflightCommand = vi.fn();
+    installBridge({
+      preflightCommand,
+      executeCommand: vi.fn()
+    });
+    await renderWorkspaceCommandHarness([]);
+
+    await act(async () => {
+      await workspaceCommandController?.request(
+        Array.from({ length: 21 }, (_, index) => ({
+          type: "remove" as const,
+          worktreeId: `worktree-${index}`
+        }))
+      );
+    });
+
+    expect(preflightCommand).not.toHaveBeenCalled();
+    expect(workspaceCommandController?.error?.message).toContain(
+      "一次最多处理 20 个"
+    );
+  });
+
   async function renderHarness(
     operations: WorkspaceOperationDto[]
   ): Promise<void> {
@@ -201,6 +495,24 @@ describe("useWorktreeCommands", () => {
             controller = value;
           }}
           operations={operations}
+        />
+      );
+    });
+  }
+
+  async function renderWorkspaceCommandHarness(
+    operations: WorkspaceOperationDto[],
+    repositoryId?: string
+  ): Promise<void> {
+    await act(async () => {
+      root.render(
+        <WorkspaceCommandHarness
+          onController={(value) => {
+            workspaceCommandController = value;
+          }}
+          onSettled={workspaceCommandsSettled}
+          operations={operations}
+          {...(repositoryId ? { repositoryId } : {})}
         />
       );
     });
@@ -216,6 +528,30 @@ function Harness({
 }) {
   onController(
     useWorktreeCommands(REPOSITORY_ID, operations)
+  );
+  return null;
+}
+
+function WorkspaceCommandHarness({
+  operations,
+  onController,
+  onSettled,
+  repositoryId
+}: {
+  operations: WorkspaceOperationDto[];
+  onController(
+    value: WorkspaceWorktreeCommandController
+  ): void;
+  onSettled(): Promise<void>;
+  repositoryId?: string;
+}) {
+  onController(
+    useWorkspaceWorktreeCommands(
+      "workspace-1",
+      operations,
+      onSettled,
+      repositoryId
+    )
   );
   return null;
 }
@@ -270,6 +606,37 @@ function createPreflight(
   };
 }
 
+function createPrunePreflight(
+  command: Extract<WorktreeCommandDto, { type: "prune" }>,
+  index: number
+): WorktreeCommandPreflightDto {
+  return {
+    preflightId: `worktree_prune_preflight_${index}`,
+    expiresAt: "2026-09-04T12:01:00.000Z",
+    command,
+    targetSummary: `仓库 ${command.repositoryId}`,
+    impacts: [
+      {
+        kind: "worktree-registration",
+        target: {
+          repositoryId: command.repositoryId,
+          worktreeId: `prunable-${index}`
+        },
+        summary: "清除失效 Worktree 登记",
+        detail: `C:\\workspace\\prunable-${index}`
+      }
+    ],
+    warnings: [
+      {
+        code: "PRUNE_REGISTRATION",
+        severity: "warning",
+        message: "只会移除失效 Git 登记。"
+      }
+    ],
+    confirmationRequired: true
+  };
+}
+
 function createOperation(
   id: string,
   state: WorkspaceOperationDto["state"]
@@ -289,5 +656,26 @@ function createOperation(
       state === "succeeded"
         ? "锁定 Worktree 已完成。"
         : "锁定 Worktree 状态已更新。"
+  };
+}
+
+function createPruneOperation(
+  id: string,
+  state: WorkspaceOperationDto["state"],
+  repositoryId: string
+): WorkspaceOperationDto {
+  return {
+    id,
+    kind: "worktree-prune",
+    scope: "repository",
+    targetIds: [`${repositoryId}:worktree-prunable`],
+    state,
+    progress: state === "running" ? 0.5 : 1,
+    succeeded: state === "succeeded" ? 1 : 0,
+    failed: state === "failed" ? 1 : 0,
+    message:
+      state === "succeeded"
+        ? "清除失效 Worktree 登记已完成。"
+        : "正在清除失效 Worktree 登记。"
   };
 }

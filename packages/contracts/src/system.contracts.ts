@@ -18,7 +18,9 @@ import type {
   CodeAnalysisStateDto,
   InstallLanguageServerRequest,
   LanguageServerInstallResultDto,
+  McpRegistrationStatusDto,
   ReadCodeAnalysisFileRequest,
+  SetMcpRegistrationRequest,
   RestoreCodeAnalysisSnapshotRequest,
   StartCodeAnalysisRequest
 } from "./analysis.contracts";
@@ -68,6 +70,8 @@ import type {
   RepositoryQueryRequest
 } from "./repository.contracts";
 import type {
+  AddWorkspaceDirectoryRequest,
+  AddWorkspaceDirectoryResultDto,
   CreateWorkspaceRequest,
   DeleteWorkspaceRequest,
   RemoveWorkspaceRepositoryRequest,
@@ -173,6 +177,12 @@ export interface GitNestBridge {
     installLanguageServer(
       request: InstallLanguageServerRequest
     ): Promise<GitReadResult<LanguageServerInstallResultDto>>;
+    getMcpRegistration(): Promise<
+      GitReadResult<McpRegistrationStatusDto>
+    >;
+    setMcpRegistration(
+      request: SetMcpRegistrationRequest
+    ): Promise<GitReadResult<McpRegistrationStatusDto>>;
     onStateChanged(
       listener: (state: CodeAnalysisStateDto) => void
     ): () => void;
@@ -263,6 +273,9 @@ export interface GitNestBridge {
     selectDirectory(): Promise<
       WorkspaceResult<WorkspaceDirectorySelectionDto>
     >;
+    addDirectory(
+      request: AddWorkspaceDirectoryRequest
+    ): Promise<WorkspaceResult<AddWorkspaceDirectoryResultDto>>;
     rescan(): Promise<WorkspaceResult<WorkspaceDetailsDto>>;
     removeRepository(
       request: RemoveWorkspaceRepositoryRequest

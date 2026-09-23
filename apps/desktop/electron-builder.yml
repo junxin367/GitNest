@@ -17,10 +17,21 @@ files:
   - out/**/*
   - package.json
   - "!out/**/*.map"
+  # The MCP server is shipped through `extraResources` below, so it
+  # must not also be packed into `app.asar` (the release audit rejects
+  # entries outside its whitelist).
+  - "!out/main/mcp/**"
   - "!out/**/node_modules/**"
   - "!node_modules/**"
   - "!**/*.test.*"
   - "!**/*.spec.*"
+
+extraResources:
+  - from: out/main/mcp
+    to: mcp
+    filter:
+      - "**/*"
+      - "!**/*.map"
 
 extraMetadata:
   main: out/main/index.js

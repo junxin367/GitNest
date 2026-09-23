@@ -1,6 +1,7 @@
 import {
   AnalysisSnapshotCache,
   codeAnalysisSnapshotConfigurationKey,
+  codeAnalysisWorktreeStatusFingerprint,
   type CodeAnalysisProgress,
   type CodeAnalysisScope,
   type CodeAnalysisSettings,
@@ -786,6 +787,9 @@ export class CodeAnalysisService {
         })),
         scope: input.scope,
         changedPaths: repositoryState.changedPaths,
+        freshnessChangedPaths:
+          repositoryState.freshnessChangedPaths,
+        worktreeStatuses: repositoryState.worktreeStatuses,
         cacheDirectory: this.#cacheDirectory,
         lspDataDirectory: this.#lspDataDirectory,
         settings: input.settings,
@@ -902,6 +906,12 @@ export class CodeAnalysisService {
       worktreeId: string;
       path: string;
     }> = [];
+    const freshnessChangedPaths: typeof changedPaths = [];
+    const worktreeStatuses: Array<{
+      repositoryId: string;
+      worktreeId: string;
+      fingerprint: string;
+    }> = [];
     const revisions = new Map<string, string>();
     for (const root of roots) {
       throwIfAborted(signal);
@@ -916,11 +926,28 @@ export class CodeAnalysisService {
         repositoryTargetKey(root),
         snapshot.head
       );
+      worktreeStatuses.push({
+        repositoryId: root.repositoryId,
+        worktreeId: root.worktreeId,
+        fingerprint: codeAnalysisWorktreeStatusFingerprint(
+          snapshot.changes
+        )
+      });
+      appendChangedPaths(
+        freshnessChangedPaths,
+        root,
+        snapshot
+      );
       if (includeChangedPaths) {
         appendChangedPaths(changedPaths, root, snapshot);
       }
     }
-    return { changedPaths, revisions };
+    return {
+      changedPaths,
+      freshnessChangedPaths,
+      worktreeStatuses,
+      revisions
+    };
   }
 
   #setState(state: CodeAnalysisState): void {

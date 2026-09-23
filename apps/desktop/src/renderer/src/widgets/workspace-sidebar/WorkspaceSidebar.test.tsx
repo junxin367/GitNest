@@ -49,7 +49,7 @@ describe("WorkspaceSidebar", () => {
   });
 
   it("matches the prototype Workspace root and toggles its repository tree", () => {
-    const onRefresh = vi.fn();
+    const onAddDirectory = vi.fn(async () => true);
     const onRescan = vi.fn(async () => true);
     const onOpenWorkspace = vi.fn();
 
@@ -70,9 +70,9 @@ describe("WorkspaceSidebar", () => {
           ]}
           onCreateWorkspace={vi.fn(async () => true)}
           onDeleteWorkspace={vi.fn(async () => true)}
+          onAddDirectory={onAddDirectory}
           onOpenWorkspace={onOpenWorkspace}
           onRenameWorkspace={vi.fn(async () => true)}
-          onRefresh={onRefresh}
           onRemoveRepository={vi.fn(async () => true)}
           onRescan={onRescan}
           onSelectTarget={vi.fn()}
@@ -85,7 +85,7 @@ describe("WorkspaceSidebar", () => {
     expect(container.textContent).toContain("核心仓库");
     expect(container.textContent).toContain("GitNest");
     expect(container.textContent).toContain("GitNest Docs");
-    expect(container.textContent).not.toContain("添加目录");
+    expect(container.textContent).toContain("添加目录");
 
     const workspaceOverview =
       container.querySelector<HTMLButtonElement>(
@@ -120,20 +120,16 @@ describe("WorkspaceSidebar", () => {
         ?.getAttribute("aria-hidden")
     ).toBe("true");
 
-    const directory = container.querySelector<HTMLElement>(
-      "[data-workspace-directory]"
-    );
-    expect(directory?.textContent).toContain("E:\\code\\GitNest");
-    expect(directory?.getAttribute("title")).toBe(
-      "E:\\code\\GitNest"
-    );
-
     act(() => {
       container
         .querySelector<HTMLButtonElement>(
-          'button[aria-label="刷新 Workspace 状态"]'
+          "button.sidebar-add-directory"
         )
         ?.click();
+    });
+    expect(onAddDirectory).toHaveBeenCalledOnce();
+
+    act(() => {
       container
         .querySelector<HTMLButtonElement>(
           'button[aria-label="重新扫描 Workspace"]'
@@ -141,7 +137,6 @@ describe("WorkspaceSidebar", () => {
         ?.click();
     });
 
-    expect(onRefresh).toHaveBeenCalledOnce();
     expect(onRescan).toHaveBeenCalledOnce();
   });
 
@@ -517,9 +512,9 @@ describe("WorkspaceSidebar", () => {
           ]}
           onCreateWorkspace={vi.fn(async () => true)}
           onDeleteWorkspace={vi.fn(async () => true)}
+          onAddDirectory={vi.fn(async () => true)}
           onOpenWorkspace={vi.fn()}
           onRenameWorkspace={vi.fn(async () => true)}
-          onRefresh={vi.fn()}
           onRemoveRepository={vi.fn(async () => true)}
           onRescan={vi.fn(async () => true)}
           onSelectTarget={vi.fn()}

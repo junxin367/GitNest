@@ -353,6 +353,20 @@ export interface CodeAnalysisSnapshot {
   scope: CodeAnalysisScope;
   generatedAt: string;
   roots: AnalysisRoot[];
+  sourceState?: {
+    worktreeStatuses: Array<{
+      repositoryId: string;
+      worktreeId: string;
+      fingerprint: string;
+    }>;
+    changedSourceFiles: Array<{
+      repositoryId: string;
+      worktreeId: string;
+      path: string;
+      size: number;
+      modifiedAtMs: number;
+    }>;
+  };
   nodes: CodeGraphNode[];
   edges: CodeGraphEdge[];
   requestChains: CodeRequestChain[];
@@ -370,6 +384,12 @@ export interface CodeAnalysisInput {
   roots: AnalysisRoot[];
   scope: CodeAnalysisScope;
   changedPaths: ChangedAnalysisPath[];
+  freshnessChangedPaths?: ChangedAnalysisPath[];
+  worktreeStatuses?: Array<{
+    repositoryId: string;
+    worktreeId: string;
+    fingerprint: string;
+  }>;
   cacheDirectory: string;
   lspDataDirectory: string;
   settings: CodeAnalysisSettings;

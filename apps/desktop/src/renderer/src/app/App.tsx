@@ -44,6 +44,9 @@ import {
 } from "../features/repository-command/useRepositoryCommands";
 import { useAppSettings } from "../features/settings/useAppSettings";
 import {
+  useWorkspaceWorktreeCommands
+} from "../features/worktree-command/useWorkspaceWorktreeCommands";
+import {
   chunkRepositoryTargets,
   resolveDefaultTerminalProfile,
   resolveStartupNavigation
@@ -123,6 +126,11 @@ export function App() {
     workspace.operations,
     workspace.workspace?.id
   );
+  const workspaceWorktreeCommands = useWorkspaceWorktreeCommands(
+    workspace.workspace?.id,
+    workspace.operations,
+    workspace.syncCurrentWorkspace
+  );
   const externalTerminals = useExternalTerminals(
     workspace.workspace?.selectedTarget
   );
@@ -150,14 +158,6 @@ export function App() {
     () => listWorkspaceTargets(workspace.workspace),
     [workspace.workspace]
   );
-  const operationAttentionCount = workspace.operations.filter(
-    (operation) =>
-      operation.state === "queued" ||
-      operation.state === "running" ||
-      operation.state === "cancelling" ||
-      operation.state === "failed" ||
-      operation.state === "interrupted"
-  ).length;
   const selectedTarget = workspace.workspace?.selectedTarget;
   const selectedTargetKey = selectedTarget
     ? `${selectedTarget.repositoryId}:${selectedTarget.worktreeId}`
@@ -393,10 +393,18 @@ export function App() {
     repositoryCommands.preflight
   ]);
 
-  const openRepositoryTarget = (target: RepositoryTargetDto) => {
-    changeNavigationSequence.current += 1;
+  const openRepositoryTarget = async (
+    target: RepositoryTargetDto
+  ) => {
+    const navigationId = ++changeNavigationSequence.current;
     setPendingChangeNavigation(null);
-    void workspace.selectTarget(target);
+    const selected = await workspace.selectTarget(target);
+    if (
+      !selected ||
+      changeNavigationSequence.current !== navigationId
+    ) {
+      return;
+    }
     const nextTab = repositoryTabForTargetSwitch(repositoryTab);
     setRepositoryTab(nextTab);
     setView("repository");
@@ -531,7 +539,6 @@ export function App() {
       >
         <ActivityRail
           activeView={view}
-          operationAttentionCount={operationAttentionCount}
           searchOpen={globalSearchOpen}
           sidebarCollapsed={directoryPanelHidden}
           terminalDisabled={
@@ -571,9 +578,9 @@ export function App() {
           onCreateWorkspace={workspace.createWorkspace}
           onSwitchWorkspace={workspace.switchWorkspace}
           onDeleteWorkspace={workspace.deleteWorkspace}
+          onAddDirectory={workspace.chooseDirectory}
           onOpenWorkspace={() => navigate("workspace")}
           onRenameWorkspace={workspace.renameWorkspace}
-          onRefresh={workspace.refresh}
           onRemoveRepository={workspace.removeRepository}
           onRescan={workspace.rescan}
           onSelectTarget={openRepositoryTarget}
@@ -696,7 +703,11 @@ export function App() {
               tabIndex={-1}
             >
               <Suspense fallback={<AppPageLoadingFallback />}>
-                {view === "workspace" &&
+                {workspace.operation === "switching" &&
+                (view === "workspace" ||
+                  view === "repository") ? (
+                  <AppPageLoadingFallback />
+                ) : view === "workspace" &&
                 workspaceTab === "overview" ? (
                   <WorkspaceOverviewPage
                     key={workspace.workspace?.id}
@@ -714,6 +725,7 @@ export function App() {
                   <WorkspaceCollectionPage
                     key={workspace.workspace?.id}
                     busy={workspace.busy}
+                    commands={workspaceWorktreeCommands}
                     loading={workspace.operation === "loading"}
                     onCreateWorkspace={workspace.createWorkspace}
                     onSelectTarget={openRepositoryTarget}
@@ -749,6 +761,9 @@ export function App() {
                           : current
                       )
                     }
+                    onWorkspaceTopologyChanged={
+                      workspace.syncCurrentWorkspace
+                    }
                   />
                 ) : view === "analysis" ? (
                   <CodeAnalysisPage
@@ -765,7 +780,6 @@ export function App() {
                     loading={workspace.operation === "loading"}
                     onOpenTarget={openRepositoryTarget}
                     operations={workspace.operations}
-                    snapshots={workspace.snapshots}
                     workspace={workspace.workspace}
                   />
                 ) : (

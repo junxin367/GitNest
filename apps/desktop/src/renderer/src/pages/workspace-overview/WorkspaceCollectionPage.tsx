@@ -20,6 +20,11 @@ import {
   getSnapshotChangeCount,
   listWorkspaceTargets
 } from "../../entities/workspace/model";
+import { WorktreeCommandDialog } from "../../features/worktree-command/WorktreeCommandDialog";
+import {
+  MAX_WORKTREE_BATCH_COMMANDS,
+  type WorkspaceWorktreeCommandController
+} from "../../features/worktree-command/useWorkspaceWorktreeCommands";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import {
@@ -31,14 +36,20 @@ import {
   MenuItem,
   MenuPopover
 } from "../../shared/ui/Menu";
+import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import {
   WORKTREE_FACET_OPTIONS,
   activeWorktreeFilterCount,
+  buildWorktreeDeletePlan,
   createWorktreeFilterState,
   isWorktreeSnapshotDirty,
+  isWorktreeSnapshotReadyForDelete,
   matchesWorktreeFilters,
   toggleWorktreeFacet,
+  worktreeDeleteActionTitle,
   worktreeFacetIds,
+  worktreeStatusLabel,
+  worktreeStatusTone,
   type WorktreeFacet,
   type WorktreeFilterState
 } from "../../shared/lib/worktreeFilters";
@@ -47,6 +58,7 @@ type CollectionTab = Exclude<WorkspaceTab, "overview">;
 
 interface WorkspaceCollectionPageProps {
   busy: boolean;
+  commands: WorkspaceWorktreeCommandController;
   loading: boolean;
   snapshots: RepositoryStatusSnapshotDto[];
   tab: CollectionTab;
@@ -64,6 +76,7 @@ interface WorkspaceRepositoryRow {
 
 export function WorkspaceCollectionPage({
   busy,
+  commands,
   loading,
   snapshots,
   tab,
@@ -194,20 +207,50 @@ export function WorkspaceCollectionPage({
   }
 
   return (
-    <div className="page-scroll workspace-collection-page">
-      <WorkspacePageHeading
-        title="跨仓 Worktrees"
-        description={`聚合仓库实际登记 ${activeWorktrees.length} 个 Worktree；其中 ${activeWorktrees.filter((worktree) => worktree.isPrunable).length} 个记录指向不存在的目录。`}
-        workspacePath={workspace.path}
-      />
-      <WorkspaceCollectionSummary workspace={workspace} />
-      <WorkspaceWorktreesPanel
-        onSelectTarget={onSelectTarget}
-        repositories={activeRepositories}
-        snapshots={activeSnapshots}
-        worktrees={activeWorktrees}
-      />
-    </div>
+    <>
+      <ToastViewport>
+        {(commands.error || commands.notice) && (
+          <Toast
+            closeLabel="关闭 Worktree 操作提示"
+            icon={commands.error ? "warning" : "check"}
+            message={
+              commands.error?.message ?? commands.notice ?? ""
+            }
+            onClose={commands.clearFeedback}
+            title={
+              commands.error
+                ? "Worktree 操作未完成"
+                : "Worktree 操作状态"
+            }
+            tone={commands.error ? "error" : "success"}
+          />
+        )}
+      </ToastViewport>
+      <div className="page-scroll workspace-collection-page">
+        <WorkspacePageHeading
+          title="跨仓 Worktrees"
+          description={`聚合仓库实际登记 ${activeWorktrees.length} 个 Worktree；其中 ${activeWorktrees.filter((worktree) => worktree.isPrunable).length} 个记录指向不存在的目录。`}
+          workspacePath={workspace.path}
+        />
+        <WorkspaceCollectionSummary workspace={workspace} />
+        <WorkspaceWorktreesPanel
+          commands={commands}
+          onSelectTarget={onSelectTarget}
+          repositories={activeRepositories}
+          snapshots={activeSnapshots}
+          worktrees={activeWorktrees}
+        />
+      </div>
+      {commands.preflights.length > 0 && (
+        <WorktreeCommandDialog
+          active={commands.active}
+          onCancel={commands.dismissPreflight}
+          onConfirm={() => void commands.confirm()}
+          preflight={commands.preflights}
+          workspace={workspace}
+        />
+      )}
+    </>
   );
 }
 
@@ -241,11 +284,13 @@ function WorkspaceCollectionSkeleton() {
 }
 
 function WorkspaceWorktreesPanel({
+  commands,
   onSelectTarget,
   repositories,
   snapshots,
   worktrees
 }: {
+  commands: WorkspaceWorktreeCommandController;
   onSelectTarget(target: RepositoryTargetDto): void;
   repositories: WorkspaceRepositoryDto[];
   snapshots: RepositoryStatusSnapshotDto[];
@@ -257,6 +302,7 @@ function WorkspaceWorktreesPanel({
   );
   const [repoMenuOpen, setRepoMenuOpen] = useState(false);
   const filterInputRef = useRef<HTMLInputElement>(null);
+  const filterTriggerRef = useRef<HTMLButtonElement>(null);
   const repoMenuRootRef = useRef<HTMLDivElement>(null);
   const repoMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const repoMenuRef = useRef<HTMLDivElement>(null);
@@ -284,7 +330,17 @@ function WorkspaceWorktreesPanel({
     matchesWorktreeFilters(worktree, snapshotFor(worktree), filters)
   );
   const activeFilterCount = activeWorktreeFilterCount(filters);
-  const facetCounts = worktrees.reduce<
+  const facetCountWorktrees = worktrees.filter((worktree) =>
+    matchesWorktreeFilters(
+      worktree,
+      snapshotFor(worktree),
+      {
+        ...filters,
+        facet: null
+      }
+    )
+  );
+  const facetCounts = facetCountWorktrees.reduce<
     Record<WorktreeFacet, number>
   >(
     (counts, worktree) => {
@@ -295,8 +351,17 @@ function WorkspaceWorktreesPanel({
     },
     { primary: 0, linked: 0, detached: 0, locked: 0, prunable: 0 }
   );
-  const dirtyCount = worktrees.filter((worktree) =>
-    isWorktreeSnapshotDirty(snapshotFor(worktree))
+  const dirtyCount = worktrees.filter(
+    (worktree) =>
+      matchesWorktreeFilters(
+        worktree,
+        snapshotFor(worktree),
+        {
+          ...filters,
+          onlyDirty: false
+        }
+      ) &&
+      isWorktreeSnapshotDirty(snapshotFor(worktree))
   ).length;
   const repositoryIdsWithWorktrees = useMemo(
     () =>
@@ -328,6 +393,47 @@ function WorkspaceWorktreesPanel({
   );
   const selectedRepositoryName =
     repositoryNames.get(filters.repositoryId) ?? "全部仓库";
+  const deletePlan = buildWorktreeDeletePlan(
+    visibleWorktrees,
+    snapshotFor,
+    filters.facet
+  );
+  const pruning = deletePlan.mode === "prune";
+  const batchLimitExceeded =
+    deletePlan.commands.length >
+    MAX_WORKTREE_BATCH_COMMANDS;
+  const deleteActionTitle = batchLimitExceeded
+    ? `当前范围需要 ${deletePlan.commands.length} 个命令，一次最多处理 ${MAX_WORKTREE_BATCH_COMMANDS} 个；请缩小筛选范围`
+    : worktreeDeleteActionTitle(
+        deletePlan,
+        filters.facet,
+        commands.busy
+      );
+  const deleteStatusId = "workspace-worktree-delete-status";
+
+  useEffect(() => {
+    setFilters((current) => {
+      const facet = current.facet;
+      const repositoryAvailable =
+        !current.repositoryId ||
+        repositoryIdsWithWorktrees.has(current.repositoryId);
+      const facetAvailable =
+        !facet ||
+        worktrees.some((worktree) =>
+          worktreeFacetIds(worktree).includes(facet)
+        );
+      if (repositoryAvailable && facetAvailable) {
+        return current;
+      }
+      return {
+        ...current,
+        repositoryId: repositoryAvailable
+          ? current.repositoryId
+          : "",
+        facet: facetAvailable ? current.facet : null
+      };
+    });
+  }, [repositoryIdsWithWorktrees, worktrees]);
 
   useEffect(() => {
     if (!repoMenuOpen) {
@@ -445,6 +551,9 @@ function WorkspaceWorktreesPanel({
                 ...current,
                 query: ""
               }));
+              filterTriggerRef.current?.focus({
+                preventScroll: true
+              });
             }}
             placeholder="筛选分支、路径或状态"
             ref={filterInputRef}
@@ -452,12 +561,51 @@ function WorkspaceWorktreesPanel({
             value={filters.query}
           />
         )}
+        <Button
+          aria-busy={commands.busy}
+          aria-describedby={deleteStatusId}
+          aria-label={
+            commands.busy
+              ? "Worktree 操作处理中"
+              : pruning
+              ? "清除失效 Worktree 登记"
+              : "删除筛选中的 Worktree"
+          }
+          className="worktree-delete-action"
+          disabled={
+            commands.busy ||
+            batchLimitExceeded ||
+            deletePlan.commands.length === 0
+          }
+          icon={
+            <Icon
+              name={pruning ? "refresh" : "trash"}
+              size={13}
+            />
+          }
+          onClick={() =>
+            void commands.request(deletePlan.commands)
+          }
+          size="small"
+          title={deleteActionTitle}
+          type="button"
+          variant="danger"
+        >
+          {commands.active !== null
+            ? "预检中…"
+            : commands.busy
+              ? "处理中…"
+              : pruning
+                ? `清除 (${deletePlan.eligibleCount})`
+                : `删除 (${deletePlan.eligibleCount})`}
+        </Button>
         <Button size="small"
           aria-expanded={filterOpen}
           className={`panel-header-action${
             filterOpen ? " worktree-filter-open" : ""
           }`}
           onClick={() => setFilterOpen((open) => !open)}
+          ref={filterTriggerRef}
           type="button"
         >
           <Icon name="filter" size={13} />
@@ -546,7 +694,9 @@ function WorkspaceWorktreesPanel({
               className={`worktree-filter-chip${
                 selected ? " selected" : ""
               }`}
-              disabled={facetCounts[option.id] === 0}
+              disabled={
+                facetCounts[option.id] === 0 && !selected
+              }
               key={option.id}
               onClick={() =>
                 setFilters((current) => ({
@@ -591,12 +741,22 @@ function WorkspaceWorktreesPanel({
             onClick={() => {
               setFilters(createWorktreeFilterState());
               setFilterOpen(false);
+              filterTriggerRef.current?.focus({
+                preventScroll: true
+              });
             }}
             type="button"
           >
             清除筛选（{activeFilterCount}）
           </Button>
         )}
+      </div>
+      <div
+        className="worktree-delete-status"
+        id={deleteStatusId}
+        role="status"
+      >
+        {deleteActionTitle}
       </div>
       {visibleWorktrees.length > 0 ? (
         <div className="worktree-grid">
@@ -612,6 +772,7 @@ function WorkspaceWorktreesPanel({
                 repositoryName={
                   repositoryNames.get(worktree.repositoryId) ?? ""
                 }
+                snapshot={snapshotFor(worktree)}
                 worktree={worktree}
               />
             );
@@ -621,7 +782,7 @@ function WorkspaceWorktreesPanel({
         <div className="worktree-filter-empty">
           <Icon name="search" size={18} />
           <strong>没有匹配的 Worktree</strong>
-          <span>可修改筛选关键词后重试。</span>
+          <span>可修改筛选条件后重试。</span>
         </div>
       )}
     </div>
@@ -954,46 +1115,63 @@ function RepositoryTable({
 function WorkspaceWorktreeCard({
   onSelect,
   repositoryName,
+  snapshot,
   worktree
 }: {
   onSelect(): void;
   repositoryName: string;
+  snapshot: RepositoryStatusSnapshotDto | undefined;
   worktree: WorkspaceWorktreeDto;
 }) {
-  const statusTone = worktree.isPrunable
-    ? "red"
-    : worktree.isDetached
-      ? "yellow"
-      : worktree.isPrimary
-        ? "green"
-        : "neutral";
-  const statusLabel = worktree.isPrunable
-    ? "可清理登记"
-    : worktree.isPrimary
-        ? "主工作目录"
-        : worktree.isDetached
-          ? "游离 HEAD"
-          : "已登记";
+  const statusTone = worktreeStatusTone(worktree);
+  const statusLabel = worktreeStatusLabel(worktree);
   const title = worktree.branch || "游离 HEAD";
-  const locationLabel = worktree.isPrunable ? "目录不存在" : "目录存在";
+  const changes = snapshot ? getSnapshotChangeCount(snapshot) : 0;
+  const snapshotReady =
+    isWorktreeSnapshotReadyForDelete(snapshot);
+  const interactive = !worktree.isPrunable && !worktree.isBare;
+  const locationLabel = worktree.isBare
+    ? "无工作目录"
+    : worktree.isPrunable
+      ? "目录不存在"
+      : "目录存在";
+  const stateDetail = [
+    changes > 0 ? `${changes} 项变更` : "",
+    interactive && !snapshotReady ? "状态未就绪" : ""
+  ]
+    .filter(Boolean)
+    .join("，");
+  const activate = () => {
+    if (interactive) {
+      onSelect();
+    }
+  };
 
   return (
     <article
       aria-label={`${repositoryName ? `${repositoryName} 的 ` : ""}${title}，${statusLabel}，提交 ${shortHead(
         worktree.head
-      )}，${locationLabel}，${worktree.path}`}
+      )}，${locationLabel}${
+        stateDetail ? `，${stateDetail}` : ""
+      }，${worktree.path}`}
       className={`worktree-card worktree-summary-card${
         worktree.isPrimary ? " primary" : ""
+      }${worktree.isPrunable ? " prunable" : ""}${
+        worktree.isBare ? " bare" : ""
       }`}
-      onClick={onSelect}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onSelect();
-        }
-      }}
-      role="button"
-      tabIndex={0}
+      onClick={interactive ? activate : undefined}
+      onKeyDown={
+        interactive
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                activate();
+              }
+            }
+          : undefined
+      }
+      role={interactive ? "button" : undefined}
+      tabIndex={interactive ? 0 : undefined}
     >
       <div className="worktree-card-head">
         <span className="worktree-symbol">
@@ -1029,8 +1207,18 @@ function WorkspaceWorktreeCard({
         >
           {locationLabel}
         </span>
+          {changes > 0 && (
+            <span className="worktree-change-count">
+              {changes} 项变更
+            </span>
+          )}
+          {interactive && !snapshotReady && (
+            <span className="worktree-status-unavailable">
+              状态未就绪
+            </span>
+          )}
           <span className="spacer" />
-          {!worktree.isPrunable && (
+          {interactive && (
             <span className="worktree-foot-action">
               <Icon name="external" size={16} />
               登记路径

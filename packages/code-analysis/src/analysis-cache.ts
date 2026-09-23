@@ -24,8 +24,8 @@ import { BUILTIN_ANALYSIS_PROFILE_VERSIONS } from "./profiles/registry";
 const CACHE_SCHEMA_VERSION = 3;
 const SNAPSHOT_CACHE_SCHEMA_VERSION = 4;
 const SNAPSHOT_POINTER_SCHEMA_VERSION = 1;
-const PARSER_VERSION = 12;
-const GRAPH_VERSION = 13;
+const PARSER_VERSION = 13;
+const GRAPH_VERSION = 14;
 export const MAX_ANALYSIS_INDEX_CACHE_BYTES =
   128 * 1_024 * 1_024;
 export const MAX_ANALYSIS_SNAPSHOT_BYTES =
@@ -128,7 +128,7 @@ interface AnalysisSnapshotPointerDocument {
   savedAt: string;
 }
 
-interface LoadedAnalysisSnapshot {
+export interface LoadedAnalysisSnapshot {
   snapshot: CodeAnalysisSnapshot;
   savedAt: string;
   source: "scoped" | "legacy";
@@ -254,7 +254,14 @@ export class AnalysisSnapshotCache
   }
 }
 
-async function loadSnapshotFromDirectory(
+/**
+ * Reads a snapshot without touching the disk.
+ *
+ * `AnalysisSnapshotCache.load` wraps this and then repairs what it
+ * found by writing (legacy migration, pointer repair, fallback copy),
+ * so readers that must stay read-only have to call this instead.
+ */
+export async function loadSnapshotFromDirectory(
   cacheDirectory: string,
   workspaceId: string,
   settings: CodeAnalysisSettings,
@@ -587,6 +594,31 @@ export function codeAnalysisSnapshotConfigurationKey(
     .digest("hex");
 }
 
+export function codeAnalysisWorktreeStatusFingerprint(
+  changes: readonly {
+    path: string;
+    originalPath?: string;
+    indexStatus: string;
+    worktreeStatus: string;
+    kind: string;
+  }[]
+): string {
+  const entries = changes
+    .map((change) =>
+      [
+        change.path,
+        change.originalPath ?? "",
+        change.indexStatus,
+        change.worktreeStatus,
+        change.kind
+      ].join("\0")
+    )
+    .sort();
+  return createHash("sha256")
+    .update(JSON.stringify(entries))
+    .digest("hex");
+}
+
 function codeAnalysisLanguageServerConfiguration(
   settings: CodeAnalysisSettings
 ): Record<
@@ -857,6 +889,8 @@ function isCodeAnalysisSnapshot(
     typeof value.generatedAt === "string" &&
     Array.isArray(value.roots) &&
     value.roots.every(isAnalysisRoot) &&
+    (value.sourceState === undefined ||
+      isAnalysisSourceState(value.sourceState)) &&
     Array.isArray(value.nodes) &&
     value.nodes.every(isCodeGraphNode) &&
     Array.isArray(value.edges) &&
@@ -875,6 +909,30 @@ function isCodeAnalysisSnapshot(
       (warning) => typeof warning === "string"
     ) &&
     isCodeAnalysisStats(value.stats)
+  );
+}
+
+function isAnalysisSourceState(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.worktreeStatuses) &&
+    value.worktreeStatuses.every(
+      (entry: unknown) =>
+        isRecord(entry) &&
+        typeof entry.repositoryId === "string" &&
+        typeof entry.worktreeId === "string" &&
+        typeof entry.fingerprint === "string"
+    ) &&
+    Array.isArray(value.changedSourceFiles) &&
+    value.changedSourceFiles.every(
+      (entry: unknown) =>
+        isRecord(entry) &&
+        typeof entry.repositoryId === "string" &&
+        typeof entry.worktreeId === "string" &&
+        typeof entry.path === "string" &&
+        isFiniteNumber(entry.size) &&
+        isFiniteNumber(entry.modifiedAtMs)
+    )
   );
 }
 

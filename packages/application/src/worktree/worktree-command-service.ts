@@ -9,6 +9,7 @@ import {
   type Worktree
 } from "@gitnest/git-core";
 import {
+  listWorkspaceRoots,
   listWorkspaceTargets,
   repositoryTargetKey,
   type RepositoryTarget,
@@ -328,11 +329,15 @@ export class WorktreeCommandService {
     }
 
     this.#preflights.delete(stored.preflightId);
+    const operationTargets = operationHistoryTargets(
+      normalized,
+      current.plan
+    );
     const accepted =
       await this.#runtime.queueRepositoryOperation(
-        stored.plan.anchorTarget,
+        current.plan.anchorTarget,
         operationKind(normalized),
-        async (anchorPath, signal) => {
+        async (_anchorPath, signal) => {
           let latest: WorktreeCommandPlan;
           try {
             latest = await this.#buildPlan(
@@ -345,14 +350,7 @@ export class WorktreeCommandService {
               "Worktree state changed while the command was queued."
             );
           }
-          if (
-            latest.fingerprint !== stored.plan.fingerprint ||
-            this.#pathPolicy.normalizePath(anchorPath)
-              .canonicalPath !==
-              this.#pathPolicy.normalizePath(
-                latest.anchorPath
-              ).canonicalPath
-          ) {
+          if (latest.fingerprint !== stored.plan.fingerprint) {
             throw new GitError(
               "PREFLIGHT_CHANGED",
               "Worktree state changed while the command was queued."
@@ -360,13 +358,17 @@ export class WorktreeCommandService {
           }
           await this.#executePlan(
             latest.execution,
-            anchorPath,
+            latest.anchorPath,
             signal
           );
         },
         {
+          allowTargetFallback: true,
           refreshTopology: true,
-          expectedWorkspaceId: stored.workspaceId
+          expectedWorkspaceId: stored.workspaceId,
+          ...(operationTargets
+            ? { operationTargets }
+            : {})
         }
       );
 
@@ -1080,12 +1082,12 @@ export class WorktreeCommandService {
     workspace: Workspace,
     destination: WorktreePathInspection
   ): "workspace-root" | "selected" {
-    const inWorkspaceRoot = Boolean(
-      workspace.canonicalPath &&
+    const inWorkspaceRoot = listWorkspaceRoots(workspace).some(
+      (root) =>
         this.#pathPolicy.isWithin(
-          workspace.canonicalPath,
-        destination.canonicalPath
-      )
+          root.canonicalPath,
+          destination.canonicalPath
+        )
     );
     if (inWorkspaceRoot) {
       return "workspace-root";
@@ -1146,6 +1148,27 @@ export class WorktreeCommandService {
     execution: WorktreeExecutionPlan;
     evidence: unknown;
   }): WorktreeCommandPlan {
+    const topologySensitive = isRepositoryTopologySensitive(
+      input.command
+    );
+    const repositoryTopology = topologySensitive
+      ? {
+          worktreeIds: [
+            ...input.context.repository.worktreeIds
+          ].sort(),
+          gitWorktrees: input.context.gitWorktrees
+            .map((worktree) =>
+              stableGitWorktree(
+                worktree,
+                this.#pathPolicy
+              )
+            )
+            .sort((left, right) =>
+              left.path.localeCompare(right.path)
+            )
+        }
+      : undefined;
+
     return {
       anchorTarget: input.context.anchorTarget,
       anchorPath: input.context.anchorPath,
@@ -1159,29 +1182,19 @@ export class WorktreeCommandService {
         repository: {
           id: input.context.repository.id,
           commonDir:
-            input.context.repository.canonicalCommonDir,
-          worktreeIds: [
-            ...input.context.repository.worktreeIds
-          ].sort()
+            input.context.repository.canonicalCommonDir
         },
-        anchor: {
-          target: repositoryTargetKey(
-            input.context.anchorTarget
-          ),
-          path: this.#pathPolicy.normalizePath(
-            input.context.anchorPath
-          ).canonicalPath
-        },
-        gitWorktrees: input.context.gitWorktrees
-          .map((worktree) =>
-            stableGitWorktree(
-              worktree,
-              this.#pathPolicy
-            )
-          )
-          .sort((left, right) =>
-            left.path.localeCompare(right.path)
-          ),
+        repositoryTopology,
+        anchor: topologySensitive
+          ? {
+              target: repositoryTargetKey(
+                input.context.anchorTarget
+              ),
+              path: this.#pathPolicy.normalizePath(
+                input.context.anchorPath
+              ).canonicalPath
+            }
+          : undefined,
         execution: input.execution,
         impacts: input.impacts,
         warnings: input.warnings,
@@ -1657,6 +1670,29 @@ function operationKind(
   command: WorktreeCommand
 ): RepositoryOperationKind {
   return `worktree-${command.type}` as RepositoryOperationKind;
+}
+
+function operationHistoryTargets(
+  command: WorktreeCommand,
+  plan: WorktreeCommandPlan
+): RepositoryTarget[] | undefined {
+  if (command.type !== "remove" && command.type !== "prune") {
+    return undefined;
+  }
+  return [
+    ...new Map(
+      plan.impacts.map((impact) => [
+        repositoryTargetKey(impact.target),
+        impact.target
+      ])
+    ).values()
+  ];
+}
+
+function isRepositoryTopologySensitive(
+  command: WorktreeCommand
+): boolean {
+  return command.type === "create" || command.type === "prune";
 }
 
 function planFingerprint(value: unknown): string {

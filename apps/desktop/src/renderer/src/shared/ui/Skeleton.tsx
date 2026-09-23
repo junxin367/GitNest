@@ -84,8 +84,9 @@ export function SkeletonBoundary({
   surfaceAs,
   surfaceClassName
 }: SkeletonBoundaryProps) {
-  const visible = useMinimumLoadingIndicator(
-    loading && !hasContent
+  const visible = useSkeletonVisibility(
+    loading,
+    hasContent
   );
 
   if (!visible) {
@@ -101,6 +102,16 @@ export function SkeletonBoundary({
       {fallback}
     </SkeletonSurface>
   );
+}
+
+export function useSkeletonVisibility(
+  loading: boolean,
+  hasContent: boolean
+): boolean {
+  const minimumVisible = useMinimumLoadingIndicator(
+    loading && !hasContent
+  );
+  return !hasContent && minimumVisible;
 }
 
 function mergeClassNames(

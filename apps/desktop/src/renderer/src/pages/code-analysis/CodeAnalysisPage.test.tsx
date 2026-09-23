@@ -1812,17 +1812,62 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
         )
         ?.click();
     });
+    const clickedSourceSearchInput =
+      container.querySelector<HTMLInputElement>(
+        ".analysis-node-source-search input"
+      );
+    expect(clickedSourceSearchInput).not.toBeNull();
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="关闭搜索"]'
+        )
+        ?.click();
+    });
+    expect(
+      container.querySelector(
+        ".analysis-node-source-search input"
+      )
+    ).toBeNull();
+
+    const findShortcut = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      key: "f"
+    });
+    act(() => {
+      window.dispatchEvent(findShortcut);
+    });
     const sourceSearchInput =
       container.querySelector<HTMLInputElement>(
         ".analysis-node-source-search input"
       );
+    expect(findShortcut.defaultPrevented).toBe(true);
     expect(sourceSearchInput).not.toBeNull();
+    expect(document.activeElement).toBe(sourceSearchInput);
     act(() => {
       setInputValue(
         sourceSearchInput as HTMLInputElement,
         "function callee"
       );
     });
+    act(() => {
+      (sourceSearchInput as HTMLInputElement).blur();
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          ctrlKey: true,
+          key: "f"
+        })
+      );
+    });
+    expect(document.activeElement).toBe(sourceSearchInput);
+    expect(sourceSearchInput?.selectionStart).toBe(0);
+    expect(sourceSearchInput?.selectionEnd).toBe(
+      "function callee".length
+    );
     const sourceSearchHit = container.querySelector(
       '[data-source-search-hit="0"]'
     );

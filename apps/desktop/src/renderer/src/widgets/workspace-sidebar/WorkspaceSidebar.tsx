@@ -68,12 +68,12 @@ export interface WorkspaceSidebarProps {
   onCreateWorkspace(): Promise<boolean>;
   onSwitchWorkspace(workspaceId: string): Promise<boolean>;
   onDeleteWorkspace(workspaceId: string): Promise<boolean>;
+  onAddDirectory(): Promise<boolean>;
   onOpenWorkspace(): void;
   onRenameWorkspace(
     workspaceId: string,
     name: string
   ): Promise<boolean>;
-  onRefresh(): Promise<void> | void;
   onRemoveRepository(
     target: RepositoryTargetDto
   ): Promise<boolean>;
@@ -158,9 +158,9 @@ export function WorkspaceSidebar({
   onCreateWorkspace,
   onSwitchWorkspace,
   onDeleteWorkspace,
+  onAddDirectory,
   onOpenWorkspace,
   onRenameWorkspace,
-  onRefresh,
   onRemoveRepository,
   onRescan,
   onSelectTarget,
@@ -1053,24 +1053,15 @@ export function WorkspaceSidebar({
       </nav>
 
       <div className="sidebar-footer">
-        <div
-          className="workspace-directory"
-          data-workspace-directory
-          title={directoryPath}
-        >
-          <Icon name="folder" size={14} />
-          <span>{directoryPath}</span>
-        </div>
         <Button
           variant="unstyled"
-          aria-label="刷新 Workspace 状态"
-          className="icon-button"
-          disabled={busy || !workspace}
-          onClick={() => void onRefresh()}
-          title="刷新 Workspace 状态"
+          className="sidebar-add-directory"
+          disabled={busy}
+          onClick={() => void onAddDirectory()}
           type="button"
         >
-          <Icon name="activity" size={14} />
+          <Icon name="plus" size={14} />
+          添加目录
         </Button>
         <Button
           variant="unstyled"

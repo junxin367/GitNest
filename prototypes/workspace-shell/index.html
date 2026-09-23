@@ -643,24 +643,6 @@
       height: var(--icon-regular);
     }
 
-    .rail-badge {
-      position: absolute;
-      top: 0;
-      right: 0;
-      display: grid;
-      place-items: center;
-      min-width: var(--icon-regular);
-      height: var(--icon-regular);
-      padding: 0 var(--space-1);
-      color: #0c1413;
-      background: var(--accent);
-      border: 2px solid var(--rail);
-      border-radius: 999px;
-      font-size: var(--font-size-caption);
-      font-weight: var(--font-weight-semibold);
-      line-height: 1;
-    }
-
     .rail-spacer {
       flex: 1;
     }
@@ -5359,8 +5341,20 @@
       font-size: var(--font-size-caption);
     }
 
-    .worktree-filter-field + .panel-header-action {
+    .worktree-toolbar .worktree-prune-action {
+      margin-left: auto;
+    }
+
+    .worktree-toolbar .worktree-filter-field + .worktree-prune-action,
+    .worktree-toolbar .worktree-prune-action + .panel-header-action {
       margin-left: 0;
+    }
+
+    .worktree-prune-action:disabled {
+      --gn-button-background: var(--surface-2);
+      color: var(--muted);
+      border-color: var(--border-soft);
+      opacity: 1;
     }
 
     .worktree-filter-bar {
@@ -5629,37 +5623,6 @@
 
     .worktree-foot .spacer {
       flex: 1;
-    }
-
-    .worktree-clear-action {
-      display: inline-flex;
-      align-items: center;
-      flex: 0 0 auto;
-      gap: var(--space-1);
-      height: 26px;
-      padding: 0 var(--space-2);
-      color: var(--red);
-      background: var(--red-soft);
-      border: 1px solid color-mix(in srgb, var(--red) 28%, var(--border-soft));
-      border-radius: var(--radius-small);
-      cursor: pointer;
-      font: inherit;
-      font-weight: var(--font-weight-semibold);
-    }
-
-    .worktree-clear-action:hover:not(:disabled) {
-      background: color-mix(in srgb, var(--red) 15%, var(--surface));
-      border-color: color-mix(in srgb, var(--red) 44%, var(--border));
-    }
-
-    .worktree-clear-action:focus-visible {
-      outline: 2px solid var(--red);
-      outline-offset: 2px;
-    }
-
-    .worktree-clear-action:disabled {
-      cursor: not-allowed;
-      opacity: 0.55;
     }
 
     .inspector-head {
@@ -16151,14 +16114,16 @@
     function openCodeAnalysis() {
       withCommitDraftGuard(() => {
         const enteringAnalysis = state.view !== "analysis";
-        if (enteringAnalysis) {
-          window.clearTimeout(state.analysisLoadingTimer);
-          state.analysisLoading = true;
-        }
+        const hasAnalysisData =
+          analysisChainsForCurrentScope().length > 0;
+        const showInitialSkeleton =
+          enteringAnalysis && !hasAnalysisData;
+        window.clearTimeout(state.analysisLoadingTimer);
+        state.analysisLoading = showInitialSkeleton;
         state.view = "analysis";
         state.inspectorOpen = false;
         renderMain();
-        if (enteringAnalysis) {
+        if (showInitialSkeleton) {
           state.analysisLoadingTimer = window.setTimeout(() => {
             state.analysisLoadingTimer = null;
             state.analysisLoading = false;
@@ -16684,7 +16649,7 @@
           <div class="metric-grid">
             ${metricCard("refresh", "活动", "1", "等待本地任务调度", "var(--blue)", "var(--blue-soft)")}
             ${metricCard("check", "成功", "12", "最近完成的只读操作", "var(--green)", "var(--green-soft)")}
-            ${metricCard("alert", "失败", "0", "需要人工处理", "var(--yellow)", "var(--yellow-soft)")}
+            ${metricCard("alert", "失败", "0", "最近操作中的异常记录", "var(--yellow)", "var(--yellow-soft)")}
             ${metricCard("operations", "记录", "18", "当前 Workspace 操作记录", "var(--accent)", "var(--accent-soft)")}
           </div>
 
@@ -17169,6 +17134,20 @@
     function renderWorkspaceWorktrees() {
       const activeWorkspaceSnapshot = currentWorkspaceSnapshot();
       const visibleWorktrees = filteredWorkspaceWorktrees();
+      const pruneCandidates = activeWorkspaceSnapshot.worktreeEntries.filter(
+        (entry) =>
+          entry.prunable &&
+          !entry.locked &&
+          !entry.primary &&
+          (!state.workspaceWorktreeRepo ||
+            entry.repo === state.workspaceWorktreeRepo)
+      );
+      const pruneRepositoryCount = new Set(
+        pruneCandidates.map((entry) => entry.repo)
+      ).size;
+      const pruneEnabled =
+        state.workspaceWorktreeFacet === "prunable" &&
+        pruneCandidates.length > 0;
       const activeFilterCount =
         (state.workspaceWorktreeFacet ? 1 : 0) +
         (state.workspaceWorktreeOnlyDirty ? 1 : 0) +
@@ -17205,6 +17184,21 @@
                       : null
                   })
                 : ""}
+              ${renderButton({
+                label: "清除",
+                size: "small",
+                variant: "danger",
+                className: "worktree-prune-action",
+                icon: icon("refresh", 13),
+                disabled: !pruneEnabled,
+                ariaLabel: "清除失效 Worktree 登记",
+                title: state.workspaceWorktreeFacet !== "prunable"
+                  ? "选择“可清理登记”类型后可清除"
+                  : pruneCandidates.length === 0
+                    ? "当前范围没有可安全清除的失效登记"
+                    : `将先预检 ${pruneRepositoryCount} 个仓库，再清除 ${pruneCandidates.length} 条失效登记；不会删除目录`,
+                attributes: 'onclick="previewWorkspacePrune()"'
+              })}
               ${renderButton({
                 label: "筛选",
                 size: "small",
@@ -17257,34 +17251,39 @@
             ${entry.exists ? "目录存在" : "目录不存在"}
             ${entry.changes > 0 ? `<span class="diff-add">${entry.changes} 项变更</span>` : ""}
             <span class="spacer"></span>
-            ${entry.prunable
-              ? `<button
-                  type="button"
-                  class="worktree-clear-action"
-                  data-worktree-path="${escapeHtml(entry.path)}"
-                  data-worktree-repository="${escapeHtml(entry.repo || "当前仓库")}"
-                  ${entry.locked ? "disabled" : ""}
-                  title="${entry.locked ? "该失效登记已锁定，需先解锁后才能清除" : "预检并清除该仓库内所有失效 Worktree 登记；不会删除目录"}"
-                  onclick="event.stopPropagation(); previewPruneWorktree(event.currentTarget)"
-                >${icon("refresh", 14)}清除</button>`
-              : `${icon("external", 16)}登记路径`}
+            ${entry.prunable ? "" : `${icon("external", 16)}登记路径`}
           </div>
         </article>
       `;
     }
 
-    function previewPruneWorktree(trigger) {
-      if (!(trigger instanceof HTMLElement) || trigger.hasAttribute("disabled")) return;
-      const path = trigger.dataset.worktreePath || "失效 Worktree 登记";
-      const repository = trigger.dataset.worktreeRepository || "当前仓库";
+    function previewWorkspacePrune() {
+      const activeWorkspaceSnapshot = currentWorkspaceSnapshot();
+      const candidates = activeWorkspaceSnapshot.worktreeEntries.filter(
+        (entry) =>
+          entry.prunable &&
+          !entry.locked &&
+          !entry.primary &&
+          (!state.workspaceWorktreeRepo ||
+            entry.repo === state.workspaceWorktreeRepo)
+      );
+      if (
+        state.workspaceWorktreeFacet !== "prunable" ||
+        candidates.length === 0
+      ) {
+        return;
+      }
+      const repositoryCount = new Set(
+        candidates.map((entry) => entry.repo)
+      ).size;
       openConfirmDialog({
         title: "清除失效 Worktree 登记？",
-        description: `${path} 的目录已不存在。正式程序会先预检，并清除 ${repository} 中所有可清理的失效 Git 登记；不会递归删除仍存在的目录。`,
+        description: `正式程序会逐仓预检 ${repositoryCount} 个仓库，并清除 ${candidates.length} 条可清理的失效 Git 登记；不会递归删除仍存在的目录。`,
         actionLabel: "确认清除",
         onConfirm: () =>
           showToast(
             "清除预览已完成",
-            `${repository} 的失效登记已通过预检；设计预览未执行 Git 命令。`,
+            `${repositoryCount} 个仓库的失效登记已通过预检；设计预览未执行 Git 命令。`,
             "refresh"
           )
       });
@@ -19081,6 +19080,18 @@
         (state.repoWorktreeOnlyDirty ? 1 : 0) +
         ((state.repoWorktreeFilter || "").trim() ? 1 : 0);
       const existingWorktrees = Math.max(0, repo.worktrees - repo.prunable);
+      const pruneCandidateCount =
+        repo.id === "workspace-root"
+          ? currentWorkspaceSnapshot().worktreeEntries.filter(
+              (entry) =>
+                entry.prunable &&
+                !entry.locked &&
+                !entry.primary
+            ).length
+          : repo.prunable;
+      const pruneEnabled =
+        state.repoWorktreeFacet === "prunable" &&
+        pruneCandidateCount > 0;
       document.getElementById("mainContent").innerHTML = `
         <div class="page-scroll">
           <div class="worktree-management">
@@ -19133,6 +19144,21 @@
                   })
                 : ""}
               ${renderButton({
+                label: "清除",
+                size: "small",
+                variant: "danger",
+                className: "worktree-prune-action",
+                icon: icon("refresh", 13),
+                disabled: !pruneEnabled,
+                ariaLabel: "清除失效 Worktree 登记",
+                title: state.repoWorktreeFacet !== "prunable"
+                  ? "选择“可清理登记”类型后可清除"
+                  : pruneCandidateCount === 0
+                    ? "当前范围没有可安全清除的失效登记"
+                    : `将先预检，再清除 ${repo.name} 仓库中的 ${pruneCandidateCount} 条失效登记；不会删除目录`,
+                attributes: 'onclick="previewRepositoryPrune()"'
+              })}
+              ${renderButton({
                 label: "筛选",
                 size: "small",
                 variant: "default",
@@ -19156,6 +19182,36 @@
         </div>
       `;
       renderWorktreeInspector();
+    }
+
+    function previewRepositoryPrune() {
+      const repo = currentRepo();
+      const candidateCount =
+        repo.id === "workspace-root"
+          ? currentWorkspaceSnapshot().worktreeEntries.filter(
+              (entry) =>
+                entry.prunable &&
+                !entry.locked &&
+                !entry.primary
+            ).length
+          : repo.prunable;
+      if (
+        state.repoWorktreeFacet !== "prunable" ||
+        candidateCount === 0
+      ) {
+        return;
+      }
+      openConfirmDialog({
+        title: "清除失效 Worktree 登记？",
+        description: `正式程序会先预检 ${repo.name}，再清除 ${candidateCount} 条可清理的失效 Git 登记；不会递归删除仍存在的目录。`,
+        actionLabel: "确认清除",
+        onConfirm: () =>
+          showToast(
+            "清除预览已完成",
+            `${repo.name} 的失效登记已通过预检；设计预览未执行 Git 命令。`,
+            "refresh"
+          )
+      });
     }
 
     function repositoryWorktreeCard(title, branch, path, head, status, primary, locked) {
@@ -19241,11 +19297,19 @@
         return;
       }
       state.diffHunkContexts = {};
-      state.diffLoading = true;
       state.selectedFile = path;
       clearTimeout(state.diffLoadingTimer);
       clearTimeout(state.diffSkeletonMinimumTimer);
+      const hasDiffData = currentChangedFiles().some(
+        (file) => file.path === path
+      );
+      state.diffLoading = !hasDiffData;
       state.diffSkeletonMinimumTimer = null;
+      if (hasDiffData) {
+        state.diffSkeletonVisible = false;
+        renderChanges();
+        return;
+      }
       if (!state.diffSkeletonVisible) {
         state.diffSkeletonVisible = true;
         state.diffSkeletonShownAt = performance.now();
@@ -20289,12 +20353,10 @@
         .trim()
         .toLocaleLowerCase();
       const searchableRepositories = visibleCommandRepositories();
-      const changeResults = state.commandSearchLoading
-        ? []
-        : changedFileSearchResults(
-            query,
-            searchableRepositories
-          );
+      const changeResults = changedFileSearchResults(
+        query,
+        searchableRepositories
+      );
       const repoResults = searchableRepositories
         .filter((repo) => {
           const searchText = [
@@ -20314,6 +20376,7 @@
       const showSearchSkeleton =
         state.commandSearchLoading &&
         Boolean(query) &&
+        changeResults.length === 0 &&
         repoResults.length === 0 &&
         commands.length === 0;
 

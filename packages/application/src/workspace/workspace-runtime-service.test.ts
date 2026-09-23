@@ -1476,6 +1476,86 @@ describe("WorkspaceRuntimeService", () => {
     await runtime.dispose();
   });
 
+  it("retains every active operation while trimming only terminal history", async () => {
+    const workspace = createWorkspace(1);
+    const target =
+      workspace.selectedTarget as RepositoryTarget;
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      new MemorySnapshotStore([
+        createCachedSnapshot(target)
+      ]),
+      new FakeWatcher(),
+      {
+        autoRefresh: false,
+        clock: () => "2026-09-04T12:00:00.000Z"
+      }
+    );
+    await runtime.getState();
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const acceptedIds: string[] = [];
+
+    for (let index = 0; index < 31; index += 1) {
+      const accepted = await runtime.queueRepositoryOperation(
+        target,
+        "fetch",
+        index === 0
+          ? async () => firstGate
+          : async () => undefined
+      );
+      acceptedIds.push(accepted.operationId);
+    }
+
+    const crowded = await runtime.getState();
+    expect(crowded.operations).toHaveLength(31);
+    expect(
+      acceptedIds.every((operationId) =>
+        crowded.operations.some(
+          (operation) => operation.id === operationId
+        )
+      )
+    ).toBe(true);
+
+    releaseFirst();
+    await waitForState(
+      runtime,
+      (state) =>
+        acceptedIds.every((operationId) =>
+          state.operations.some(
+            (operation) =>
+              operation.id === operationId &&
+              operation.state === "succeeded"
+          )
+        )
+    );
+
+    const next = await runtime.queueRepositoryOperation(
+      target,
+      "fetch",
+      async () => undefined
+    );
+    const trimmed = await waitForState(
+      runtime,
+      (state) =>
+        state.operations.some(
+          (operation) =>
+            operation.id === next.operationId &&
+            operation.state === "succeeded"
+        )
+    );
+    expect(trimmed.operations).toHaveLength(30);
+    expect(
+      trimmed.operations.some(
+        (operation) => operation.id === acceptedIds[0]
+      )
+    ).toBe(false);
+    await runtime.dispose();
+  });
+
   it("rescans topology after a successful worktree operation and refreshes the new targets", async () => {
     const workspace = createWorkspace(1);
     const rescannedWorkspace =
@@ -1531,6 +1611,99 @@ describe("WorkspaceRuntimeService", () => {
         "repository-0:worktree-linked"
       ])
     );
+    await runtime.dispose();
+  });
+
+  it("falls back to a current repository Worktree when the queued target was removed", async () => {
+    const rescannedWorkspace = createWorkspace(1);
+    const workspace = addLinkedWorktree(rescannedWorkspace);
+    const primaryTarget =
+      workspace.selectedTarget as RepositoryTarget;
+    const linkedTarget: RepositoryTarget = {
+      repositoryId: "repository-0",
+      worktreeId: "worktree-linked"
+    };
+    const configuration = new FakeConfiguration(workspace);
+    configuration.nextRescanWorkspace =
+      rescannedWorkspace;
+    const runtime = new WorkspaceRuntimeService(
+      configuration,
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      new FakeWatcher(),
+      {
+        autoRefresh: false,
+        clock: () => "2026-09-04T12:00:00.000Z"
+      }
+    );
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const fallbackPaths: string[] = [];
+
+    const first = await runtime.queueRepositoryOperation(
+      primaryTarget,
+      "worktree-remove",
+      async () => firstGate,
+      { refreshTopology: true }
+    );
+    const second = await runtime.queueRepositoryOperation(
+      linkedTarget,
+      "worktree-remove",
+      async (path) => {
+        fallbackPaths.push(path);
+      },
+      {
+        allowTargetFallback: true,
+        operationTargets: [linkedTarget]
+      }
+    );
+
+    releaseFirst();
+    const completed = await waitForState(
+      runtime,
+      (state) =>
+        [first.operationId, second.operationId].every(
+          (operationId) =>
+            state.operations.some(
+              (operation) =>
+                operation.id === operationId &&
+                operation.state === "succeeded"
+            )
+        )
+    );
+
+    expect(completed.workspace.worktrees).toHaveLength(1);
+    expect(
+      completed.operations.find(
+        (operation) => operation.id === second.operationId
+      )?.targetIds
+    ).toEqual(["repository-0:worktree-linked"]);
+
+    const queuedAfterRemoval =
+      await runtime.queueRepositoryOperation(
+        linkedTarget,
+        "worktree-remove",
+        async (path) => {
+          fallbackPaths.push(path);
+        },
+        { allowTargetFallback: true }
+      );
+    await waitForState(
+      runtime,
+      (state) =>
+        state.operations.some(
+          (operation) =>
+            operation.id ===
+              queuedAfterRemoval.operationId &&
+            operation.state === "succeeded"
+        )
+    );
+    expect(fallbackPaths).toEqual([
+      "C:\\root\\repository-0",
+      "C:\\root\\repository-0"
+    ]);
     await runtime.dispose();
   });
 

@@ -7,8 +7,10 @@ import type {
   CodeAnalysisStateDto,
   InstallLanguageServerRequest,
   LanguageServerInstallResultDto,
+  McpRegistrationStatusDto,
   ReadCodeAnalysisFileRequest,
   RestoreCodeAnalysisSnapshotRequest,
+  SetMcpRegistrationRequest,
   StartCodeAnalysisRequest
 } from "./analysis.contracts";
 import type {
@@ -75,6 +77,8 @@ import type {
   RepositoryQueryRequest
 } from "./repository.contracts";
 import type {
+  AddWorkspaceDirectoryRequest,
+  AddWorkspaceDirectoryResultDto,
   CreateWorkspaceRequest,
   DeleteWorkspaceRequest,
   RemoveWorkspaceRepositoryRequest,
@@ -169,6 +173,14 @@ export interface IpcContractMap {
   [IPC_CHANNELS.codeAnalysisInstallLanguageServer]: IpcContract<
     [request: InstallLanguageServerRequest],
     GitReadResult<LanguageServerInstallResultDto>
+  >;
+  [IPC_CHANNELS.codeAnalysisGetMcpRegistration]: IpcContract<
+    [],
+    GitReadResult<McpRegistrationStatusDto>
+  >;
+  [IPC_CHANNELS.codeAnalysisSetMcpRegistration]: IpcContract<
+    [request: SetMcpRegistrationRequest],
+    GitReadResult<McpRegistrationStatusDto>
   >;
   [IPC_CHANNELS.settingsGet]: IpcContract<
     [],
@@ -286,6 +298,10 @@ export interface IpcContractMap {
   [IPC_CHANNELS.workspaceSelectDirectory]: IpcContract<
     [],
     WorkspaceResult<WorkspaceDirectorySelectionDto>
+  >;
+  [IPC_CHANNELS.workspaceAddDirectory]: IpcContract<
+    [request: AddWorkspaceDirectoryRequest],
+    WorkspaceResult<AddWorkspaceDirectoryResultDto>
   >;
   [IPC_CHANNELS.workspaceRescan]: IpcContract<
     [],

@@ -21,10 +21,23 @@ import {
   stagedFileContentArguments,
   stagedFileSizeArguments,
   STAGED_DIFF_STAT_ARGUMENTS,
+  STATUS_ARGUMENTS,
   UNSTAGED_DIFF_PATH_ARGUMENTS
 } from "./read-repository";
 
 describe("repository read commands", () => {
+  it("bypasses stale fsmonitor state when reading repository status", () => {
+    expect(STATUS_ARGUMENTS).toEqual([
+      "-c",
+      "core.fsmonitor=false",
+      "status",
+      "--porcelain=v2",
+      "--branch",
+      "-z",
+      "--untracked-files=all"
+    ]);
+  });
+
   it("uses an explicit pathspec boundary for every diff mode", () => {
     expect(
       diffArguments("-leading-dash.ts", "unstaged", 3)

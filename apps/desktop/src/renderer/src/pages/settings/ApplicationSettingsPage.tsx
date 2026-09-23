@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState
@@ -17,6 +18,10 @@ import {
   MAX_CODE_ANALYSIS_GRAPH_NODES,
   MAX_CODE_ANALYSIS_REQUEST_CHAINS,
   MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB,
+  MAX_MCP_MAX_RESPONSE_KB,
+  MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+  MIN_MCP_MAX_RESPONSE_KB,
+  MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
   MAX_LSP_DOCUMENTS,
   MAX_LSP_REFERENCES_PER_SYMBOL,
   MAX_LSP_REQUESTS,
@@ -31,7 +36,9 @@ import {
   MIN_LSP_REQUESTS,
   MIN_LSP_SYMBOLS_PER_DOCUMENT,
   createDefaultCodeAnalysisSettings,
-  type LanguageServerCommandSettingsDto
+  type LanguageServerCommandSettingsDto,
+  type McpRegistrationStatusDto,
+  type McpServerSettingsDto
 } from "@gitnest/contracts";
 
 import type { AccountController } from "../../features/account-manage/useAccounts";
@@ -53,6 +60,7 @@ export type ApplicationSettingsSection =
   | "general"
   | "ai"
   | "analysis"
+  | "mcp"
   | "git"
   | "account";
 
@@ -88,6 +96,12 @@ const SETTINGS_SECTIONS: Array<{
     label: "LSP 与代码分析",
     subtitle: "请求链与调用关系",
     icon: "graph"
+  },
+  {
+    id: "mcp",
+    label: "MCP",
+    subtitle: "客户端连接与访问控制",
+    icon: "layers"
   },
   {
     id: "git",
@@ -207,12 +221,22 @@ export function ApplicationSettingsPage({
         appSettings.settings.codeAnalysis
       )
     );
+  const [mcpDraft, setMcpDraft] =
+    useState<McpServerSettingsDto>(() => ({
+      ...appSettings.settings.codeAnalysis.mcp
+    }));
   const [selectedLanguageServer, setSelectedLanguageServer] =
     useState<LanguageServerId>("typescript");
   const aiDraftDirtyRef = useRef(false);
   const analysisDraftDirtyRef = useRef(false);
+  const mcpDraftDirtyRef = useRef(false);
   const aiDraftVersionRef = useRef(0);
   const analysisDraftVersionRef = useRef(0);
+  const mcpDraftVersionRef = useRef(0);
+  const mcpResponseLimitValid =
+    Number.isInteger(mcpDraft.maxResponseKb) &&
+    mcpDraft.maxResponseKb >= MIN_MCP_MAX_RESPONSE_KB &&
+    mcpDraft.maxResponseKb <= MAX_MCP_MAX_RESPONSE_KB;
 
   useEffect(() => {
     setSection(initialSection);
@@ -239,6 +263,15 @@ export function ApplicationSettingsPage({
     );
   }, [appSettings.settings.codeAnalysis]);
 
+  useEffect(() => {
+    if (mcpDraftDirtyRef.current) {
+      return;
+    }
+    setMcpDraft({
+      ...appSettings.settings.codeAnalysis.mcp
+    });
+  }, [appSettings.settings.codeAnalysis.mcp]);
+
   const updateAnalysisDraft = (
     update: (
       current: CodeAnalysisSettingsDto
@@ -247,6 +280,14 @@ export function ApplicationSettingsPage({
     analysisDraftDirtyRef.current = true;
     analysisDraftVersionRef.current += 1;
     setAnalysisDraft(update);
+  };
+
+  const updateMcpDraft = (
+    update: (current: McpServerSettingsDto) => McpServerSettingsDto
+  ) => {
+    mcpDraftDirtyRef.current = true;
+    mcpDraftVersionRef.current += 1;
+    setMcpDraft(update);
   };
 
   const markAiDraftDirty = () => {
@@ -361,7 +402,10 @@ export function ApplicationSettingsPage({
     const saved = await appSettings.update(
       {
         codeAnalysis: cloneCodeAnalysisSettings(
-          analysisDraft
+          {
+            ...analysisDraft,
+            mcp: appSettings.settings.codeAnalysis.mcp
+          }
         )
       },
       {
@@ -374,6 +418,24 @@ export function ApplicationSettingsPage({
       draftVersion === analysisDraftVersionRef.current
     ) {
       analysisDraftDirtyRef.current = false;
+    }
+  };
+
+  const saveMcpSettings = async () => {
+    if (!mcpResponseLimitValid) {
+      return;
+    }
+    const draftVersion = mcpDraftVersionRef.current;
+    const saved = await appSettings.update(
+      {
+        codeAnalysis: {
+          mcp: { ...mcpDraft }
+        }
+      },
+      { notice: "MCP 设置已保存。" }
+    );
+    if (saved && draftVersion === mcpDraftVersionRef.current) {
+      mcpDraftDirtyRef.current = false;
     }
   };
 
@@ -404,7 +466,7 @@ export function ApplicationSettingsPage({
             <span className="eyebrow">应用偏好</span>
             <h1>设置</h1>
             <p>
-              管理应用行为、AI、LSP 代码分析、Git 同步策略以及账号认证。
+              管理应用行为、AI、代码分析、MCP、Git 同步策略以及账号认证。
             </p>
           </div>
         </section>
@@ -977,6 +1039,45 @@ export function ApplicationSettingsPage({
                       }))
                     }
                   />
+                  <SettingsToggle
+                    checked={analysisDraft.autoRefresh.enabled}
+                    description="仅对当前选中的条目自动重跑变动范围，去抖后合并多次保存；全量分析与手动重新分析不受影响。"
+                    disabled={appSettings.saving}
+                    label="自动刷新变动分析"
+                    onChange={(enabled) =>
+                      updateAnalysisDraft((current) => ({
+                        ...current,
+                        autoRefresh: {
+                          ...current.autoRefresh,
+                          enabled
+                        }
+                      }))
+                    }
+                  />
+                  <div className="mcp-registration-grid">
+                    <Input
+                      fullWidth
+                      id="analysis-auto-refresh-debounce-ms"
+                      label="自动刷新去抖（毫秒）"
+                      max={MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS}
+                      min={MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS}
+                      onChange={(event) => {
+                        const parsed = Number(event.target.value);
+                        if (!Number.isFinite(parsed)) {
+                          return;
+                        }
+                        updateAnalysisDraft((current) => ({
+                          ...current,
+                          autoRefresh: {
+                            ...current.autoRefresh,
+                            debounceMs: parsed
+                          }
+                        }));
+                      }}
+                      type="number"
+                      value={analysisDraft.autoRefresh.debounceMs}
+                    />
+                  </div>
                   <div className="settings-safety-note">
                     <Icon name="check" size={15} />
                     <div>
@@ -1237,6 +1338,85 @@ export function ApplicationSettingsPage({
                   selectedLanguage={selectedLanguageServer}
                   settings={analysisDraft}
                 />
+              </>
+            )}
+
+            {section === "mcp" && (
+              <>
+                <SettingsCard
+                  description="将已生成的代码分析快照提供给本机 MCP 客户端。"
+                  title="MCP 服务"
+                >
+                  <SettingsToggle
+                    checked={mcpDraft.enabled}
+                    description="关闭后工具不返回代码分析数据；不影响 GitNest 内的代码分析。"
+                    disabled={appSettings.saving}
+                    label="启用 MCP 服务"
+                    onChange={(enabled) =>
+                      updateMcpDraft((current) => ({
+                        ...current,
+                        enabled
+                      }))
+                    }
+                  />
+                  <div className="mcp-registration-grid">
+                    <Input
+                      disabled={appSettings.saving}
+                      fullWidth
+                      helpText={
+                        mcpResponseLimitValid
+                          ? ""
+                          : `请输入 ${MIN_MCP_MAX_RESPONSE_KB}～${MAX_MCP_MAX_RESPONSE_KB} 之间的整数。`
+                      }
+                      id="analysis-mcp-response-kb"
+                      label="单次响应上限（KiB）"
+                      min={MIN_MCP_MAX_RESPONSE_KB}
+                      max={MAX_MCP_MAX_RESPONSE_KB}
+                      onChange={(event) => {
+                        const parsed = Number(event.target.value);
+                        if (!Number.isFinite(parsed)) {
+                          return;
+                        }
+                        updateMcpDraft((current) => ({
+                          ...current,
+                          maxResponseKb: parsed
+                        }));
+                      }}
+                      step={1}
+                      state={
+                        mcpResponseLimitValid ? "default" : "error"
+                      }
+                      type="number"
+                      value={mcpDraft.maxResponseKb}
+                    />
+                  </div>
+                  <div className="settings-ai-actions">
+                    <Button
+                      aria-busy={appSettings.saving}
+                      disabled={
+                        appSettings.saving || !mcpResponseLimitValid
+                      }
+                      onClick={() => void saveMcpSettings()}
+                      size="small"
+                      type="button"
+                      variant="primary"
+                    >
+                      <Icon name="check" />
+                      保存 MCP 设置
+                    </Button>
+                  </div>
+                </SettingsCard>
+
+                <SettingsCard
+                  description="管理本机 Codex 的 GitNest MCP 注册。"
+                  title="Codex 连接"
+                >
+                  <McpRegistrationPanel
+                    enabled={
+                      appSettings.settings.codeAnalysis.mcp.enabled
+                    }
+                  />
+                </SettingsCard>
               </>
             )}
 
@@ -1896,4 +2076,155 @@ function formatAiSettingsError(
     return "连接超时，请检查 API URL 和网络。";
   }
   return error.message;
+}
+
+function McpRegistrationPanel({ enabled }: { enabled: boolean }) {
+  const [status, setStatus] = useState<McpRegistrationStatusDto | null>(
+    null
+  );
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const bridge = window.gitnest?.codeAnalysis;
+    if (!bridge || typeof bridge.getMcpRegistration !== "function") {
+      setFeedback("当前环境无法读取 MCP 注册状态。");
+      return;
+    }
+    try {
+      const result = await bridge.getMcpRegistration();
+      if (result.ok) {
+        setStatus(result.value);
+        setFeedback(null);
+      } else {
+        setFeedback(result.error.message);
+      }
+    } catch (reason) {
+      setFeedback(
+        reason instanceof Error
+          ? reason.message
+          : "无法读取 MCP 注册状态。"
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const toggle = async (registered: boolean) => {
+    setBusy(true);
+    setFeedback(null);
+    try {
+      const bridge = window.gitnest?.codeAnalysis;
+      if (!bridge || typeof bridge.setMcpRegistration !== "function") {
+        setFeedback("当前环境无法修改 MCP 注册状态。");
+        return;
+      }
+      const result = await bridge.setMcpRegistration({
+        registered
+      });
+      if (result.ok) {
+        setStatus(result.value);
+        setFeedback(result.value.message);
+      } else {
+        setFeedback(result.error.message);
+      }
+    } catch (reason) {
+      setFeedback(
+        reason instanceof Error
+          ? reason.message
+          : "MCP 注册操作失败。"
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setFeedback("已复制到剪贴板。");
+    } catch {
+      setFeedback("复制失败，请手动选择文本。");
+    }
+  };
+
+  return (
+    <div className="mcp-registration">
+      <div className="mcp-registration-status">
+        <span
+          className={`mcp-registration-dot${
+            status?.registered ? " active" : ""
+          }`}
+        />
+        <span>
+          {status === null
+            ? feedback
+              ? "注册状态不可用"
+              : "正在读取注册状态…"
+            : status.registered
+              ? enabled
+                ? "已注册到本机 Codex"
+                : "已注册，MCP 服务已关闭"
+              : "尚未注册"}
+        </span>
+        <div className="mcp-registration-actions">
+          <Button
+            disabled={
+              busy ||
+              !status?.codexAvailable ||
+              (!status.registered && !status.serverAvailable)
+            }
+            onClick={() => void toggle(!status?.registered)}
+            size="small"
+            type="button"
+          >
+            <Icon
+              name={status?.registered ? "minus" : "plus"}
+            />
+            {status?.registered ? "卸载" : "一键注册"}
+          </Button>
+          <Button
+            disabled={!status?.serverAvailable}
+            onClick={() =>
+              void copy(status?.command ?? "")
+            }
+            size="small"
+            type="button"
+          >
+            <Icon name="copy" />
+            复制命令
+          </Button>
+          <Button
+            disabled={!status?.serverAvailable}
+            onClick={() =>
+              void copy(status?.configSnippet ?? "")
+            }
+            size="small"
+            type="button"
+          >
+            <Icon name="copy" />
+            复制 config.toml
+          </Button>
+        </div>
+      </div>
+      <p className="mcp-registration-hint" role="status">
+        {feedback ?? status?.message ?? ""}
+      </p>
+      {status ? (
+        <>
+          <div className="mcp-registration-path">
+            <span>数据目录</span>
+            <code>{status.dataDirectory}</code>
+          </div>
+          {status.serverAvailable && (
+            <code className="mcp-registration-command">
+              {status.command}
+            </code>
+          )}
+        </>
+      ) : null}
+    </div>
+  );
 }

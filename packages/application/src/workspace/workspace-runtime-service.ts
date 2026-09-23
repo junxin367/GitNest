@@ -27,6 +27,8 @@ import type {
   RenameWorkspaceInput
 } from "./workspace-collection-service";
 import type {
+  AddWorkspaceDirectoryInput,
+  AddWorkspaceDirectoryResult,
   ExcludeWorkspaceRepositoryInput,
   SetWorkspaceGroupCollapsedInput
 } from "./workspace-service";
@@ -151,6 +153,8 @@ export interface RepositoryOperationAccepted {
 }
 
 export interface RepositoryOperationOptions {
+  allowTargetFallback?: boolean;
+  operationTargets?: RepositoryTarget[];
   refreshTopology?: boolean;
   expectedWorkspaceId?: string;
 }
@@ -187,6 +191,9 @@ export interface WorkspaceConfigurationService {
     input: RenameWorkspaceInput
   ): Promise<Workspace>;
   deleteWorkspace?(workspaceId: string): Promise<Workspace>;
+  addDirectory?(
+    input: AddWorkspaceDirectoryInput
+  ): Promise<AddWorkspaceDirectoryResult>;
   rescan(signal?: AbortSignal): Promise<Workspace>;
   excludeRepository(
     input: ExcludeWorkspaceRepositoryInput
@@ -443,6 +450,27 @@ export class WorkspaceRuntimeService {
     });
   }
 
+  async addDirectory(
+    input: AddWorkspaceDirectoryInput
+  ): Promise<AddWorkspaceDirectoryResult> {
+    return this.#queueWorkspaceUpdate(async () => {
+      if (!this.#configuration.addDirectory) {
+        throw new WorkspaceError(
+          "INVALID_REQUEST",
+          "Adding directories is unavailable for this Workspace."
+        );
+      }
+      const result =
+        await this.#configuration.addDirectory(input);
+      await this.#refreshWorkspaceSummaries(result.workspace);
+      this.#acceptWorkspace(result.workspace);
+      if (!result.duplicate) {
+        this.#startMonitoringAndRefresh("workspace-change");
+      }
+      return result;
+    });
+  }
+
   async excludeRepository(
     input: ExcludeWorkspaceRepositoryInput
   ): Promise<Workspace> {
@@ -576,13 +604,39 @@ export class WorkspaceRuntimeService {
         "The active Workspace changed. Run the operation again."
       );
     }
-    this.#resolveMutationWorktreePath(target);
+    try {
+      this.#resolveMutationWorktreePath(target);
+    } catch (error) {
+      if (!options.allowTargetFallback) {
+        throw error;
+      }
+      this.#resolveRepositoryMutationWorktreePath(
+        target.repositoryId
+      );
+    }
 
     const repositoryTargets =
       this.#repositoryTargets(target.repositoryId);
+    if (
+      options.operationTargets?.some(
+        (operationTarget) =>
+          operationTarget.repositoryId !== target.repositoryId
+      )
+    ) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "Repository operation history targets must belong to the queued repository."
+      );
+    }
+    const operationTargets =
+      options.operationTargets ?? repositoryTargets;
     const operation = this.#createOperation(
       kind,
-      repositoryTargets.map(repositoryTargetKey),
+      [
+        ...new Set(
+          operationTargets.map(repositoryTargetKey)
+        )
+      ],
       repositoryOperationMessage(kind, "queued"),
       "repository"
     );
@@ -831,9 +885,8 @@ export class WorkspaceRuntimeService {
           persisted,
           this.#clock()
         );
-        this.#operations = recovered.operations.slice(
-          0,
-          MAX_OPERATIONS
+        this.#operations = trimOperationHistory(
+          recovered.operations
         );
         this.#operationSequence =
           maxOperationSequence(persisted);
@@ -1675,10 +1728,7 @@ export class WorkspaceRuntimeService {
     }
 
     let worktreePath: string;
-    try {
-      worktreePath =
-        this.#resolveMutationWorktreePath(target);
-    } catch (error) {
+    const failPathResolution = (error: unknown): void => {
       this.#updateOperation(operation.id, {
         state: "failed",
         progress: 1,
@@ -1690,7 +1740,24 @@ export class WorkspaceRuntimeService {
         finishedAt: this.#clock()
       });
       this.#emit();
-      return;
+    };
+    try {
+      worktreePath =
+        this.#resolveMutationWorktreePath(target);
+    } catch (error) {
+      if (!options.allowTargetFallback) {
+        failPathResolution(error);
+        return;
+      }
+      try {
+        worktreePath =
+          this.#resolveRepositoryMutationWorktreePath(
+            target.repositoryId
+          );
+      } catch (fallbackError) {
+        failPathResolution(fallbackError);
+        return;
+      }
     }
 
     this.#updateOperation(operation.id, {
@@ -1759,11 +1826,13 @@ export class WorkspaceRuntimeService {
         : await this.#refreshRepositoryAfterMutation(
             target.repositoryId
           );
-      this.#updateOperation(operation.id, {
-        targetIds: this.#repositoryTargets(
-          target.repositoryId
-        ).map(repositoryTargetKey)
-      });
+      if (!options.operationTargets) {
+        this.#updateOperation(operation.id, {
+          targetIds: this.#repositoryTargets(
+            target.repositoryId
+          ).map(repositoryTargetKey)
+        });
+      }
       this.#updateOperation(operation.id, {
         state: "succeeded",
         progress: 1,
@@ -1788,11 +1857,13 @@ export class WorkspaceRuntimeService {
         : await this.#refreshRepositoryAfterMutation(
             target.repositoryId
           );
-      this.#updateOperation(operation.id, {
-        targetIds: this.#repositoryTargets(
-          target.repositoryId
-        ).map(repositoryTargetKey)
-      });
+      if (!options.operationTargets) {
+        this.#updateOperation(operation.id, {
+          targetIds: this.#repositoryTargets(
+            target.repositoryId
+          ).map(repositoryTargetKey)
+        });
+      }
       const cancelled =
         controller.signal.aborted ||
         getErrorCode(error) === "COMMAND_CANCELLED";
@@ -1974,6 +2045,22 @@ export class WorkspaceRuntimeService {
     }
 
     return worktree.path;
+  }
+
+  #resolveRepositoryMutationWorktreePath(
+    repositoryId: string
+  ): string {
+    for (const target of this.#repositoryTargets(repositoryId)) {
+      try {
+        return this.#resolveMutationWorktreePath(target);
+      } catch {
+        // Repository-scoped commands can move to another current anchor.
+      }
+    }
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "Repository mutations require an available non-bare Worktree."
+    );
   }
 
   #repositoryTargets(
@@ -2478,10 +2565,10 @@ export class WorkspaceRuntimeService {
       failed: 0,
       message
     };
-    this.#operations = [
+    this.#operations = trimOperationHistory([
       operation,
       ...this.#operations
-    ].slice(0, MAX_OPERATIONS);
+    ]);
     this.#queueOperationPersistence();
     return operation;
   }
@@ -2642,6 +2729,40 @@ function recoverInterruptedOperations(
     });
   }
   return { operations: recovered, changed };
+}
+
+function trimOperationHistory(
+  operations: WorkspaceOperation[]
+): WorkspaceOperation[] {
+  const activeCount = operations.filter(
+    (operation) => !isTerminalOperation(operation.state)
+  ).length;
+  let terminalSlots = Math.max(
+    0,
+    MAX_OPERATIONS - activeCount
+  );
+
+  return operations.filter((operation) => {
+    if (!isTerminalOperation(operation.state)) {
+      return true;
+    }
+    if (terminalSlots === 0) {
+      return false;
+    }
+    terminalSlots -= 1;
+    return true;
+  });
+}
+
+function isTerminalOperation(
+  state: WorkspaceOperationState
+): boolean {
+  return (
+    state === "succeeded" ||
+    state === "failed" ||
+    state === "cancelled" ||
+    state === "interrupted"
+  );
 }
 
 function maxOperationSequence(
@@ -3114,7 +3235,7 @@ function repositoryOperationLabel(
     "worktree-move": "移动 Worktree",
     "worktree-repair": "修复 Worktree 登记",
     "worktree-prune": "裁剪 Worktree 登记",
-    "worktree-remove": "移除 Worktree"
+    "worktree-remove": "删除 Worktree"
   }[kind];
 }
 
@@ -3144,7 +3265,7 @@ function workspaceOperationLabel(
     "worktree-move": "移动 Worktree",
     "worktree-repair": "修复 Worktree 登记",
     "worktree-prune": "裁剪 Worktree 登记",
-    "worktree-remove": "移除 Worktree"
+    "worktree-remove": "删除 Worktree"
   }[kind];
 }
 

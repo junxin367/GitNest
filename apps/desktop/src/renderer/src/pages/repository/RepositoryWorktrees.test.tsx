@@ -14,10 +14,30 @@ import {
   vi
 } from "vitest";
 
-import type { WorkspaceDetailsDto } from "@gitnest/contracts";
+import type {
+  RepositoryStatusSnapshotDto,
+  WorkspaceDetailsDto
+} from "@gitnest/contracts";
 
 import type { WorktreeCommandController } from "../../features/worktree-command/useWorktreeCommands";
-import { RepositoryWorktrees } from "./RepositoryWorktrees";
+import type { WorkspaceWorktreeCommandController } from "../../features/worktree-command/useWorkspaceWorktreeCommands";
+import {
+  RepositoryWorktrees as RepositoryWorktreesView
+} from "./RepositoryWorktrees";
+
+function RepositoryWorktrees(
+  props: Omit<
+    React.ComponentProps<typeof RepositoryWorktreesView>,
+    "batchCommands"
+  >
+) {
+  return (
+    <RepositoryWorktreesView
+      {...props}
+      batchCommands={batchCommands}
+    />
+  );
+}
 
 describe("RepositoryWorktrees registered cards", () => {
   let container: HTMLDivElement;
@@ -155,7 +175,7 @@ describe("RepositoryWorktrees registered cards", () => {
     expect(container.textContent).not.toContain("Detached");
   });
 
-  it("removes the header prune shortcut while keeping the safety action", () => {
+  it("keeps the toolbar clear action disabled until the prunable type is selected", () => {
     const workspaceWithPrunableWorktree: WorkspaceDetailsDto = {
       ...workspaceWithTwoWorktrees,
       worktrees: workspaceWithTwoWorktrees.worktrees.map(
@@ -191,11 +211,33 @@ describe("RepositoryWorktrees registered cards", () => {
     expect(headingActions?.textContent).not.toContain("Prune 预览");
     expect(headingActions?.textContent).toContain("新建 Worktree");
 
-    const createButton =
-      headingActions?.querySelector<HTMLButtonElement>("button");
-    act(() => createButton?.click());
+    const toolbar = container.querySelector(".worktree-toolbar");
+    const toolbarButtons = [
+      ...(toolbar?.querySelectorAll<HTMLButtonElement>("button") ?? [])
+    ];
+    const clearButton =
+      toolbar?.querySelector<HTMLButtonElement>(
+        ".worktree-delete-action"
+      );
+    const filterButton = toolbarButtons.find(
+      (button) => button.textContent?.trim() === "筛选"
+    );
 
-    expect(container.textContent).toContain("预检清除 (1)");
+    expect(clearButton?.disabled).toBe(true);
+    expect(toolbarButtons.indexOf(clearButton as HTMLButtonElement)).toBe(
+      toolbarButtons.indexOf(filterButton as HTMLButtonElement) - 1
+    );
+
+    const prunableChip = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".worktree-filter-chip"
+      )
+    ].find(
+      (button) => button.textContent?.trim() === "可清理登记1"
+    );
+    act(() => prunableChip?.click());
+
+    expect(clearButton?.disabled).toBe(false);
   });
 
   it("matches the prototype hierarchy without duplicating the current worktree", () => {
@@ -237,7 +279,7 @@ describe("RepositoryWorktrees registered cards", () => {
     expect(onOpenDirectory).toHaveBeenCalledWith("linked");
   });
 
-  it("runs the repository prune preflight from a prunable card", () => {
+  it("runs the repository prune preflight from the toolbar and removes card actions", () => {
     const onOpenDirectory = vi.fn();
     const workspaceWithPrunableWorktree: WorkspaceDetailsDto = {
       ...workspaceWithTwoWorktrees,
@@ -280,25 +322,165 @@ describe("RepositoryWorktrees registered cards", () => {
     expect(
       prunableCard?.querySelector(".worktree-foot-action")
     ).toBeNull();
-    const clearButton =
-      prunableCard?.querySelector<HTMLButtonElement>(
-        ".worktree-clear-action"
-      );
+    expect(
+      prunableCard?.querySelector(".worktree-clear-action")
+    ).toBeNull();
+
+    const clearButton = container.querySelector<HTMLButtonElement>(
+      ".worktree-delete-action"
+    );
+    expect(clearButton?.disabled).toBe(true);
+
+    const prunableChip = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".worktree-filter-chip"
+      )
+    ].find(
+      (button) => button.textContent?.trim() === "可清理登记1"
+    );
+    act(() => prunableChip?.click());
+
     expect(clearButton?.textContent).toContain("清除");
     expect(clearButton?.disabled).toBe(false);
-    expect(clearButton?.title).toContain(
-      "core 仓库中的 1 条失效登记"
-    );
+    expect(clearButton?.title).toContain("1 个仓库");
 
     act(() => clearButton?.click());
-    expect(commands.request).toHaveBeenCalledWith({
-      type: "prune",
-      repositoryId: "repository"
-    });
+    expect(batchCommands.request).toHaveBeenCalledWith([
+      {
+        type: "prune",
+        repositoryId: "repository"
+      }
+    ]);
     expect(onOpenDirectory).not.toHaveBeenCalled();
   });
 
-  it("disables clear for a locked prunable registration", () => {
+  it("removes clean linked Worktrees from the selected type", () => {
+    act(() => {
+      root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={false}
+          onOpenDirectory={vi.fn()}
+          repositoryId="repository"
+          snapshots={[createSnapshot("linked")]}
+          worktreeId="worktree"
+          workspace={workspaceWithTwoWorktrees}
+        />
+      );
+    });
+
+    const linkedChip = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".worktree-filter-chip"
+      )
+    ].find(
+      (button) => button.textContent?.trim() === "已登记1"
+    );
+    act(() => linkedChip?.click());
+
+    const deleteButton =
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="删除筛选中的 Worktree"]'
+      );
+    expect(deleteButton?.disabled).toBe(false);
+    expect(deleteButton?.title).toContain("1 个干净 Worktree");
+
+    act(() => deleteButton?.click());
+    expect(batchCommands.request).toHaveBeenCalledWith([
+      {
+        type: "remove",
+        worktreeId: "linked"
+      }
+    ]);
+  });
+
+  it("keeps delete disabled for primary and dirty Worktrees", () => {
+    act(() => {
+      root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={false}
+          onOpenDirectory={vi.fn()}
+          repositoryId="repository"
+          snapshots={[
+            createSnapshot("worktree"),
+            createSnapshot("linked", { unstaged: 1 })
+          ]}
+          worktreeId="worktree"
+          workspace={workspaceWithTwoWorktrees}
+        />
+      );
+    });
+
+    const chips = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".worktree-filter-chip"
+      )
+    ];
+    const primaryChip = chips.find(
+      (button) => button.textContent?.trim() === "主工作目录1"
+    );
+    const linkedChip = chips.find(
+      (button) => button.textContent?.trim() === "已登记1"
+    );
+    const deleteButton =
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="删除筛选中的 Worktree"]'
+      );
+
+    act(() => primaryChip?.click());
+    expect(deleteButton?.disabled).toBe(true);
+    expect(deleteButton?.title).toContain("主工作目录不能删除");
+
+    act(() => linkedChip?.click());
+    expect(deleteButton?.disabled).toBe(true);
+    expect(deleteButton?.title).toContain("有变更");
+    act(() => deleteButton?.click());
+    expect(batchCommands.request).not.toHaveBeenCalled();
+  });
+
+  it("keeps delete disabled until the status snapshot is current", () => {
+    act(() => {
+      root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={false}
+          onOpenDirectory={vi.fn()}
+          repositoryId="repository"
+          snapshots={[
+            createSnapshot("linked", {
+              stale: true
+            })
+          ]}
+          worktreeId="worktree"
+          workspace={workspaceWithTwoWorktrees}
+        />
+      );
+    });
+
+    const linkedChip = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".worktree-filter-chip"
+      )
+    ].find(
+      (button) => button.textContent?.trim() === "已登记1"
+    );
+    act(() => linkedChip?.click());
+
+    const deleteButton =
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="删除筛选中的 Worktree"]'
+      );
+    expect(deleteButton?.disabled).toBe(true);
+    expect(deleteButton?.title).toContain("状态未就绪");
+    expect(container.textContent).toContain("状态未就绪");
+    expect(
+      container.querySelector(".worktree-summary-card")
+        ?.getAttribute("aria-label")
+    ).toContain("状态未就绪");
+  });
+
+  it("keeps toolbar clear disabled for locked prunable registrations", () => {
     const workspaceWithLockedPrunableWorktree: WorkspaceDetailsDto = {
       ...workspaceWithTwoWorktrees,
       worktrees: workspaceWithTwoWorktrees.worktrees.map(
@@ -329,14 +511,70 @@ describe("RepositoryWorktrees registered cards", () => {
       );
     });
 
-    const clearButton =
-      container.querySelector<HTMLButtonElement>(
-        ".worktree-clear-action"
-      );
+    const prunableChip = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".worktree-filter-chip"
+      )
+    ].find(
+      (button) => button.textContent?.trim() === "可清理登记1"
+    );
+    act(() => prunableChip?.click());
+
+    const clearButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="清除失效 Worktree 登记"]'
+    );
     expect(clearButton?.disabled).toBe(true);
     expect(clearButton?.title).toContain("需先解锁");
+    expect(container.querySelector(".worktree-clear-action")).toBeNull();
     act(() => clearButton?.click());
-    expect(commands.request).not.toHaveBeenCalled();
+    expect(batchCommands.request).not.toHaveBeenCalled();
+  });
+
+  it("shows bare repositories as non-interactive and non-deletable", () => {
+    const onOpenDirectory = vi.fn();
+    const bareWorkspace: WorkspaceDetailsDto = {
+      ...workspace,
+      worktrees: workspace.worktrees.map((worktree) => ({
+        ...worktree,
+        isBare: true
+      }))
+    };
+
+    act(() => {
+      root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={false}
+          onOpenDirectory={onOpenDirectory}
+          repositoryId="repository"
+          snapshots={[]}
+          worktreeId="worktree"
+          workspace={bareWorkspace}
+        />
+      );
+    });
+
+    const card = container.querySelector<HTMLElement>(
+      ".worktree-summary-card.bare"
+    );
+    expect(card?.getAttribute("role")).toBeNull();
+    expect(card?.textContent).toContain("裸仓库");
+
+    const primaryChip = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".worktree-filter-chip"
+      )
+    ].find(
+      (button) => button.textContent?.trim() === "主工作目录1"
+    );
+    act(() => primaryChip?.click());
+
+    expect(
+      container.querySelector(".worktree-delete-status")
+        ?.textContent
+    ).toContain("裸仓库");
+    act(() => card?.click());
+    expect(onOpenDirectory).not.toHaveBeenCalled();
   });
 
   it("filters the registered worktrees and reports the match count", () => {
@@ -413,6 +651,85 @@ describe("RepositoryWorktrees registered cards", () => {
     expect(container.querySelector(".worktree-filter-empty")).toBeTruthy();
   });
 
+  it("returns focus to the filter trigger when Escape closes search", () => {
+    act(() => {
+      root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={false}
+          onOpenDirectory={vi.fn()}
+          repositoryId="repository"
+          snapshots={[]}
+          worktreeId="worktree"
+          workspace={workspaceWithTwoWorktrees}
+        />
+      );
+    });
+
+    const filterButton = [
+      ...container.querySelectorAll<HTMLButtonElement>("button")
+    ].find((button) => button.textContent?.trim() === "筛选");
+    act(() => filterButton?.click());
+    const input = container.querySelector<HTMLInputElement>(
+      ".worktree-filter-input"
+    );
+
+    act(() => {
+      input?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          key: "Escape"
+        })
+      );
+    });
+
+    expect(
+      container.querySelector(".worktree-filter-input")
+    ).toBeNull();
+    expect(document.activeElement).toBe(filterButton);
+  });
+
+  it("shows locked status ahead of detached status", () => {
+    const lockedWorkspace: WorkspaceDetailsDto = {
+      ...workspaceWithTwoWorktrees,
+      worktrees: workspaceWithTwoWorktrees.worktrees.map(
+        (worktree) =>
+          worktree.id === "linked"
+            ? {
+                ...worktree,
+                branch: "",
+                isDetached: true,
+                isLocked: true
+              }
+            : worktree
+      )
+    };
+
+    act(() => {
+      root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={false}
+          onOpenDirectory={vi.fn()}
+          repositoryId="repository"
+          snapshots={[]}
+          worktreeId="worktree"
+          workspace={lockedWorkspace}
+        />
+      );
+    });
+
+    const cards = [
+      ...container.querySelectorAll<HTMLElement>(
+        ".worktree-summary-card"
+      )
+    ];
+    expect(
+      cards[1]?.querySelector(".worktree-card-status")
+        ?.textContent
+    ).toBe("已锁定");
+  });
+
   it("filters worktrees by one type at a time with counts", () => {
     act(() => {
       root.render(
@@ -473,9 +790,13 @@ describe("RepositoryWorktrees registered cards", () => {
     const clearButton = [
       ...container.querySelectorAll("button")
     ].find((button) => button.textContent?.includes("清除筛选"));
+    const filterTrigger = [
+      ...container.querySelectorAll<HTMLButtonElement>("button")
+    ].find((button) => button.textContent?.trim() === "筛选");
     expect(clearButton?.textContent?.trim()).toBe("清除筛选（1）");
     act(() => clearButton?.click());
     expect(container.textContent).not.toContain("已筛出");
+    expect(document.activeElement).toBe(filterTrigger);
     expect(
       container.querySelectorAll(".worktree-summary-card").length
     ).toBe(2);
@@ -494,6 +815,18 @@ const commands: WorktreeCommandController = {
   dismissPreflight: vi.fn(),
   chooseDirectory: vi.fn(async () => null),
   cancelOperation: vi.fn(async () => false),
+  clearFeedback: vi.fn()
+};
+
+const batchCommands: WorkspaceWorktreeCommandController = {
+  active: null,
+  busy: false,
+  preflights: [],
+  error: null,
+  notice: null,
+  request: vi.fn(async () => false),
+  confirm: vi.fn(async () => false),
+  dismissPreflight: vi.fn(),
   clearFeedback: vi.fn()
 };
 
@@ -620,3 +953,28 @@ const workspaceWithTwoWorktrees: WorkspaceDetailsDto = {
     }
   ]
 };
+
+function createSnapshot(
+  worktreeId: string,
+  overrides: Partial<RepositoryStatusSnapshotDto> = {}
+): RepositoryStatusSnapshotDto {
+  return {
+    repositoryId: "repository",
+    worktreeId,
+    branch:
+      worktreeId === "worktree"
+        ? "main"
+        : "feature/worktree",
+    head: "abcdef1234567890",
+    ahead: 0,
+    behind: 0,
+    staged: 0,
+    unstaged: 0,
+    untracked: 0,
+    conflicted: 0,
+    refreshPending: false,
+    stale: false,
+    refreshedAt: "2026-09-23T00:00:00.000Z",
+    ...overrides
+  };
+}

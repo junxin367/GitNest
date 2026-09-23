@@ -2,21 +2,21 @@ import { Button } from "../../shared/ui/Button";
 
 import type {
   WorkspaceDetailsDto,
+  WorktreeCommandDto,
   WorktreeCommandPreflightDto
 } from "@gitnest/contracts";
 
 import { resolveWorkspaceTarget } from "../../entities/workspace/model";
 import { Dialog } from "../../shared/ui/Dialog";
 import { Icon } from "../../shared/ui/Icon";
-import {
-  worktreeCommandLabel,
-  type WorktreeCommandController
-} from "./useWorktreeCommands";
+import { worktreeCommandLabel } from "./useWorktreeCommands";
 
 interface WorktreeCommandDialogProps {
-  preflight: WorktreeCommandPreflightDto;
+  preflight:
+    | WorktreeCommandPreflightDto
+    | readonly WorktreeCommandPreflightDto[];
   workspace: WorkspaceDetailsDto | null;
-  active: WorktreeCommandController["active"];
+  active: WorktreeCommandDto["type"] | null;
   onCancel(): void;
   onConfirm(): void;
 }
@@ -28,10 +28,45 @@ export function WorktreeCommandDialog({
   onCancel,
   onConfirm
 }: WorktreeCommandDialogProps) {
-  const dangerous = preflight.warnings.some(
+  const preflights = Array.isArray(preflight)
+    ? preflight
+    : [preflight];
+  const primaryPreflight = preflights[0];
+  if (!primaryPreflight) {
+    return null;
+  }
+  const impacts = preflights.flatMap(
+    (candidate) => candidate.impacts
+  );
+  const warnings = [
+    ...new Map(
+      preflights
+        .flatMap((candidate) => candidate.warnings)
+        .map((warning) => [
+          `${warning.code}:${warning.severity}:${warning.message}`,
+          warning
+        ])
+    ).values()
+  ];
+  const dangerous = warnings.some(
     (warning) => warning.severity === "danger"
   );
   const busy = active !== null;
+  const batchType = preflights.every(
+    (candidate) =>
+      candidate.command.type ===
+      primaryPreflight.command.type
+  )
+    ? primaryPreflight.command.type
+    : null;
+  const targetSummary =
+    preflights.length === 1
+      ? primaryPreflight.targetSummary
+      : batchType === "prune"
+        ? `${preflights.length} 个仓库，共 ${impacts.length} 条失效登记`
+        : batchType === "remove"
+          ? `${preflights.length} 个 Worktree 目录与 Git 登记`
+          : `${preflights.length} 个 Worktree 操作`;
 
   return (
     <Dialog
@@ -76,9 +111,11 @@ export function WorktreeCommandDialog({
             variant={dangerous ? "danger" : "primary"}
           >
             {busy
-              ? "重新校验中…"
-              : preflight.command.type === "remove"
-                ? "确认移除 Worktree"
+              ? "正在提交…"
+              : batchType === "remove"
+                ? preflights.length === 1
+                  ? "确认删除 Worktree"
+                  : `确认删除 ${preflights.length} 个 Worktree`
                 : "确认并执行"}
           </Button>
         </>
@@ -86,7 +123,7 @@ export function WorktreeCommandDialog({
       icon={dangerous ? "warning" : "worktree"}
       onDismiss={onCancel}
       size="complex"
-      title={worktreeCommandLabel(preflight.command.type)}
+      title={worktreeCommandLabel(primaryPreflight.command.type)}
       tone={dangerous ? "danger" : "default"}
     >
       <div
@@ -94,16 +131,16 @@ export function WorktreeCommandDialog({
         id="worktree-command-dialog-description"
       >
         <span>目标</span>
-        <strong>{preflight.targetSummary}</strong>
+        <strong>{targetSummary}</strong>
         <small>
-          预检有效至 {formatExpiry(preflight.expiresAt)}
+          预检有效至 {formatExpiry(earliestExpiry(preflights))}
         </small>
       </div>
 
       <section>
         <h3>精确影响范围</h3>
         <div className="command-impact-list">
-          {preflight.impacts.map((impact, index) => {
+          {impacts.map((impact, index) => {
             const resolved =
               workspace &&
               resolveWorkspaceTarget(
@@ -134,11 +171,11 @@ export function WorktreeCommandDialog({
         </div>
       </section>
 
-      {preflight.warnings.length > 0 && (
+      {warnings.length > 0 && (
         <section>
           <h3>提示与风险</h3>
           <div className="command-warning-list">
-            {preflight.warnings.map((warning, index) => (
+            {warnings.map((warning, index) => (
               <div
                 className={`command-warning ${warning.severity}`}
                 key={`${warning.code}:${index}`}
@@ -178,4 +215,20 @@ function formatExpiry(value: string): string {
         minute: "2-digit",
         second: "2-digit"
       });
+}
+
+function earliestExpiry(
+  preflights: readonly WorktreeCommandPreflightDto[]
+): string {
+  return preflights.reduce((earliest, candidate) => {
+    const earliestTime = Date.parse(earliest);
+    const candidateTime = Date.parse(candidate.expiresAt);
+    if (!Number.isFinite(earliestTime)) {
+      return candidate.expiresAt;
+    }
+    return Number.isFinite(candidateTime) &&
+      candidateTime < earliestTime
+      ? candidate.expiresAt
+      : earliest;
+  }, preflights[0]?.expiresAt ?? "");
 }

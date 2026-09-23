@@ -63,6 +63,34 @@ describe("JsonWorkspaceStore", () => {
     );
   });
 
+  it("round-trips additional Workspace roots", async () => {
+    temporary =
+      await createTemporaryDirectoryFixture("workspace-roots");
+    const filePath = join(
+      temporary.path,
+      "default.workspace.json"
+    );
+    const workspace = {
+      ...createEmptyWorkspace("2026-09-23T10:00:00.000Z"),
+      path: "C:\\workspace",
+      canonicalPath: "c:\\workspace",
+      excludes: [],
+      additionalRoots: [
+        {
+          path: "D:\\shared\\tools",
+          canonicalPath: "d:\\shared\\tools",
+          excludes: ["vendor"]
+        }
+      ],
+      lastScannedAt: "2026-09-23T10:00:00.000Z"
+    };
+    const store = new JsonWorkspaceStore(filePath);
+
+    await store.save(workspace);
+
+    await expect(store.load()).resolves.toEqual(workspace);
+  });
+
   it.each([
     {
       path: "C:\\workspace"
