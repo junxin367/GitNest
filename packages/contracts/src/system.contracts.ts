@@ -1,21 +1,10 @@
 import type {
-  AccountConnectionTestResultDto,
-  AccountOverviewDto,
-  AccountProfileDto,
-  AccountRemovalImpactDto,
-  AccountRemovalImpactRequest,
-  BindAccountRequest,
-  RemoveAccountRequest,
-  SaveAccountRequest,
-  TestAccountRequest,
-  UnbindAccountRequest
-} from "./account.contracts";
-import type {
   CancelCodeAnalysisRequest,
   CodeAnalysisAcceptedDto,
   CodeAnalysisFileDto,
   CodeAnalysisSnapshotDto,
   CodeAnalysisStateDto,
+  GetCodeAnalysisSnapshotRequest,
   InstallLanguageServerRequest,
   LanguageServerInstallResultDto,
   McpRegistrationStatusDto,
@@ -95,10 +84,12 @@ import type {
 import type {
   AiCommitMessageDto,
   AiConnectionTestResultDto,
+  AiApiKeyValueDto,
   AppSettingsDto,
   AppSettingsLoadDto,
   ClearAiApiKeyRequest,
   GenerateAiCommitMessageRequest,
+  ReadAiApiKeyRequest,
   TestAiConnectionRequest,
   UpdateAppSettingsRequest
 } from "./settings.contracts";
@@ -168,7 +159,9 @@ export interface GitNestBridge {
     cancel(
       request: CancelCodeAnalysisRequest
     ): Promise<GitReadResult<void>>;
-    getSnapshot(): Promise<
+    getSnapshot(
+      request?: GetCodeAnalysisSnapshotRequest
+    ): Promise<
       GitReadResult<CodeAnalysisSnapshotDto | null>
     >;
     readFile(
@@ -192,6 +185,9 @@ export interface GitNestBridge {
     update(
       request: UpdateAppSettingsRequest
     ): Promise<GitReadResult<AppSettingsDto>>;
+    readAiApiKey(
+      request: ReadAiApiKeyRequest
+    ): Promise<GitReadResult<AiApiKeyValueDto>>;
     clearAiApiKey(
       request: ClearAiApiKeyRequest
     ): Promise<GitReadResult<AppSettingsDto>>;
@@ -207,29 +203,9 @@ export interface GitNestBridge {
       request: GenerateAiCommitMessageRequest
     ): Promise<GitReadResult<AiCommitMessageDto>>;
   };
-  account: {
-    list(): Promise<GitReadResult<AccountOverviewDto>>;
-    save(
-      request: SaveAccountRequest
-    ): Promise<GitReadResult<AccountProfileDto>>;
-    bind(
-      request: BindAccountRequest
-    ): Promise<GitReadResult<AccountOverviewDto>>;
-    unbind(
-      request: UnbindAccountRequest
-    ): Promise<GitReadResult<AccountOverviewDto>>;
-    getRemovalImpact(
-      request: AccountRemovalImpactRequest
-    ): Promise<GitReadResult<AccountRemovalImpactDto>>;
-    remove(
-      request: RemoveAccountRequest
-    ): Promise<GitReadResult<AccountRemovalImpactDto>>;
-    test(
-      request: TestAccountRequest
-    ): Promise<GitReadResult<AccountConnectionTestResultDto>>;
-  };
   system: {
     getRuntimeInfo(): Promise<RuntimeInfo>;
+    openIssuesPage(): Promise<void>;
     listExternalApplications(): Promise<
       GitReadResult<ExternalApplicationProfileDto[]>
     >;

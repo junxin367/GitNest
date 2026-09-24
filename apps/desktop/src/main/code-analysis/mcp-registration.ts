@@ -7,7 +7,7 @@ import type { McpRegistrationStatusDto } from "@gitnest/contracts";
 
 const execFileAsync = promisify(execFile);
 
-export const MCP_SERVER_NAME = "gitnest";
+export const MCP_REGISTRATION_NAME = "GitNest_code_lsp";
 const CODEX_COMMAND_TIMEOUT_MS = 20_000;
 const WINDOWS_SHELL_META_CHARACTERS =
   /([()\][%!^"`<>&|;, *?])/g;
@@ -56,7 +56,7 @@ export class McpRegistrationService {
           [
             "mcp",
             "add",
-            MCP_SERVER_NAME,
+            MCP_REGISTRATION_NAME,
             "--env",
             "ELECTRON_RUN_AS_NODE=1",
             "--",
@@ -69,7 +69,7 @@ export class McpRegistrationService {
       } else {
         await this.#runCodexCommand(
           codex.command,
-          ["mcp", "remove", MCP_SERVER_NAME]
+          ["mcp", "remove", MCP_REGISTRATION_NAME]
         );
       }
     } catch (error) {
@@ -97,7 +97,7 @@ export class McpRegistrationService {
       : false;
     const command = [
       "codex mcp add",
-      MCP_SERVER_NAME,
+      MCP_REGISTRATION_NAME,
       "--env ELECTRON_RUN_AS_NODE=1",
       "--",
       `"${this.#options.executablePath}"`,
@@ -106,7 +106,7 @@ export class McpRegistrationService {
       `"${this.#options.dataDirectory}"`
     ].join(" ");
     const configSnippet = [
-      "[mcp_servers.gitnest]",
+      `[mcp_servers.${MCP_REGISTRATION_NAME}]`,
       `command = "${escapeToml(this.#options.executablePath)}"`,
       "args = [",
       `  "${escapeToml(this.#options.entryScriptPath)}",`,
@@ -114,7 +114,7 @@ export class McpRegistrationService {
       `  "${escapeToml(this.#options.dataDirectory)}"`,
       "]",
       "",
-      "[mcp_servers.gitnest.env]",
+      `[mcp_servers.${MCP_REGISTRATION_NAME}.env]`,
       'ELECTRON_RUN_AS_NODE = "1"'
     ].join("\n");
     return {
@@ -160,9 +160,9 @@ export class McpRegistrationService {
     try {
       const { stdout } = await this.#runCodexCommand(
         codexCommand,
-        ["mcp", "get", MCP_SERVER_NAME]
+        ["mcp", "get", MCP_REGISTRATION_NAME]
       );
-      return stdout.includes(MCP_SERVER_NAME);
+      return stdout.includes(MCP_REGISTRATION_NAME);
     } catch {
       return false;
     }

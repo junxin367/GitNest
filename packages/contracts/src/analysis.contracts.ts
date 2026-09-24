@@ -7,6 +7,10 @@ export type CodeAnalysisScopeDto =
   | "changed"
   | "workspace";
 
+export type CodeAnalysisSnapshotDetailDto =
+  | "navigation"
+  | "full";
+
 export const LANGUAGE_SERVER_LANGUAGES = [
   "typescript",
   "vue",
@@ -98,12 +102,15 @@ export interface CodeAnalysisSettingsDto {
 export interface CodeAnalysisAutoRefreshSettingsDto {
   enabled: boolean;
   debounceMs: number;
+  periodicEnabled: boolean;
+  periodicIntervalMinutes: number;
 }
 
 export interface McpServerSettingsDto {
   enabled: boolean;
   allowSourceSnippets: boolean;
   maxResponseKb: number;
+  maxStaleAgeDays: number;
 }
 
 export interface UpdateCodeAnalysisSettingsRequest {
@@ -260,6 +267,8 @@ export interface CodeAnalysisSnapshotDto {
   workspaceId: string;
   scope: CodeAnalysisScopeDto;
   generatedAt: string;
+  detailLevel?: CodeAnalysisSnapshotDetailDto;
+  totalNodeCount?: number;
   roots: CodeAnalysisRootDto[];
   nodes: CodeGraphNodeDto[];
   edges: CodeGraphEdgeDto[];
@@ -312,6 +321,10 @@ export interface StartCodeAnalysisRequest {
 
 export interface RestoreCodeAnalysisSnapshotRequest {
   scope: CodeAnalysisScopeDto;
+}
+
+export interface GetCodeAnalysisSnapshotRequest {
+  detail: CodeAnalysisSnapshotDetailDto;
 }
 
 export interface CodeAnalysisAcceptedDto {
@@ -419,8 +432,15 @@ export const MIN_MCP_MAX_RESPONSE_KB = 64;
 export const MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS = 200;
 export const DEFAULT_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS = 1_500;
 export const MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS = 30_000;
+export const MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES = 5;
+export const DEFAULT_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES = 60;
+export const MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES =
+  7 * 24 * 60;
 export const DEFAULT_MCP_MAX_RESPONSE_KB = 256;
 export const MAX_MCP_MAX_RESPONSE_KB = 1_024;
+export const MIN_MCP_MAX_STALE_AGE_DAYS = 1;
+export const DEFAULT_MCP_MAX_STALE_AGE_DAYS = 7;
+export const MAX_MCP_MAX_STALE_AGE_DAYS = 365;
 export const DEFAULT_LSP_REFERENCES_PER_SYMBOL = 500;
 export const MAX_LSP_REFERENCES_PER_SYMBOL = 5_000;
 
@@ -431,12 +451,16 @@ export function createDefaultCodeAnalysisSettings(): CodeAnalysisSettingsDto {
     staticFallback: true,
     autoRefresh: {
       enabled: true,
-      debounceMs: DEFAULT_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS
+      debounceMs: DEFAULT_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+      periodicEnabled: true,
+      periodicIntervalMinutes:
+        DEFAULT_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES
     },
     mcp: {
       enabled: true,
       allowSourceSnippets: true,
-      maxResponseKb: DEFAULT_MCP_MAX_RESPONSE_KB
+      maxResponseKb: DEFAULT_MCP_MAX_RESPONSE_KB,
+      maxStaleAgeDays: DEFAULT_MCP_MAX_STALE_AGE_DAYS
     },
     maxFiles: 5_000,
     maxTotalSourceMb: DEFAULT_CODE_ANALYSIS_TOTAL_SOURCE_MB,

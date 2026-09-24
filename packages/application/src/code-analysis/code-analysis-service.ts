@@ -2,6 +2,8 @@ import {
   AnalysisSnapshotCache,
   codeAnalysisSnapshotConfigurationKey,
   codeAnalysisWorktreeStatusFingerprint,
+  createChangedAnalysisSnapshot,
+  mergeIncrementalWorkspaceSnapshot,
   type CodeAnalysisProgress,
   type CodeAnalysisScope,
   type CodeAnalysisSettings,
@@ -70,6 +72,12 @@ export interface CodeAnalysisAccepted {
   analysisId: string;
 }
 
+export interface CodeAnalysisRefreshResult {
+  analysisId: string;
+  workspaceSnapshotUpdated: boolean;
+  changedSnapshotUpdated: boolean;
+}
+
 export interface CodeAnalysisFile {
   nodeId: string;
   path: string;
@@ -89,6 +97,16 @@ export interface CodeAnalysisFile {
   totalLines: number;
   truncated: boolean;
 }
+
+export type CodeAnalysisSnapshotDetail =
+  | "navigation"
+  | "full";
+
+export type CodeAnalysisSnapshotView =
+  CodeAnalysisSnapshot & {
+    detailLevel?: CodeAnalysisSnapshotDetail;
+    totalNodeCount?: number;
+  };
 
 export interface CodeAnalysisServiceOptions {
   cacheDirectory: string;
@@ -141,6 +159,13 @@ export class CodeAnalysisService {
     | undefined;
   #disposed = false;
   #active:
+    | {
+        analysisId: string;
+        selectionKey: string;
+        controller: AbortController;
+      }
+    | undefined;
+  #background:
     | {
         analysisId: string;
         selectionKey: string;
@@ -226,6 +251,11 @@ export class CodeAnalysisService {
       context
     );
 
+    this.#background?.controller.abort(
+      new AnalysisCancelledError(
+        "A manual code analysis replaced the background refresh."
+      )
+    );
     if (this.#active) {
       this.#active.controller.abort(
         new AnalysisCancelledError(
@@ -277,6 +307,89 @@ export class CodeAnalysisService {
     this.#runQueue = queuedRun;
     void queuedRun;
     return { analysisId };
+  }
+
+  /**
+   * Refreshes persisted snapshots without switching the renderer to a
+   * running state. A changed refresh reuses the complete index and
+   * writes both the full workspace graph and the focused changed view.
+   */
+  async refresh(
+    scope: CodeAnalysisScope,
+    signal?: AbortSignal
+  ): Promise<CodeAnalysisRefreshResult | null> {
+    this.#assertNotDisposed();
+    if (signal?.aborted) {
+      return null;
+    }
+    const settings = await this.#settingsProvider();
+    this.#assertNotDisposed();
+    if (!settings.enabled) {
+      return null;
+    }
+    await this.#settingsValidator?.(settings);
+    this.#assertNotDisposed();
+    const workspace = await this.#workspace.getCurrent();
+    this.#assertNotDisposed();
+    const context = resolveAnalysisContext(workspace);
+    await this.#ensureSnapshotHydrated(
+      workspace,
+      settings,
+      context
+    );
+    this.#assertNotDisposed();
+    if (this.#active || this.#background || signal?.aborted) {
+      return null;
+    }
+
+    const selectionKey = analysisSelectionKey(
+      workspace,
+      context
+    );
+    const analysisId = this.#idFactory();
+    const controller = new AbortController();
+    const abort = () =>
+      controller.abort(
+        signal?.reason ??
+          new AnalysisCancelledError(
+            "The background code analysis was cancelled."
+          )
+      );
+    signal?.addEventListener("abort", abort, { once: true });
+    this.#background = {
+      analysisId,
+      selectionKey,
+      controller
+    };
+
+    const queuedRun = this.#runQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (
+          this.#background?.analysisId !== analysisId ||
+          controller.signal.aborted
+        ) {
+          return null;
+        }
+        return this.#runBackground({
+          analysisId,
+          workspace,
+          context,
+          scope,
+          settings,
+          selectionKey,
+          controller
+        });
+      });
+    this.#runQueue = queuedRun.then(() => undefined);
+    try {
+      return await queuedRun;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      if (this.#background?.analysisId === analysisId) {
+        this.#background = undefined;
+      }
+    }
   }
 
   async restoreSnapshot(
@@ -401,7 +514,9 @@ export class CodeAnalysisService {
     );
   }
 
-  async getSnapshot(): Promise<CodeAnalysisSnapshot | null> {
+  async getSnapshot(
+    detail?: CodeAnalysisSnapshotDetail
+  ): Promise<CodeAnalysisSnapshotView | null> {
     const [workspace, settings] = await Promise.all([
       this.#workspace.getCurrent(),
       this.#settingsProvider()
@@ -425,7 +540,18 @@ export class CodeAnalysisService {
     ) {
       return null;
     }
-    return structuredClone(this.#snapshot);
+    const snapshot =
+      detail === "navigation"
+        ? createNavigationSnapshot(this.#snapshot)
+        : this.#snapshot;
+    const result = structuredClone(
+      snapshot
+    ) as CodeAnalysisSnapshotView;
+    if (detail) {
+      result.detailLevel = detail;
+      result.totalNodeCount = this.#snapshot.nodes.length;
+    }
+    return result;
   }
 
   async readFile(nodeId: string): Promise<CodeAnalysisFile> {
@@ -570,6 +696,16 @@ export class CodeAnalysisService {
       active.controller.abort(
         new AnalysisCancelledError(
           "Workspace selection changed during code analysis."
+        )
+      );
+    }
+    if (
+      this.#background &&
+      selectionKey !== this.#background.selectionKey
+    ) {
+      this.#background.controller.abort(
+        new AnalysisCancelledError(
+          "Workspace selection changed during background code analysis."
         )
       );
     }
@@ -736,7 +872,12 @@ export class CodeAnalysisService {
     this.#scopeRestoreGeneration += 1;
     const active = this.#active;
     this.#active = undefined;
+    const background = this.#background;
+    this.#background = undefined;
     active?.controller.abort(
+      new AnalysisCancelledError("GitNest is shutting down.")
+    );
+    background?.controller.abort(
       new AnalysisCancelledError("GitNest is shutting down.")
     );
     await this.#runQueue.catch(() => undefined);
@@ -893,6 +1034,185 @@ export class CodeAnalysisService {
           details: {}
         }
       });
+    }
+  }
+
+  async #runBackground(input: {
+    analysisId: string;
+    workspace: Workspace;
+    context: AnalysisContext;
+    scope: CodeAnalysisScope;
+    settings: CodeAnalysisSettings;
+    selectionKey: string;
+    controller: AbortController;
+  }): Promise<CodeAnalysisRefreshResult | null> {
+    try {
+      const repositoryState =
+        await this.#readRepositoryState(
+          input.context.roots,
+          input.scope === "changed",
+          input.controller.signal
+        );
+      const previousWorkspaceSnapshot =
+        input.scope === "changed"
+          ? await this.#loadWorkspaceSnapshotForRefresh(
+              input.workspace,
+              input.context,
+              input.settings
+            )
+          : null;
+      const snapshot = await this.#runner.analyze({
+        analysisId: input.analysisId,
+        workspaceId: input.workspace.id,
+        workspaceRootPath: input.context.workspaceRootPath,
+        roots: input.context.roots.map((root) => ({
+          repositoryId: root.repositoryId,
+          worktreeId: root.worktreeId,
+          name: root.name,
+          path: root.path,
+          revision:
+            repositoryState.revisions.get(
+              repositoryTargetKey(root)
+            ) ?? root.revision
+        })),
+        scope: input.scope,
+        ...(input.scope === "changed"
+          ? { resultScope: "workspace" as const }
+          : {}),
+        changedPaths: repositoryState.changedPaths,
+        freshnessChangedPaths:
+          repositoryState.freshnessChangedPaths,
+        worktreeStatuses: repositoryState.worktreeStatuses,
+        cacheDirectory: this.#cacheDirectory,
+        lspDataDirectory: this.#lspDataDirectory,
+        settings: input.settings,
+        signal: input.controller.signal
+      });
+      if (
+        this.#background?.analysisId !== input.analysisId ||
+        input.controller.signal.aborted
+      ) {
+        return null;
+      }
+
+      const workspaceCandidate =
+        input.scope === "workspace" ||
+        snapshot.indexStatus?.fullIndexAvailable === true
+          ? {
+              ...snapshot,
+              scope: "workspace" as const
+            }
+          : undefined;
+      const workspaceSnapshot =
+        input.scope === "changed" && workspaceCandidate
+          ? previousWorkspaceSnapshot &&
+            hasConsistentWorkspaceFileStats(
+              previousWorkspaceSnapshot
+            )
+            ? mergeIncrementalWorkspaceSnapshot(
+                previousWorkspaceSnapshot,
+                workspaceCandidate,
+                repositoryState.changedPaths
+              )
+            : undefined
+          : workspaceCandidate;
+      const changedSnapshot =
+        input.scope === "changed"
+          ? createChangedAnalysisSnapshot(snapshot)
+          : undefined;
+      const snapshots = [
+        changedSnapshot,
+        workspaceSnapshot
+      ].filter(
+        (
+          candidate
+        ): candidate is CodeAnalysisSnapshot =>
+          candidate !== undefined
+      );
+      const currentScope =
+        this.#snapshot?.scope ?? this.#state.scope;
+      snapshots.sort((left, right) => {
+        if (left.scope === currentScope) {
+          return 1;
+        }
+        if (right.scope === currentScope) {
+          return -1;
+        }
+        return left.scope === "changed" ? -1 : 1;
+      });
+      for (const candidate of snapshots) {
+        await this.#snapshotStore.save(
+          candidate,
+          input.settings
+        );
+      }
+      if (
+        this.#background?.analysisId !== input.analysisId ||
+        input.controller.signal.aborted
+      ) {
+        return null;
+      }
+
+      const currentSnapshot = snapshots.find(
+        (candidate) => candidate.scope === currentScope
+      );
+      if (currentSnapshot) {
+        this.#snapshot = currentSnapshot;
+        this.#snapshotConfigurationKey =
+          codeAnalysisSnapshotConfigurationKey(
+            input.settings,
+            currentSnapshot.roots
+          );
+        this.#snapshotInputConfigurationKey =
+          codeAnalysisSnapshotConfigurationKey(
+            input.settings,
+            input.context.roots
+          );
+        this.#hydratedCacheKey = `${input.selectionKey}\0${this.#snapshotConfigurationKey}`;
+        this.#setState(stateFromSnapshot(currentSnapshot));
+      }
+      return {
+        analysisId: input.analysisId,
+        workspaceSnapshotUpdated:
+          workspaceSnapshot !== undefined,
+        changedSnapshotUpdated:
+          changedSnapshot !== undefined
+      };
+    } catch (error) {
+      if (
+        input.controller.signal.aborted ||
+        error instanceof AnalysisCancelledError
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async #loadWorkspaceSnapshotForRefresh(
+    workspace: Workspace,
+    context: AnalysisContext,
+    settings: CodeAnalysisSettings
+  ): Promise<CodeAnalysisSnapshot | null> {
+    if (
+      this.#snapshot?.scope === "workspace" &&
+      snapshotMatchesContext(
+        this.#snapshot,
+        workspace,
+        context
+      )
+    ) {
+      return this.#snapshot;
+    }
+    try {
+      return await this.#snapshotStore.load(
+        workspace.id,
+        settings,
+        context.roots,
+        "workspace"
+      );
+    } catch {
+      return null;
     }
   }
 
@@ -1091,6 +1411,42 @@ function snapshotMatchesContext(
   );
 }
 
+function createNavigationSnapshot(
+  snapshot: CodeAnalysisSnapshot
+): CodeAnalysisSnapshot {
+  const nodeIds = new Set<string>();
+  const edgeIds = new Set<string>();
+
+  for (const chain of snapshot.requestChains) {
+    nodeIds.add(chain.clientNodeId);
+    nodeIds.add(chain.endpointNodeId);
+    for (const nodeId of chain.nodeIds) {
+      nodeIds.add(nodeId);
+    }
+    for (const edgeId of chain.edgeIds) {
+      edgeIds.add(edgeId);
+    }
+  }
+
+  const edges = snapshot.edges.filter(
+    (edge) =>
+      edgeIds.has(edge.id) ||
+      (nodeIds.has(edge.from) && nodeIds.has(edge.to))
+  );
+  for (const edge of edges) {
+    nodeIds.add(edge.from);
+    nodeIds.add(edge.to);
+  }
+
+  return {
+    ...snapshot,
+    nodes: snapshot.nodes.filter((node) =>
+      nodeIds.has(node.id)
+    ),
+    edges
+  };
+}
+
 function stateFromSnapshot(
   snapshot: CodeAnalysisSnapshot
 ): CodeAnalysisState {
@@ -1103,6 +1459,18 @@ function stateFromSnapshot(
     generatedAt: snapshot.generatedAt,
     stats: snapshot.stats
   };
+}
+
+function hasConsistentWorkspaceFileStats(
+  snapshot: CodeAnalysisSnapshot
+): boolean {
+  const fileNodeCount = snapshot.nodes.filter(
+    (node) => node.kind === "file"
+  ).length;
+  return (
+    fileNodeCount === 0 ||
+    snapshot.stats.analyzedFiles === fileNodeCount
+  );
 }
 
 function toAnalysisRoot(

@@ -1784,7 +1784,6 @@
     }
 
     .settings-page-scroll {
-      padding-top: var(--space-6);
       padding-bottom: var(--space-7);
     }
 
@@ -1800,7 +1799,7 @@
 
     .settings-layout {
       display: grid;
-      grid-template-columns: 220px minmax(0, 1fr);
+      grid-template-columns: 232px minmax(0, 1fr);
       gap: var(--space-5);
       align-items: start;
     }
@@ -1808,16 +1807,18 @@
     .settings-nav {
       position: sticky;
       top: var(--space-4);
+      display: grid;
+      align-content: start;
+      gap: 2px;
       padding: var(--space-2);
     }
 
     .settings-nav-label {
-      padding: var(--space-2) var(--space-3);
+      padding: var(--space-2) var(--space-3) var(--space-1);
       color: var(--muted);
       font-size: var(--font-size-caption);
       font-weight: var(--font-weight-semibold);
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
+      letter-spacing: 0;
     }
 
     .settings-nav-divider {
@@ -1827,29 +1828,66 @@
     }
 
     .settings-nav-item {
+      position: relative;
       display: flex;
       align-items: center;
       gap: var(--space-3);
       width: 100%;
-      min-height: 48px;
+      min-height: 46px;
       padding: var(--space-2) var(--space-3);
       color: var(--muted);
       text-align: left;
       background: transparent;
-      border: 1px solid transparent;
+      border: 0;
       border-radius: var(--radius-regular);
       cursor: pointer;
+      font: inherit;
     }
 
-    .settings-nav-item:hover {
+    .settings-nav-group {
+      display: contents;
+    }
+
+    .settings-nav-item::before {
+      position: absolute;
+      top: 9px;
+      bottom: 9px;
+      left: 0;
+      width: 2px;
+      background: var(--accent);
+      border-radius: 999px;
+      content: "";
+      opacity: 0;
+      transform: scaleY(0.5);
+      transition:
+        opacity 140ms ease,
+        transform 140ms ease;
+    }
+
+    .settings-nav-item:hover,
+    .settings-nav-item:focus-visible {
       color: var(--text);
       background: var(--surface-hover);
     }
 
+    .settings-nav-item:focus-visible,
+    .settings-nav-subitem:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: -1px;
+    }
+
     .settings-nav-item.active {
       color: var(--text);
-      background: var(--accent-soft);
-      border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+      background: color-mix(
+        in srgb,
+        var(--accent) 9%,
+        var(--surface)
+      );
+    }
+
+    .settings-nav-item.active::before {
+      opacity: 1;
+      transform: scaleY(1);
     }
 
     .settings-nav-item > .icon {
@@ -1863,8 +1901,25 @@
 
     .settings-nav-item-copy {
       display: grid;
+      flex: 1 1 auto;
       gap: 2px;
       min-width: 0;
+    }
+
+    .settings-nav-item-chevron {
+      display: grid;
+      flex: 0 0 auto;
+      place-items: center;
+      color: var(--muted);
+      transform: rotate(-90deg);
+      transition:
+        color 140ms ease,
+        transform 160ms ease;
+    }
+
+    .settings-nav-group.is-active .settings-nav-item-chevron {
+      color: var(--text-soft);
+      transform: rotate(0);
     }
 
     .settings-nav-item-title {
@@ -1879,6 +1934,77 @@
       font-size: var(--font-size-caption);
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .settings-nav-subnav {
+      display: grid;
+      gap: 2px;
+      margin: 0 0 var(--space-1) 31px;
+      padding: var(--space-1) 0 var(--space-1) var(--space-3);
+      border-left: 1px solid var(--border-soft);
+      animation: settings-subnav-in 160ms ease-out;
+    }
+
+    .settings-nav-subitem {
+      position: relative;
+      width: 100%;
+      min-height: 30px;
+      overflow: hidden;
+      padding: 0 var(--space-2);
+      color: var(--muted);
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-small);
+      cursor: pointer;
+      font: inherit;
+      font-size: var(--font-size-caption);
+    }
+
+    .settings-nav-subitem::before {
+      position: absolute;
+      top: 8px;
+      bottom: 8px;
+      left: calc(-1 * var(--space-3) - 1px);
+      width: 2px;
+      background: var(--accent);
+      border-radius: 999px;
+      content: "";
+      opacity: 0;
+    }
+
+    .settings-nav-subitem:hover,
+    .settings-nav-subitem:focus-visible {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .settings-nav-subitem.active {
+      color: var(--accent);
+      background: color-mix(
+        in srgb,
+        var(--accent) 8%,
+        transparent
+      );
+      font-weight: var(--font-weight-medium);
+    }
+
+    .settings-nav-subitem.active::before {
+      opacity: 1;
+    }
+
+    @keyframes settings-subnav-in {
+      from {
+        opacity: 0;
+        transform: translateY(-4px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
 
     .settings-content {
@@ -1920,6 +2046,7 @@
 
     .settings-card {
       overflow: hidden;
+      scroll-margin-top: var(--space-4);
     }
 
     .settings-card-header {
@@ -1953,7 +2080,9 @@
     }
 
     .settings-card-body {
-      padding: 0 var(--space-4);
+      display: grid;
+      gap: var(--space-3);
+      padding: var(--space-4);
     }
 
     .settings-card-footer {
@@ -1976,13 +2105,7 @@
       grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
       gap: var(--space-4);
-      min-height: 72px;
-      padding: var(--space-3) 0;
-      border-bottom: 1px solid var(--border-soft);
-    }
-
-    .settings-setting-row:last-child {
-      border-bottom: 0;
+      min-height: 48px;
     }
 
     .settings-setting-title {
@@ -2040,7 +2163,10 @@
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: var(--space-3);
-      padding: var(--space-4) 0;
+    }
+
+    .system-auth-info-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
     .settings-info-item {
@@ -2072,7 +2198,6 @@
       grid-template-columns:
         repeat(auto-fit, minmax(min(220px, 100%), 1fr));
       gap: var(--space-3);
-      padding: var(--space-3) 0 var(--space-4);
     }
 
     .settings-preference-group {
@@ -2198,7 +2323,6 @@
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: var(--space-3);
-      padding: var(--space-4) 0 var(--space-3);
     }
 
     .settings-ai-field,
@@ -2233,7 +2357,6 @@
 
     .settings-ai-field-grid.single {
       grid-template-columns: minmax(0, 1fr);
-      padding-top: 0;
     }
 
     .settings-ai-field input:hover,
@@ -2249,15 +2372,20 @@
     .settings-ai-actions {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-end;
       gap: var(--space-3);
-      padding-top: var(--space-3);
+      padding-top: var(--space-1);
     }
 
     .settings-ai-actions-copy {
       min-width: 0;
+      margin-right: auto;
       color: var(--muted);
       font-size: var(--font-size-caption);
+    }
+
+    .settings-ai-actions > .settings-field-help {
+      margin-right: auto;
     }
 
     .settings-ai-actions-buttons {
@@ -2266,42 +2394,10 @@
       gap: var(--space-2);
     }
 
-    .settings-account-preview {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: var(--space-4);
-      padding: var(--space-4) 0;
-    }
-
-    .settings-account-preview > div:first-child {
-      display: grid;
-      gap: var(--space-1);
-      min-width: 0;
-    }
-
-    .settings-account-preview strong {
-      color: var(--text);
-    }
-
-    .settings-account-preview span {
-      color: var(--muted);
-      font-size: var(--font-size-caption);
-    }
-
-    .settings-account-actions {
-      display: flex;
-      flex: 0 0 auto;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-      gap: var(--space-2);
-    }
-
     .settings-option-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: var(--space-3);
-      padding: var(--space-4) 0;
     }
 
     .settings-option-grid.three {
@@ -2412,10 +2508,58 @@
       line-height: var(--line-height-body);
     }
 
+    .mcp-registration-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--space-3);
+    }
+
+    .mcp-registration {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+    }
+
+    .mcp-registration-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: var(--space-1);
+      margin-left: auto;
+    }
+
+    .mcp-registration-path {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: baseline;
+      gap: var(--space-3);
+      min-width: 0;
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .mcp-registration-path code {
+      min-width: 0;
+      color: var(--text);
+      font-family: var(--font-mono);
+      overflow-wrap: anywhere;
+    }
+
+    @container settings-content (max-width: 520px) {
+      .mcp-registration-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .mcp-registration-actions {
+        width: 100%;
+        margin-left: 0;
+      }
+    }
+
     .settings-lsp-breadcrumb {
       min-width: 0;
       overflow-x: auto;
-      padding: var(--space-4) 0 var(--space-1);
+      padding-bottom: var(--space-1);
     }
 
     .settings-lsp-breadcrumb ol {
@@ -2490,7 +2634,6 @@
       display: grid;
       gap: var(--space-4);
       min-width: 0;
-      margin: var(--space-3) 0 var(--space-4);
       padding: var(--space-4);
       background: var(--surface-2);
       border: 1px solid var(--border-soft);
@@ -9048,14 +9191,13 @@
 
     .analysis-settings-number-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: var(--space-3);
-      padding: var(--space-4) 0 0;
     }
 
     @container settings-content (min-width: 700px) {
       .analysis-settings-number-grid {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
     }
 
@@ -9128,23 +9270,73 @@
 
       .settings-layout {
         grid-template-columns: minmax(0, 1fr);
+        gap: var(--space-4);
       }
 
       .settings-nav {
         position: static;
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: var(--space-1);
+        grid-template-columns: repeat(5, max-content);
+        grid-template-rows: auto auto;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scroll-snap-type: x proximity;
       }
 
-      .settings-nav-label,
-      .settings-nav-divider {
+      .settings-nav-label {
+        display: none;
+      }
+
+      .settings-nav-item {
+        grid-row: 1;
+        width: auto;
+        min-height: 38px;
+        padding: 0 var(--space-3);
+        scroll-snap-align: start;
+      }
+
+      .settings-nav-item::before {
+        top: auto;
+        right: var(--space-3);
+        bottom: 0;
+        left: var(--space-3);
+        width: auto;
+        height: 2px;
+        transform: scaleX(0.5);
+      }
+
+      .settings-nav-item.active::before {
+        transform: scaleX(1);
+      }
+
+      .settings-nav-item-copy {
+        display: block;
+      }
+
+      .settings-nav-item-subtitle,
+      .settings-nav-item-chevron {
+        display: none;
+      }
+
+      .settings-nav-subnav {
+        grid-row: 2;
         grid-column: 1 / -1;
+        display: flex;
+        width: max-content;
+        min-width: 100%;
+        margin: 0;
+        padding: var(--space-2) 0 0;
+        border-top: 1px solid var(--border-soft);
+        border-left: 0;
       }
 
-      .settings-nav-divider {
-        margin-top: var(--space-2);
-        margin-bottom: var(--space-2);
+      .settings-nav-subitem {
+        width: auto;
+        flex: 0 0 auto;
+        padding: 0 var(--space-3);
+      }
+
+      .settings-nav-subitem::before {
+        display: none;
       }
 
       .settings-info-grid,
@@ -9218,21 +9410,18 @@
       }
 
       .settings-ai-actions {
-        align-items: stretch;
+        align-items: flex-end;
         flex-direction: column;
+      }
+
+      .settings-ai-actions-copy,
+      .settings-ai-actions > .settings-field-help {
+        align-self: stretch;
+        margin-right: 0;
       }
 
       .settings-ai-actions-buttons {
         justify-content: flex-end;
-      }
-
-      .settings-account-preview {
-        align-items: stretch;
-        flex-direction: column;
-      }
-
-      .settings-account-actions {
-        justify-content: flex-start;
       }
 
       .settings-switch {
@@ -9609,6 +9798,7 @@
     const prototypeLatestVersion = "0.0.2";
     const gitNestProjectUrl =
       "https://github.com/junxin367/GitNest";
+    const gitNestIssuesUrl = `${gitNestProjectUrl}/issues`;
     const gitNestReleasesUrl = `${gitNestProjectUrl}/releases`;
     const prototypeReleaseUrl =
       `${gitNestReleasesUrl}/tag/v${prototypeLatestVersion}`;
@@ -11574,7 +11764,7 @@
         enabled: false,
         url: "",
         model: "",
-        apiKey: "",
+        apiKey: "sk-prototype-only-not-a-real-key",
         prompt:
           "根据下一次提交将包含的文件和代码变更，生成一条简洁准确的 Git 提交信息。使用 Conventional Commits 格式，使用中文，只返回提交信息，不要 Markdown。"
       };
@@ -11582,6 +11772,10 @@
         const value = localStorage.getItem(aiSettingsStorageKey);
         if (!value) return fallback;
         const parsed = JSON.parse(value);
+        const parsedApiKey =
+          typeof parsed?.apiKey === "string"
+            ? parsed.apiKey.trim()
+            : "";
         return {
           ...fallback,
           enabled: parsed?.enabled === true,
@@ -11591,8 +11785,8 @@
               ? parsed.model
               : fallback.model,
           apiKey:
-            typeof parsed?.apiKey === "string"
-              ? parsed.apiKey
+            parsedApiKey && !/^\*+$/.test(parsedApiKey)
+              ? parsedApiKey
               : fallback.apiKey,
           prompt:
             typeof parsed?.prompt === "string"
@@ -11876,6 +12070,7 @@
       tab: "overview",
       repositoryTab: "overview",
       settingsSection: "general",
+      settingsCard: "settings-general-behavior",
       selectedCommit: repositories[0].head,
       historyDetailOpen: false,
       historySelectedFile: "",
@@ -11948,7 +12143,7 @@
           : "vscode"
       },
       aiSettings: { ...savedAiSettings },
-      aiKeyVisible: true,
+      aiKeyVisible: false,
       openInMenuOpen: false,
       selectedBranch: repositories[0].branch,
       commitDraft: { ...initialCommitDraft },
@@ -11996,6 +12191,14 @@
       analysisTimer: null,
       analysisEnabled: true,
       analysisStaticFallback: true,
+      analysisAutoRefreshEnabled: true,
+      analysisAutoRefreshDebounceMs: 1500,
+      analysisPeriodicRefreshEnabled: true,
+      analysisPeriodicRefreshMinutes: 60,
+      analysisMcpEnabled: true,
+      analysisMcpMaxResponseKb: 256,
+      analysisMcpMaxStaleAgeDays: 7,
+      analysisMcpRegistered: false,
       analysisSelectedLanguageServer: "typescript",
       analysisTypeScriptEnabled: true,
       analysisTypeScriptCommand: "typescript-language-server",
@@ -12479,6 +12682,11 @@
           label: "快捷键与命令面板",
           leading: icon("search", 14),
           attributes: `onclick="closeTitlebarMenus(); openCommandPalette()"`
+        }),
+        renderMenuItem({
+          label: "提交 Bug",
+          leading: icon("external", 14),
+          attributes: `onclick="openIssuesPage()"`
         }),
         `<div class="menu-separator" aria-hidden="true"></div>`,
         renderMenuItem({
@@ -14268,29 +14476,211 @@
     ];
 
     const settingsSections = [
-      { id: "general", label: "通用", subtitle: "应用行为与偏好", iconName: "settings" },
-      { id: "ai", label: "AI 提交信息", subtitle: "生成提交信息", iconName: "sparkle" },
-      { id: "analysis", label: "LSP 与代码分析", subtitle: "请求链与调用关系", iconName: "graph" },
-      { id: "git", label: "Git", subtitle: "运行环境与同步策略", iconName: "branch" },
-      { id: "account", label: "账号与认证", subtitle: "凭据与仓库绑定", iconName: "repository" }
+      {
+        id: "general",
+        label: "通用",
+        subtitle: "应用行为与偏好",
+        iconName: "settings",
+        cards: [
+          { id: "settings-general-behavior", label: "应用行为" },
+          { id: "settings-general-terminal", label: "默认终端" },
+          { id: "settings-general-preferences", label: "当前偏好" }
+        ]
+      },
+      {
+        id: "analysis",
+        label: "代码分析",
+        subtitle: "索引、LSP 与 MCP",
+        iconName: "graph",
+        cards: [
+          { id: "settings-analysis-overview", label: "代码分析" },
+          { id: "settings-analysis-budget", label: "性能预算" },
+          { id: "settings-analysis-language-servers", label: "Language Server 配置" },
+          { id: "settings-analysis-mcp", label: "MCP 服务" },
+          { id: "settings-analysis-codex", label: "Codex 连接" }
+        ]
+      },
+      {
+        id: "ai",
+        label: "AI 提交信息",
+        subtitle: "生成提交信息",
+        iconName: "sparkle",
+        cards: [
+          { id: "settings-ai-commit-message", label: "AI 提交信息" }
+        ]
+      },
+      {
+        id: "git",
+        label: "Git",
+        subtitle: "运行环境与同步策略",
+        iconName: "branch",
+        cards: [
+          { id: "settings-git-environment", label: "Git 运行环境" },
+          { id: "settings-git-fetch", label: "远程检查策略" },
+          { id: "settings-git-push", label: "Push 同步策略" }
+        ]
+      },
+      {
+        id: "account",
+        label: "账号与认证",
+        subtitle: "系统 Git 凭据",
+        iconName: "repository",
+        cards: [
+          { id: "settings-account-system", label: "系统 Git 认证" }
+        ]
+      }
     ];
+    let settingsProgrammaticCard = "";
+    let settingsScrollUnlockTimer = 0;
+
+    const prototypeMcpRegistration = {
+      dataDirectory: "C:\\Users\\demo\\AppData\\Roaming\\GitNest"
+    };
 
     function openSettings() {
       withCommitDraftGuard(() => {
         state.view = "settings";
         state.settingsSection = state.settingsSection || "general";
+        const section =
+          settingsSections.find(
+            (item) => item.id === state.settingsSection
+          ) || settingsSections[0];
+        if (
+          !section.cards.some(
+            (card) => card.id === state.settingsCard
+          )
+        ) {
+          state.settingsCard = section.cards[0]?.id || "";
+        }
         state.inspectorOpen = false;
         renderMain();
       });
     }
 
     function setSettingsSection(section) {
-      if (!settingsSections.some((item) => item.id === section)) return;
+      const nextSection = settingsSections.find(
+        (item) => item.id === section
+      );
+      if (!nextSection) return;
       withCommitDraftGuard(() => {
+        const nextCardId = nextSection.cards[0]?.id || "";
+        if (
+          state.view === "settings" &&
+          state.settingsSection === section
+        ) {
+          scrollToSettingsCard(nextCardId);
+          return;
+        }
         state.view = "settings";
         state.settingsSection = section;
+        state.settingsCard = nextCardId;
         renderMain();
       });
+    }
+
+    function setActiveSettingsCard(cardId) {
+      state.settingsCard = cardId;
+      document
+        .querySelectorAll(".settings-nav-subitem")
+        .forEach((item) => {
+          const active = item.dataset.settingsCard === cardId;
+          item.classList.toggle("active", active);
+          if (active) {
+            item.setAttribute("aria-current", "location");
+          } else {
+            item.removeAttribute("aria-current");
+          }
+        });
+    }
+
+    function scrollToSettingsCard(cardId) {
+      const activeSection = settingsSections.find(
+        (item) => item.id === state.settingsSection
+      );
+      if (
+        !activeSection?.cards.some((card) => card.id === cardId)
+      ) {
+        return;
+      }
+      const target = document.getElementById(cardId);
+      if (!target) return;
+
+      setActiveSettingsCard(cardId);
+      window.clearTimeout(settingsScrollUnlockTimer);
+      settingsProgrammaticCard = cardId;
+      const releaseScrollTracking = () => {
+        if (settingsProgrammaticCard !== cardId) return;
+        settingsProgrammaticCard = "";
+        window.clearTimeout(settingsScrollUnlockTimer);
+        settingsScrollUnlockTimer = 0;
+      };
+      const scrollHost = document.querySelector(
+        "#mainContent .settings-page-scroll"
+      );
+      scrollHost?.addEventListener(
+        "scrollend",
+        releaseScrollTracking,
+        { once: true }
+      );
+      settingsScrollUnlockTimer = window.setTimeout(
+        releaseScrollTracking,
+        900
+      );
+      target.scrollIntoView({
+        behavior: window.matchMedia?.(
+          "(prefers-reduced-motion: reduce)"
+        ).matches
+          ? "auto"
+          : "smooth",
+        block: "start"
+      });
+    }
+
+    function syncSettingsCardFromScroll() {
+      if (settingsProgrammaticCard) return;
+      const scrollHost = document.querySelector(
+        "#mainContent .settings-page-scroll"
+      );
+      const activeSection = settingsSections.find(
+        (item) => item.id === state.settingsSection
+      );
+      if (!scrollHost || !activeSection) return;
+
+      const cards = activeSection.cards
+        .map((card) => ({
+          ...card,
+          element: document.getElementById(card.id)
+        }))
+        .filter((card) => card.element);
+      if (cards.length === 0) return;
+
+      const activationLine =
+        scrollHost.getBoundingClientRect().top +
+        Math.min(
+          120,
+          Math.max(72, scrollHost.clientHeight * 0.18)
+        );
+      let nextCardId = cards[0].id;
+      cards.forEach((card) => {
+        if (
+          card.element.getBoundingClientRect().top <=
+          activationLine
+        ) {
+          nextCardId = card.id;
+        }
+      });
+      if (
+        scrollHost.scrollHeight > scrollHost.clientHeight + 8 &&
+        scrollHost.scrollHeight -
+          scrollHost.scrollTop -
+          scrollHost.clientHeight <=
+        8
+      ) {
+        nextCardId = cards[cards.length - 1].id;
+      }
+      if (nextCardId !== state.settingsCard) {
+        setActiveSettingsCard(nextCardId);
+      }
     }
 
     function toggleSetting(key, label) {
@@ -14324,10 +14714,60 @@
     }
 
     function saveAnalysisSettings() {
+      const debounceValid =
+        Number.isInteger(state.analysisAutoRefreshDebounceMs) &&
+        state.analysisAutoRefreshDebounceMs >= 200 &&
+        state.analysisAutoRefreshDebounceMs <= 30000;
+      const periodicRefreshValid =
+        Number.isInteger(state.analysisPeriodicRefreshMinutes) &&
+        state.analysisPeriodicRefreshMinutes >= 5 &&
+        state.analysisPeriodicRefreshMinutes <= 10080;
+      if (!debounceValid || !periodicRefreshValid) {
+        showErrorToast(
+          "无法保存代码分析设置",
+          !debounceValid
+            ? "自动刷新去抖请输入 200～30000 之间的整数。"
+            : "定时更新间隔请输入 5～10080 之间的整数。"
+        );
+        return;
+      }
       showToast(
         "设置已更新",
         "LSP 与代码分析设置已保存；已有分析结果会在下次运行时按新设置重建。",
         "check"
+      );
+    }
+
+    function saveMcpSettings() {
+      const responseLimitValid =
+        Number.isInteger(state.analysisMcpMaxResponseKb) &&
+        state.analysisMcpMaxResponseKb >= 64 &&
+        state.analysisMcpMaxResponseKb <= 1024;
+      const staleAgeValid =
+        Number.isInteger(state.analysisMcpMaxStaleAgeDays) &&
+        state.analysisMcpMaxStaleAgeDays >= 1 &&
+        state.analysisMcpMaxStaleAgeDays <= 365;
+      if (!responseLimitValid || !staleAgeValid) {
+        showErrorToast(
+          "无法保存 MCP 设置",
+          !responseLimitValid
+            ? "单次响应上限请输入 64～1024 之间的整数。"
+            : "陈旧快照最长使用天数请输入 1～365 之间的整数。"
+        );
+        return;
+      }
+      showToast("设置已更新", "MCP 设置已保存。", "check");
+    }
+
+    function togglePrototypeMcpRegistration() {
+      state.analysisMcpRegistered = !state.analysisMcpRegistered;
+      renderSettingsPage();
+      showToast(
+        state.analysisMcpRegistered ? "MCP 已注册" : "MCP 已卸载",
+        state.analysisMcpRegistered
+          ? "GitNest_code_lsp 已注册；重新启动 Codex 后生效。"
+          : "GitNest_code_lsp 已从本机 Codex 卸载。",
+        state.analysisMcpRegistered ? "check" : "settings"
       );
     }
 
@@ -14392,40 +14832,6 @@
         if (!apiKey) return;
         apiKey.focus();
         apiKey.setSelectionRange(apiKey.value.length, apiKey.value.length);
-      });
-    }
-
-    function clearAiApiKey() {
-      captureAiSettings();
-      if (!state.aiSettings.apiKey) {
-        showToast("无需清空", "当前没有已保存的 AI API Key。", "settings");
-        return;
-      }
-      openConfirmDialog({
-        title: "清空 AI API Key？",
-        description: "生成和连接测试将不可用，直到再次保存 Key。API URL、模型和提示词不会被删除。",
-        actionLabel: "确认清空 Key",
-        onConfirm: () => {
-          state.aiSettings.apiKey = "";
-          state.aiKeyVisible = true;
-          persistAiSettings();
-          renderSettingsPage();
-          showToast("AI API Key 已清空", "其他 AI 设置已保留。", "check");
-        }
-      });
-    }
-
-    function confirmPreviewAccountRemoval() {
-      openConfirmDialog({
-        title: "删除 GitHub 账号？",
-        description: "删除前会展示受影响的仓库绑定；正式应用始终要求确认。",
-        actionLabel: "确认删除",
-        onConfirm: () =>
-          showToast(
-            "账号删除预览完成",
-            "原型未删除真实账号或凭据。",
-            "alert"
-          )
       });
     }
 
@@ -14520,15 +14926,46 @@
     }
 
     function settingsNavItems(sections) {
-      return sections.map((section) => `
-        <button type="button" class="settings-nav-item ${state.settingsSection === section.id ? "active" : ""}" aria-current="${state.settingsSection === section.id ? "page" : "false"}" onclick="setSettingsSection('${section.id}')">
-          ${icon(section.iconName, 16)}
-          <span class="settings-nav-item-copy">
-            <span class="settings-nav-item-title">${section.label}</span>
-            <span class="settings-nav-item-subtitle">${section.subtitle}</span>
-          </span>
-        </button>
-      `).join("");
+      return sections.map((section) => {
+        const active = state.settingsSection === section.id;
+        return `
+          <div class="settings-nav-group ${active ? "is-active" : ""}">
+            <button
+              type="button"
+              class="settings-nav-item ${active ? "active" : ""}"
+              aria-controls="settings-subnav-${section.id}"
+              ${active ? 'aria-current="page"' : ""}
+              aria-expanded="${active}"
+              onclick="setSettingsSection('${section.id}')"
+            >
+              ${icon(section.iconName, 16)}
+              <span class="settings-nav-item-copy">
+                <span class="settings-nav-item-title">${section.label}</span>
+                <span class="settings-nav-item-subtitle">${section.subtitle}</span>
+              </span>
+              <span class="settings-nav-item-chevron" aria-hidden="true">${icon("chevronDown", 14)}</span>
+            </button>
+            ${active ? `
+              <div
+                class="settings-nav-subnav"
+                id="settings-subnav-${section.id}"
+                role="group"
+                aria-label="${section.label}卡片"
+              >
+                ${section.cards.map((card) => `
+                  <button
+                    type="button"
+                    class="settings-nav-subitem ${state.settingsCard === card.id ? "active" : ""}"
+                    data-settings-card="${card.id}"
+                    ${state.settingsCard === card.id ? 'aria-current="location"' : ""}
+                    onclick="scrollToSettingsCard('${card.id}')"
+                  >${card.label}</button>
+                `).join("")}
+              </div>
+            ` : ""}
+          </div>
+        `;
+      }).join("");
     }
 
     function renderAnalysisLanguageServerSettings() {
@@ -14560,7 +14997,7 @@
       const fieldId = `${configuration.id}-language-server`;
 
       return `
-        <section class="panel settings-card">
+        <section id="settings-analysis-language-servers" class="panel settings-card">
           <div class="settings-card-header">
             <div>
               <div class="settings-card-title">Language Server 配置</div>
@@ -14621,14 +15058,20 @@
     function renderSettingsPage() {
       const activeSection = settingsSections.find((item) => item.id === state.settingsSection) || settingsSections[0];
       state.settingsSection = activeSection.id;
+      if (
+        !activeSection.cards.some(
+          (card) => card.id === state.settingsCard
+        )
+      ) {
+        state.settingsCard = activeSection.cards[0]?.id || "";
+      }
       document.getElementById("mainContent").innerHTML = `
-        <div class="page-scroll settings-page-scroll">
+        <div class="page-scroll settings-page-scroll" onscroll="syncSettingsCardFromScroll()">
           <div class="settings-page">
             <div class="page-heading">
               <div>
-                <div class="eyebrow">${icon("settings", 14)}应用偏好</div>
                 <h1 class="page-title">设置</h1>
-                <p class="page-description">管理应用行为、AI、LSP 代码分析、Git 同步策略以及账号认证。</p>
+                <p class="page-description">管理应用行为、AI、代码分析、Git 同步策略以及系统认证。</p>
               </div>
             </div>
 
@@ -14652,7 +15095,7 @@
     function renderSettingsSection(section) {
       if (section === "analysis") {
         return `
-          <section class="panel settings-card">
+          <section id="settings-analysis-overview" class="panel settings-card">
             <div class="settings-card-header">
               <div>
                 <div class="settings-card-title">代码分析</div>
@@ -14668,17 +15111,33 @@
                 ${settingsOption("analysisScope", "workspace", "files", "默认分析全部代码", "默认选中全部代码；仍需在代码分析页手动启动。")}
               </div>
               ${settingsToggle("允许内置分析降级", "Language Server 未安装、超时或失败时，继续使用内置框架分析器生成请求链。", "analysisStaticFallback")}
-              <div class="settings-safety-note">
-                ${icon("check", 15)}
-                <div>
-                  <strong>Workspace 保持只读</strong>
-                  <p>源码只执行目录遍历与读取；分析缓存和各语言 LSP 数据统一保存在 GitNest 应用数据目录。</p>
-                </div>
+              ${settingsToggle("文件变更后增量更新", "后台读取 Git 变动文件并复用完整索引，同时刷新 MCP 全量快照与变动视图；完整索引不可复用时自动重建。", "analysisAutoRefreshEnabled")}
+              ${settingsToggle("定时更新分析快照", "应用运行期间按间隔在后台更新分析快照；优先复用完整索引，无法复用时再执行全量分析。", "analysisPeriodicRefreshEnabled")}
+              <div class="mcp-registration-grid">
+                ${renderInput({
+                  id: "analysis-auto-refresh-debounce-ms",
+                  label: "自动刷新去抖（毫秒）",
+                  type: "number",
+                  value: state.analysisAutoRefreshDebounceMs,
+                  fullWidth: true,
+                  reserveHelpSpace: true,
+                  attributes: 'min="200" max="30000" step="1" oninput="state.analysisAutoRefreshDebounceMs = Number(this.value)"'
+                })}
+                ${renderInput({
+                  id: "analysis-periodic-refresh-minutes",
+                  label: "定时更新间隔（分钟）",
+                  type: "number",
+                  value: state.analysisPeriodicRefreshMinutes,
+                  fullWidth: true,
+                  helpText: "最短 5 分钟；更新在后台运行，不切换当前代码分析视图。",
+                  reserveHelpSpace: true,
+                  attributes: `min="5" max="10080" step="1" ${state.analysisPeriodicRefreshEnabled ? "" : "disabled"} oninput="state.analysisPeriodicRefreshMinutes = Number(this.value)"`
+                })}
               </div>
             </div>
           </section>
 
-          <section class="panel settings-card">
+          <section id="settings-analysis-budget" class="panel settings-card">
             <div class="settings-card-header">
               <div>
                 <div class="settings-card-title">性能预算</div>
@@ -14796,7 +15255,7 @@
                 attributes: 'oninput="state.analysisIgnoreDirectories = this.value"'
               })}
               <div class="settings-ai-actions">
-                <p class="settings-field-help">全部代码分析始终需要在代码分析页手动启动。</p>
+                <p class="settings-field-help">后台刷新优先复用完整索引；只有索引不可复用时才重建全部代码。</p>
                 ${renderButton({
                   label: "保存代码分析设置",
                   size: "small",
@@ -14809,12 +15268,86 @@
           </section>
 
           ${renderAnalysisLanguageServerSettings()}
+
+          <section id="settings-analysis-mcp" class="panel settings-card">
+            <div class="settings-card-header">
+              <div>
+                <div class="settings-card-title">MCP 服务</div>
+                <div class="settings-card-description">将代码分析快照提供给本机 MCP 客户端；关闭后仅停止返回 MCP 数据，不影响 GitNest 内的代码分析。</div>
+              </div>
+              <button type="button" class="settings-switch ${state.analysisMcpEnabled ? "active" : ""}" aria-label="启用 MCP 服务" aria-pressed="${state.analysisMcpEnabled}" onclick="toggleSetting('analysisMcpEnabled', 'MCP 服务')">
+                <span class="settings-switch-thumb"></span>
+              </button>
+            </div>
+            <div class="settings-card-body">
+              <div class="mcp-registration-grid">
+                ${renderInput({
+                  id: "analysis-mcp-response-kb",
+                  label: "单次响应上限（KiB）",
+                  type: "number",
+                  value: state.analysisMcpMaxResponseKb,
+                  fullWidth: true,
+                  reserveHelpSpace: true,
+                  attributes: 'min="64" max="1024" step="1" oninput="state.analysisMcpMaxResponseKb = Number(this.value)"'
+                })}
+                ${renderInput({
+                  id: "analysis-mcp-max-stale-age-days",
+                  label: "陈旧快照最长使用（天）",
+                  type: "number",
+                  value: state.analysisMcpMaxStaleAgeDays,
+                  fullWidth: true,
+                  helpText: "仅限制已确认陈旧或无法验证的快照；与当前源码一致的快照不会因时间过期。",
+                  reserveHelpSpace: true,
+                  attributes: 'min="1" max="365" step="1" oninput="state.analysisMcpMaxStaleAgeDays = Number(this.value)"'
+                })}
+              </div>
+              <div class="settings-ai-actions">
+                ${renderButton({
+                  label: "保存 MCP 设置",
+                  size: "small",
+                  variant: "primary",
+                  icon: icon("check", 13),
+                  attributes: 'onclick="saveMcpSettings()"'
+                })}
+              </div>
+            </div>
+          </section>
+
+          <section id="settings-analysis-codex" class="panel settings-card">
+            <div class="settings-card-header">
+              <div>
+                <div class="settings-card-title">Codex 连接</div>
+                <div class="settings-card-description">管理本机 Codex 的 GitNest MCP 注册。</div>
+              </div>
+              <span class="status-pill ${state.analysisMcpRegistered ? "green" : "neutral"}">${state.analysisMcpRegistered ? "已注册" : "未注册"}</span>
+            </div>
+            <div class="settings-card-body">
+              <div class="mcp-registration">
+                <div class="mcp-registration-path">
+                  <span>名称</span>
+                  <code>GitNest_code_lsp</code>
+                </div>
+                <div class="mcp-registration-path">
+                  <span>数据目录</span>
+                  <code>${escapeHtml(prototypeMcpRegistration.dataDirectory)}</code>
+                </div>
+                <div class="mcp-registration-actions">
+                  ${renderButton({
+                    label: state.analysisMcpRegistered ? "卸载" : "一键注册",
+                    size: "small",
+                    icon: icon(state.analysisMcpRegistered ? "minus" : "plus", 13),
+                    attributes: 'onclick="togglePrototypeMcpRegistration()"'
+                  })}
+                </div>
+              </div>
+            </div>
+          </section>
         `;
       }
 
       if (section === "ai") {
         return `
-          <section class="panel settings-card">
+          <section id="settings-ai-commit-message" class="panel settings-card">
             <div class="settings-card-header">
               <div>
                 <div class="settings-card-title">AI 提交信息</div>
@@ -14885,12 +15418,6 @@
                     attributes: 'onclick="saveAiSettings()"'
                   })}
                 </div>
-                ${renderButton({
-                  label: "清空 Key",
-                  size: "small",
-                  variant: "danger",
-                  attributes: 'onclick="clearAiApiKey()"'
-                })}
               </div>
             </div>
           </section>
@@ -14899,98 +15426,22 @@
 
       if (section === "account") {
         return `
-          <section class="panel settings-card">
-            <div class="settings-card-header">
-              <div>
-                <div class="settings-card-title">添加 GitNest 账号</div>
-                <div class="settings-card-description">使用 HTTPS Token，或继续交由系统 SSH 和 Credential Helper 认证。</div>
-              </div>
-            </div>
-            <div class="settings-card-body">
-              <div class="settings-ai-field-grid">
-                <label class="settings-ai-field">
-                  主机
-                  <input autocomplete="url" placeholder="github.com" spellcheck="false" type="text" value="github.com" />
-                </label>
-                <label class="settings-ai-field">
-                  认证方式
-                  <select>
-                    <option>HTTPS Token</option>
-                    <option>系统 SSH / Credential Helper</option>
-                  </select>
-                </label>
-              </div>
-              <div class="settings-ai-field-grid single">
-                <label class="settings-ai-field">
-                  Token
-                  <input autocomplete="new-password" placeholder="输入访问令牌" type="password" />
-                </label>
-              </div>
-              <div class="settings-inline-note">${icon("alert", 14)}正式应用会把 Token 存入系统凭据存储；不会写入普通 JSON、日志或 Git 参数。</div>
-              <div class="settings-ai-actions">
-                <span></span>
-                ${renderButton({
-                  label: "保存账号",
-                  size: "small",
-                  variant: "primary",
-                  icon: icon("check", 13),
-                  attributes: 'onclick="showToast(\'账号已保存\', \'原型未写入真实凭据。\', \'check\')"'
-                })}
-              </div>
-            </div>
-          </section>
-          <section class="panel settings-card">
+          <section id="settings-account-system" class="panel settings-card">
             <div class="settings-card-header">
               <div>
                 <div class="settings-card-title">系统 Git 认证</div>
-                <div class="settings-card-description">未绑定账号时，GitNest 不改变系统 Git 行为。</div>
+                <div class="settings-card-description">所有远程 Git 操作均使用系统认证，不保存或注入 GitNest 账号凭据。</div>
               </div>
               <span class="status-pill green">${icon("check", 12)}默认</span>
             </div>
             <div class="settings-card-body">
-              <div class="settings-info-grid">
+              <div class="settings-info-grid system-auth-info-grid">
+                <div class="settings-info-item"><span class="settings-info-label">默认用户名</span><span class="settings-info-value">GitNest User</span></div>
+                <div class="settings-info-item"><span class="settings-info-label">默认邮箱</span><span class="settings-info-value">gitnest@example.com</span></div>
                 <div class="settings-info-item"><span class="settings-info-label">Credential Helpers</span><span class="settings-info-value">1 个</span></div>
                 <div class="settings-info-item"><span class="settings-info-label">SSH Agent</span><span class="settings-info-value">已配置</span></div>
                 <div class="settings-info-item"><span class="settings-info-label">.ssh/config</span><span class="settings-info-value">已检测</span></div>
                 <div class="settings-info-item"><span class="settings-info-label">全局 Git 配置</span><span class="settings-info-value">保持不变</span></div>
-              </div>
-            </div>
-          </section>
-          <section class="panel settings-card">
-            <div class="settings-card-header">
-              <div>
-                <div class="settings-card-title">GitNest 账号中心</div>
-                <div class="settings-card-description">管理仓库绑定、连接测试和删除操作。</div>
-              </div>
-              <span class="status-pill neutral">1 个账号</span>
-            </div>
-            <div class="settings-card-body">
-              <div class="settings-account-preview">
-                <div>
-                  <strong>GitHub · github.com</strong>
-                  <span>HTTPS Token · 已绑定 gitnest-ui</span>
-                </div>
-                <div class="settings-account-actions">
-                  ${renderButton({
-                    label: "测试",
-                    size: "small",
-                    variant: "default",
-                    icon: icon("check", 13),
-                    attributes: 'onclick="showToast(\'账号连接正常\', \'github.com 已通过认证测试。\', \'check\')"'
-                  })}
-                  ${renderButton({
-                    label: "管理绑定",
-                    size: "small",
-                    variant: "default",
-                    attributes: 'onclick="showToast(\'仓库绑定已更新\', \'原型展示账号与仓库绑定流程。\', \'branch\')"'
-                  })}
-                  ${renderButton({
-                    label: "删除",
-                    size: "small",
-                    variant: "danger",
-                    attributes: 'onclick="confirmPreviewAccountRemoval()"'
-                  })}
-                </div>
               </div>
             </div>
           </section>
@@ -14999,7 +15450,7 @@
 
       if (section === "git") {
         return `
-          <section class="panel settings-card">
+          <section id="settings-git-environment" class="panel settings-card">
             <div class="settings-card-header">
               <div>
                 <div class="settings-card-title">Git 运行环境</div>
@@ -15020,22 +15471,28 @@
               </div>
             </div>
           </section>
-          <section class="panel settings-card">
+          <section id="settings-git-fetch" class="panel settings-card">
             <div class="settings-card-header">
               <div>
-              <div class="settings-card-title">默认同步策略</div>
-                <div class="settings-card-description">选择启动且 Workspace 加载完成后的远程检查方式。</div>
+                <div class="settings-card-title">远程检查策略</div>
+                <div class="settings-card-description">选择应用启动并完成 Workspace 加载后的远程检查方式。</div>
               </div>
             </div>
             <div class="settings-card-body">
               <div class="settings-option-grid">
-                ${settingsOption("settingsFetchMode", "manual", "download", "手动 Fetch", "只有明确点击 Fetch 时才检查远程引用。")}
-                ${settingsOption("settingsFetchMode", "startup", "refresh", "启动时检查", "Workspace 首次加载完成后，对全部仓库执行一次 Fetch。")}
+                ${settingsOption("settingsFetchMode", "manual", "download", "手动 Fetch", "只有明确点击 Fetch 时才更新远程跟踪引用。")}
+                ${settingsOption("settingsFetchMode", "startup", "refresh", "启动时检查", "每次启动且 Workspace 加载完成后，对全部仓库执行一次 Fetch。")}
               </div>
-              <div class="settings-inline-note">${icon("check", 14)}仅更新远程跟踪引用；不会执行 Pull、Merge、Rebase，也不会修改工作区或暂存区。</div>
+              <div class="settings-safety-note">
+                ${icon("check", 15)}
+                <div>
+                  <strong>仅更新远程跟踪引用</strong>
+                  <p>启动检查不会执行 Pull、Merge、Rebase，也不会修改工作区、暂存区或未提交改动。</p>
+                </div>
+              </div>
             </div>
           </section>
-          <section class="panel settings-card">
+          <section id="settings-git-push" class="panel settings-card">
             <div class="settings-card-header">
               <div>
                 <div class="settings-card-title">Push 同步策略</div>
@@ -15056,7 +15513,7 @@
         state.toolPreferences.defaultTerminal
       ) || terminalTools[0];
       return `
-        <section class="panel settings-card">
+        <section id="settings-general-behavior" class="panel settings-card">
           <div class="settings-card-header">
             <div>
               <div class="settings-card-title">应用行为</div>
@@ -15067,7 +15524,7 @@
             ${settingsToggle("记住上次打开的视图", "重新打开 GitNest 时恢复最近使用的 Workspace 或仓库页面。", "settingsRestoreLastView")}
           </div>
         </section>
-        <section class="panel settings-card">
+        <section id="settings-general-terminal" class="panel settings-card">
           <div class="settings-card-header">
             <div>
               <div class="settings-card-title">默认终端</div>
@@ -15111,7 +15568,7 @@
             </div>
           </div>
         </section>
-          <section class="panel settings-card">
+          <section id="settings-general-preferences" class="panel settings-card">
             <div class="settings-card-header">
               <div>
               <div class="settings-card-title">当前偏好</div>
@@ -15252,11 +15709,21 @@
 
     function renderAnalysisChainList(chains, selectedChain) {
       if (!chains.length) {
+        const normalizedFilter = state.analysisFilter.trim().toLocaleLowerCase("zh-CN");
+        const hasNodeMatch = normalizedFilter && analysisNodeSearchIndexForCurrentScope()
+          .entries
+          .some((entry) => entry.searchText.includes(normalizedFilter));
         return `
           <div class="analysis-list-empty">
             ${icon("search", 20)}
             <strong>没有匹配的请求链</strong>
-            <p>可清除筛选、切换到函数搜索，或重新运行全部代码分析。</p>
+            <p>可清除筛选、切换到代码节点搜索，或重新运行全部代码分析。</p>
+            ${hasNodeMatch ? renderButton({
+              label: "在代码节点中查看",
+              size: "small",
+              icon: icon("search", 13),
+              attributes: 'onclick="searchAnalysisFilterInNodes()"'
+            }) : ""}
           </div>
         `;
       }
@@ -16021,7 +16488,7 @@
           </header>
 
           ${!state.analysisEnabled ? `
-            <div class="settings-inline-note">${icon("alert", 14)}代码分析已关闭。请前往 LSP 设置启用后再启动分析。</div>
+            <div class="settings-inline-note">${icon("alert", 14)}代码分析已关闭。请前往代码分析设置启用后再启动分析。</div>
           ` : ""}
 
           ${state.analysisRunning ? `
@@ -16051,7 +16518,6 @@
 
           <div class="analysis-runtime-strip">
             <span>分析时间 ${formatSnapshotDate(state.analysisGeneratedAt)}</span>
-            <span>${workspaceScope ? "全部代码" : "变动代码"}</span>
             <span>耗时 ${workspaceScope ? "3.8 s" : "620 ms"}</span>
             ${renderAnalysisLanguageServerStates()}
             <details class="analysis-warning-panel">
@@ -16250,6 +16716,18 @@
       state.analysisNavigationMode = mode;
       syncAnalysisNodeInspection();
       const input = document.querySelector('[data-analysis-navigation-filter="true"]');
+      if (input instanceof HTMLInputElement) input.focus();
+    }
+
+    function searchAnalysisFilterInNodes() {
+      const query = state.analysisFilter.trim();
+      if (!query) return;
+      state.analysisNodeFilter = query;
+      state.analysisNavigationMode = "symbols";
+      syncAnalysisNodeInspection();
+      const input = document.querySelector(
+        '[data-analysis-navigation-filter="true"][data-analysis-filter-kind="nodes"]'
+      );
       if (input instanceof HTMLInputElement) input.focus();
     }
 
@@ -20096,6 +20574,11 @@
         "_blank",
         "noopener,noreferrer"
       );
+    }
+
+    function openIssuesPage() {
+      closeTitlebarMenus();
+      window.open(gitNestIssuesUrl, "_blank", "noopener,noreferrer");
     }
 
     function openVersionReleasePage() {

@@ -104,6 +104,168 @@ describe("useCodeAnalysis snapshot synchronization", () => {
     expect(controller?.snapshot?.analysisId).toBe("analysis-b");
   });
 
+  it("loads another scope when snapshots share the same analysis identity", async () => {
+    const generatedAt = "2026-09-24T01:00:00.000Z";
+    const workspaceState = readyState(
+      "shared-analysis",
+      generatedAt,
+      "workspace"
+    );
+    const changedState = readyState(
+      "shared-analysis",
+      generatedAt,
+      "changed"
+    );
+    let listener:
+      | ((state: CodeAnalysisStateDto) => void)
+      | undefined;
+    const getSnapshot = vi
+      .fn<GitNestBridge["codeAnalysis"]["getSnapshot"]>()
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: snapshotFor(workspaceState)
+      })
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: snapshotFor(changedState)
+      });
+    installBridge({
+      getState: vi.fn(async () => ({
+        ok: true as const,
+        value: workspaceState
+      })),
+      getSnapshot,
+      onStateChanged: vi.fn((nextListener) => {
+        listener = nextListener;
+        return vi.fn();
+      })
+    });
+
+    await act(async () => {
+      root.render(<Harness onChange={(value) => (controller = value)} />);
+      await flushAsyncWork();
+    });
+    expect(controller?.snapshot?.scope).toBe("workspace");
+
+    await act(async () => {
+      listener?.(changedState);
+      await flushAsyncWork();
+    });
+
+    expect(getSnapshot).toHaveBeenCalledTimes(2);
+    expect(controller?.state.scope).toBe("changed");
+    expect(controller?.snapshot?.scope).toBe("changed");
+  });
+
+  it("loads a navigation snapshot first and upgrades it on demand", async () => {
+    const state = readyState(
+      "analysis-a",
+      "2026-09-24T01:00:00.000Z"
+    );
+    const getSnapshot = vi
+      .fn<GitNestBridge["codeAnalysis"]["getSnapshot"]>()
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: {
+          ...snapshotFor(state),
+          detailLevel: "navigation"
+        }
+      })
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: {
+          ...snapshotFor(state),
+          detailLevel: "full"
+        }
+      });
+    installBridge({
+      getState: vi.fn(async () => ({
+        ok: true as const,
+        value: state
+      })),
+      getSnapshot,
+      onStateChanged: vi.fn(() => vi.fn())
+    });
+
+    await act(async () => {
+      root.render(<Harness onChange={(value) => (controller = value)} />);
+      await flushAsyncWork();
+    });
+
+    expect(getSnapshot).toHaveBeenNthCalledWith(1, {
+      detail: "navigation"
+    });
+    expect(controller?.snapshotDetail).toBe("navigation");
+
+    await act(async () => {
+      await controller?.loadFullSnapshot();
+      await flushAsyncWork();
+    });
+
+    expect(getSnapshot).toHaveBeenNthCalledWith(2, {
+      detail: "full"
+    });
+    expect(controller?.snapshotDetail).toBe("full");
+    expect(controller?.loadingFullSnapshot).toBe(false);
+  });
+
+  it("does not let a delayed navigation response replace a full snapshot", async () => {
+    const navigation = deferredSnapshot();
+    const full = deferredSnapshot();
+    const state = readyState(
+      "analysis-a",
+      "2026-09-24T02:00:00.000Z"
+    );
+    const getSnapshot = vi
+      .fn<GitNestBridge["codeAnalysis"]["getSnapshot"]>()
+      .mockImplementationOnce(() => navigation.promise)
+      .mockImplementationOnce(() => full.promise);
+    installBridge({
+      getState: vi.fn(async () => ({
+        ok: true as const,
+        value: state
+      })),
+      getSnapshot,
+      onStateChanged: vi.fn(() => vi.fn())
+    });
+
+    await act(async () => {
+      root.render(<Harness onChange={(value) => (controller = value)} />);
+      await flushAsyncWork();
+    });
+
+    let fullLoad: Promise<boolean> | undefined;
+    await act(async () => {
+      fullLoad = controller?.loadFullSnapshot();
+      await flushAsyncWork();
+    });
+    await act(async () => {
+      full.resolve({
+        ok: true as const,
+        value: {
+          ...snapshotFor(state),
+          detailLevel: "full"
+        }
+      });
+      await fullLoad;
+      await flushAsyncWork();
+    });
+    expect(controller?.snapshotDetail).toBe("full");
+
+    await act(async () => {
+      navigation.resolve({
+        ok: true as const,
+        value: {
+          ...snapshotFor(state),
+          detailLevel: "navigation"
+        }
+      });
+      await flushAsyncWork();
+    });
+
+    expect(controller?.snapshotDetail).toBe("full");
+  });
+
   it("invalidates an in-flight snapshot when the workspace state clears it", async () => {
     const pending = deferredSnapshot();
     const initialState = readyState(
@@ -232,14 +394,15 @@ function Harness({
 
 function readyState(
   analysisId: string,
-  generatedAt: string
+  generatedAt: string,
+  scope: "changed" | "workspace" = "workspace"
 ): CodeAnalysisStateDto {
   return {
     state: "ready",
     snapshotAvailable: true,
     analysisId,
     workspaceId: "workspace",
-    scope: "workspace",
+    scope,
     generatedAt
   };
 }

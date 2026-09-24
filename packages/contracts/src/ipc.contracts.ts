@@ -5,6 +5,7 @@ import type {
   CodeAnalysisFileDto,
   CodeAnalysisSnapshotDto,
   CodeAnalysisStateDto,
+  GetCodeAnalysisSnapshotRequest,
   InstallLanguageServerRequest,
   LanguageServerInstallResultDto,
   McpRegistrationStatusDto,
@@ -13,18 +14,6 @@ import type {
   SetMcpRegistrationRequest,
   StartCodeAnalysisRequest
 } from "./analysis.contracts";
-import type {
-  AccountConnectionTestResultDto,
-  AccountOverviewDto,
-  AccountProfileDto,
-  AccountRemovalImpactDto,
-  AccountRemovalImpactRequest,
-  BindAccountRequest,
-  RemoveAccountRequest,
-  SaveAccountRequest,
-  TestAccountRequest,
-  UnbindAccountRequest
-} from "./account.contracts";
 import type {
   GitEnvironmentDto,
   GitReadResult,
@@ -101,10 +90,12 @@ import type {
 import type {
   AiCommitMessageDto,
   AiConnectionTestResultDto,
+  AiApiKeyValueDto,
   AppSettingsDto,
   AppSettingsLoadDto,
   ClearAiApiKeyRequest,
   GenerateAiCommitMessageRequest,
+  ReadAiApiKeyRequest,
   TestAiConnectionRequest,
   UpdateAppSettingsRequest
 } from "./settings.contracts";
@@ -163,7 +154,7 @@ export interface IpcContractMap {
     GitReadResult<void>
   >;
   [IPC_CHANNELS.codeAnalysisGetSnapshot]: IpcContract<
-    [],
+    [request?: GetCodeAnalysisSnapshotRequest],
     GitReadResult<CodeAnalysisSnapshotDto | null>
   >;
   [IPC_CHANNELS.codeAnalysisReadFile]: IpcContract<
@@ -190,6 +181,10 @@ export interface IpcContractMap {
     [request: UpdateAppSettingsRequest],
     GitReadResult<AppSettingsDto>
   >;
+  [IPC_CHANNELS.settingsReadAiApiKey]: IpcContract<
+    [request: ReadAiApiKeyRequest],
+    GitReadResult<AiApiKeyValueDto>
+  >;
   [IPC_CHANNELS.settingsClearAiApiKey]: IpcContract<
     [request: ClearAiApiKeyRequest],
     GitReadResult<AppSettingsDto>
@@ -203,6 +198,7 @@ export interface IpcContractMap {
     GitReadResult<AiCommitMessageDto>
   >;
   [IPC_CHANNELS.systemGetRuntimeInfo]: IpcContract<[], RuntimeInfo>;
+  [IPC_CHANNELS.systemOpenIssuesPage]: IpcContract<[], void>;
   [IPC_CHANNELS.systemListExternalApplications]: IpcContract<
     [],
     GitReadResult<ExternalApplicationProfileDto[]>
@@ -226,34 +222,6 @@ export interface IpcContractMap {
   [IPC_CHANNELS.systemOpenFileLocation]: IpcContract<
     [request: OpenFileLocationRequest],
     GitReadResult<void>
-  >;
-  [IPC_CHANNELS.accountList]: IpcContract<
-    [],
-    GitReadResult<AccountOverviewDto>
-  >;
-  [IPC_CHANNELS.accountSave]: IpcContract<
-    [request: SaveAccountRequest],
-    GitReadResult<AccountProfileDto>
-  >;
-  [IPC_CHANNELS.accountBind]: IpcContract<
-    [request: BindAccountRequest],
-    GitReadResult<AccountOverviewDto>
-  >;
-  [IPC_CHANNELS.accountUnbind]: IpcContract<
-    [request: UnbindAccountRequest],
-    GitReadResult<AccountOverviewDto>
-  >;
-  [IPC_CHANNELS.accountGetRemovalImpact]: IpcContract<
-    [request: AccountRemovalImpactRequest],
-    GitReadResult<AccountRemovalImpactDto>
-  >;
-  [IPC_CHANNELS.accountRemove]: IpcContract<
-    [request: RemoveAccountRequest],
-    GitReadResult<AccountRemovalImpactDto>
-  >;
-  [IPC_CHANNELS.accountTest]: IpcContract<
-    [request: TestAccountRequest],
-    GitReadResult<AccountConnectionTestResultDto>
   >;
   [IPC_CHANNELS.windowIsMaximized]: IpcContract<[], boolean>;
   [IPC_CHANNELS.windowMinimize]: IpcContract<[], void>;

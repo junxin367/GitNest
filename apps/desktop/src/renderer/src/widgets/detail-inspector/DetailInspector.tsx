@@ -6,7 +6,6 @@ import {
 } from "react";
 
 import type {
-  AccountOverviewDto,
   GitEnvironmentDto,
   GitReadErrorDto,
   RepositoryCommitDto,
@@ -28,7 +27,6 @@ import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 
 interface DetailInspectorProps {
-  accountOverview: AccountOverviewDto | null;
   commit: RepositoryCommitDto["commit"] | null;
   gitEnvironment: GitEnvironmentDto | null;
   gitError: GitReadErrorDto | null;
@@ -47,7 +45,6 @@ interface DetailInspectorProps {
 }
 
 export function DetailInspector({
-  accountOverview,
   commit,
   gitEnvironment,
   gitError,
@@ -76,22 +73,6 @@ export function DetailInspector({
   const [commitNotice, setCommitNotice] = useState<string | null>(
     null
   );
-  const repositoryAccountBinding =
-    workspace?.selectedTarget
-      ? accountOverview?.bindings.find(
-          (binding) =>
-            binding.repositoryId ===
-            workspace.selectedTarget?.repositoryId
-        )
-      : undefined;
-  const repositoryAccount =
-    repositoryAccountBinding
-      ? accountOverview?.accounts.find(
-          (account) =>
-            account.id ===
-            repositoryAccountBinding.accountId
-        )
-      : undefined;
   const operationActive = operations.some(
     (item) =>
       item.state === "queued" ||
@@ -385,32 +366,13 @@ export function DetailInspector({
       <section className="inspector-section">
         <div className="inspector-section-title">
           <span>认证来源</span>
-          <span
-            className={`status-pill ${
-              repositoryAccount ? "blue" : "neutral"
-            }`}
-          >
-            {repositoryAccount ? "仓库覆盖" : "继承默认"}
-          </span>
+          <span className="status-pill green">系统 Git</span>
         </div>
         <div className="inspector-note authentication-source">
-          <Icon
-            name={
-              repositoryAccount?.authType === "system-ssh"
-                ? "terminal"
-                : "repository"
-            }
-            size={15}
-          />
+          <Icon name="terminal" size={15} />
           <p>
-            {repositoryAccount
-              ? `${repositoryAccount.host} · ${
-                  repositoryAccount.username ??
-                  (repositoryAccount.authType === "system-ssh"
-                    ? "系统 SSH"
-                    : "HTTPS Token")
-                }`
-              : "当前仓库未设置显式覆盖；远程操作使用主机默认 GitNest 账号或系统 Credential Helper / SSH。"}
+            远程操作直接继承系统 Credential Helper、SSH Agent 和全局
+            Git 配置。
           </p>
         </div>
         <Button size="small"
@@ -420,7 +382,7 @@ export function DetailInspector({
           type="button"
         >
           <Icon name="settings" />
-          管理账号
+          认证设置
         </Button>
       </section>
 

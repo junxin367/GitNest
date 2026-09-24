@@ -5,6 +5,10 @@ export interface GitEnvironment {
     available: boolean;
     version?: string;
   };
+  identity: {
+    name?: string;
+    email?: string;
+  };
   credentialHelpers: string[];
   ssh: {
     command: string;

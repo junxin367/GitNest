@@ -1,5 +1,6 @@
 export const IPC_CHANNELS = {
   systemGetRuntimeInfo: "system:get-runtime-info",
+  systemOpenIssuesPage: "system:open-issues-page",
   systemListExternalApplications:
     "system:list-external-applications",
   systemOpenExternalApplication:
@@ -15,15 +16,9 @@ export const IPC_CHANNELS = {
     "update:download-and-install",
   updateOpenProjectPage: "update:open-project-page",
   updateOpenReleasePage: "update:open-release-page",
-  accountList: "account:list",
-  accountSave: "account:save",
-  accountBind: "account:bind",
-  accountUnbind: "account:unbind",
-  accountGetRemovalImpact: "account:get-removal-impact",
-  accountRemove: "account:remove",
-  accountTest: "account:test",
   settingsGet: "settings:get",
   settingsUpdate: "settings:update",
+  settingsReadAiApiKey: "settings:read-ai-api-key",
   settingsClearAiApiKey: "settings:clear-ai-api-key",
   aiTestConnection: "ai:test-connection",
   aiGenerateCommitMessage: "ai:generate-commit-message",

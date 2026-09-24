@@ -71,6 +71,83 @@ describe("CodeAnalysisService snapshot persistence", () => {
     await service.dispose();
   });
 
+  it("returns only request-chain graph data for navigation snapshots", async () => {
+    const workspace = createWorkspace();
+    const snapshot = createRefreshSnapshot(
+      "persisted",
+      true
+    );
+    const relatedNode = snapshot.nodes[1];
+    if (!relatedNode) {
+      throw new Error("Snapshot fixture is incomplete.");
+    }
+    snapshot.nodes.push({
+      ...relatedNode,
+      id: "omitted-node",
+      name: "omitted",
+      qualifiedName: "omitted"
+    });
+    snapshot.edges = [
+      {
+        id: "chain-edge",
+        from: "changed-node",
+        to: "unrelated-node",
+        kind: "calls",
+        confidence: "exact"
+      },
+      {
+        id: "omitted-edge",
+        from: "omitted-node",
+        to: "unrelated-node",
+        kind: "calls",
+        confidence: "exact"
+      }
+    ];
+    snapshot.requestChains = [
+      {
+        id: "request-chain",
+        profileId: "web-http",
+        transport: "http",
+        operationKey: "GET /items",
+        method: "GET",
+        route: "/items",
+        title: "Items",
+        clientNodeId: "changed-node",
+        endpointNodeId: "unrelated-node",
+        nodeIds: ["changed-node", "unrelated-node"],
+        edgeIds: [],
+        changed: true,
+        ambiguous: false,
+        confidence: "exact"
+      }
+    ];
+    snapshot.stats = {
+      ...snapshot.stats,
+      symbolCount: 3,
+      edgeCount: 2,
+      requestChainCount: 1
+    };
+    const service = createService(
+      workspace,
+      createSnapshotStore(snapshot),
+      createEngine()
+    );
+
+    const navigation =
+      await service.getSnapshot("navigation");
+
+    expect(navigation?.detailLevel).toBe("navigation");
+    expect(navigation?.totalNodeCount).toBe(3);
+    expect(
+      navigation?.nodes.map((node) => node.id)
+    ).toEqual(["changed-node", "unrelated-node"]);
+    expect(
+      navigation?.edges.map((edge) => edge.id)
+    ).toEqual(["chain-edge"]);
+    expect(navigation?.stats).toEqual(snapshot.stats);
+    await service.dispose();
+  });
+
   it("restores a completed analysis after the service is recreated", async () => {
     const directory = await mkdtemp(
       join(tmpdir(), "gitnest-analysis-restart-")
@@ -210,7 +287,7 @@ describe("CodeAnalysisService snapshot persistence", () => {
     await service.dispose();
   });
 
-  it("keeps a live-HEAD snapshot while Workspace still reports the pre-run HEAD", async () => {
+  it("keeps a completed snapshot available across Workspace HEAD updates", async () => {
     let workspace = createWorkspace();
     const worktree = workspace.worktrees[0];
     if (!worktree) {
@@ -261,10 +338,13 @@ describe("CodeAnalysisService snapshot persistence", () => {
 
     workspace = structuredClone(workspace);
     workspace.worktrees[0]!.head = "future-head";
-    await expect(service.getSnapshot()).resolves.toBeNull();
+    await expect(service.getSnapshot()).resolves.toMatchObject({
+      analysisId: "fresh",
+      roots: [{ revision: "live-head" }]
+    });
     await expect(service.getState()).resolves.toMatchObject({
-      state: "idle",
-      snapshotAvailable: false
+      state: "ready",
+      snapshotAvailable: true
     });
     await service.dispose();
   });
@@ -381,6 +461,229 @@ describe("CodeAnalysisService snapshot persistence", () => {
     );
     analysisCompletion.resolve(createSnapshot("fresh"));
     await ready;
+    await service.dispose();
+  });
+
+  it("refreshes workspace and changed snapshots in the background without switching the foreground scope", async () => {
+    const workspace = createWorkspace();
+    const foreground = createSnapshot("foreground");
+    foreground.nodes = [
+      {
+        id: "persisted-lsp-node",
+        kind: "method",
+        name: "semanticMethod",
+        qualifiedName: "Service.semanticMethod",
+        language: "typescript",
+        location: {
+          repositoryId: "repository",
+          worktreeId: "worktree",
+          path: "src/semantic.ts",
+          line: 1,
+          column: 1
+        },
+        changed: false,
+        source: "lsp",
+        confidence: "exact",
+        metadata: {}
+      }
+    ];
+    foreground.languageServers = [
+      {
+        language: "typescript",
+        state: "connected",
+        command: "typescript-language-server",
+        message: "Connected",
+        symbolCount: 1,
+        semanticCoverage: "complete",
+        documentsTotal: 1,
+        documentsAnalyzed: 1
+      }
+    ];
+    foreground.stats.analyzedFiles = 8;
+    foreground.stats.discoveredFiles = 8;
+    foreground.stats.symbolCount = 1;
+    const store = createSnapshotStore(foreground);
+    const refreshed = createRefreshSnapshot(
+      "background-refresh",
+      true
+    );
+    const engine = createEngine(async () => refreshed);
+    const service = createService(workspace, store, engine);
+    await expect(service.getState()).resolves.toMatchObject({
+      state: "ready",
+      scope: "workspace",
+      analysisId: "foreground"
+    });
+    const published: CodeAnalysisState[] = [];
+    const unsubscribe = service.subscribe((state) => {
+      published.push(state);
+    });
+    published.length = 0;
+
+    const result = await service.refresh("changed");
+
+    expect(result).toEqual({
+      analysisId: "fresh",
+      workspaceSnapshotUpdated: true,
+      changedSnapshotUpdated: true
+    });
+    expect(engine.analyze).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "changed",
+        resultScope: "workspace"
+      })
+    );
+    const savedSnapshots = store.save.mock.calls.map(
+      ([snapshot]) => snapshot as CodeAnalysisSnapshot
+    );
+    expect(savedSnapshots.map((snapshot) => snapshot.scope)).toEqual([
+      "changed",
+      "workspace"
+    ]);
+    expect(savedSnapshots[0]?.nodes.map((node) => node.id)).toEqual([
+      "changed-node"
+    ]);
+    expect(savedSnapshots[1]?.nodes.map((node) => node.id)).toEqual([
+      "changed-node",
+      "unrelated-node",
+      "persisted-lsp-node"
+    ]);
+    expect(savedSnapshots[1]?.languageServers).toEqual([
+      expect.objectContaining({
+        language: "typescript",
+        state: "connected"
+      })
+    ]);
+    expect(savedSnapshots[1]?.stats).toMatchObject({
+      analyzedFiles: 8,
+      discoveredFiles: 8
+    });
+    expect(
+      published.every((state) => state.state !== "running")
+    ).toBe(true);
+    await expect(service.getState()).resolves.toMatchObject({
+      state: "ready",
+      scope: "workspace",
+      analysisId: "background-refresh"
+    });
+    await expect(service.getSnapshot()).resolves.toMatchObject({
+      scope: "workspace",
+      analysisId: "background-refresh",
+      nodes: expect.arrayContaining([
+        expect.objectContaining({
+          id: "persisted-lsp-node",
+          source: "lsp"
+        })
+      ])
+    });
+
+    unsubscribe();
+    await service.dispose();
+  });
+
+  it("does not replace the workspace snapshot when a changed refresh only has a partial index", async () => {
+    const workspace = createWorkspace();
+    const foreground = createSnapshot("foreground");
+    const store = createSnapshotStore(foreground);
+    const engine = createEngine(async () =>
+      createRefreshSnapshot("partial-refresh", false)
+    );
+    const service = createService(workspace, store, engine);
+    await service.getState();
+
+    const result = await service.refresh("changed");
+
+    expect(result).toEqual({
+      analysisId: "fresh",
+      workspaceSnapshotUpdated: false,
+      changedSnapshotUpdated: true
+    });
+    const savedSnapshots = store.save.mock.calls.map(
+      ([snapshot]) => snapshot as CodeAnalysisSnapshot
+    );
+    expect(savedSnapshots).toHaveLength(1);
+    expect(savedSnapshots[0]).toMatchObject({
+      analysisId: "partial-refresh",
+      scope: "changed"
+    });
+    await expect(service.getSnapshot()).resolves.toEqual(
+      foreground
+    );
+    await expect(service.getState()).resolves.toMatchObject({
+      state: "ready",
+      scope: "workspace",
+      analysisId: "foreground"
+    });
+    await service.dispose();
+  });
+
+  it("falls back to a full refresh when the stored workspace snapshot has incremental file statistics", async () => {
+    const workspace = createWorkspace();
+    const foreground = createSnapshot("degraded");
+    foreground.nodes = [
+      {
+        id: "file-a",
+        kind: "file",
+        name: "a.ts",
+        qualifiedName: "src/a.ts",
+        language: "typescript",
+        location: {
+          repositoryId: "repository",
+          worktreeId: "worktree",
+          path: "src/a.ts",
+          line: 1,
+          column: 1
+        },
+        changed: false,
+        source: "builtin",
+        confidence: "exact",
+        metadata: {}
+      },
+      {
+        id: "file-b",
+        kind: "file",
+        name: "b.ts",
+        qualifiedName: "src/b.ts",
+        language: "typescript",
+        location: {
+          repositoryId: "repository",
+          worktreeId: "worktree",
+          path: "src/b.ts",
+          line: 1,
+          column: 1
+        },
+        changed: false,
+        source: "builtin",
+        confidence: "exact",
+        metadata: {}
+      }
+    ];
+    foreground.stats.discoveredFiles = 0;
+    foreground.stats.analyzedFiles = 0;
+    const store = createSnapshotStore(foreground);
+    const service = createService(
+      workspace,
+      store,
+      createEngine(async () =>
+        createRefreshSnapshot("incremental", true)
+      )
+    );
+    await service.getState();
+
+    const result = await service.refresh("changed");
+
+    expect(result).toEqual({
+      analysisId: "fresh",
+      workspaceSnapshotUpdated: false,
+      changedSnapshotUpdated: true
+    });
+    expect(store.save).toHaveBeenCalledTimes(1);
+    expect(store.save.mock.calls[0]?.[0]).toMatchObject({
+      scope: "changed"
+    });
+    await expect(service.getSnapshot()).resolves.toEqual(
+      foreground
+    );
     await service.dispose();
   });
 });
@@ -619,7 +922,7 @@ function createEngine(
         input.analysisId,
         input.roots[0]?.worktreeId ?? "worktree"
       ),
-      scope: input.scope
+      scope: input.resultScope ?? input.scope
     })
 ) {
   return {
@@ -758,6 +1061,65 @@ function createSnapshot(
       durationMs: 20
     }
   };
+}
+
+function createRefreshSnapshot(
+  analysisId: string,
+  fullIndexAvailable: boolean
+): CodeAnalysisSnapshot {
+  const snapshot = createSnapshot(analysisId);
+  snapshot.nodes = [
+    {
+      id: "changed-node",
+      kind: "function",
+      name: "changed",
+      qualifiedName: "changed",
+      language: "typescript",
+      location: {
+        repositoryId: "repository",
+        worktreeId: "worktree",
+        path: "src/changed.ts",
+        line: 1,
+        column: 1
+      },
+      changed: true,
+      source: "builtin",
+      confidence: "exact",
+      metadata: {}
+    },
+    {
+      id: "unrelated-node",
+      kind: "function",
+      name: "unrelated",
+      qualifiedName: "unrelated",
+      language: "typescript",
+      location: {
+        repositoryId: "repository",
+        worktreeId: "worktree",
+        path: "src/unrelated.ts",
+        line: 1,
+        column: 1
+      },
+      changed: false,
+      source: "builtin",
+      confidence: "exact",
+      metadata: {}
+    }
+  ];
+  snapshot.indexStatus = {
+    fullIndexAvailable,
+    resultCompleteness: fullIndexAvailable
+      ? "complete"
+      : "partial",
+    impactCoverage: fullIndexAvailable
+      ? "confirmed"
+      : "possible-omissions",
+    message: fullIndexAvailable
+      ? "Complete index"
+      : "Partial index"
+  };
+  snapshot.stats.symbolCount = snapshot.nodes.length;
+  return snapshot;
 }
 
 function createSnapshotWithNode(

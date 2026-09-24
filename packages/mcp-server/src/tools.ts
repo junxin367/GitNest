@@ -12,6 +12,7 @@ import {
 import {
   DataAccessError,
   GitNestDataAccess,
+  type AnalysisFreshness,
   type AnalysisTarget,
   type ProjectAnalysisMatch
 } from "./data-access";
@@ -29,6 +30,7 @@ const MAX_TRACE_MATCHES = 12;
 const MAX_TRACE_CHAINS = 3;
 const MAX_TRACE_NODES = 80;
 const MAX_TRACE_EDGES = 120;
+const DAY_MS = 24 * 60 * 60 * 1_000;
 const TRACE_NODE_KINDS: CodeGraphNodeKind[] = [
   "function",
   "method",
@@ -57,11 +59,13 @@ const TRACE_LANGUAGES: readonly CodeAnalysisLanguage[] = [
 export interface ToolSettings {
   enabled: boolean;
   maxResponseKb: number;
+  maxStaleAgeDays: number;
 }
 
 export interface ToolContext {
   access: GitNestDataAccess;
   readSettings(): Promise<ToolSettings>;
+  now?(): number;
 }
 
 export function createTools(
@@ -87,7 +91,7 @@ export function createTools(
         name: "get_analysis_status",
         title: "GitNest analysis status",
         description:
-          "Check whether GitNest analysis applies to the current project. Pass its absolute projectPath and optionally a workspaceId from get_analysis_projects. If useMcp is false, inspect current source directly.",
+          "Check whether GitNest analysis applies to the current project. Stale snapshots remain usable within the configured grace period and are returned with verification warnings. Pass its absolute projectPath and optionally a workspaceId from get_analysis_projects.",
         inputSchema: {
           type: "object",
           properties: {
@@ -113,7 +117,7 @@ export function createTools(
         name: "get_call_chain",
         title: "Get a function or request call chain",
         description:
-          "After get_analysis_status returns useMcp=true, query a function, method or route in the same projectPath. Set language to restrict matching symbols, not cross-language call-chain nodes. Verify directed edges in source; a miss does not prove absence.",
+          "After get_analysis_status returns useMcp=true, query a function, method or route in the same projectPath. Stale-but-allowed results require current-source verification. Set language to restrict matching symbols, not cross-language call-chain nodes.",
         inputSchema: {
           type: "object",
           properties: {
@@ -183,7 +187,7 @@ async function runStatus(
   context: ToolContext,
   args: Record<string, unknown>
 ): Promise<McpToolResult> {
-  return guard(context, async () => {
+  return guard(context, async (settings) => {
     const matches = await matchedProjects(context, args);
     if (matches.length === 0) {
       return {
@@ -227,38 +231,69 @@ async function runStatus(
       available[0]!;
     const { match, targets } = chosen;
     const probes = new Map();
-    const analyses = await Promise.all(
+    const summaries = await Promise.all(
       targets.map((target) =>
         context.access.summarize(target, probes)
       )
     );
-    const workspace = analyses.find(
+    const now = context.now?.() ?? Date.now();
+    const policies = summaries.map((summary, index) =>
+      snapshotUsePolicy(
+        targets[index]!,
+        summary.freshness,
+        settings.maxStaleAgeDays,
+        now
+      )
+    );
+    const analyses = summaries.map((summary, index) => ({
+      ...summary,
+      ...snapshotPolicyPayload(policies[index]!)
+    }));
+    const workspaceIndex = summaries.findIndex(
       (entry) => entry.scope === "workspace"
     );
-    const hasWorkspaceAnalysis = workspace !== undefined;
-    const hasChangedAnalysis = analyses.some(
+    const workspace =
+      workspaceIndex >= 0
+        ? summaries[workspaceIndex]
+        : undefined;
+    const workspacePolicy =
+      workspaceIndex >= 0
+        ? policies[workspaceIndex]
+        : undefined;
+    const hasWorkspaceAnalysis = workspaceIndex >= 0;
+    const hasChangedAnalysis = summaries.some(
       (entry) => entry.scope === "changed"
     );
-    const useMcp = workspace?.freshness === "fresh";
+    const useMcp = workspacePolicy?.usable === true;
     const decisionReason = !hasWorkspaceAnalysis
       ? "workspace-analysis-missing"
-      : workspace.freshness === "stale"
-        ? "workspace-analysis-stale"
-        : workspace.freshness === "unknown"
-          ? "workspace-analysis-unverified"
-          : "ready";
+      : !workspacePolicy?.usable
+        ? "workspace-analysis-expired"
+        : workspace?.freshness === "stale"
+          ? "workspace-analysis-stale-usable"
+          : workspace?.freshness === "unknown"
+            ? "workspace-analysis-unverified-usable"
+            : "ready";
     const guidance = !hasWorkspaceAnalysis
       ? "项目已在 GitNest 登记，但没有可用的全量代码分析；请先在 GitNest 执行分析，当前用 rg 检查源码。"
-      : workspace.freshness === "stale"
-        ? "全量快照已过期；请重新分析，当前代码关系用 rg 核对。"
-        : workspace.freshness === "unknown"
-          ? "无法验证全量快照是否对应当前代码；请重新分析或用 rg 检查当前源码。"
-          : workspace.completeness === "partial"
-            ? "全量快照只覆盖部分源码；可以用 GitNest MCP 查候选关系，未命中和关键关系仍需用 rg 核对。"
-            : "可以用 GitNest MCP 查询候选调用图；关键关系仍需用当前源码核对。";
-    const target = targets.length > 0
-      ? latestTarget(targets)
-      : undefined;
+      : !workspacePolicy?.usable
+        ? `全量快照已超过 ${settings.maxStaleAgeDays} 天陈旧数据期限；请重新分析后再查询。`
+        : workspace?.freshness === "stale"
+          ? `全量快照与当前代码存在差异，但仍在 ${settings.maxStaleAgeDays} 天容忍期内；可以查询候选关系，行号和关键边必须用当前源码核对。`
+          : workspace?.freshness === "unknown"
+            ? `无法验证全量快照是否最新，但仍在 ${settings.maxStaleAgeDays} 天容忍期内；可以查询候选关系，结论必须用当前源码核对。`
+            : workspace?.completeness === "partial"
+              ? "全量快照只覆盖部分源码；可以用 GitNest MCP 查候选关系，未命中和关键关系仍需用 rg 核对。"
+              : "可以用 GitNest MCP 查询候选调用图；关键关系仍需用当前源码核对。";
+    const target =
+      workspaceIndex >= 0
+        ? targets[workspaceIndex]
+        : targets.length > 0
+          ? latestTarget(targets)
+          : undefined;
+    const targetIndex = target
+      ? targets.indexOf(target)
+      : -1;
     const body = {
       projectMatched: true,
       matchedRepositoryRoot: match.root.path,
@@ -271,14 +306,20 @@ async function runStatus(
       analyses,
       guidance
     };
-    const summary = analyses.find(
-      (entry) => entry.scope === target?.scope
-    );
+    const summary =
+      targetIndex >= 0 ? summaries[targetIndex] : undefined;
+    const policy =
+      targetIndex >= 0 ? policies[targetIndex] : undefined;
     return target
       ? envelope(
           target,
           summary?.freshness ?? "unknown",
-          body
+          {
+            ...(policy
+              ? snapshotPolicyPayload(policy)
+              : {}),
+            ...body
+          }
         )
       : body;
   });
@@ -290,7 +331,7 @@ async function runTrace(
 ): Promise<McpToolResult> {
   return guard(
     context,
-    async () => {
+    async (settings) => {
       const query = requireString(args.query, "query");
       const language = readLanguage(args.language);
       if (query.length > 256) {
@@ -352,10 +393,23 @@ async function runTrace(
       }
       const freshness =
         await context.access.freshnessFor(target);
+      const policy = snapshotUsePolicy(
+        target,
+        freshness,
+        settings.maxStaleAgeDays,
+        context.now?.() ?? Date.now()
+      );
+      if (!policy.usable) {
+        throw new DataAccessError(
+          "snapshot-expired",
+          `代码分析快照已超过 ${settings.maxStaleAgeDays} 天陈旧数据期限；请重新分析后再查询。`
+        );
+      }
       return envelope(
         target,
         freshness,
         {
+          ...snapshotPolicyPayload(policy),
           projectMatched: true,
           matchedRepositoryRoot: match.root.path,
           ...traceGraph(target, query, pathPrefix, language)
@@ -653,9 +707,101 @@ function summarizeChain(
   };
 }
 
+type SnapshotReliability =
+  | "current"
+  | "degraded"
+  | "unverified"
+  | "expired";
+
+interface SnapshotUsePolicy {
+  usable: boolean;
+  reliability: SnapshotReliability;
+  maxStaleAgeDays: number;
+  requiresSourceVerification: boolean;
+  snapshotAgeMs?: number;
+  expiresAt?: string;
+  clockSkewDetected?: boolean;
+}
+
+function snapshotUsePolicy(
+  target: AnalysisTarget,
+  freshness: AnalysisFreshness,
+  maxStaleAgeDays: number,
+  now: number
+): SnapshotUsePolicy {
+  const generatedAt = Date.parse(
+    target.snapshot.generatedAt
+  );
+  const validGeneratedAt = Number.isFinite(generatedAt);
+  const snapshotAgeMs = validGeneratedAt
+    ? Math.max(0, now - generatedAt)
+    : undefined;
+  const clockSkewDetected =
+    validGeneratedAt && generatedAt > now;
+
+  if (freshness === "fresh") {
+    return {
+      usable: true,
+      reliability: "current",
+      maxStaleAgeDays,
+      requiresSourceVerification: false,
+      ...(snapshotAgeMs !== undefined ? { snapshotAgeMs } : {}),
+      ...(clockSkewDetected ? { clockSkewDetected } : {})
+    };
+  }
+  if (!validGeneratedAt) {
+    return {
+      usable: false,
+      reliability: "expired",
+      maxStaleAgeDays,
+      requiresSourceVerification: true
+    };
+  }
+
+  const expiresAtMs =
+    generatedAt + maxStaleAgeDays * DAY_MS;
+  const usable = now <= expiresAtMs;
+  return {
+    usable,
+    reliability: usable
+      ? freshness === "stale"
+        ? "degraded"
+        : "unverified"
+      : "expired",
+    maxStaleAgeDays,
+    requiresSourceVerification: true,
+    snapshotAgeMs: Math.max(0, now - generatedAt),
+    expiresAt: new Date(expiresAtMs).toISOString(),
+    ...(clockSkewDetected ? { clockSkewDetected } : {})
+  };
+}
+
+function snapshotPolicyPayload(
+  policy: SnapshotUsePolicy
+): Record<string, unknown> {
+  return {
+    snapshotReliability: policy.reliability,
+    snapshotExpired: !policy.usable,
+    maxStaleAgeDays: policy.maxStaleAgeDays,
+    requiresSourceVerification:
+      policy.requiresSourceVerification,
+    ...(policy.snapshotAgeMs !== undefined
+      ? { snapshotAgeMs: policy.snapshotAgeMs }
+      : {}),
+    ...(policy.expiresAt
+      ? { expiresAt: policy.expiresAt }
+      : {}),
+    ...(policy.clockSkewDetected
+      ? { clockSkewDetected: true }
+      : {})
+  };
+}
+
 async function guard(
   context: ToolContext,
-  run: () => Promise<Record<string, unknown>>
+  run: (
+    settings: ToolSettings
+  ) => Promise<Record<string, unknown>>
 ): Promise<McpToolResult> {
   let maxResponseKb = DEFAULT_MAX_RESPONSE_KB;
   try {
@@ -672,7 +818,7 @@ async function guard(
         { isError: true }
       );
     }
-    const body = await run();
+    const body = await run(settings);
     return textResult(
       limitPayload(body, settings.maxResponseKb)
     );

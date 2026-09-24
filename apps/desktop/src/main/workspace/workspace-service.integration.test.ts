@@ -345,6 +345,12 @@ describe("WorkspaceService integration", () => {
         restoredSecond.worktrees.some(
           (worktree) => worktree.path === externalWorktreePath
         )
+      ).toBe(false);
+      const refreshedSecond = await collection.rescan();
+      expect(
+        refreshedSecond.worktrees.some(
+          (worktree) => worktree.path === externalWorktreePath
+        )
       ).toBe(true);
       await gitClient.removeWorktree(
         fixture.standaloneRepositoryPath,

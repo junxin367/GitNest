@@ -36,6 +36,7 @@ export interface PersistedCodeAnalysisSettings {
     enabled: boolean;
     allowSourceSnippets: boolean;
     maxResponseKb: number;
+    maxStaleAgeDays?: number;
   };
   maxFiles: number;
   maxTotalSourceMb: number;

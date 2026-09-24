@@ -217,7 +217,7 @@ Activity Rail 增加“代码分析”入口，使用独立全页视图。页面
 - 自动刷新（`codeAnalysis.autoRefresh`）：`enabled`（默认开启）、`debounceMs`（默认 `1500`，范围 `200～30000`）。
 - MCP 服务开关只控制 MCP 进程的工具响应，不影响 GUI 分析能力。
 - 设置页左侧提供独立的 MCP 分组，展示服务开关、源码片段权限、响应上限、数据目录、Codex 注册状态与操作；MCP 保存只提交 `codeAnalysis.mcp`，不覆盖未保存的 LSP 与代码分析草稿。
-- 设置页展示可复制的 `codex mcp add gitnest ...` 注册命令、等价的 `config.toml` 片段，以及“一键注册 / 卸载”按钮；按钮调用本机固定参数的 `codex mcp add|remove`（不经 shell 拼接），回读结果并展示，不修改其他 MCP 配置。开发版或入口文件缺失时禁止注册并隐藏无效的复制命令。
+- 设置页展示可复制的 `codex mcp add GitNest_code_lsp ...` 注册命令、等价的 `config.toml` 片段，以及“一键注册 / 卸载”按钮；按钮调用本机固定参数的 `codex mcp add|remove`（不经 shell 拼接），回读结果并展示，不修改其他 MCP 配置。开发版或入口文件缺失时禁止注册并隐藏无效的复制命令。
 - MCP 响应上限、源码片段可见性和启用状态变化都不需要重建分析缓存；运行中的 MCP 进程每次工具调用前重读设置，关闭服务或源码片段后立即生效。
 
 修改设置不会自动触发全量分析。影响分析结果的设置变化后，页面提示缓存需要重建。
@@ -253,7 +253,7 @@ Activity Rail 增加“代码分析”入口，使用独立全页视图。页面
 - MCP 进程只读 GitNest 数据目录；新鲜度探测执行 `git status --porcelain=v2`，必要时用只读 `git diff --name-only` 排除仅索引时间戳变化，设置 `GIT_OPTIONAL_LOCKS=0`，不写入 GitNest 数据、缓存或 Workspace 文件。
 - MCP 工具接受当前项目的绝对 `projectPath`，只用于只读归属匹配；`workspaceId` 必须属于匹配的项目。不得把该路径用于任意源码读取，也不接受 Git 命令或 shell 参数；节点位置在返回值中拆分为根目录绝对路径与被分析仓库内相对路径。
 - MCP 入口脚本位于 asar 之外，随安装包一起分发；启动不使用 shell 拼接。
-- “一键注册 / 卸载”只调用固定的 `codex mcp add gitnest` 与 `codex mcp remove gitnest` 参数，不经 shell 拼接，不提交任意命令；该按钮是 MCP 唯一能改动应用之外状态的路径，且写入内容可回读、可用同一按钮撤销。
+- “一键注册 / 卸载”只调用固定的 `codex mcp add GitNest_code_lsp` 与 `codex mcp remove GitNest_code_lsp` 参数，不经 shell 拼接，不提交任意命令；该按钮是 MCP 唯一能改动应用之外状态的路径，且写入内容可回读、可用同一按钮撤销。
 
 ## 10. 错误与降级
 
@@ -324,13 +324,13 @@ MCP 服务是由 MCP 客户端拉起的 stdio 进程，不依赖 GitNest 窗口�
 - 注册方式：一条 `codex mcp add` 命令（本机 Codex CLI 已确认提供该子命令），设置页生成该命令并提供复制：
 
 ```powershell
-codex mcp add gitnest --env ELECTRON_RUN_AS_NODE=1 -- "<安装目录>\GitNest.exe" "<安装目录>\resources\mcp\gitnest-mcp.mjs" --data-dir "<用户数据目录>"
+codex mcp add GitNest_code_lsp --env ELECTRON_RUN_AS_NODE=1 -- "<安装目录>\GitNest.exe" "<安装目录>\resources\mcp\gitnest-mcp.mjs" --data-dir "<用户数据目录>"
 ```
 
-等价的 `~/.codex/config.toml` 写法（`[mcp_servers.gitnest]` 与 `[mcp_servers.gitnest.env]`）在同一处展示；`codex mcp remove gitnest` 可撤销。
+等价的 `~/.codex/config.toml` 写法（`[mcp_servers.GitNest_code_lsp]` 与 `[mcp_servers.GitNest_code_lsp.env]`）在同一处展示；`codex mcp remove GitNest_code_lsp` 可撤销。
 
 ```toml
-[mcp_servers.gitnest]
+[mcp_servers.GitNest_code_lsp]
 command = "<GitNest 安装目录>\\GitNest.exe"
 args = [
   "<GitNest 安装目录>\\resources\\mcp\\gitnest-mcp.mjs",
@@ -338,11 +338,11 @@ args = [
   "<用户数据目录>"
 ]
 
-[mcp_servers.gitnest.env]
+[mcp_servers.GitNest_code_lsp.env]
 ELECTRON_RUN_AS_NODE = "1"
 ```
 
-- 设置页提供“一键注册”按钮：调用本机 `codex` 执行固定的 `mcp add` / `mcp remove` 参数（不经 shell 拼接），完成后用 `codex mcp get gitnest` 回读校验并展示结果；失败时展示 stderr 与可复制命令。除该按钮外不修改任何用户配置，也不写入 Workspace。
+- 设置页提供“一键注册”按钮：调用本机 `codex` 执行固定的 `mcp add` / `mcp remove` 参数（不经 shell 拼接），完成后用 `codex mcp get GitNest_code_lsp` 回读校验并展示结果；失败时展示 stderr 与可复制命令。除该按钮外不修改任何用户配置，也不写入 Workspace。
 
 ### 11.5 数据来源与复用边界
 
@@ -460,7 +460,7 @@ Desktop Renderer 现有的筛选与裁剪逻辑（`codeAnalysisNavigation.ts` �
 - 分析过程中 Workspace 源码、Git 索引和仓库状态不发生变化。
 - 大型目录受到文件数、文件大小和并发上限约束，Renderer 保持可操作。
 - 切换 Workspace 条目后不会展示上一条目的异步结果。
-- 一条 `codex mcp add gitnest ...` 命令注册后，Codex 无需额外配置即可发现并调用工具；未安装 Node、GitNest 未运行时仍可完成查询。（已验证：对真实 `win-unpacked` 打包目录执行 `codex mcp add` 后 `codex mcp get gitnest` 正确回读 command/args/env；用 Codex 客户端实际调用 `get_analysis_status`，返回 `freshness=fresh`、`nodeCount=65801`、`workspaceName=视频素材识别需求`。）
+- 一条 `codex mcp add GitNest_code_lsp ...` 命令注册后，Codex 无需额外配置即可发现并调用工具；未安装 Node、GitNest 未运行时仍可完成查询。打包验收需确认 `codex mcp get GitNest_code_lsp` 正确回读 command/args/env，并用 Codex 客户端实际调用 `get_analysis_status`。
 - `get_analysis_status` 返回各范围快照时间、新鲜度、完整性与根目录列表；`search_code_nodes` → `get_request_chain` 对一个真实前端请求给出与页面一致的有序链路。（已验证：真实数据 65801 节点 / 82118 边 / 426 条请求链，`getPublicDigitalHumanGroups` → `POST /api/digitalHuman/commGroupList` → 后端 `getCommDigitalHumanGroupList`，含 `http-request` 跨端边。）
 - 对一处同时涉及前端请求与 Spring 后端的改动，`analyze_change_impact` 能列出受影响入口、跨端边（http/rpc）与下游目标，每步带 `confidence`；同路由或同 Endpoint 命中多条链时返回 `ambiguous` 候选而不猜。
 - 快照过期时返回 `stale`：结构性查询仍返回并带 `generatedAt` 与 `freshnessNote`，`analyze_change_impact` 额外返回 `staleWarning` 说明不能作为本次改动的依据；快照不存在时返回 `snapshot-unavailable`。（已验证：21 个根全部一致时返回 `fresh`；在隔离数据目录中让工作区与快照同时记录一个实时仓库不存在的 revision（并重算配置键使快照仍可加载）后，`get_analysis_status`、`search_code_nodes`、`analyze_change_impact` 均返回 `stale` 且带 `freshnessNote`/`staleWarning`。）

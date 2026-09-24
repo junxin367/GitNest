@@ -1,6 +1,10 @@
 import {
+  createHash
+} from "node:crypto";
+import {
   mkdir,
   mkdtemp,
+  readFile,
   readdir,
   rename,
   rm,
@@ -8,7 +12,7 @@ import {
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import {
   afterEach,
@@ -31,6 +35,7 @@ import {
   AnalysisCache,
   MAX_ANALYSIS_SNAPSHOT_BYTES
 } from "./analysis-cache";
+import { BUILTIN_ANALYSIS_PROFILE_VERSIONS } from "./profiles/registry";
 
 describe("AnalysisSnapshotCache", () => {
   const temporaryPaths: string[] = [];
@@ -212,7 +217,7 @@ describe("AnalysisSnapshotCache", () => {
     );
   });
 
-  it("treats changed analysis settings or roots as a cache miss", async () => {
+  it("treats changed analysis settings or root identity as a cache miss while tolerating revision changes", async () => {
     const directory = await createTemporaryDirectory();
     const store = new AnalysisSnapshotCache(directory);
     const snapshot = createSnapshot("analysis");
@@ -261,8 +266,8 @@ describe("AnalysisSnapshotCache", () => {
         snapshot.roots
       )
     ).toBeNull();
-    expect(
-      await store.load(
+    await expect(
+      store.load(
         snapshot.workspaceId,
         createSettings(),
         [
@@ -272,7 +277,7 @@ describe("AnalysisSnapshotCache", () => {
           }
         ]
       )
-    ).toBeNull();
+    ).resolves.toEqual(snapshot);
     expect(
       await store.load(
         snapshot.workspaceId,
@@ -285,6 +290,49 @@ describe("AnalysisSnapshotCache", () => {
         ]
       )
     ).toBeNull();
+  });
+
+  it("loads a legacy revision-coupled snapshot after the Worktree revision changes", async () => {
+    const directory = await createTemporaryDirectory();
+    const store = new AnalysisSnapshotCache(directory);
+    const settings = createSettings();
+    const snapshot = createSnapshot("legacy-revision-key");
+    await store.save(snapshot, settings);
+
+    const snapshotPath = join(
+      codeAnalysisWorkspaceCacheDirectory(
+        directory,
+        snapshot.workspaceId
+      ),
+      "snapshot-workspace.json"
+    );
+    const document = JSON.parse(
+      await readFile(snapshotPath, "utf8")
+    ) as {
+      configurationKey: string;
+    };
+    document.configurationKey =
+      legacySnapshotConfigurationKey(
+        settings,
+        snapshot.roots
+      );
+    await writeFile(
+      snapshotPath,
+      JSON.stringify(document),
+      "utf8"
+    );
+
+    await expect(
+      store.load(
+        snapshot.workspaceId,
+        settings,
+        snapshot.roots.map((root) => ({
+          ...root,
+          revision: "head-two"
+        })),
+        "workspace"
+      )
+    ).resolves.toEqual(snapshot);
   });
 
   it("includes every configurable analysis budget in the snapshot key", () => {
@@ -355,6 +403,15 @@ describe("AnalysisSnapshotCache", () => {
         )
       )
     ).not.toContain(baseline);
+    expect(
+      codeAnalysisSnapshotConfigurationKey(
+        settings,
+        roots.map((root) => ({
+          ...root,
+          revision: "head-two"
+        }))
+      )
+    ).toBe(baseline);
   });
 
   it("ignores malformed snapshot JSON", async () => {
@@ -466,6 +523,101 @@ function createSettings(): CodeAnalysisSettings {
       maxReferencesPerSymbol: 500
     }
   };
+}
+
+function legacySnapshotConfigurationKey(
+  settings: CodeAnalysisSettings,
+  roots: AnalysisRoot[]
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        snapshotVersion: 4,
+        parserVersion: 13,
+        graphVersion: 14,
+        profiles: BUILTIN_ANALYSIS_PROFILE_VERSIONS,
+        maxTotalSourceBytes: settings.maxTotalSourceBytes,
+        maxFiles: settings.maxFiles,
+        maxFileSizeBytes: settings.maxFileSizeBytes,
+        ignoreDirectories: [
+          ...settings.ignoreDirectories
+        ].sort(),
+        graphDepth: settings.graphDepth,
+        maxGraphNodes: settings.maxGraphNodes,
+        maxGraphEdges: settings.maxGraphEdges,
+        maxRequestChains: settings.maxRequestChains,
+        maxDiagnostics: settings.maxDiagnostics,
+        staticFallback: settings.staticFallback,
+        lspTimeoutMs: settings.lspTimeoutMs,
+        languageServers:
+          legacyLanguageServerConfiguration(settings),
+        roots: roots
+          .map((root) => ({
+            repositoryId: root.repositoryId,
+            worktreeId: root.worktreeId,
+            path: canonicalSnapshotPath(root.path),
+            revision: root.revision ?? ""
+          }))
+          .sort((left, right) =>
+            `${left.repositoryId}\0${left.worktreeId}\0${left.path}`.localeCompare(
+              `${right.repositoryId}\0${right.worktreeId}\0${right.path}`
+            )
+          )
+      })
+    )
+    .digest("hex");
+}
+
+function legacyLanguageServerConfiguration(
+  settings: CodeAnalysisSettings
+) {
+  return Object.fromEntries(
+    (
+      [
+        "typescript",
+        "vue",
+        "java",
+        "python",
+        "go",
+        "kotlin",
+        "csharp",
+        "rust"
+      ] as const
+    ).map((language) => {
+      const server = settings[language];
+      return [
+        language,
+        server
+          ? {
+              enabled: server.enabled,
+              command: server.command,
+              args: [...server.args],
+              maxDocuments: server.maxDocuments,
+              maxSymbolsPerDocument:
+                server.maxSymbolsPerDocument,
+              maxCallHierarchyRequests:
+                server.maxCallHierarchyRequests,
+              maxTypeHierarchyRequests:
+                server.maxTypeHierarchyRequests ??
+                server.maxCallHierarchyRequests,
+              maxReferenceRequests:
+                server.maxReferenceRequests,
+              maxDocumentationRequests:
+                server.maxDocumentationRequests,
+              maxReferencesPerSymbol:
+                server.maxReferencesPerSymbol
+            }
+          : null
+      ];
+    })
+  );
+}
+
+function canonicalSnapshotPath(path: string): string {
+  const normalized = resolve(path);
+  return process.platform === "win32"
+    ? normalized.toLocaleLowerCase("en-US")
+    : normalized;
 }
 
 function createSnapshot(

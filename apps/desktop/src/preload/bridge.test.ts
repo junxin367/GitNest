@@ -34,6 +34,7 @@ describe("createGitNestBridge", () => {
             executablePath: "C:\\Program Files\\Git\\cmd\\git.exe",
             version: "2.53.0.windows.3",
             lfs: { available: false },
+            identity: {},
             credentialHelpers: [],
             ssh: {
               command: "ssh",
@@ -131,6 +132,9 @@ describe("createGitNestBridge", () => {
       analysisId: "analysis-1"
     });
     await bridge.codeAnalysis.getSnapshot();
+    await bridge.codeAnalysis.getSnapshot({
+      detail: "navigation"
+    });
     await bridge.codeAnalysis.readFile({
       nodeId: "function_123"
     });
@@ -152,6 +156,9 @@ describe("createGitNestBridge", () => {
         fetchMode: "startup"
       }
     });
+    await bridge.settings.readAiApiKey({
+      reveal: true
+    });
     await bridge.settings.clearAiApiKey({
       confirmed: true
     });
@@ -171,35 +178,8 @@ describe("createGitNestBridge", () => {
         worktreeId: "worktree"
       }
     });
-    await bridge.account.list();
-    await bridge.account.save({
-      provider: "custom",
-      host: "git.example.test",
-      username: "git",
-      authType: "system-ssh",
-      makeHostDefault: true
-    });
-    await bridge.account.bind({
-      accountId: "account_1",
-      repositoryId: "repository"
-    });
-    await bridge.account.unbind({
-      host: "git.example.test",
-      repositoryId: "repository"
-    });
-    await bridge.account.getRemovalImpact({
-      accountId: "account_1"
-    });
-    await bridge.account.remove({
-      accountId: "account_1",
-      confirmed: true
-    });
-    await bridge.account.test({
-      accountId: "account_1",
-      repositoryUrl:
-        "ssh://git@git.example.test/team/repository.git"
-    });
     await bridge.system.getRuntimeInfo();
+    await bridge.system.openIssuesPage();
     await bridge.system.listExternalApplications();
     await bridge.system.openExternalApplication({
       context: {
@@ -454,7 +434,6 @@ describe("createGitNestBridge", () => {
       "codeAnalysis",
       "settings",
       "ai",
-      "account",
       "system",
       "git",
       "repository",
@@ -509,6 +488,10 @@ describe("createGitNestBridge", () => {
         args: []
       },
       {
+        channel: IPC_CHANNELS.codeAnalysisGetSnapshot,
+        args: [{ detail: "navigation" }]
+      },
+      {
         channel: IPC_CHANNELS.codeAnalysisReadFile,
         args: [{ nodeId: "function_123" }]
       },
@@ -536,6 +519,10 @@ describe("createGitNestBridge", () => {
         ]
       },
       {
+        channel: IPC_CHANNELS.settingsReadAiApiKey,
+        args: [{ reveal: true }]
+      },
+      {
         channel: IPC_CHANNELS.settingsClearAiApiKey,
         args: [{ confirmed: true }]
       },
@@ -561,64 +548,11 @@ describe("createGitNestBridge", () => {
         ]
       },
       {
-        channel: IPC_CHANNELS.accountList,
+        channel: IPC_CHANNELS.systemGetRuntimeInfo,
         args: []
       },
       {
-        channel: IPC_CHANNELS.accountSave,
-        args: [
-          {
-            provider: "custom",
-            host: "git.example.test",
-            username: "git",
-            authType: "system-ssh",
-            makeHostDefault: true
-          }
-        ]
-      },
-      {
-        channel: IPC_CHANNELS.accountBind,
-        args: [
-          {
-            accountId: "account_1",
-            repositoryId: "repository"
-          }
-        ]
-      },
-      {
-        channel: IPC_CHANNELS.accountUnbind,
-        args: [
-          {
-            host: "git.example.test",
-            repositoryId: "repository"
-          }
-        ]
-      },
-      {
-        channel: IPC_CHANNELS.accountGetRemovalImpact,
-        args: [{ accountId: "account_1" }]
-      },
-      {
-        channel: IPC_CHANNELS.accountRemove,
-        args: [
-          {
-            accountId: "account_1",
-            confirmed: true
-          }
-        ]
-      },
-      {
-        channel: IPC_CHANNELS.accountTest,
-        args: [
-          {
-            accountId: "account_1",
-            repositoryUrl:
-              "ssh://git@git.example.test/team/repository.git"
-          }
-        ]
-      },
-      {
-        channel: IPC_CHANNELS.systemGetRuntimeInfo,
+        channel: IPC_CHANNELS.systemOpenIssuesPage,
         args: []
       },
       {

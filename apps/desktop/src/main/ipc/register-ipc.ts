@@ -25,14 +25,18 @@ import {
   MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB,
   MAX_LSP_DOCUMENTS,
   MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+  MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
   MAX_MCP_MAX_RESPONSE_KB,
+  MAX_MCP_MAX_STALE_AGE_DAYS,
   MAX_LSP_REFERENCES_PER_SYMBOL,
   MAX_LSP_REQUESTS,
   MAX_LSP_SYMBOLS_PER_DOCUMENT,
   MAX_DIFF_COMMIT_PANEL_HEIGHT,
   MIN_CODE_ANALYSIS_DIAGNOSTICS,
   MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+  MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
   MIN_MCP_MAX_RESPONSE_KB,
+  MIN_MCP_MAX_STALE_AGE_DAYS,
   MIN_CODE_ANALYSIS_GRAPH_EDGES,
   MIN_CODE_ANALYSIS_GRAPH_NODES,
   MIN_CODE_ANALYSIS_REQUEST_CHAINS,
@@ -42,18 +46,18 @@ import {
   MIN_LSP_REQUESTS,
   MIN_LSP_SYMBOLS_PER_DOCUMENT,
   MIN_DIFF_COMMIT_PANEL_HEIGHT,
+  GITNEST_PROJECT_URL,
   IPC_CHANNELS,
   IPC_EVENTS,
   LANGUAGE_SERVER_LANGUAGES,
+  type AiApiKeyValueDto,
   type AiCommitMessageDto,
   type AiConnectionTestResultDto,
   type AcknowledgeApplicationUpdatePromptRequest,
-  type AccountRemovalImpactRequest,
   type AddWorkspaceDirectoryRequest,
   type AppSettingsDto,
   type AppSettingsLoadDto,
   type AppThemeDto,
-  type BindAccountRequest,
   type CancelCodeAnalysisRequest,
   type McpRegistrationStatusDto,
   type CancelRepositoryOperationRequest,
@@ -70,6 +74,7 @@ import {
   type GitReadErrorDto,
   type GitReadResult,
   type GenerateAiCommitMessageRequest,
+  type GetCodeAnalysisSnapshotRequest,
   type InstallLanguageServerRequest,
   type InstallableLanguageServerDto,
   type LanguageServerInstallResultDto,
@@ -88,7 +93,6 @@ import {
   type OpenExternalTerminalRequest,
   type OpenFileLocationRequest,
   type RemoveWorkspaceRepositoryRequest,
-  type RemoveAccountRequest,
   type RenameWorkspaceRequest,
   type RepositoryInspectionRequest,
   type RepositoryCommitRequest,
@@ -106,19 +110,17 @@ import {
   type RepositoryQueryRequest,
   type RepositoryTabDto,
   type ReadCodeAnalysisFileRequest,
+  type ReadAiApiKeyRequest,
   type RestoreCodeAnalysisSnapshotRequest,
   type RuntimeInfo,
   type RuntimePlatform,
-  type SaveAccountRequest,
   type SetMcpRegistrationRequest,
   type StartCodeAnalysisRequest,
   type RepositoryTargetDto,
   type SelectRepositoryTargetRequest,
   type SetWorkspaceGroupCollapsedRequest,
   type SwitchWorkspaceRequest,
-  type TestAccountRequest,
   type TestAiConnectionRequest,
-  type UnbindAccountRequest,
   type UpdateAppSettingsRequest,
   type LastContentViewDto,
   type WorkspaceTabDto,
@@ -168,20 +170,6 @@ const EXTERNAL_APPLICATION_KINDS = new Set([
   "terminal",
   "git-bash"
 ]);
-const ACCOUNT_PROVIDERS = new Set([
-  "github",
-  "gitlab",
-  "gitee",
-  "custom"
-]);
-const ACCOUNT_AUTH_TYPES = new Set([
-  "https-token",
-  "system-ssh"
-]);
-const MAX_ACCOUNT_HOST_LENGTH = 320;
-const MAX_ACCOUNT_USERNAME_LENGTH = 255;
-const MAX_ACCOUNT_TOKEN_LENGTH = 8_192;
-const MAX_ACCOUNT_REPOSITORY_URL_LENGTH = 4_096;
 const MAX_AI_API_URL_LENGTH = 2_048;
 const MAX_AI_MODEL_LENGTH = 256;
 const MAX_AI_API_KEY_LENGTH = 8_192;
@@ -218,6 +206,10 @@ const REPOSITORY_TABS = new Set([
 const CODE_ANALYSIS_SCOPES = new Set([
   "changed",
   "workspace"
+]);
+const CODE_ANALYSIS_SNAPSHOT_DETAILS = new Set([
+  "navigation",
+  "full"
 ]);
 const INSTALLABLE_LANGUAGE_SERVERS = new Set<string>(
   LANGUAGE_SERVER_LANGUAGES
@@ -261,6 +253,19 @@ export function registerIpcHandlers(
           approvedLanguageServerLaunches: launches
         });
       })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.settingsReadAiApiKey,
+    (
+      _event,
+      request
+    ): Promise<GitReadResult<AiApiKeyValueDto>> =>
+      captureGitRead(() =>
+        services.settings.readAiApiKey(
+          validateReadAiApiKeyRequest(request).reveal
+        )
+      )
   );
 
   registerHandler(
@@ -354,11 +359,18 @@ export function registerIpcHandlers(
 
   registerHandler(
     IPC_CHANNELS.codeAnalysisGetSnapshot,
-    (): Promise<
+    (
+      _event,
+      request
+    ): Promise<
       GitReadResult<CodeAnalysisSnapshotDto | null>
     > =>
       captureGitRead(() =>
-        services.codeAnalysis.getSnapshot()
+        services.codeAnalysis.getSnapshot(
+          validateGetCodeAnalysisSnapshotRequest(
+            request
+          ).detail
+        )
       )
   );
 
@@ -401,6 +413,14 @@ export function registerIpcHandlers(
       nodeVersion: process.versions.node,
       platform: process.platform as RuntimePlatform
     })
+  );
+
+  registerHandler(
+    IPC_CHANNELS.systemOpenIssuesPage,
+    () =>
+      shell.openExternal(
+        `${GITNEST_PROJECT_URL}/issues/new`
+      )
   );
 
   registerHandler(
@@ -610,75 +630,6 @@ export function registerIpcHandlers(
             openError
           );
         }
-      })
-  );
-
-  registerHandler(IPC_CHANNELS.accountList, () =>
-    captureGitRead(() => services.accounts.list())
-  );
-
-  registerHandler(
-    IPC_CHANNELS.accountSave,
-    (_event, request) =>
-      captureGitRead(() =>
-        services.accounts.save(
-          validateSaveAccountRequest(request)
-        )
-      )
-  );
-
-  registerHandler(
-    IPC_CHANNELS.accountBind,
-    (_event, request) =>
-      captureGitRead(() =>
-        services.accounts.bind(
-          validateBindAccountRequest(request)
-        )
-      )
-  );
-
-  registerHandler(
-    IPC_CHANNELS.accountUnbind,
-    (_event, request) =>
-      captureGitRead(() =>
-        services.accounts.unbind(
-          validateUnbindAccountRequest(request)
-        )
-      )
-  );
-
-  registerHandler(
-    IPC_CHANNELS.accountGetRemovalImpact,
-    (_event, request) =>
-      captureGitRead(() =>
-        services.accounts.getRemovalImpact(
-          validateAccountRemovalImpactRequest(request)
-            .accountId
-        )
-      )
-  );
-
-  registerHandler(
-    IPC_CHANNELS.accountRemove,
-    (_event, request) =>
-      captureGitRead(() => {
-        const input = validateRemoveAccountRequest(request);
-        return services.accounts.remove(
-          input.accountId,
-          input.confirmed
-        );
-      })
-  );
-
-  registerHandler(
-    IPC_CHANNELS.accountTest,
-    (_event, request) =>
-      captureGitRead(() => {
-        const input = validateTestAccountRequest(request);
-        return services.accounts.test(
-          input.accountId,
-          input.repositoryUrl
-        );
       })
   );
 
@@ -1595,6 +1546,13 @@ export function validateUpdateAppSettingsRequest(
           MAX_MCP_MAX_RESPONSE_KB
         );
       }
+      if ("maxStaleAgeDays" in mcp) {
+        validated.maxStaleAgeDays = requireIntegerInRange(
+          mcp.maxStaleAgeDays,
+          MIN_MCP_MAX_STALE_AGE_DAYS,
+          MAX_MCP_MAX_STALE_AGE_DAYS
+        );
+      }
       codeAnalysis.mcp = validated;
     }
     if ("autoRefresh" in request.codeAnalysis) {
@@ -1614,6 +1572,19 @@ export function validateUpdateAppSettingsRequest(
           MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
           MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS
         );
+      }
+      if ("periodicEnabled" in autoRefresh) {
+        validated.periodicEnabled = requireBoolean(
+          autoRefresh.periodicEnabled
+        );
+      }
+      if ("periodicIntervalMinutes" in autoRefresh) {
+        validated.periodicIntervalMinutes =
+          requireIntegerInRange(
+            autoRefresh.periodicIntervalMinutes,
+            MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
+            MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES
+          );
       }
       codeAnalysis.autoRefresh = validated;
     }
@@ -1794,6 +1765,21 @@ export function validateClearAiApiKeyRequest(
   return { confirmed: request.confirmed };
 }
 
+export function validateReadAiApiKeyRequest(
+  request: unknown
+): ReadAiApiKeyRequest {
+  if (
+    !isRecord(request) ||
+    typeof request.reveal !== "boolean"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Reading the AI API Key requires an explicit reveal mode."
+    );
+  }
+  return { reveal: request.reveal };
+}
+
 export function validateAcknowledgeApplicationUpdatePromptRequest(
   value: unknown
 ): AcknowledgeApplicationUpdatePromptRequest {
@@ -1854,6 +1840,33 @@ export function validateRestoreCodeAnalysisSnapshotRequest(
     CODE_ANALYSIS_SCOPES
   ) as CodeAnalysisScopeDto;
   return { scope };
+}
+
+export function validateGetCodeAnalysisSnapshotRequest(
+  request: unknown
+): GetCodeAnalysisSnapshotRequest {
+  if (request === undefined) {
+    return { detail: "full" };
+  }
+  if (!isRecord(request)) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Reading a code analysis snapshot requires a supported detail level."
+    );
+  }
+  const detail = request.detail;
+  if (
+    typeof detail !== "string" ||
+    !CODE_ANALYSIS_SNAPSHOT_DETAILS.has(detail)
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Reading a code analysis snapshot requires a supported detail level."
+    );
+  }
+  return {
+    detail: detail as GetCodeAnalysisSnapshotRequest["detail"]
+  };
 }
 
 export function validateCancelCodeAnalysisRequest(
@@ -3149,296 +3162,6 @@ function validateRelativeWorktreeFilePath(path: unknown): string {
   }
 
   return path;
-}
-
-export function validateSaveAccountRequest(
-  request: unknown
-): SaveAccountRequest {
-  if (
-    !request ||
-    typeof request !== "object" ||
-    !("provider" in request) ||
-    typeof request.provider !== "string" ||
-    !ACCOUNT_PROVIDERS.has(request.provider) ||
-    !("host" in request) ||
-    typeof request.host !== "string" ||
-    !("authType" in request) ||
-    typeof request.authType !== "string" ||
-    !ACCOUNT_AUTH_TYPES.has(request.authType)
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Saving an account requires a supported provider, host, and authentication type."
-    );
-  }
-
-  const id =
-    "id" in request ? request.id : undefined;
-  const username =
-    "username" in request ? request.username : undefined;
-  const token =
-    "token" in request ? request.token : undefined;
-  const makeHostDefault =
-    "makeHostDefault" in request
-      ? request.makeHostDefault
-      : undefined;
-  if (id !== undefined && typeof id !== "string") {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Account ids must be strings."
-    );
-  }
-  if (
-    username !== undefined &&
-    typeof username !== "string"
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Account usernames must be strings."
-    );
-  }
-  if (token !== undefined && typeof token !== "string") {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Account tokens must be strings."
-    );
-  }
-  if (
-    makeHostDefault !== undefined &&
-    typeof makeHostDefault !== "boolean"
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Host default selection must be boolean."
-    );
-  }
-
-  const host = request.host.trim();
-  const normalizedUsername = username?.trim();
-  const normalizedToken = token?.trim();
-  if (
-    !host ||
-    host.length > MAX_ACCOUNT_HOST_LENGTH ||
-    host.includes("\0") ||
-    /[\r\n]/.test(host) ||
-    (normalizedUsername !== undefined &&
-      (normalizedUsername.length >
-        MAX_ACCOUNT_USERNAME_LENGTH ||
-        normalizedUsername.includes("\0") ||
-        /[\r\n]/.test(normalizedUsername))) ||
-    (normalizedToken !== undefined &&
-      (normalizedToken.length > MAX_ACCOUNT_TOKEN_LENGTH ||
-        normalizedToken.includes("\0") ||
-        /[\r\n]/.test(normalizedToken)))
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Account fields exceed the supported bounds or contain invalid characters."
-    );
-  }
-  if (
-    request.authType === "system-ssh" &&
-    normalizedToken
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "System SSH accounts do not accept tokens."
-    );
-  }
-
-  return {
-    ...(id !== undefined
-      ? { id: validateAccountIdentifier(id) }
-      : {}),
-    provider:
-      request.provider as SaveAccountRequest["provider"],
-    host,
-    ...(normalizedUsername
-      ? { username: normalizedUsername }
-      : {}),
-    authType:
-      request.authType as SaveAccountRequest["authType"],
-    ...(normalizedToken ? { token: normalizedToken } : {}),
-    makeHostDefault: makeHostDefault ?? false
-  };
-}
-
-export function validateBindAccountRequest(
-  request: unknown
-): BindAccountRequest {
-  if (
-    !request ||
-    typeof request !== "object" ||
-    !("accountId" in request) ||
-    typeof request.accountId !== "string"
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Binding an account requires its id."
-    );
-  }
-  const repositoryId =
-    "repositoryId" in request
-      ? request.repositoryId
-      : undefined;
-  if (
-    repositoryId !== undefined &&
-    typeof repositoryId !== "string"
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Repository ids must be strings."
-    );
-  }
-  return {
-    accountId: validateAccountIdentifier(request.accountId),
-    ...(repositoryId !== undefined
-      ? {
-          repositoryId:
-            validateAccountIdentifier(repositoryId)
-        }
-      : {})
-  };
-}
-
-export function validateUnbindAccountRequest(
-  request: unknown
-): UnbindAccountRequest {
-  if (
-    !request ||
-    typeof request !== "object" ||
-    !("host" in request) ||
-    typeof request.host !== "string"
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Unbinding an account requires its host."
-    );
-  }
-  const repositoryId =
-    "repositoryId" in request
-      ? request.repositoryId
-      : undefined;
-  if (
-    repositoryId !== undefined &&
-    typeof repositoryId !== "string"
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Repository ids must be strings."
-    );
-  }
-  const host = request.host.trim();
-  if (
-    !host ||
-    host.length > MAX_ACCOUNT_HOST_LENGTH ||
-    host.includes("\0") ||
-    /[\r\n]/.test(host)
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Account hosts exceed the supported bounds."
-    );
-  }
-  return {
-    host,
-    ...(repositoryId !== undefined
-      ? {
-          repositoryId:
-            validateAccountIdentifier(repositoryId)
-        }
-      : {})
-  };
-}
-
-export function validateAccountRemovalImpactRequest(
-  request: unknown
-): AccountRemovalImpactRequest {
-  if (
-    !request ||
-    typeof request !== "object" ||
-    !("accountId" in request) ||
-    typeof request.accountId !== "string"
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Account removal impact requires an account id."
-    );
-  }
-  return {
-    accountId: validateAccountIdentifier(request.accountId)
-  };
-}
-
-export function validateRemoveAccountRequest(
-  request: unknown
-): RemoveAccountRequest {
-  const impact =
-    validateAccountRemovalImpactRequest(request);
-  if (
-    !request ||
-    typeof request !== "object" ||
-    !("confirmed" in request) ||
-    typeof request.confirmed !== "boolean"
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Removing an account requires explicit confirmation state."
-    );
-  }
-  return {
-    ...impact,
-    confirmed: request.confirmed
-  };
-}
-
-export function validateTestAccountRequest(
-  request: unknown
-): TestAccountRequest {
-  if (
-    !request ||
-    typeof request !== "object" ||
-    !("accountId" in request) ||
-    typeof request.accountId !== "string" ||
-    !("repositoryUrl" in request) ||
-    typeof request.repositoryUrl !== "string"
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Testing an account requires its id and a repository URL."
-    );
-  }
-  const repositoryUrl = request.repositoryUrl.trim();
-  if (
-    !repositoryUrl ||
-    repositoryUrl.length >
-      MAX_ACCOUNT_REPOSITORY_URL_LENGTH ||
-    repositoryUrl.includes("\0") ||
-    /[\r\n]/.test(repositoryUrl)
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "The repository URL exceeds the supported bounds."
-    );
-  }
-  return {
-    accountId: validateAccountIdentifier(request.accountId),
-    repositoryUrl
-  };
-}
-
-function validateAccountIdentifier(value: string): string {
-  if (
-    !value ||
-    value.length > MAX_REPOSITORY_TARGET_ID_LENGTH ||
-    !/^[a-zA-Z0-9_-]+$/.test(value)
-  ) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      "Account and repository ids contain invalid characters."
-    );
-  }
-  return value;
 }
 
 function validateRepositoryCommand(

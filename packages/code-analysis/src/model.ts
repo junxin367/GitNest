@@ -383,6 +383,11 @@ export interface CodeAnalysisInput {
   workspaceRootPath: string;
   roots: AnalysisRoot[];
   scope: CodeAnalysisScope;
+  /**
+   * Allows a changed-file discovery pass to emit an updated full
+   * workspace graph from the cached complete index.
+   */
+  resultScope?: CodeAnalysisScope;
   changedPaths: ChangedAnalysisPath[];
   freshnessChangedPaths?: ChangedAnalysisPath[];
   worktreeStatuses?: Array<{

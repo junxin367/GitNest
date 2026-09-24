@@ -109,6 +109,15 @@ export interface ClearAiApiKeyRequest {
   confirmed: boolean;
 }
 
+export interface ReadAiApiKeyRequest {
+  reveal: boolean;
+}
+
+export interface AiApiKeyValueDto {
+  apiKey: string | null;
+  length: number;
+}
+
 export interface TestAiConnectionRequest {
   apiUrl: string;
   model: string;

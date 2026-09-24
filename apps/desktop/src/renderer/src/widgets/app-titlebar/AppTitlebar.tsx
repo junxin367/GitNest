@@ -145,6 +145,17 @@ export function AppTitlebar({
               >
                 快捷键与命令面板
               </MenuItem>
+              <MenuItem
+                leading={<Icon name="external" size={14} />}
+                onClick={() => {
+                  closeMenu();
+                  void window.gitnest.system
+                    .openIssuesPage()
+                    .catch(() => undefined);
+                }}
+              >
+                反馈问题
+              </MenuItem>
               <MenuSeparator />
               <MenuItem
                 leading={<Icon name="sparkle" size={14} />}

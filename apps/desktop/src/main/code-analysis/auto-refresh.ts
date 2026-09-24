@@ -5,24 +5,36 @@ import type { Workspace } from "@gitnest/workspace-core";
  * Debounced, single-flight scheduler for automatic code-analysis
  * refreshes.
  *
- * Behaviour (CA-5):
- * - only the currently selected entry is refreshed, and only with
- *   the `changed` scope; the full `workspace` scope stays manual;
+ * Behaviour:
+ * - the caller decides whether to run an incremental refresh or a
+ *   full fallback without tying the task to the renderer's scope;
  * - rapid saves collapse into one run (`debounceMs`, default 1500);
  * - at most one refresh runs at a time, and a new request during a
  *   run supersedes the pending one instead of queueing up;
  * - switching entries or disabling the feature cancels the pending
  *   and the running refresh.
  *
- * The scheduler owns no timers beyond the debounce timer and never
- * writes analysis data itself: it only asks the service to start a
- * run.
+ * The scheduler never writes analysis data itself: it only asks the
+ * service to run the configured refresh.
  */
 export interface AutoRefreshSchedulerOptions {
   debounceMs: number;
   enabled(): Promise<boolean>;
   run(signal: AbortSignal): Promise<void>;
   onError?(error: unknown): void;
+}
+
+export interface PeriodicRefreshConfiguration {
+  enabled: boolean;
+  intervalMs: number;
+}
+
+export interface PeriodicRefreshSchedulerOptions {
+  configuration(): Promise<PeriodicRefreshConfiguration>;
+  run(signal: AbortSignal): Promise<void>;
+  onError?(error: unknown): void;
+  checkIntervalMs?: number;
+  clock?: () => number;
 }
 
 export class CodeAnalysisAutoRefreshScheduler {
@@ -120,6 +132,106 @@ export class CodeAnalysisAutoRefreshScheduler {
   }
 }
 
+/**
+ * Lightweight periodic refresh trigger. It checks configuration on a
+ * short heartbeat, but only launches analysis after the configured
+ * interval.
+ */
+export class CodeAnalysisPeriodicRefreshScheduler {
+  readonly #options: PeriodicRefreshSchedulerOptions;
+  readonly #checkIntervalMs: number;
+  readonly #clock: () => number;
+  #timer: NodeJS.Timeout | undefined;
+  #activeController: AbortController | undefined;
+  #lastRunAt: number;
+  #running = false;
+  #disposed = false;
+
+  constructor(options: PeriodicRefreshSchedulerOptions) {
+    this.#options = options;
+    this.#checkIntervalMs =
+      options.checkIntervalMs ?? 60_000;
+    this.#clock = options.clock ?? Date.now;
+    this.#lastRunAt = this.#clock();
+  }
+
+  start(): void {
+    if (this.#disposed || this.#timer) {
+      return;
+    }
+    this.#schedule();
+  }
+
+  reset(): void {
+    this.#lastRunAt = this.#clock();
+    this.#activeController?.abort();
+  }
+
+  dispose(): void {
+    this.#disposed = true;
+    if (this.#timer) {
+      clearTimeout(this.#timer);
+      this.#timer = undefined;
+    }
+    this.#activeController?.abort();
+  }
+
+  get running(): boolean {
+    return this.#running;
+  }
+
+  #schedule(): void {
+    if (this.#disposed) {
+      return;
+    }
+    this.#timer = setTimeout(() => {
+      this.#timer = undefined;
+      void this.#tick();
+    }, this.#checkIntervalMs);
+  }
+
+  async #tick(): Promise<void> {
+    try {
+      if (this.#disposed || this.#running) {
+        return;
+      }
+      let configuration: PeriodicRefreshConfiguration;
+      try {
+        configuration =
+          await this.#options.configuration();
+      } catch {
+        return;
+      }
+      if (
+        !configuration.enabled ||
+        !Number.isFinite(configuration.intervalMs) ||
+        configuration.intervalMs <= 0 ||
+        this.#clock() - this.#lastRunAt <
+          configuration.intervalMs
+      ) {
+        return;
+      }
+
+      this.#lastRunAt = this.#clock();
+      this.#running = true;
+      const controller = new AbortController();
+      this.#activeController = controller;
+      try {
+        await this.#options.run(controller.signal);
+      } catch (error) {
+        this.#options.onError?.(error);
+      } finally {
+        if (this.#activeController === controller) {
+          this.#activeController = undefined;
+        }
+        this.#running = false;
+      }
+    } finally {
+      this.#schedule();
+    }
+  }
+}
+
 export function waitForAnalysisCompletion(
   subscribe: (
     listener: (state: CodeAnalysisState) => void
@@ -177,9 +289,8 @@ export interface AutoRefreshSource {
 }
 
 /**
- * True when an automatic `changed` refresh is meaningful for this
- * workspace: it needs at least one group target, otherwise the
- * analysis context is empty and a refresh would do nothing.
+ * True when an automatic refresh is meaningful for this workspace:
+ * it needs at least one group target and one readable worktree.
  */
 export function shouldAutoRefresh(
   workspace: Workspace | undefined

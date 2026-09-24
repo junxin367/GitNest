@@ -226,6 +226,112 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     ).toBe("3");
   });
 
+  it("loads the full node index only after opening the code-node tab", async () => {
+    const base = createSnapshot();
+    const navigationSnapshot: CodeAnalysisSnapshotDto = {
+      ...base,
+      detailLevel: "navigation",
+      requestChains: [
+        {
+          id: "items-chain",
+          profileId: "web-http",
+          transport: "http",
+          operationKey: "GET /items",
+          method: "GET",
+          route: "/items",
+          title: "Items",
+          clientNodeId: "caller",
+          endpointNodeId: "callee",
+          nodeIds: ["caller", "callee"],
+          edgeIds: ["caller-callee"],
+          changed: true,
+          ambiguous: false,
+          confidence: "exact"
+        }
+      ],
+      stats: {
+        ...base.stats,
+        analyzedFiles: 0,
+        requestChainCount: 1
+      }
+    };
+    let finishLoading!: (loaded: boolean) => void;
+    const controller = createController(
+      navigationSnapshot
+    );
+    controller.snapshotDetail = "navigation";
+    controller.loadFullSnapshot = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishLoading = resolve;
+        })
+    );
+    analysisMock.controller = controller;
+
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(controller.loadFullSnapshot).not.toHaveBeenCalled();
+    const nodeTab = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.analysis-navigation-tabs [role="tab"]'
+      )
+    ).find((tab) => tab.textContent?.includes("代码节点"));
+    await act(async () => {
+      nodeTab?.click();
+      await flushAsyncWork();
+    });
+
+    expect(controller.loadFullSnapshot).toHaveBeenCalledTimes(1);
+    controller.loadingFullSnapshot = true;
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+    expect(container.textContent).toContain(
+      "正在加载完整代码节点"
+    );
+
+    controller.snapshot = {
+      ...navigationSnapshot,
+      detailLevel: "full"
+    };
+    controller.snapshotDetail = "full";
+    controller.loadingFullSnapshot = false;
+    await act(async () => {
+      finishLoading(true);
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(
+      container.querySelectorAll(".analysis-symbol-result")
+    ).toHaveLength(2);
+  });
+
   it("limits code-node results without rendering a truncation notice", async () => {
     const base = createSnapshot();
     const nodes = Array.from({ length: 121 }, (_, index) => ({
@@ -731,7 +837,7 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     );
   });
 
-  it("shows the original analysis time as the leftmost runtime detail", async () => {
+  it("shows analysis time and duration without repeating the selected scope", async () => {
     const snapshot = createSnapshot();
     analysisMock.controller = createController(snapshot);
     await act(async () => {
@@ -751,16 +857,17 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
         ".analysis-runtime-strip"
       )?.children ?? []
     ).map((element) => element.textContent?.trim());
-    expect(details.slice(0, 3)).toEqual([
+    expect(details.slice(0, 2)).toEqual([
       `分析时间 ${new Date(
         snapshot.generatedAt
       ).toLocaleString()}`,
-      "全部代码",
       "耗时 1 ms"
     ]);
+    expect(details).not.toContain("变动代码");
+    expect(details).not.toContain("全部代码");
   });
 
-  it("switches analysis scopes without showing the previous scope snapshot", async () => {
+  it("keeps the current scope visible until the replacement snapshot is ready", async () => {
     const controller = createController();
     analysisMock.controller = controller;
     await act(async () => {
@@ -802,14 +909,14 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       "changed"
     );
     expect(controller.start).toHaveBeenCalledWith("changed");
-    expect(changedScope?.getAttribute("aria-pressed")).toBe(
+    expect(workspaceScope?.getAttribute("aria-pressed")).toBe(
       "true"
     );
     expect(
       container.querySelector(".analysis-summary-grid")
-    ).toBeNull();
-    expect(container.textContent).toContain(
-      "目标范围完成前不会展示另一范围的统计和关系图"
+    ).not.toBeNull();
+    expect(container.textContent).not.toContain(
+      "正在切换到变动代码分析"
     );
 
     controller.state = {
@@ -832,12 +939,12 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       await flushAsyncWork();
     });
 
-    expect(changedScope?.getAttribute("aria-pressed")).toBe(
+    expect(workspaceScope?.getAttribute("aria-pressed")).toBe(
       "true"
     );
     expect(
       container.querySelector(".analysis-summary-grid")
-    ).toBeNull();
+    ).not.toBeNull();
 
     controller.snapshot = {
       ...createSnapshot(),
@@ -898,7 +1005,7 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(controller.start).not.toHaveBeenCalled();
     expect(
       container.querySelector(".analysis-summary-grid")
-    ).toBeNull();
+    ).not.toBeNull();
 
     controller.state = {
       state: "ready",
@@ -929,6 +1036,96 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(
       container.querySelector(".analysis-summary-grid")
     ).not.toBeNull();
+  });
+
+  it("keeps the current scope while a same-identity snapshot is loading", async () => {
+    const controller = createController();
+    controller.restoreSnapshot = vi.fn(async () => true);
+    analysisMock.controller = controller;
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    const changedScope = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        ".analysis-scope-switch button"
+      )
+    ).find((button) => button.textContent === "变动代码");
+
+    await act(async () => {
+      changedScope?.click();
+      await flushAsyncWork();
+    });
+
+    controller.action = "restoring";
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    controller.action = null;
+    controller.state = {
+      ...controller.state,
+      scope: "changed"
+    };
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    const workspaceScope = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        ".analysis-scope-switch button"
+      )
+    ).find((button) => button.textContent === "全部代码");
+    expect(workspaceScope?.getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(
+      container.querySelector(".analysis-summary-grid")
+    ).not.toBeNull();
+
+    controller.snapshot = {
+      ...createSnapshot(),
+      scope: "changed"
+    };
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(changedScope?.getAttribute("aria-pressed")).toBe(
+      "true"
+    );
   });
 
   it("keeps a non-default scope selected when no cached snapshot exists", async () => {
@@ -1061,6 +1258,97 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       warningPanel?.querySelector(".analysis-warning-menu")
         ?.textContent
     ).toContain("部分动态调用无法静态解析。");
+  });
+
+  it("offers matching code nodes when a request-chain search has no result", async () => {
+    const base = createSnapshot();
+    analysisMock.controller = createController({
+      ...base,
+      nodes: [
+        ...base.nodes,
+        {
+          ...base.nodes[0]!,
+          id: "standalone-function",
+          name: "getRecognitionList",
+          qualifiedName: "getRecognitionList",
+          location: {
+            ...base.nodes[0]!.location,
+            path: "src/getRecognitionList.ts"
+          }
+        }
+      ],
+      requestChains: [
+        {
+          id: "users-chain",
+          profileId: "web-http",
+          transport: "http",
+          operationKey: "GET /users",
+          method: "GET",
+          route: "/users",
+          title: "Users",
+          clientNodeId: "caller",
+          endpointNodeId: "callee",
+          nodeIds: ["caller", "callee"],
+          edgeIds: ["caller-callee"],
+          changed: true,
+          ambiguous: false,
+          confidence: "exact"
+        }
+      ],
+      stats: {
+        ...base.stats,
+        symbolCount: base.stats.symbolCount + 1,
+        requestChainCount: 1
+      }
+    });
+
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    const input = container.querySelector<HTMLInputElement>(
+      'input[aria-label="筛选请求链"]'
+    );
+    if (!input) {
+      throw new Error("Request-chain search input was not rendered.");
+    }
+    await act(async () => {
+      setInputValue(input, "getRecognitionList");
+      await flushAsyncWork();
+    });
+
+    const switchButton = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("button")
+    ).find((button) =>
+      button.textContent?.includes("在代码节点中查看")
+    );
+    expect(switchButton).not.toBeUndefined();
+
+    await act(async () => {
+      switchButton?.click();
+      await flushAsyncWork();
+    });
+
+    expect(
+      container.querySelector<HTMLInputElement>(
+        'input[aria-label="搜索代码节点"]'
+      )?.value
+    ).toBe("getRecognitionList");
+    expect(
+      Array.from(
+        container.querySelectorAll(
+          ".analysis-symbol-result strong"
+        )
+      ).map((element) => element.textContent)
+    ).toContain("getRecognitionList");
   });
 
   it("clears navigation search from the input and uses the shared dropdown menu for request types", async () => {
@@ -2144,12 +2432,15 @@ function createController(
       generatedAt: "2026-09-17T00:00:00.000Z"
     },
     snapshot,
+    snapshotDetail: snapshot.detailLevel ?? "full",
     loading: false,
+    loadingFullSnapshot: false,
     action: null,
     installingLanguage: null,
     error: null,
     start: vi.fn(async () => true),
     restoreSnapshot: vi.fn(async () => false),
+    loadFullSnapshot: vi.fn(async () => true),
     cancel: vi.fn(async () => true),
     installLanguageServer: vi.fn(async () => null),
     reload: vi.fn(async () => undefined),

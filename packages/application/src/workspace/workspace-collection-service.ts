@@ -150,7 +150,7 @@ export class WorkspaceCollectionService {
         throw invalidWorkspaceCatalog(workspaceId);
       }
       const nextService = this.#createService(workspaceId);
-      const refreshedWorkspace = await nextService.rescan();
+      // Activate persisted topology immediately; the runtime rescans it in the background.
 
       if (catalog.activeWorkspaceId !== workspaceId) {
         const nextCatalog: WorkspaceCatalog = {
@@ -162,8 +162,8 @@ export class WorkspaceCollectionService {
         this.#catalog = nextCatalog;
       }
       this.#activeService = nextService;
-      await this.#syncSummary(refreshedWorkspace);
-      return refreshedWorkspace;
+      await this.#syncSummary(workspace);
+      return workspace;
     });
   }
 

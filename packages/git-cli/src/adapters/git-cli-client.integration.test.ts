@@ -49,6 +49,7 @@ describe("GitCliClient integration", () => {
       /git(?:\.exe)?$/i
     );
     expect(environment.version).toMatch(/^\d+\.\d+\.\d+/);
+    expect(environment.identity).toEqual(expect.any(Object));
     expect(environment.detectedAt).toMatch(/Z$/);
     expect(environment.ssh.command.length).toBeGreaterThan(0);
   });

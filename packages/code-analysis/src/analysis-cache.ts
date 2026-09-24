@@ -216,7 +216,7 @@ export class AnalysisSnapshotCache
           primary.savedAt
         ).catch(() => undefined);
       }
-      return structuredClone(primary.snapshot);
+      return primary.snapshot;
     }
 
     for (const directory of this.#fallbackDirectories) {
@@ -236,7 +236,7 @@ export class AnalysisSnapshotCache
         settings,
         fallback.savedAt
       ).catch(() => undefined);
-      return structuredClone(fallback.snapshot);
+      return fallback.snapshot;
     }
     return null;
   }
@@ -346,15 +346,22 @@ async function loadSnapshotDocument(
     if (
       !isSnapshotDocument(value) ||
       value.workspaceId !== workspaceId ||
-      value.configurationKey !==
-        codeAnalysisSnapshotConfigurationKey(
-          settings,
-          roots
-        ) ||
       value.snapshot.workspaceId !== workspaceId ||
       (scope !== undefined &&
         value.snapshot.scope !== scope) ||
-      !analysisRootsMatch(value.snapshot.roots, roots)
+      !analysisRootsMatch(value.snapshot.roots, roots) ||
+      (
+        value.configurationKey !==
+          codeAnalysisSnapshotConfigurationKey(
+            settings,
+            roots
+          ) &&
+        value.configurationKey !==
+          legacyCodeAnalysisSnapshotConfigurationKey(
+            settings,
+            value.snapshot.roots
+          )
+      )
     ) {
       return null;
     }
@@ -557,6 +564,21 @@ export function codeAnalysisSnapshotConfigurationKey(
   settings: CodeAnalysisSettings,
   roots: AnalysisRoot[]
 ): string {
+  return snapshotConfigurationKey(settings, roots, false);
+}
+
+function legacyCodeAnalysisSnapshotConfigurationKey(
+  settings: CodeAnalysisSettings,
+  roots: AnalysisRoot[]
+): string {
+  return snapshotConfigurationKey(settings, roots, true);
+}
+
+function snapshotConfigurationKey(
+  settings: CodeAnalysisSettings,
+  roots: AnalysisRoot[],
+  includeRevision: boolean
+): string {
   return createHash("sha256")
     .update(
       JSON.stringify({
@@ -582,11 +604,13 @@ export function codeAnalysisSnapshotConfigurationKey(
             repositoryId: root.repositoryId,
             worktreeId: root.worktreeId,
             path: canonicalPath(root.path),
-            revision: root.revision ?? ""
+            ...(includeRevision
+              ? { revision: root.revision ?? "" }
+              : {})
           }))
           .sort((left, right) =>
-            `${left.repositoryId}\0${left.worktreeId}\0${left.path}\0${left.revision}`.localeCompare(
-              `${right.repositoryId}\0${right.worktreeId}\0${right.path}\0${right.revision}`
+            `${left.repositoryId}\0${left.worktreeId}\0${left.path}`.localeCompare(
+              `${right.repositoryId}\0${right.worktreeId}\0${right.path}`
             )
           )
       })
@@ -757,7 +781,7 @@ function analysisRootsMatch(
         (root) =>
           `${root.repositoryId}\0${root.worktreeId}\0${canonicalPath(
             root.path
-          )}\0${root.revision ?? ""}`
+          )}`
       )
       .sort();
   const leftKeys = toKeys(left);

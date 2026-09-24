@@ -35,20 +35,6 @@
     max-width: 104px;
   }
 
-  .account-form-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .account-token-field {
-    grid-column: auto;
-  }
-
-  .account-test-row,
-  .account-form-actions {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
   .repository-health-grid {
     gap: var(--space-2);
   }
@@ -84,6 +70,10 @@
 }
 
 @media (max-width: 760px) {
+  .settings-info-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .version-dialog-facts {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -111,15 +101,73 @@
 
   .settings-layout {
     grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
   }
 
   .settings-nav {
     position: static;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(5, max-content);
+    grid-template-rows: auto auto;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
   }
 
   .settings-nav-label {
+    display: none;
+  }
+
+  .settings-nav-item {
+    grid-row: 1;
+    width: auto;
+    min-height: 38px;
+    padding: 0 var(--space-3);
+    scroll-snap-align: start;
+  }
+
+  .settings-nav-item::before {
+    top: auto;
+    right: var(--space-3);
+    bottom: 0;
+    left: var(--space-3);
+    width: auto;
+    height: 2px;
+    transform: scaleX(0.5);
+  }
+
+  .settings-nav-item.active::before {
+    transform: scaleX(1);
+  }
+
+  .settings-nav-item-copy {
+    display: block;
+  }
+
+  .settings-nav-item-subtitle,
+  .settings-nav-item-chevron {
+    display: none;
+  }
+
+  .settings-nav-subnav {
+    grid-row: 2;
     grid-column: 1 / -1;
+    display: flex;
+    width: max-content;
+    min-width: 100%;
+    margin: 0;
+    padding: var(--space-2) 0 0;
+    border-top: 1px solid var(--border-soft);
+    border-left: 0;
+  }
+
+  .settings-nav-subitem {
+    width: auto;
+    flex: 0 0 auto;
+    padding: 0 var(--space-3);
+  }
+
+  .settings-nav-subitem::before {
+    display: none;
   }
 
   .settings-ai-field-grid,
@@ -135,8 +183,13 @@
   }
 
   .settings-ai-actions {
-    align-items: stretch;
+    align-items: flex-end;
     flex-direction: column;
+  }
+
+  .settings-ai-actions > .settings-field-help {
+    align-self: stretch;
+    margin-right: 0;
   }
 
   .settings-ai-actions-buttons {

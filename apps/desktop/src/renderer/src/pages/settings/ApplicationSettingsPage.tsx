@@ -9,8 +9,7 @@ import type {
   CodeAnalysisSettingsDto,
   ExternalTerminalProfileDto,
   GitEnvironmentDto,
-  GitReadErrorDto,
-  WorkspaceDetailsDto
+  GitReadErrorDto
 } from "@gitnest/contracts";
 import {
   MAX_CODE_ANALYSIS_DIAGNOSTICS,
@@ -19,9 +18,13 @@ import {
   MAX_CODE_ANALYSIS_REQUEST_CHAINS,
   MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB,
   MAX_MCP_MAX_RESPONSE_KB,
+  MAX_MCP_MAX_STALE_AGE_DAYS,
   MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+  MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
   MIN_MCP_MAX_RESPONSE_KB,
+  MIN_MCP_MAX_STALE_AGE_DAYS,
   MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+  MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
   MAX_LSP_DOCUMENTS,
   MAX_LSP_REFERENCES_PER_SYMBOL,
   MAX_LSP_REQUESTS,
@@ -41,10 +44,8 @@ import {
   type McpServerSettingsDto
 } from "@gitnest/contracts";
 
-import type { AccountController } from "../../features/account-manage/useAccounts";
 import type { AppSettingsController } from "../../features/settings/useAppSettings";
 import { Button } from "../../shared/ui/Button";
-import { Dialog } from "../../shared/ui/Dialog";
 import { Icon, type IconName } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import { Select } from "../../shared/ui/Select";
@@ -60,62 +61,98 @@ export type ApplicationSettingsSection =
   | "general"
   | "ai"
   | "analysis"
-  | "mcp"
   | "git"
   | "account";
 
 interface ApplicationSettingsPageProps {
-  workspace: WorkspaceDetailsDto | null;
   gitEnvironment: GitEnvironmentDto | null;
   terminalProfiles: ExternalTerminalProfileDto[];
-  accounts: AccountController;
   appSettings: AppSettingsController;
   initialSection?: ApplicationSettingsSection;
 }
 
-const SETTINGS_SECTIONS: Array<{
+interface SettingsCardLink {
+  id: string;
+  label: string;
+}
+
+interface SettingsSectionDefinition {
   id: ApplicationSettingsSection;
   label: string;
   subtitle: string;
   icon: IconName;
-}> = [
+  cards: SettingsCardLink[];
+}
+
+const GENERAL_SETTINGS_SECTION: SettingsSectionDefinition = {
+  id: "general",
+  label: "通用",
+  subtitle: "应用行为与偏好",
+  icon: "settings",
+  cards: [
+    { id: "settings-general-behavior", label: "应用行为" },
+    { id: "settings-general-terminal", label: "默认终端" },
+    { id: "settings-general-preferences", label: "当前偏好" }
+  ]
+};
+
+const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
+  GENERAL_SETTINGS_SECTION,
   {
-    id: "general",
-    label: "通用",
-    subtitle: "应用行为与偏好",
-    icon: "settings"
+    id: "analysis",
+    label: "代码分析",
+    subtitle: "索引、LSP 与 MCP",
+    icon: "graph",
+    cards: [
+      { id: "settings-analysis-overview", label: "代码分析" },
+      { id: "settings-analysis-budget", label: "性能预算" },
+      {
+        id: "settings-analysis-language-servers",
+        label: "Language Server 配置"
+      },
+      { id: "settings-analysis-mcp", label: "MCP 服务" },
+      { id: "settings-analysis-codex", label: "Codex 连接" }
+    ]
   },
   {
     id: "ai",
     label: "AI 提交信息",
     subtitle: "生成提交信息",
-    icon: "sparkle"
-  },
-  {
-    id: "analysis",
-    label: "LSP 与代码分析",
-    subtitle: "请求链与调用关系",
-    icon: "graph"
-  },
-  {
-    id: "mcp",
-    label: "MCP",
-    subtitle: "客户端连接与访问控制",
-    icon: "layers"
+    icon: "sparkle",
+    cards: [
+      { id: "settings-ai-commit-message", label: "AI 提交信息" }
+    ]
   },
   {
     id: "git",
     label: "Git",
     subtitle: "运行环境与同步策略",
-    icon: "branch"
+    icon: "branch",
+    cards: [
+      { id: "settings-git-environment", label: "Git 运行环境" },
+      { id: "settings-git-fetch", label: "远程检查策略" },
+      { id: "settings-git-push", label: "Push 同步策略" }
+    ]
   },
   {
     id: "account",
     label: "账号与认证",
-    subtitle: "凭据与仓库绑定",
-    icon: "repository"
+    subtitle: "系统 Git 凭据",
+    icon: "repository",
+    cards: [
+      { id: "settings-account-system", label: "系统 Git 认证" }
+    ]
   }
 ];
+
+function findSettingsSection(
+  section: ApplicationSettingsSection
+): SettingsSectionDefinition {
+  return (
+    SETTINGS_SECTIONS.find((item) => item.id === section) ??
+    GENERAL_SETTINGS_SECTION
+  );
+}
 
 const LANGUAGE_SERVER_CONFIGURATIONS = [
   {
@@ -184,15 +221,19 @@ type LanguageServerId =
   (typeof LANGUAGE_SERVER_CONFIGURATIONS)[number]["id"];
 
 export function ApplicationSettingsPage({
-  workspace,
   gitEnvironment,
   terminalProfiles,
-  accounts,
   appSettings,
   initialSection = "general"
 }: ApplicationSettingsPageProps) {
+  const initialSettingsSection = findSettingsSection(initialSection);
   const [section, setSection] =
-    useState<ApplicationSettingsSection>(initialSection);
+    useState<ApplicationSettingsSection>(
+      initialSettingsSection.id
+    );
+  const [settingsCard, setSettingsCard] = useState(
+    initialSettingsSection.cards[0]?.id ?? ""
+  );
   const [aiUrl, setAiUrl] = useState(
     appSettings.settings.ai.apiUrl
   );
@@ -206,15 +247,18 @@ export function ApplicationSettingsPage({
     appSettings.settings.ai.enabled
   );
   const [aiKey, setAiKey] = useState("");
+  const [revealedAiKey, setRevealedAiKey] = useState<
+    string | null
+  >(null);
   const [aiKeyVisible, setAiKeyVisible] = useState(false);
+  const [aiKeyLength, setAiKeyLength] = useState(0);
+  const [aiKeyLoading, setAiKeyLoading] = useState(false);
   const [aiTesting, setAiTesting] = useState(false);
   const [aiFeedback, setAiFeedback] = useState<{
     title: string;
     message: string;
     tone: "success" | "error";
   } | null>(null);
-  const [clearKeyConfirmOpen, setClearKeyConfirmOpen] =
-    useState(false);
   const [analysisDraft, setAnalysisDraft] =
     useState<CodeAnalysisSettingsDto>(() =>
       cloneCodeAnalysisSettings(
@@ -230,6 +274,14 @@ export function ApplicationSettingsPage({
   const aiDraftDirtyRef = useRef(false);
   const analysisDraftDirtyRef = useRef(false);
   const mcpDraftDirtyRef = useRef(false);
+  const settingsScrollRef = useRef<HTMLDivElement>(null);
+  const pendingSettingsCardScrollRef = useRef<string | null>(
+    null
+  );
+  const programmaticSettingsCardRef = useRef<string | null>(null);
+  const settingsScrollUnlockTimerRef = useRef<number | null>(
+    null
+  );
   const aiDraftVersionRef = useRef(0);
   const analysisDraftVersionRef = useRef(0);
   const mcpDraftVersionRef = useRef(0);
@@ -237,10 +289,183 @@ export function ApplicationSettingsPage({
     Number.isInteger(mcpDraft.maxResponseKb) &&
     mcpDraft.maxResponseKb >= MIN_MCP_MAX_RESPONSE_KB &&
     mcpDraft.maxResponseKb <= MAX_MCP_MAX_RESPONSE_KB;
+  const mcpStaleAgeValid =
+    Number.isInteger(mcpDraft.maxStaleAgeDays) &&
+    mcpDraft.maxStaleAgeDays >=
+      MIN_MCP_MAX_STALE_AGE_DAYS &&
+    mcpDraft.maxStaleAgeDays <=
+      MAX_MCP_MAX_STALE_AGE_DAYS;
+  const periodicRefreshIntervalValid =
+    Number.isInteger(
+      analysisDraft.autoRefresh.periodicIntervalMinutes
+    ) &&
+    analysisDraft.autoRefresh.periodicIntervalMinutes >=
+      MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES &&
+    analysisDraft.autoRefresh.periodicIntervalMinutes <=
+      MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES;
+
+  const scrollToSettingsCard = useCallback(
+    (cardId: string) => {
+      const scrollHost = settingsScrollRef.current;
+      const target = document.getElementById(cardId);
+      if (!scrollHost || !target || !scrollHost.contains(target)) {
+        return;
+      }
+      if (settingsScrollUnlockTimerRef.current !== null) {
+        window.clearTimeout(
+          settingsScrollUnlockTimerRef.current
+        );
+      }
+      programmaticSettingsCardRef.current = cardId;
+      const releaseScrollTracking = () => {
+        if (programmaticSettingsCardRef.current !== cardId) {
+          return;
+        }
+        programmaticSettingsCardRef.current = null;
+        if (settingsScrollUnlockTimerRef.current !== null) {
+          window.clearTimeout(
+            settingsScrollUnlockTimerRef.current
+          );
+          settingsScrollUnlockTimerRef.current = null;
+        }
+      };
+      scrollHost.addEventListener(
+        "scrollend",
+        releaseScrollTracking,
+        { once: true }
+      );
+      settingsScrollUnlockTimerRef.current = window.setTimeout(
+        releaseScrollTracking,
+        900
+      );
+      const reducedMotion =
+        window.matchMedia?.(
+          "(prefers-reduced-motion: reduce)"
+        ).matches ?? false;
+      target.scrollIntoView({
+        behavior: reducedMotion ? "auto" : "smooth",
+        block: "start"
+      });
+    },
+    []
+  );
+
+  const selectSettingsCard = useCallback(
+    (cardId: string) => {
+      if (
+        !findSettingsSection(section).cards.some(
+          (card) => card.id === cardId
+        )
+      ) {
+        return;
+      }
+      setSettingsCard(cardId);
+      scrollToSettingsCard(cardId);
+    },
+    [scrollToSettingsCard, section]
+  );
+
+  const selectSettingsSection = useCallback(
+    (nextSectionId: ApplicationSettingsSection) => {
+      const nextSection = findSettingsSection(nextSectionId);
+      const nextCardId = nextSection.cards[0]?.id ?? "";
+      setSettingsCard(nextCardId);
+      if (nextSection.id === section) {
+        scrollToSettingsCard(nextCardId);
+        return;
+      }
+      pendingSettingsCardScrollRef.current = nextCardId;
+      setSection(nextSection.id);
+    },
+    [scrollToSettingsCard, section]
+  );
+
+  const syncSettingsCardFromScroll = useCallback(() => {
+    const scrollHost = settingsScrollRef.current;
+    if (
+      !scrollHost ||
+      programmaticSettingsCardRef.current !== null
+    ) {
+      return;
+    }
+    const cards = findSettingsSection(section).cards
+      .map((card) => ({
+        ...card,
+        element: document.getElementById(card.id)
+      }))
+      .filter(
+        (
+          card
+        ): card is SettingsCardLink & {
+          element: HTMLElement;
+        } =>
+          card.element instanceof HTMLElement &&
+          scrollHost.contains(card.element)
+      );
+    const firstCard = cards[0];
+    if (!firstCard) {
+      return;
+    }
+
+    const scrollHostTop =
+      scrollHost.getBoundingClientRect().top;
+    const activationLine =
+      scrollHostTop +
+      Math.min(
+        120,
+        Math.max(72, scrollHost.clientHeight * 0.18)
+      );
+    let nextCardId = firstCard.id;
+    for (const card of cards) {
+      if (
+        card.element.getBoundingClientRect().top <=
+        activationLine
+      ) {
+        nextCardId = card.id;
+      }
+    }
+    const lastCard = cards[cards.length - 1];
+    if (
+      lastCard &&
+      scrollHost.scrollHeight > scrollHost.clientHeight + 8 &&
+      scrollHost.scrollHeight -
+        scrollHost.scrollTop -
+        scrollHost.clientHeight <=
+      8
+    ) {
+      nextCardId = lastCard.id;
+    }
+    setSettingsCard((current) =>
+      current === nextCardId ? current : nextCardId
+    );
+  }, [section]);
 
   useEffect(() => {
-    setSection(initialSection);
+    const nextSection = findSettingsSection(initialSection);
+    setSection(nextSection.id);
+    setSettingsCard(nextSection.cards[0]?.id ?? "");
   }, [initialSection]);
+
+  useEffect(() => {
+    const pendingCardId =
+      pendingSettingsCardScrollRef.current;
+    if (!pendingCardId) {
+      return;
+    }
+    pendingSettingsCardScrollRef.current = null;
+    scrollToSettingsCard(pendingCardId);
+  }, [scrollToSettingsCard, section]);
+
+  useEffect(
+    () => () => {
+      if (settingsScrollUnlockTimerRef.current !== null) {
+        window.clearTimeout(
+          settingsScrollUnlockTimerRef.current
+        );
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (aiDraftDirtyRef.current) {
@@ -250,6 +475,37 @@ export function ApplicationSettingsPage({
     setAiModel(appSettings.settings.ai.model);
     setAiPrompt(appSettings.settings.ai.prompt);
     setAiEnabled(appSettings.settings.ai.enabled);
+    setAiKey("");
+    setRevealedAiKey(null);
+    setAiKeyVisible(false);
+  }, [appSettings.settings.ai]);
+
+  useEffect(() => {
+    if (section !== "ai") {
+      setRevealedAiKey(null);
+      setAiKeyVisible(false);
+    }
+  }, [section]);
+
+  useEffect(() => {
+    let active = true;
+    if (!appSettings.settings.ai.apiKeyConfigured) {
+      setAiKeyLength(0);
+      return () => {
+        active = false;
+      };
+    }
+    void window.gitnest.settings
+      .readAiApiKey({ reveal: false })
+      .then((result) => {
+        if (active && result.ok) {
+          setAiKeyLength(result.value.length);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
   }, [appSettings.settings.ai]);
 
   useEffect(() => {
@@ -295,6 +551,60 @@ export function ApplicationSettingsPage({
     aiDraftVersionRef.current += 1;
   };
 
+  const toggleAiKeyVisibility = async () => {
+    if (aiKeyVisible) {
+      setAiKeyVisible(false);
+      setRevealedAiKey(null);
+      return;
+    }
+    if (
+      aiKey ||
+      !appSettings.settings.ai.apiKeyConfigured
+    ) {
+      setAiKeyVisible(true);
+      return;
+    }
+
+    setAiKeyLoading(true);
+    setAiFeedback(null);
+    try {
+      const result =
+        await window.gitnest.settings.readAiApiKey({
+          reveal: true
+        });
+      if (!result.ok) {
+        setAiFeedback({
+          title: "无法显示 API Key",
+          message: formatAiSettingsError(result.error),
+          tone: "error"
+        });
+        return;
+      }
+      if (result.value.apiKey === null) {
+        setAiFeedback({
+          title: "无法显示 API Key",
+          message: "未找到已保存的 API Key。",
+          tone: "error"
+        });
+        return;
+      }
+      setAiKeyLength(result.value.length);
+      setRevealedAiKey(result.value.apiKey);
+      setAiKeyVisible(true);
+    } catch (reason) {
+      setAiFeedback({
+        title: "无法显示 API Key",
+        message:
+          reason instanceof Error
+            ? reason.message
+            : "读取 API Key 失败。",
+        tone: "error"
+      });
+    } finally {
+      setAiKeyLoading(false);
+    }
+  };
+
   const saveAiSettings = async () => {
     const draftVersion = aiDraftVersionRef.current;
     const url = aiUrl.trim();
@@ -331,6 +641,7 @@ export function ApplicationSettingsPage({
         setAiModel(model);
         setAiPrompt(prompt);
         setAiKey("");
+        setRevealedAiKey(null);
         setAiKeyVisible(false);
       }
       setAiFeedback(null);
@@ -397,6 +708,9 @@ export function ApplicationSettingsPage({
   };
 
   const saveAnalysisSettings = async () => {
+    if (!periodicRefreshIntervalValid) {
+      return;
+    }
     const draftVersion =
       analysisDraftVersionRef.current;
     const saved = await appSettings.update(
@@ -422,7 +736,7 @@ export function ApplicationSettingsPage({
   };
 
   const saveMcpSettings = async () => {
-    if (!mcpResponseLimitValid) {
+    if (!mcpResponseLimitValid || !mcpStaleAgeValid) {
       return;
     }
     const draftVersion = mcpDraftVersionRef.current;
@@ -450,6 +764,16 @@ export function ApplicationSettingsPage({
       profile.kind ===
       appSettings.settings.general.defaultTerminalKind
   );
+  const aiKeyValue =
+    revealedAiKey ??
+    (aiKey ||
+      (appSettings.settings.ai.apiKeyConfigured
+        ? "*".repeat(aiKeyLength)
+        : ""));
+  const aiKeyReadOnly =
+    appSettings.settings.ai.apiKeyConfigured &&
+    revealedAiKey === null &&
+    !aiKey;
 
   return (
     <SkeletonBoundary
@@ -459,14 +783,17 @@ export function ApplicationSettingsPage({
       loading={appSettings.loading}
       surfaceClassName="page-scroll settings-page-scroll gn-page-skeleton application-settings-skeleton"
     >
-      <div className="page-scroll settings-page-scroll">
+      <div
+        className="page-scroll settings-page-scroll"
+        onScroll={syncSettingsCardFromScroll}
+        ref={settingsScrollRef}
+      >
         <div className="application-settings-page">
         <section className="page-heading">
           <div>
-            <span className="eyebrow">应用偏好</span>
             <h1>设置</h1>
             <p>
-              管理应用行为、AI、代码分析、MCP、Git 同步策略以及账号认证。
+              管理应用行为、AI、代码分析、Git 同步策略以及系统认证。
             </p>
           </div>
         </section>
@@ -514,29 +841,76 @@ export function ApplicationSettingsPage({
             className="panel settings-nav"
           >
             <div className="settings-nav-label">GitNest</div>
-            {SETTINGS_SECTIONS.map((item) => (
-              <button
-                aria-current={
-                  section === item.id ? "page" : undefined
-                }
-                className={`settings-nav-item${
-                  section === item.id ? " active" : ""
-                }`}
-                key={item.id}
-                onClick={() => setSection(item.id)}
-                type="button"
-              >
-                <Icon name={item.icon} size={16} />
-                <span className="settings-nav-item-copy">
-                  <span className="settings-nav-item-title">
-                    {item.label}
-                  </span>
-                  <span className="settings-nav-item-subtitle">
-                    {item.subtitle}
-                  </span>
-                </span>
-              </button>
-            ))}
+            {SETTINGS_SECTIONS.map((item) => {
+              const active = section === item.id;
+              return (
+                <div
+                  className={`settings-nav-group${
+                    active ? " is-active" : ""
+                  }`}
+                  key={item.id}
+                >
+                  <button
+                    aria-controls={`settings-subnav-${item.id}`}
+                    aria-current={active ? "page" : undefined}
+                    aria-expanded={active}
+                    className={`settings-nav-item${
+                      active ? " active" : ""
+                    }`}
+                    onClick={() =>
+                      selectSettingsSection(item.id)
+                    }
+                    type="button"
+                  >
+                    <Icon name={item.icon} size={16} />
+                    <span className="settings-nav-item-copy">
+                      <span className="settings-nav-item-title">
+                        {item.label}
+                      </span>
+                      <span className="settings-nav-item-subtitle">
+                        {item.subtitle}
+                      </span>
+                    </span>
+                    <span
+                      aria-hidden="true"
+                      className="settings-nav-item-chevron"
+                    >
+                      <Icon name="chevron" size={14} />
+                    </span>
+                  </button>
+                  {active && (
+                    <div
+                      aria-label={`${item.label}卡片`}
+                      className="settings-nav-subnav"
+                      id={`settings-subnav-${item.id}`}
+                      role="group"
+                    >
+                      {item.cards.map((card) => (
+                        <button
+                          aria-current={
+                            settingsCard === card.id
+                              ? "location"
+                              : undefined
+                          }
+                          className={`settings-nav-subitem${
+                            settingsCard === card.id
+                              ? " active"
+                              : ""
+                          }`}
+                          key={card.id}
+                          onClick={() =>
+                            selectSettingsCard(card.id)
+                          }
+                          type="button"
+                        >
+                          {card.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </nav>
 
           <section
@@ -547,6 +921,7 @@ export function ApplicationSettingsPage({
               <>
                 <SettingsCard
                   description="控制启动导航，并明确不可关闭的安全边界。"
+                  id="settings-general-behavior"
                   title="应用行为"
                 >
                   <SettingsToggle
@@ -567,6 +942,7 @@ export function ApplicationSettingsPage({
                 <SettingsCard
                   badge={`${terminalProfiles.length} 个可用`}
                   description="左侧活动栏的终端入口会使用这里解析出的默认终端。"
+                  id="settings-general-terminal"
                   title="默认终端"
                 >
                   <Select<ExternalTerminalProfileDto["kind"]>
@@ -606,6 +982,7 @@ export function ApplicationSettingsPage({
 
                 <SettingsCard
                   description="按类别查看当前文件浏览、差异与提交偏好。"
+                  id="settings-general-preferences"
                   title="当前偏好"
                 >
                   <div className="settings-preference-groups">
@@ -723,6 +1100,7 @@ export function ApplicationSettingsPage({
                     </button>
                   }
                   description="根据当前提交范围生成提交信息，结果仍由你确认后提交。"
+                  id="settings-ai-commit-message"
                   title="AI 提交信息"
                 >
                   <div className="settings-ai-field-grid">
@@ -760,7 +1138,7 @@ export function ApplicationSettingsPage({
                     fullWidth
                     helpText={
                       appSettings.settings.ai.apiKeyConfigured
-                        ? "已有 Key 保存在 Windows 安全存储；留空会保留原值。"
+                        ? "已有 Key 保存在 Windows 安全存储。"
                         : "Key 将通过 Windows 安全存储加密保存，不会写入 app-settings.json。"
                     }
                     id="ai-api-key"
@@ -768,16 +1146,19 @@ export function ApplicationSettingsPage({
                     maxLength={8192}
                     onChange={(event) => {
                       markAiDraftDirty();
+                      setRevealedAiKey(null);
                       setAiKey(event.target.value);
                     }}
                     placeholder={
                       appSettings.settings.ai.apiKeyConfigured
-                        ? "已保存；输入新值可替换"
+                        ? "已保存"
                         : "输入 API Key"
                     }
+                    readOnly={aiKeyReadOnly}
                     spellCheck={false}
                     trailing={
                       <Button
+                        aria-busy={aiKeyLoading}
                         aria-label={
                           aiKeyVisible
                             ? "隐藏 API Key"
@@ -785,8 +1166,9 @@ export function ApplicationSettingsPage({
                         }
                         aria-pressed={aiKeyVisible}
                         className="gn-input__action"
+                        disabled={aiKeyLoading}
                         onClick={() =>
-                          setAiKeyVisible((visible) => !visible)
+                          void toggleAiKeyVisibility()
                         }
                         title={
                           aiKeyVisible
@@ -800,7 +1182,7 @@ export function ApplicationSettingsPage({
                       </Button>
                     }
                     type={aiKeyVisible ? "text" : "password"}
-                    value={aiKey}
+                    value={aiKeyValue}
                   />
                   <Textarea
                     fullWidth
@@ -849,19 +1231,6 @@ export function ApplicationSettingsPage({
                         保存 AI 设置
                       </Button>
                     </div>
-                    <Button
-                      disabled={
-                        !appSettings.settings.ai
-                          .apiKeyConfigured ||
-                        appSettings.clearingKey
-                      }
-                      onClick={() => setClearKeyConfirmOpen(true)}
-                      size="small"
-                      type="button"
-                      variant="danger"
-                    >
-                      清空 Key
-                    </Button>
                   </div>
                 </SettingsCard>
               </>
@@ -871,25 +1240,48 @@ export function ApplicationSettingsPage({
               <>
                 <SettingsCard
                   badge={gitEnvironment ? "可用" : "不可用"}
-                  description="查看 GitNest 当前使用的 Git 运行环境。"
+                  badgeIcon={
+                    gitEnvironment ? "check" : "warning"
+                  }
+                  badgeTone={gitEnvironment ? "green" : "red"}
+                  description="查看当前 Git 版本与运行环境。"
+                  id="settings-git-environment"
                   title="Git 运行环境"
                 >
-                  <dl className="detail-list settings-preference-list">
-                    <Detail
-                      label="Git 版本"
-                      value={gitEnvironment?.version ?? "未检测"}
-                    />
-                    <Detail
-                      label="执行文件"
-                      value={
-                        gitEnvironment?.executablePath ?? "不可用"
-                      }
-                    />
-                  </dl>
+                  <div className="settings-info-grid">
+                    <div className="settings-info-item">
+                      <span className="settings-info-label">
+                        Git 版本
+                      </span>
+                      <span
+                        className="settings-info-value"
+                        title={
+                          gitEnvironment?.version ?? "未检测"
+                        }
+                      >
+                        {gitEnvironment?.version ?? "未检测"}
+                      </span>
+                    </div>
+                    <div className="settings-info-item">
+                      <span className="settings-info-label">
+                        执行文件
+                      </span>
+                      <span
+                        className="settings-info-value"
+                        title={
+                          gitEnvironment?.executablePath ??
+                          "不可用"
+                        }
+                      >
+                        {gitEnvironment?.executablePath ?? "不可用"}
+                      </span>
+                    </div>
+                  </div>
                 </SettingsCard>
 
                 <SettingsCard
                   description="选择应用启动并完成 Workspace 加载后的远程检查方式。"
+                  id="settings-git-fetch"
                   title="远程检查策略"
                 >
                   <div className="settings-option-grid">
@@ -935,6 +1327,7 @@ export function ApplicationSettingsPage({
 
                 <SettingsCard
                   description="当 Push 发现远程分支已有更新时，先按这里的策略同步，再继续 Push。"
+                  id="settings-git-push"
                   title="Push 同步策略"
                 >
                   <div className="settings-option-grid">
@@ -994,6 +1387,7 @@ export function ApplicationSettingsPage({
                     </button>
                   }
                   description="分析当前 Workspace，不在项目目录写入索引或配置。"
+                  id="settings-analysis-overview"
                   title="代码分析"
                 >
                   <div className="settings-option-grid">
@@ -1041,15 +1435,32 @@ export function ApplicationSettingsPage({
                   />
                   <SettingsToggle
                     checked={analysisDraft.autoRefresh.enabled}
-                    description="仅对当前选中的条目自动重跑变动范围，去抖后合并多次保存；全量分析与手动重新分析不受影响。"
+                    description="后台读取 Git 变动文件并复用完整索引，同时刷新 MCP 全量快照与变动视图；完整索引不可复用时自动重建。"
                     disabled={appSettings.saving}
-                    label="自动刷新变动分析"
+                    label="文件变更后增量更新"
                     onChange={(enabled) =>
                       updateAnalysisDraft((current) => ({
                         ...current,
                         autoRefresh: {
                           ...current.autoRefresh,
                           enabled
+                        }
+                      }))
+                    }
+                  />
+                  <SettingsToggle
+                    checked={
+                      analysisDraft.autoRefresh.periodicEnabled
+                    }
+                    description="应用运行期间按间隔在后台更新分析快照；优先复用完整索引，无法复用时再执行全量分析。"
+                    disabled={appSettings.saving}
+                    label="定时更新分析快照"
+                    onChange={(periodicEnabled) =>
+                      updateAnalysisDraft((current) => ({
+                        ...current,
+                        autoRefresh: {
+                          ...current.autoRefresh,
+                          periodicEnabled
                         }
                       }))
                     }
@@ -1074,24 +1485,61 @@ export function ApplicationSettingsPage({
                           }
                         }));
                       }}
+                      reserveHelpSpace
                       type="number"
                       value={analysisDraft.autoRefresh.debounceMs}
                     />
-                  </div>
-                  <div className="settings-safety-note">
-                    <Icon name="check" size={15} />
-                    <div>
-                      <strong>Workspace 保持只读</strong>
-                      <p>
-                        源码只执行目录遍历与读取；分析缓存和各语言 LSP
-                        数据统一保存在 GitNest 应用数据目录。
-                      </p>
-                    </div>
+                    <Input
+                      disabled={
+                        appSettings.saving ||
+                        !analysisDraft.autoRefresh.periodicEnabled
+                      }
+                      fullWidth
+                      helpText={
+                        periodicRefreshIntervalValid
+                          ? "最短 5 分钟；更新在后台运行，不切换当前代码分析视图。"
+                          : `请输入 ${MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES}～${MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES} 之间的整数。`
+                      }
+                      id="analysis-periodic-refresh-minutes"
+                      label="定时更新间隔（分钟）"
+                      max={
+                        MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES
+                      }
+                      min={
+                        MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES
+                      }
+                      onChange={(event) => {
+                        const parsed = Number(event.target.value);
+                        if (!Number.isFinite(parsed)) {
+                          return;
+                        }
+                        updateAnalysisDraft((current) => ({
+                          ...current,
+                          autoRefresh: {
+                            ...current.autoRefresh,
+                            periodicIntervalMinutes: parsed
+                          }
+                        }));
+                      }}
+                      reserveHelpSpace
+                      state={
+                        periodicRefreshIntervalValid
+                          ? "default"
+                          : "error"
+                      }
+                      step={1}
+                      type="number"
+                      value={
+                        analysisDraft.autoRefresh
+                          .periodicIntervalMinutes
+                      }
+                    />
                   </div>
                 </SettingsCard>
 
                 <SettingsCard
                   description="限制大型项目的文件读取、内存占用和关系图展开规模。"
+                  id="settings-analysis-budget"
                   title="性能预算"
                 >
                   <div className="analysis-settings-number-grid">
@@ -1303,11 +1751,14 @@ export function ApplicationSettingsPage({
                   />
                   <div className="settings-ai-actions">
                     <p className="settings-field-help">
-                      全部代码分析始终需要在代码分析页手动启动。
+                      后台刷新优先复用完整索引；只有索引不可复用时才重建全部代码。
                     </p>
                     <Button
                       aria-busy={appSettings.saving}
-                      disabled={appSettings.saving}
+                      disabled={
+                        appSettings.saving ||
+                        !periodicRefreshIntervalValid
+                      }
                       onClick={() =>
                         void saveAnalysisSettings()
                       }
@@ -1338,27 +1789,24 @@ export function ApplicationSettingsPage({
                   selectedLanguage={selectedLanguageServer}
                   settings={analysisDraft}
                 />
-              </>
-            )}
-
-            {section === "mcp" && (
-              <>
                 <SettingsCard
-                  description="将已生成的代码分析快照提供给本机 MCP 客户端。"
+                  action={
+                    <SettingsSwitch
+                      checked={mcpDraft.enabled}
+                      disabled={appSettings.saving}
+                      label="启用 MCP 服务"
+                      onChange={(enabled) =>
+                        updateMcpDraft((current) => ({
+                          ...current,
+                          enabled
+                        }))
+                      }
+                    />
+                  }
+                  description="将代码分析快照提供给本机 MCP 客户端；关闭后仅停止返回 MCP 数据，不影响 GitNest 内的代码分析。"
+                  id="settings-analysis-mcp"
                   title="MCP 服务"
                 >
-                  <SettingsToggle
-                    checked={mcpDraft.enabled}
-                    description="关闭后工具不返回代码分析数据；不影响 GitNest 内的代码分析。"
-                    disabled={appSettings.saving}
-                    label="启用 MCP 服务"
-                    onChange={(enabled) =>
-                      updateMcpDraft((current) => ({
-                        ...current,
-                        enabled
-                      }))
-                    }
-                  />
                   <div className="mcp-registration-grid">
                     <Input
                       disabled={appSettings.saving}
@@ -1382,6 +1830,7 @@ export function ApplicationSettingsPage({
                           maxResponseKb: parsed
                         }));
                       }}
+                      reserveHelpSpace
                       step={1}
                       state={
                         mcpResponseLimitValid ? "default" : "error"
@@ -1389,12 +1838,44 @@ export function ApplicationSettingsPage({
                       type="number"
                       value={mcpDraft.maxResponseKb}
                     />
+                    <Input
+                      disabled={appSettings.saving}
+                      fullWidth
+                      helpText={
+                        mcpStaleAgeValid
+                          ? "仅限制已确认陈旧或无法验证的快照；与当前源码一致的快照不会因时间过期。"
+                          : `请输入 ${MIN_MCP_MAX_STALE_AGE_DAYS}～${MAX_MCP_MAX_STALE_AGE_DAYS} 之间的整数。`
+                      }
+                      id="analysis-mcp-max-stale-age-days"
+                      label="陈旧快照最长使用（天）"
+                      max={MAX_MCP_MAX_STALE_AGE_DAYS}
+                      min={MIN_MCP_MAX_STALE_AGE_DAYS}
+                      onChange={(event) => {
+                        const parsed = Number(event.target.value);
+                        if (!Number.isFinite(parsed)) {
+                          return;
+                        }
+                        updateMcpDraft((current) => ({
+                          ...current,
+                          maxStaleAgeDays: parsed
+                        }));
+                      }}
+                      reserveHelpSpace
+                      state={
+                        mcpStaleAgeValid ? "default" : "error"
+                      }
+                      step={1}
+                      type="number"
+                      value={mcpDraft.maxStaleAgeDays}
+                    />
                   </div>
                   <div className="settings-ai-actions">
                     <Button
                       aria-busy={appSettings.saving}
                       disabled={
-                        appSettings.saving || !mcpResponseLimitValid
+                        appSettings.saving ||
+                        !mcpResponseLimitValid ||
+                        !mcpStaleAgeValid
                       }
                       onClick={() => void saveMcpSettings()}
                       size="small"
@@ -1407,46 +1888,22 @@ export function ApplicationSettingsPage({
                   </div>
                 </SettingsCard>
 
-                <SettingsCard
-                  description="管理本机 Codex 的 GitNest MCP 注册。"
-                  title="Codex 连接"
-                >
-                  <McpRegistrationPanel
-                    enabled={
-                      appSettings.settings.codeAnalysis.mcp.enabled
-                    }
-                  />
-                </SettingsCard>
+                <McpRegistrationPanel />
               </>
             )}
 
             {section === "account" && (
               <AccountAuthSettings
-                accounts={accounts}
+                cardId="settings-account-system"
                 embedded
                 gitEnvironment={gitEnvironment}
                 terminalProfiles={terminalProfiles}
-                workspace={workspace}
               />
             )}
           </section>
         </div>
       </div>
 
-        {clearKeyConfirmOpen && (
-          <ClearAiKeyDialog
-            busy={appSettings.clearingKey}
-            onCancel={() => setClearKeyConfirmOpen(false)}
-            onConfirm={async () => {
-              const cleared = await appSettings.clearAiApiKey();
-              if (cleared) {
-                setAiKey("");
-                setAiKeyVisible(false);
-                setClearKeyConfirmOpen(false);
-              }
-            }}
-          />
-        )}
       </div>
     </SkeletonBoundary>
   );
@@ -1533,6 +1990,7 @@ function LanguageServerSettingsPanel({
   return (
     <SettingsCard
       description="在同一区域切换并配置各语言 Server；未显示的配置和未保存草稿会继续保留。"
+      id="settings-analysis-language-servers"
       title="Language Server 配置"
     >
       <nav
@@ -1822,18 +2280,24 @@ function LanguageServerSettingsPanel({
 function SettingsCard({
   title,
   description,
+  id,
   badge,
+  badgeIcon,
+  badgeTone = "neutral",
   action,
   children
 }: {
   title: string;
   description: string;
+  id?: string;
   badge?: string;
+  badgeIcon?: IconName;
+  badgeTone?: "neutral" | "blue" | "green" | "yellow" | "red";
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <article className="panel settings-card">
+    <article className="panel settings-card" id={id}>
       <header className="settings-card-header">
         <div>
           <div className="settings-card-title">{title}</div>
@@ -1843,7 +2307,10 @@ function SettingsCard({
         </div>
         {action}
         {badge && (
-          <span className="status-pill neutral">{badge}</span>
+          <span className={`status-pill ${badgeTone}`}>
+            {badgeIcon && <Icon name={badgeIcon} size={12} />}
+            {badge}
+          </span>
         )}
       </header>
       <div className="settings-card-body">{children}</div>
@@ -1858,6 +2325,12 @@ function cloneCodeAnalysisSettings(
   return {
     ...settings,
     ignoreDirectories: [...settings.ignoreDirectories],
+    autoRefresh: {
+      ...settings.autoRefresh
+    },
+    mcp: {
+      ...settings.mcp
+    },
     typescript: {
       ...settings.typescript,
       args: [...settings.typescript.args]
@@ -1946,17 +2419,38 @@ function SettingsToggle({
           {description}
         </div>
       </div>
-      <button
-        aria-label={label}
-        aria-pressed={checked}
-        className={`settings-switch${checked ? " active" : ""}`}
+      <SettingsSwitch
+        checked={checked}
         disabled={disabled}
-        onClick={() => onChange(!checked)}
-        type="button"
-      >
-        <span className="settings-switch-thumb" />
-      </button>
+        label={label}
+        onChange={onChange}
+      />
     </div>
+  );
+}
+
+function SettingsSwitch({
+  checked,
+  disabled,
+  label,
+  onChange
+}: {
+  checked: boolean;
+  disabled: boolean;
+  label: string;
+  onChange(value: boolean): void;
+}) {
+  return (
+    <button
+      aria-label={label}
+      aria-pressed={checked}
+      className={`settings-switch${checked ? " active" : ""}`}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      type="button"
+    >
+      <span className="settings-switch-thumb" />
+    </button>
   );
 }
 
@@ -2008,64 +2502,6 @@ function Detail({
   );
 }
 
-function ClearAiKeyDialog({
-  busy,
-  onCancel,
-  onConfirm
-}: {
-  busy: boolean;
-  onCancel(): void;
-  onConfirm(): void | Promise<void>;
-}) {
-  return (
-    <Dialog
-      ariaDescribedBy="clear-ai-key-description"
-      dismissDisabled={busy}
-      footer={
-        <>
-          <Button
-            data-modal-initial-focus
-            disabled={busy}
-            onClick={onCancel}
-            size="small"
-            type="button"
-          >
-            取消
-          </Button>
-          <Button
-            aria-busy={busy}
-            disabled={busy}
-            emphasis="strong"
-            onClick={() => void onConfirm()}
-            size="small"
-            type="button"
-            variant="danger"
-          >
-            确认清空 Key
-          </Button>
-        </>
-      }
-      icon="warning"
-      onDismiss={onCancel}
-      role="alertdialog"
-      size="compact"
-      title="清空 AI API Key？"
-      tone="danger"
-    >
-      <div
-        className="command-warning danger"
-        id="clear-ai-key-description"
-      >
-        <Icon name="warning" size={15} />
-        <span>
-          清空后，AI 生成和连接测试将不可用，直到再次保存
-          Key。API URL、模型和提示词不会被删除。
-        </span>
-      </div>
-    </Dialog>
-  );
-}
-
 function formatAiSettingsError(
   error: GitReadErrorDto
 ): string {
@@ -2078,33 +2514,57 @@ function formatAiSettingsError(
   return error.message;
 }
 
-function McpRegistrationPanel({ enabled }: { enabled: boolean }) {
+function McpRegistrationPanel() {
   const [status, setStatus] = useState<McpRegistrationStatusDto | null>(
     null
   );
   const [busy, setBusy] = useState(false);
-  const [feedback, setFeedback] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{
+    title: string;
+    message: string;
+    tone: "success" | "error";
+  } | null>(null);
 
   const load = useCallback(async () => {
     const bridge = window.gitnest?.codeAnalysis;
     if (!bridge || typeof bridge.getMcpRegistration !== "function") {
-      setFeedback("当前环境无法读取 MCP 注册状态。");
+      setFeedback({
+        title: "无法读取 MCP 注册状态",
+        message: "当前环境无法读取 MCP 注册状态。",
+        tone: "error"
+      });
       return;
     }
     try {
       const result = await bridge.getMcpRegistration();
       if (result.ok) {
         setStatus(result.value);
-        setFeedback(null);
+        setFeedback(
+          result.value.serverAvailable &&
+            result.value.codexAvailable
+            ? null
+            : {
+                title: "Codex 连接不可用",
+                message: result.value.message,
+                tone: "error"
+              }
+        );
       } else {
-        setFeedback(result.error.message);
+        setFeedback({
+          title: "无法读取 MCP 注册状态",
+          message: result.error.message,
+          tone: "error"
+        });
       }
     } catch (reason) {
-      setFeedback(
-        reason instanceof Error
-          ? reason.message
-          : "无法读取 MCP 注册状态。"
-      );
+      setFeedback({
+        title: "无法读取 MCP 注册状态",
+        message:
+          reason instanceof Error
+            ? reason.message
+            : "无法读取 MCP 注册状态。",
+        tone: "error"
+      });
     }
   }, []);
 
@@ -2118,7 +2578,11 @@ function McpRegistrationPanel({ enabled }: { enabled: boolean }) {
     try {
       const bridge = window.gitnest?.codeAnalysis;
       if (!bridge || typeof bridge.setMcpRegistration !== "function") {
-        setFeedback("当前环境无法修改 MCP 注册状态。");
+        setFeedback({
+          title: registered ? "MCP 注册失败" : "MCP 卸载失败",
+          message: "当前环境无法修改 MCP 注册状态。",
+          tone: "error"
+        });
         return;
       }
       const result = await bridge.setMcpRegistration({
@@ -2126,105 +2590,104 @@ function McpRegistrationPanel({ enabled }: { enabled: boolean }) {
       });
       if (result.ok) {
         setStatus(result.value);
-        setFeedback(result.value.message);
+        setFeedback({
+          title: registered ? "MCP 已注册" : "MCP 已卸载",
+          message: result.value.message,
+          tone: "success"
+        });
       } else {
-        setFeedback(result.error.message);
+        setFeedback({
+          title: registered ? "MCP 注册失败" : "MCP 卸载失败",
+          message: result.error.message,
+          tone: "error"
+        });
       }
     } catch (reason) {
-      setFeedback(
-        reason instanceof Error
-          ? reason.message
-          : "MCP 注册操作失败。"
-      );
+      setFeedback({
+        title: registered ? "MCP 注册失败" : "MCP 卸载失败",
+        message:
+          reason instanceof Error
+            ? reason.message
+            : "MCP 注册操作失败。",
+        tone: "error"
+      });
     } finally {
       setBusy(false);
     }
   };
 
-  const copy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setFeedback("已复制到剪贴板。");
-    } catch {
-      setFeedback("复制失败，请手动选择文本。");
-    }
-  };
+  const registrationBadge =
+    status === null
+      ? feedback
+        ? "状态不可用"
+        : "正在读取"
+      : status.registered
+        ? "已注册"
+        : status.serverAvailable && status.codexAvailable
+          ? "未注册"
+          : "注册不可用";
+  const registrationBadgeTone =
+    status?.registered
+      ? "green"
+      : status === null
+        ? feedback
+          ? "red"
+          : "neutral"
+        : status.serverAvailable && status.codexAvailable
+          ? "neutral"
+          : "red";
 
   return (
-    <div className="mcp-registration">
-      <div className="mcp-registration-status">
-        <span
-          className={`mcp-registration-dot${
-            status?.registered ? " active" : ""
-          }`}
-        />
-        <span>
-          {status === null
-            ? feedback
-              ? "注册状态不可用"
-              : "正在读取注册状态…"
-            : status.registered
-              ? enabled
-                ? "已注册到本机 Codex"
-                : "已注册，MCP 服务已关闭"
-              : "尚未注册"}
-        </span>
-        <div className="mcp-registration-actions">
-          <Button
-            disabled={
-              busy ||
-              !status?.codexAvailable ||
-              (!status.registered && !status.serverAvailable)
-            }
-            onClick={() => void toggle(!status?.registered)}
-            size="small"
-            type="button"
-          >
-            <Icon
-              name={status?.registered ? "minus" : "plus"}
-            />
-            {status?.registered ? "卸载" : "一键注册"}
-          </Button>
-          <Button
-            disabled={!status?.serverAvailable}
-            onClick={() =>
-              void copy(status?.command ?? "")
-            }
-            size="small"
-            type="button"
-          >
-            <Icon name="copy" />
-            复制命令
-          </Button>
-          <Button
-            disabled={!status?.serverAvailable}
-            onClick={() =>
-              void copy(status?.configSnippet ?? "")
-            }
-            size="small"
-            type="button"
-          >
-            <Icon name="copy" />
-            复制 config.toml
-          </Button>
-        </div>
-      </div>
-      <p className="mcp-registration-hint" role="status">
-        {feedback ?? status?.message ?? ""}
-      </p>
-      {status ? (
-        <>
+    <>
+      <ToastViewport>
+        {feedback && (
+          <Toast
+            closeLabel="关闭 MCP 注册提示"
+            key="mcp-registration-feedback"
+            message={feedback.message}
+            onClose={() => setFeedback(null)}
+            title={feedback.title}
+            tone={feedback.tone}
+          />
+        )}
+      </ToastViewport>
+      <SettingsCard
+        badge={registrationBadge}
+        badgeTone={registrationBadgeTone}
+        description="管理本机 Codex 的 GitNest MCP 注册。"
+        id="settings-analysis-codex"
+        title="Codex 连接"
+      >
+        <div className="mcp-registration">
           <div className="mcp-registration-path">
-            <span>数据目录</span>
-            <code>{status.dataDirectory}</code>
+            <span>名称</span>
+            <code>GitNest_code_lsp</code>
           </div>
-          {status.serverAvailable && (
-            <code className="mcp-registration-command">
-              {status.command}
-            </code>
-          )}
-        </>
-      ) : null}
-    </div>
+          {status ? (
+            <div className="mcp-registration-path">
+              <span>数据目录</span>
+              <code>{status.dataDirectory}</code>
+            </div>
+          ) : null}
+          <div className="mcp-registration-actions">
+            <Button
+              disabled={
+                busy ||
+                !status?.codexAvailable ||
+                (!status.registered && !status.serverAvailable)
+              }
+              onClick={() => void toggle(!status?.registered)}
+              size="small"
+              type="button"
+            >
+              <Icon
+                name={status?.registered ? "minus" : "plus"}
+              />
+              {status?.registered ? "卸载" : "一键注册"}
+            </Button>
+          </div>
+        </div>
+      </SettingsCard>
+    </>
   );
 }

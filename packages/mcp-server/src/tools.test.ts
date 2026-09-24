@@ -30,6 +30,8 @@ import { createTools, type ToolSettings } from "./tools";
 const WORKSPACE_ID = "workspace-1";
 const REPOSITORY_ID = "repo-1";
 const WORKTREE_ID = "worktree-1";
+const NOW = Date.parse("2026-09-24T02:00:00.000Z");
+const DAY_MS = 24 * 60 * 60 * 1_000;
 const git = promisify(execFile);
 
 let root: string;
@@ -56,7 +58,8 @@ function persistedPreferences(): PersistedCodeAnalysisSettings {
     mcp: {
       enabled: true,
       allowSourceSnippets: true,
-      maxResponseKb: 256
+      maxResponseKb: 256,
+      maxStaleAgeDays: 7
     },
     maxFiles: 5_000,
     maxTotalSourceMb: 512,
@@ -305,7 +308,58 @@ async function writeSnapshot(value: CodeAnalysisSnapshot): Promise<void> {
   await cache.save(value, settings);
 }
 
-function createServer(options: Partial<ToolSettings> = {}): {
+async function initializeGitRepository(): Promise<string> {
+  await git("git", ["init", "--quiet"], {
+    cwd: repositoryPath
+  });
+  await git("git", ["add", "src/Demo.java"], {
+    cwd: repositoryPath
+  });
+  await git(
+    "git",
+    [
+      "-c",
+      "user.name=GitNest Test",
+      "-c",
+      "user.email=gitnest@example.invalid",
+      "commit",
+      "--quiet",
+      "-m",
+      "base"
+    ],
+    { cwd: repositoryPath }
+  );
+  const head = (
+    await git("git", ["rev-parse", "HEAD"], {
+      cwd: repositoryPath
+    })
+  ).stdout.trim();
+  await writeWorkspaceFiles(head);
+  return head;
+}
+
+async function writeFreshSnapshot(
+  generatedAt = "2026-09-23T02:00:00.000Z"
+): Promise<void> {
+  const head = await initializeGitRepository();
+  const analyzed = snapshot();
+  analyzed.generatedAt = generatedAt;
+  analyzed.roots[0]!.revision = head;
+  analyzed.sourceState = {
+    worktreeStatuses: [{
+      repositoryId: REPOSITORY_ID,
+      worktreeId: WORKTREE_ID,
+      fingerprint: codeAnalysisWorktreeStatusFingerprint([])
+    }],
+    changedSourceFiles: []
+  };
+  await writeSnapshot(analyzed);
+}
+
+function createServer(
+  options: Partial<ToolSettings> = {},
+  skipFreshness = true
+): {
   server: McpProtocolServer;
   callTool: (
     name: string,
@@ -318,7 +372,7 @@ function createServer(options: Partial<ToolSettings> = {}): {
 } {
   const access = new GitNestDataAccess({
     dataDirectory: root,
-    skipFreshness: true
+    skipFreshness
   });
   const server = new McpProtocolServer({
     info: { name: "gitnest", version: "test" },
@@ -327,7 +381,8 @@ function createServer(options: Partial<ToolSettings> = {}): {
       readSettings: async () => ({
         ...await access.readMcpSettings(),
         ...options
-      })
+      }),
+      now: () => NOW
     })
   });
   const callTool = async (
@@ -632,10 +687,18 @@ describe("MCP tool behaviour", () => {
     expect(payload.matchedRepositoryRoot).toBe(repositoryPath);
     expect(payload.hasWorkspaceAnalysis).toBe(true);
     expect(payload.hasChangedAnalysis).toBe(false);
-    expect(payload.useMcp).toBe(false);
+    expect(payload.useMcp).toBe(true);
     expect(payload.decisionReason).toBe(
-      "workspace-analysis-unverified"
+      "workspace-analysis-unverified-usable"
     );
+    expect(payload).toMatchObject({
+      snapshotReliability: "unverified",
+      snapshotExpired: false,
+      maxStaleAgeDays: 7,
+      requiresSourceVerification: true,
+      snapshotAgeMs: DAY_MS,
+      expiresAt: "2026-09-30T02:00:00.000Z"
+    });
     expect(payload.scope).toBe("workspace");
     expect(payload.generatedAt).toBe("2026-09-23T02:00:00.000Z");
     const analyses = payload.analyses as Array<{
@@ -651,7 +714,7 @@ describe("MCP tool behaviour", () => {
     expect(analyses[0]?.workspaceName).toBe("Fixture");
   });
 
-  it("uses the latest scope for status but the workspace graph for tracing", async () => {
+  it("uses the workspace scope for status and general tracing", async () => {
     await writeSnapshot(snapshot());
     const changed = snapshot();
     changed.scope = "changed";
@@ -661,7 +724,7 @@ describe("MCP tool behaviour", () => {
 
     const { callTool } = createServer();
     expect((await callTool("get_analysis_status", {})).payload.scope)
-      .toBe("changed");
+      .toBe("workspace");
     expect((await callTool("get_call_chain", {
       query: "groupService"
     })).payload.scope).toBe("workspace");
@@ -683,7 +746,132 @@ describe("MCP tool behaviour", () => {
       query: "groupService"
     });
     expect(payload.freshness).toBe("unknown");
+    expect(payload).toMatchObject({
+      snapshotReliability: "unverified",
+      snapshotExpired: false,
+      maxStaleAgeDays: 7,
+      requiresSourceVerification: true
+    });
     expect(typeof payload.freshnessNote).toBe("string");
+  });
+
+  it("uses a stale snapshot within seven days with a verification warning", async () => {
+    await writeFreshSnapshot("2026-09-20T02:00:00.000Z");
+    await writeFile(
+      join(repositoryPath, "src", "Demo.java"),
+      "class Demo { void changedAfterAnalysis() {} }"
+    );
+    const { callTool } = createServer({}, false);
+
+    const status = await callTool("get_analysis_status", {});
+    expect(status.payload).toMatchObject({
+      freshness: "stale",
+      useMcp: true,
+      decisionReason: "workspace-analysis-stale-usable",
+      snapshotReliability: "degraded",
+      snapshotExpired: false,
+      maxStaleAgeDays: 7,
+      requiresSourceVerification: true,
+      snapshotAgeMs: 4 * DAY_MS,
+      expiresAt: "2026-09-27T02:00:00.000Z"
+    });
+    expect(String(status.payload.guidance)).toContain(
+      "当前源码核对"
+    );
+
+    const trace = await callTool("get_call_chain", {
+      query: "groupService"
+    });
+    expect(trace.isError).toBe(false);
+    expect(trace.payload).toMatchObject({
+      freshness: "stale",
+      snapshotReliability: "degraded",
+      snapshotExpired: false,
+      requiresSourceVerification: true
+    });
+    expect(String(trace.payload.freshnessNote)).toContain(
+      "可能已过期"
+    );
+  });
+
+  it("rejects a stale snapshot older than seven days", async () => {
+    await writeFreshSnapshot("2026-09-16T02:00:00.000Z");
+    await writeFile(
+      join(repositoryPath, "src", "Demo.java"),
+      "class Demo { void changedAfterAnalysis() {} }"
+    );
+    const { callTool } = createServer({}, false);
+
+    const status = await callTool("get_analysis_status", {});
+    expect(status.payload).toMatchObject({
+      freshness: "stale",
+      useMcp: false,
+      decisionReason: "workspace-analysis-expired",
+      snapshotReliability: "expired",
+      snapshotExpired: true,
+      maxStaleAgeDays: 7,
+      requiresSourceVerification: true,
+      snapshotAgeMs: 8 * DAY_MS,
+      expiresAt: "2026-09-23T02:00:00.000Z"
+    });
+
+    const trace = await callTool("get_call_chain", {
+      query: "groupService"
+    });
+    expect(trace.isError).toBe(true);
+    expect(trace.payload).toMatchObject({
+      code: "snapshot-expired",
+      useMcp: false
+    });
+  });
+
+  it("keeps a fresh snapshot usable regardless of its age", async () => {
+    await writeFreshSnapshot("2026-01-01T02:00:00.000Z");
+    const { callTool } = createServer({}, false);
+
+    const status = await callTool("get_analysis_status", {});
+    expect(status.payload).toMatchObject({
+      freshness: "fresh",
+      useMcp: true,
+      decisionReason: "ready",
+      snapshotReliability: "current",
+      snapshotExpired: false,
+      maxStaleAgeDays: 7,
+      requiresSourceVerification: false
+    });
+    const trace = await callTool("get_call_chain", {
+      query: "groupService"
+    });
+    expect(trace.isError).toBe(false);
+    expect(trace.payload).toMatchObject({
+      freshness: "fresh",
+      snapshotReliability: "current",
+      snapshotExpired: false,
+      requiresSourceVerification: false
+    });
+  });
+
+  it("allows a stale snapshot at the exact TTL boundary", async () => {
+    await writeFreshSnapshot("2026-09-17T02:00:00.000Z");
+    await writeFile(
+      join(repositoryPath, "src", "Demo.java"),
+      "class Demo { void changedAfterAnalysis() {} }"
+    );
+    const { callTool } = createServer({}, false);
+
+    const status = await callTool("get_analysis_status", {});
+    expect(status.payload).toMatchObject({
+      freshness: "stale",
+      useMcp: true,
+      decisionReason: "workspace-analysis-stale-usable",
+      snapshotReliability: "degraded",
+      snapshotExpired: false,
+      snapshotAgeMs: 7 * DAY_MS,
+      expiresAt: "2026-09-24T02:00:00.000Z"
+    });
+    expect((await callTool("get_call_chain", {
+      query: "groupService"
+    })).isError).toBe(false);
   });
 
   it("filters mixed-line-ending stat changes during freshness probing", async () => {
@@ -837,7 +1025,8 @@ describe("MCP tool behaviour", () => {
       info: { name: "gitnest", version: "test" },
       tools: createTools({
         access,
-        readSettings: () => access.readMcpSettings()
+        readSettings: () => access.readMcpSettings(),
+        now: () => NOW
       })
     });
     const status = async () => {
@@ -874,8 +1063,11 @@ describe("MCP tool behaviour", () => {
     expect(await access.freshnessFor(target)).toBe("stale");
     expect(await status()).toMatchObject({
       freshness: "stale",
-      useMcp: false,
-      decisionReason: "workspace-analysis-stale"
+      useMcp: true,
+      decisionReason: "workspace-analysis-stale-usable",
+      snapshotReliability: "degraded",
+      snapshotExpired: false,
+      requiresSourceVerification: true
     });
 
     await git("git", ["add", "src/Demo.java"], {

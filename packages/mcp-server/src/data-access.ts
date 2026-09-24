@@ -33,6 +33,7 @@ const execFileAsync = promisify(execFile);
 
 export const FRESHNESS_ROOT_BUDGET = 200;
 export const FRESHNESS_ROOT_TIMEOUT_MS = 5_000;
+export const DEFAULT_MCP_MAX_STALE_AGE_DAYS = 7;
 const MAX_SETTINGS_BYTES = 4 * 1_024 * 1_024;
 
 export type AnalysisFreshness = "fresh" | "stale" | "unknown";
@@ -41,6 +42,7 @@ export interface McpServerSettings {
   enabled: boolean;
   allowSourceSnippets: boolean;
   maxResponseKb: number;
+  maxStaleAgeDays: number;
 }
 
 export interface GitNestDataPaths {
@@ -145,6 +147,7 @@ export class DataAccessError extends Error {
   readonly code:
     | "data-unavailable"
     | "snapshot-unavailable"
+    | "snapshot-expired"
     | "invalid-workspace"
     | "invalid-project"
     | "project-unmatched";
@@ -185,7 +188,10 @@ export class GitNestDataAccess {
     return {
       enabled: mcp?.enabled ?? true,
       allowSourceSnippets: mcp?.allowSourceSnippets ?? true,
-      maxResponseKb: mcp?.maxResponseKb ?? 256
+      maxResponseKb: mcp?.maxResponseKb ?? 256,
+      maxStaleAgeDays:
+        mcp?.maxStaleAgeDays ??
+        DEFAULT_MCP_MAX_STALE_AGE_DAYS
     };
   }
 

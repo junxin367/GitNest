@@ -25,24 +25,47 @@ export async function readGitEnvironment(
     ...commandOptions,
     args: ["--version"]
   });
-  const [lfsResult, helpersResult, sshConfigExists] =
-    await Promise.all([
-      runProcess({
-        ...commandOptions,
-        args: ["lfs", "version"],
-        allowFailure: true
-      }),
-      runProcess({
-        ...commandOptions,
-        args: ["config", "--get-all", "credential.helper"],
-        allowFailure: true
-      }),
-      detectSshConfig()
-    ]);
+  const [
+    lfsResult,
+    helpersResult,
+    identityNameResult,
+    identityEmailResult,
+    sshConfigExists
+  ] = await Promise.all([
+    runProcess({
+      ...commandOptions,
+      args: ["lfs", "version"],
+      allowFailure: true
+    }),
+    runProcess({
+      ...commandOptions,
+      args: ["config", "--get-all", "credential.helper"],
+      allowFailure: true
+    }),
+    runProcess({
+      ...commandOptions,
+      args: ["config", "--global", "--get", "user.name"],
+      allowFailure: true
+    }),
+    runProcess({
+      ...commandOptions,
+      args: ["config", "--global", "--get", "user.email"],
+      allowFailure: true
+    }),
+    detectSshConfig()
+  ]);
   const lfsVersion =
     lfsResult.exitCode === 0
       ? parseGitLfsVersion(lfsResult.stdout)
       : undefined;
+  const identityName =
+    identityNameResult.exitCode === 0
+      ? identityNameResult.stdout.trim()
+      : "";
+  const identityEmail =
+    identityEmailResult.exitCode === 0
+      ? identityEmailResult.stdout.trim()
+      : "";
   const sshConfigPath = process.env.USERPROFILE
     ? join(process.env.USERPROFILE, ".ssh", "config")
     : undefined;
@@ -53,6 +76,10 @@ export async function readGitEnvironment(
     lfs: {
       available: Boolean(lfsVersion),
       ...(lfsVersion ? { version: lfsVersion } : {})
+    },
+    identity: {
+      ...(identityName ? { name: identityName } : {}),
+      ...(identityEmail ? { email: identityEmail } : {})
     },
     credentialHelpers: helpersResult.stdout
       .split(/\r?\n/)

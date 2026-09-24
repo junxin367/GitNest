@@ -265,6 +265,40 @@ describe("WorkspaceRuntimeService", () => {
     await runtime.dispose();
   });
 
+  it("returns the cached Workspace before its background topology scan completes", async () => {
+    const first = createWorkspace(1);
+    first.id = "workspace_first";
+    const second = structuredClone(first);
+    second.id = "workspace_second";
+    second.name = "Second Workspace";
+    const configuration =
+      new BlockingRescanSwitchingConfiguration([
+        first,
+        second
+      ]);
+    const runtime = new WorkspaceRuntimeService(
+      configuration,
+      new TrackingGitClient(),
+      new WorkspaceScopedMemorySnapshotStore({}),
+      new FakeWatcher(),
+      { autoRefresh: true }
+    );
+
+    try {
+      const switched = await resolveWithin(
+        runtime.switchWorkspace("workspace_second"),
+        500
+      );
+
+      expect(switched.workspace.id).toBe("workspace_second");
+      await waitForCondition(() => configuration.rescanStarted);
+      expect(configuration.rescanAborted).toBe(false);
+    } finally {
+      await runtime.dispose();
+    }
+    expect(configuration.rescanAborted).toBe(true);
+  });
+
   it("retains document and cache cleanup warnings in the resulting runtime state", async () => {
     const workspace = createWorkspace(1);
     const configuration: WorkspaceConfigurationService =
@@ -372,7 +406,7 @@ describe("WorkspaceRuntimeService", () => {
     second.id = "workspace_second";
     second.name = "Second Workspace";
     const configuration =
-      new BlockingStartupSwitchingConfiguration([
+      new BlockingRescanSwitchingConfiguration([
         first,
         second
       ]);
@@ -2005,7 +2039,7 @@ class SwitchingConfiguration
   }
 }
 
-class BlockingStartupSwitchingConfiguration
+class BlockingRescanSwitchingConfiguration
   extends SwitchingConfiguration
 {
   rescanStarted = false;

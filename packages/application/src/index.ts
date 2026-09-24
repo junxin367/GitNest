@@ -35,7 +35,10 @@ export {
   CodeAnalysisService,
   type CodeAnalysisAccepted,
   type CodeAnalysisFile,
+  type CodeAnalysisRefreshResult,
   type CodeAnalysisServiceOptions,
+  type CodeAnalysisSnapshotDetail,
+  type CodeAnalysisSnapshotView,
   type CodeAnalysisState
 } from "./code-analysis/code-analysis-service";
 export type { CodeAnalysisRunnerPort } from "./code-analysis/code-analysis-runner";

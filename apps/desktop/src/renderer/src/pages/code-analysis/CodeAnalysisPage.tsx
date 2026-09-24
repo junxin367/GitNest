@@ -147,16 +147,7 @@ export function CodeAnalysisPage({
   const snapshot =
     availableSnapshot?.scope === scope &&
     availableSnapshot.workspaceId ===
-      analysis.state.workspaceId &&
-    (
-      analysis.state.state !== "ready" ||
-      (
-        availableSnapshot.analysisId ===
-          analysis.state.analysisId &&
-        availableSnapshot.generatedAt ===
-          analysis.state.generatedAt
-      )
-    )
+      analysis.state.workspaceId
       ? availableSnapshot
       : null;
   const requestChains = useMemo(
@@ -187,6 +178,17 @@ export function CodeAnalysisPage({
     () => createCodeNodeSearchIndex(snapshot?.nodes ?? []),
     [snapshot?.nodes]
   );
+  const chainNodeMatch = useMemo(
+    () =>
+      deferredChainQuery.trim()
+        ? searchCodeNodeIndexWithMetadata(
+            nodeSearchIndex,
+            deferredChainQuery,
+            1
+          ).nodes[0] ?? null
+        : null,
+    [deferredChainQuery, nodeSearchIndex]
+  );
   const nodeFilterResult = useMemo(
     () =>
       searchCodeNodeIndexWithMetadata(
@@ -197,7 +199,21 @@ export function CodeAnalysisPage({
     [deferredNodeQuery, nodeSearchIndex]
   );
   const nodeResults = nodeFilterResult.nodes;
-  const searchableNodeCount = nodeSearchIndex.length;
+  const snapshotDetail = snapshot
+    ? analysis.snapshotDetail
+    : null;
+  const fullSnapshotAvailable =
+    snapshotDetail === "full";
+  const searchableNodeCount = snapshot
+    ? snapshot.totalNodeCount ??
+      nodeSearchIndex.length
+    : 0;
+  const canSearchChainQueryInNodes =
+    Boolean(deferredChainQuery.trim()) &&
+    (
+      !fullSnapshotAvailable ||
+      chainNodeMatch !== null
+    );
   const selectedChain =
     graphFocus?.kind === "chain"
       ? requestChains.find(
@@ -270,6 +286,12 @@ export function CodeAnalysisPage({
       availableSnapshot &&
       analysis.action === null &&
       analysis.state.state !== "running" &&
+      availableSnapshot.workspaceId ===
+        analysis.state.workspaceId &&
+      (
+        analysis.state.scope === undefined ||
+        availableSnapshot.scope === analysis.state.scope
+      ) &&
       (
         analysis.state.state !== "ready" ||
         !analysis.state.analysisId ||
@@ -287,6 +309,8 @@ export function CodeAnalysisPage({
     analysis.state.state,
     analysis.state.analysisId,
     analysis.state.generatedAt,
+    analysis.state.scope,
+    analysis.state.workspaceId,
     analysis.action,
     availableSnapshot?.analysisId,
     availableSnapshot?.generatedAt,
@@ -294,6 +318,9 @@ export function CodeAnalysisPage({
   ]);
 
   useEffect(() => {
+    setChainQuery("");
+    setNodeQuery("");
+    setMethod("all");
     if (!snapshot) {
       setGraphFocus(null);
       setGraphSelectionCleared(false);
@@ -302,6 +329,7 @@ export function CodeAnalysisPage({
       setGraphFullscreen(false);
       return;
     }
+    setGraphFullscreen(false);
     const nextChain = requestChains[0];
     if (nextChain) {
       setNavigationMode("chains");
@@ -312,6 +340,15 @@ export function CodeAnalysisPage({
       setGraphSelectionCleared(false);
       setInspectedNodeId(null);
       setNodeFileExpanded(false);
+      return;
+    }
+    if (!fullSnapshotAvailable) {
+      setNavigationMode("symbols");
+      setGraphFocus(null);
+      setGraphSelectionCleared(false);
+      setInspectedNodeId(null);
+      setNodeFileExpanded(false);
+      void analysis.loadFullSnapshot();
       return;
     }
     const nextNode =
@@ -332,7 +369,35 @@ export function CodeAnalysisPage({
     setGraphSelectionCleared(false);
     setInspectedNodeId(null);
     setNodeFileExpanded(false);
-  }, [snapshot?.analysisId]);
+  }, [snapshot?.analysisId, snapshot?.scope]);
+
+  useEffect(() => {
+    if (
+      !snapshot ||
+      !fullSnapshotAvailable ||
+      requestChains.length > 0 ||
+      graphFocus !== null
+    ) {
+      return;
+    }
+    const nextNode =
+      snapshot.nodes.find(
+        (node) =>
+          node.kind !== "file" && node.changed
+      ) ??
+      snapshot.nodes.find((node) => node.kind !== "file");
+    if (nextNode) {
+      setGraphFocus({
+        kind: "node",
+        id: nextNode.id
+      });
+    }
+  }, [
+    fullSnapshotAvailable,
+    graphFocus,
+    requestChains.length,
+    snapshot
+  ]);
 
   useEffect(() => {
     if (!graphFullscreen) {
@@ -363,9 +428,6 @@ export function CodeAnalysisPage({
           (server) => server.state !== "connected"
         ) ?? [])
       : (snapshot?.languageServers ?? []);
-  const scopeDataPending =
-    availableSnapshot !== null &&
-    availableSnapshot.scope !== scope;
   const progress = analysis.state.progress;
   const progressVisible =
     running || analysis.action === "starting";
@@ -436,6 +498,30 @@ export function CodeAnalysisPage({
     setInspectedNodeId(null);
     setNodeFileExpanded(false);
   }, []);
+  const showCodeNodes = useCallback(
+    async (query?: string) => {
+      if (query !== undefined) {
+        setNodeQuery(query);
+      }
+      setNavigationMode("symbols");
+      const loaded =
+        fullSnapshotAvailable ||
+        (await analysis.loadFullSnapshot());
+      if (loaded) {
+        requestAnimationFrame(() =>
+          nodeFilterRef.current?.focus()
+        );
+      }
+    },
+    [analysis.loadFullSnapshot, fullSnapshotAvailable]
+  );
+  const searchChainQueryInNodes = useCallback(() => {
+    const query = chainQuery.trim();
+    if (!query) {
+      return;
+    }
+    void showCodeNodes(query);
+  }, [chainQuery, showCodeNodes]);
   const changeScope = async (
     nextScope: CodeAnalysisScopeDto
   ) => {
@@ -447,17 +533,9 @@ export function CodeAnalysisPage({
       return;
     }
 
-    const previousScope = scope;
-    setScope(nextScope);
-    setNavigationMode("chains");
-    setChainQuery("");
-    setNodeQuery("");
-    setMethod("all");
-    setGraphFocus(null);
-    setGraphSelectionCleared(false);
-    setInspectedNodeId(null);
-    setNodeFileExpanded(false);
-    setGraphFullscreen(false);
+    if (!availableSnapshot) {
+      setScope(nextScope);
+    }
 
     if (!workspace?.path && !availableSnapshot) {
       return;
@@ -475,10 +553,7 @@ export function CodeAnalysisPage({
     if (!startOnCacheMiss) {
       return;
     }
-    const started = await analysis.start(nextScope);
-    if (!started) {
-      setScope(previousScope);
-    }
+    await analysis.start(nextScope);
   };
   const installLanguageServer = async (
     language: InstallableLanguageServerDto
@@ -721,11 +796,6 @@ export function CodeAnalysisPage({
               ).toLocaleString()}
             </span>
             <span>
-              {snapshot.scope === "changed"
-                ? "变动代码"
-                : "全部代码"}
-            </span>
-            <span>
               耗时 {formatDuration(snapshot.stats.durationMs)}
             </span>
             {connectedLanguageServers.length > 1 && (
@@ -939,9 +1009,7 @@ export function CodeAnalysisPage({
                         ? "active"
                         : ""
                     }
-                    onClick={() =>
-                      setNavigationMode("symbols")
-                    }
+                    onClick={() => void showCodeNodes()}
                     role="tab"
                     type="button"
                   >
@@ -984,6 +1052,7 @@ export function CodeAnalysisPage({
                   <Input
                     aria-label="搜索代码节点"
                     clearLabel="清空代码节点筛选"
+                    disabled={!fullSnapshotAvailable}
                     fieldClassName="analysis-chain-filter"
                     fullWidth
                     leading={<Icon name="search" size={14} />}
@@ -1067,8 +1136,18 @@ export function CodeAnalysisPage({
                         <Icon name="search" size={20} />
                         <strong>没有匹配的请求链</strong>
                         <p>
-                          可清除筛选、切换到函数搜索，或重新运行全部代码分析。
+                          可清除筛选、切换到代码节点搜索，或重新运行全部代码分析。
                         </p>
+                        {canSearchChainQueryInNodes && (
+                          <Button
+                            onClick={searchChainQueryInNodes}
+                            size="small"
+                            type="button"
+                          >
+                            <Icon name="search" size={13} />
+                            在代码节点中查看
+                          </Button>
+                        )}
                       </div>
                     )}
                     {chainFilterResult.truncated && (
@@ -1082,48 +1161,82 @@ export function CodeAnalysisPage({
                     )}
                   </>
                 ) : (
-                  <>
-                    {nodeResults.map((node) => (
-                      <button
-                        aria-current={
-                          graphFocus?.kind === "node" &&
-                          graphFocus.id === node.id
-                            ? "true"
-                            : undefined
-                        }
-                        className={`analysis-symbol-result${
-                          graphFocus?.kind === "node" &&
-                          graphFocus.id === node.id
-                            ? " active"
-                            : ""
-                        }`}
-                        key={node.id}
-                        onClick={() => focusNode(node.id)}
-                        type="button"
-                      >
-                        <span
-                          className={`analysis-node-dot node-${node.kind}`}
-                        />
-                        <strong title={node.qualifiedName}>
-                          {codeNodeDisplayName(node)}
-                        </strong>
-                        <small>
-                          {nodeKindLabel(node)} ·{" "}
-                          {node.location.path}:
-                          {node.location.line}
-                        </small>
-                      </button>
-                    ))}
-                    {nodeResults.length === 0 && (
-                      <div className="analysis-list-empty">
-                        <Icon name="search" size={20} />
-                        <strong>没有匹配的代码节点</strong>
-                        <p>
-                          可按名称、限定名或文件路径搜索。
-                        </p>
-                      </div>
-                    )}
-                  </>
+                  !fullSnapshotAvailable ? (
+                    <div
+                      aria-busy={
+                        analysis.loadingFullSnapshot
+                      }
+                      className="analysis-list-empty"
+                      role="status"
+                    >
+                      <Icon name="refresh" size={20} />
+                      <strong>
+                        {analysis.loadingFullSnapshot
+                          ? "正在加载完整代码节点"
+                          : "完整代码节点尚未加载"}
+                      </strong>
+                      <p>
+                        {analysis.loadingFullSnapshot
+                          ? "请求链已可用，完整节点索引正在后台载入。"
+                          : "完整节点索引加载失败，可重新尝试。"}
+                      </p>
+                      {!analysis.loadingFullSnapshot && (
+                        <Button
+                          onClick={() =>
+                            void showCodeNodes()
+                          }
+                          size="small"
+                          type="button"
+                        >
+                          <Icon name="refresh" size={13} />
+                          重新加载
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      {nodeResults.map((node) => (
+                        <button
+                          aria-current={
+                            graphFocus?.kind === "node" &&
+                            graphFocus.id === node.id
+                              ? "true"
+                              : undefined
+                          }
+                          className={`analysis-symbol-result${
+                            graphFocus?.kind === "node" &&
+                            graphFocus.id === node.id
+                              ? " active"
+                              : ""
+                          }`}
+                          key={node.id}
+                          onClick={() => focusNode(node.id)}
+                          type="button"
+                        >
+                          <span
+                            className={`analysis-node-dot node-${node.kind}`}
+                          />
+                          <strong title={node.qualifiedName}>
+                            {codeNodeDisplayName(node)}
+                          </strong>
+                          <small>
+                            {nodeKindLabel(node)} ·{" "}
+                            {node.location.path}:
+                            {node.location.line}
+                          </small>
+                        </button>
+                      ))}
+                      {nodeResults.length === 0 && (
+                        <div className="analysis-list-empty">
+                          <Icon name="search" size={20} />
+                          <strong>没有匹配的代码节点</strong>
+                          <p>
+                            可按名称、限定名或文件路径搜索。
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )
                 )}
               </div>
                 </>
@@ -1230,19 +1343,9 @@ export function CodeAnalysisPage({
             <Icon name="graph" size={24} />
           </span>
           <div>
-            <strong>
-              {scopeDataPending
-                ? `正在切换到${
-                    scope === "changed"
-                      ? "变动代码"
-                      : "全部代码"
-                  }分析`
-                : "尚未生成代码关系索引"}
-            </strong>
+            <strong>尚未生成代码关系索引</strong>
             <p>
-              {scopeDataPending
-                ? "目标范围完成前不会展示另一范围的统计和关系图，避免两组分析数据混用。"
-                : "先分析变动代码可快速查看本次修改影响；需要跨项目完整请求链时，再手动运行全部代码分析。"}
+              先分析变动代码可快速查看本次修改影响；需要跨项目完整请求链时，再手动运行全部代码分析。
             </p>
           </div>
         </section>

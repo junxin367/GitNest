@@ -43,7 +43,6 @@ describe("DetailInspector Workspace details", () => {
     act(() => {
       root.render(
         <DetailInspector
-          accountOverview={null}
           busy={false}
           commit={null}
           gitEnvironment={null}
@@ -61,6 +60,13 @@ describe("DetailInspector Workspace details", () => {
     });
 
     expect(container.textContent).toContain("Workspace 详情");
+    expect(container.textContent).toContain("系统 Git");
+    expect(container.textContent).toContain(
+      "远程操作直接继承系统 Credential Helper"
+    );
+    expect(container.textContent).toContain("认证设置");
+    expect(container.textContent).not.toContain("仓库覆盖");
+    expect(container.textContent).not.toContain("管理账号");
     expect(container.textContent).toContain("C:\\workspace");
     expect(container.textContent).toContain("2 个");
     expect(container.textContent).toContain("Workspace 名称");

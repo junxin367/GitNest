@@ -880,19 +880,19 @@
 
 .analysis-settings-number-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
 }
 
 @container settings-content (min-width: 700px) {
   .analysis-settings-number-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
 .mcp-registration-grid {
   display: grid;
-  grid-template-columns: minmax(0, 240px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
 }
 
@@ -902,28 +902,10 @@
   gap: var(--space-2);
 }
 
-.mcp-registration-status {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.mcp-registration-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--muted);
-  flex: none;
-}
-
-.mcp-registration-dot.active {
-  background: var(--green);
-}
-
 .mcp-registration-actions {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: var(--space-1);
   margin-left: auto;
 }
@@ -945,26 +927,11 @@
   overflow-wrap: anywhere;
 }
 
-.mcp-registration-hint {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--font-size-caption);
-  line-height: var(--line-height-body);
-}
-
-.mcp-registration-command {
-  display: block;
-  padding: var(--space-2);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-regular);
-  background: var(--canvas);
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-caption);
-  overflow-wrap: anywhere;
-}
-
 @container settings-content (max-width: 520px) {
+  .mcp-registration-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .mcp-registration-actions {
     width: 100%;
     margin-left: 0;

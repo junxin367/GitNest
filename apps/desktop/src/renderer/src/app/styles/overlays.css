@@ -915,10 +915,6 @@
     max-width: none;
   }
 
-  .settings-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .dashboard-grid {
     grid-template-columns: minmax(0, 1fr);
   }

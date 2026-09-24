@@ -6,27 +6,33 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DEFAULT_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
   DEFAULT_CODE_ANALYSIS_GRAPH_EDGES,
   DEFAULT_CODE_ANALYSIS_GRAPH_NODES,
+  DEFAULT_MCP_MAX_STALE_AGE_DAYS,
   MAX_CODE_ANALYSIS_DIAGNOSTICS,
   MAX_CODE_ANALYSIS_GRAPH_EDGES,
   MAX_CODE_ANALYSIS_GRAPH_NODES,
+  MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
   MAX_CODE_ANALYSIS_REQUEST_CHAINS,
   MAX_CODE_ANALYSIS_TOTAL_SOURCE_MB,
   MAX_LSP_DOCUMENTS,
   MAX_LSP_REQUESTS,
+  MAX_MCP_MAX_STALE_AGE_DAYS,
   MIN_CODE_ANALYSIS_DIAGNOSTICS,
   MIN_CODE_ANALYSIS_GRAPH_EDGES,
   MIN_CODE_ANALYSIS_GRAPH_NODES,
+  MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
   MIN_CODE_ANALYSIS_REQUEST_CHAINS,
   MIN_CODE_ANALYSIS_TOTAL_SOURCE_MB,
   MIN_LSP_DOCUMENTS,
   MIN_LSP_REQUESTS,
+  MIN_MCP_MAX_STALE_AGE_DAYS,
   createDefaultAppSettings,
-  type ExternalTerminalProfileDto
+  type ExternalTerminalProfileDto,
+  type GitEnvironmentDto
 } from "@gitnest/contracts";
 
-import type { AccountController } from "../../features/account-manage/useAccounts";
 import type { AppSettingsController } from "../../features/settings/useAppSettings";
 import { ApplicationSettingsPage } from "./ApplicationSettingsPage";
 
@@ -40,11 +46,9 @@ describe("ApplicationSettingsPage", () => {
     try {
       const html = renderToStaticMarkup(
         <ApplicationSettingsPage
-          accounts={emptyAccounts()}
           appSettings={settingsController()}
           gitEnvironment={null}
           terminalProfiles={[]}
-          workspace={null}
         />
       );
       const document = new DOMParser().parseFromString(
@@ -53,7 +57,7 @@ describe("ApplicationSettingsPage", () => {
       );
       const navigationLabels = Array.from(
         document.querySelectorAll(
-          'nav[aria-label="设置分组"] button'
+          'nav[aria-label="设置分组"] .settings-nav-item'
         )
       ).map((button) =>
         button
@@ -63,12 +67,23 @@ describe("ApplicationSettingsPage", () => {
 
       expect(navigationLabels).toEqual([
         "通用",
+        "代码分析",
         "AI 提交信息",
-        "LSP 与代码分析",
-        "MCP",
         "Git",
         "账号与认证"
       ]);
+      expect(
+        Array.from(
+          document.querySelectorAll(
+            'nav[aria-label="设置分组"] .settings-nav-subitem'
+          )
+        ).map((button) => button.textContent?.trim())
+      ).toEqual(["应用行为", "默认终端", "当前偏好"]);
+      expect(
+        document.querySelector(
+          'nav[aria-label="设置分组"] .settings-nav-subitem[aria-current="location"]'
+        )?.textContent
+      ).toBe("应用行为");
       expect(html).not.toContain("快捷键");
       expect(html).not.toContain("危险操作前确认");
       expect(html).not.toContain("危险操作始终确认");
@@ -79,19 +94,170 @@ describe("ApplicationSettingsPage", () => {
     }
   });
 
+  it("expands card navigation, scrolls to anchors, and tracks the visible card", async () => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView =
+      Object.getOwnPropertyDescriptor(
+        HTMLElement.prototype,
+        "scrollIntoView"
+      );
+    Object.defineProperty(
+      HTMLElement.prototype,
+      "scrollIntoView",
+      {
+        configurable: true,
+        value: scrollIntoView
+      }
+    );
+
+    try {
+      await act(async () => {
+        root.render(
+          <ApplicationSettingsPage
+            appSettings={settingsController()}
+            gitEnvironment={null}
+            terminalProfiles={[]}
+          />
+        );
+      });
+      const gitNavigationItem = Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          ".settings-nav-item"
+        )
+      ).find(
+        (button) =>
+          button.querySelector(".settings-nav-item-title")
+            ?.textContent === "Git"
+      );
+      await act(async () => {
+        gitNavigationItem?.click();
+      });
+
+      expect(
+        Array.from(
+          container.querySelectorAll(".settings-nav-subitem")
+        ).map((button) => button.textContent?.trim())
+      ).toEqual([
+        "Git 运行环境",
+        "远程检查策略",
+        "Push 同步策略"
+      ]);
+      expect(
+        container.querySelector(
+          '.settings-nav-subitem[aria-current="location"]'
+        )?.textContent
+      ).toBe("Git 运行环境");
+
+      scrollIntoView.mockClear();
+      const pushNavigationItem = Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          ".settings-nav-subitem"
+        )
+      ).find(
+        (button) => button.textContent === "Push 同步策略"
+      );
+      await act(async () => {
+        pushNavigationItem?.click();
+      });
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        behavior: "smooth",
+        block: "start"
+      });
+      expect(
+        container.querySelector(
+          '.settings-nav-subitem[aria-current="location"]'
+        )?.textContent
+      ).toBe("Push 同步策略");
+
+      const scrollHost = container.querySelector<HTMLElement>(
+        ".settings-page-scroll"
+      );
+      const environmentCard =
+        container.querySelector<HTMLElement>(
+          "#settings-git-environment"
+        );
+      const fetchCard = container.querySelector<HTMLElement>(
+        "#settings-git-fetch"
+      );
+      const pushCard = container.querySelector<HTMLElement>(
+        "#settings-git-push"
+      );
+      scrollHost?.dispatchEvent(new Event("scrollend"));
+      Object.defineProperties(scrollHost, {
+        clientHeight: {
+          configurable: true,
+          value: 800
+        },
+        scrollHeight: {
+          configurable: true,
+          value: 2000
+        },
+        scrollTop: {
+          configurable: true,
+          value: 600
+        }
+      });
+      vi.spyOn(
+        scrollHost as HTMLElement,
+        "getBoundingClientRect"
+      ).mockReturnValue(rectAt(0, 800));
+      vi.spyOn(
+        environmentCard as HTMLElement,
+        "getBoundingClientRect"
+      ).mockReturnValue(rectAt(-400));
+      vi.spyOn(
+        fetchCard as HTMLElement,
+        "getBoundingClientRect"
+      ).mockReturnValue(rectAt(40));
+      vi.spyOn(
+        pushCard as HTMLElement,
+        "getBoundingClientRect"
+      ).mockReturnValue(rectAt(500));
+
+      await act(async () => {
+        scrollHost?.dispatchEvent(
+          new Event("scroll", { bubbles: true })
+        );
+      });
+      expect(
+        container.querySelector(
+          '.settings-nav-subitem[aria-current="location"]'
+        )?.textContent
+      ).toBe("远程检查策略");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      if (originalScrollIntoView) {
+        Object.defineProperty(
+          HTMLElement.prototype,
+          "scrollIntoView",
+          originalScrollIntoView
+        );
+      } else {
+        Reflect.deleteProperty(
+          HTMLElement.prototype,
+          "scrollIntoView"
+        );
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("uses the shared page skeleton before settings finish their first load", () => {
     vi.stubGlobal("React", React);
     try {
       const html = renderToStaticMarkup(
         <ApplicationSettingsPage
-          accounts={emptyAccounts()}
           appSettings={settingsController({
             loaded: false,
             loading: true
           })}
           gitEnvironment={null}
           terminalProfiles={[]}
-          workspace={null}
         />
       );
 
@@ -104,16 +270,52 @@ describe("ApplicationSettingsPage", () => {
     }
   });
 
+  it("shows only system Git authentication in the account section", () => {
+    vi.stubGlobal("React", React);
+    try {
+      const html = renderToStaticMarkup(
+        <ApplicationSettingsPage
+          appSettings={settingsController()}
+          gitEnvironment={null}
+          initialSection="account"
+          terminalProfiles={[]}
+        />
+      );
+      const document = new DOMParser().parseFromString(
+        html,
+        "text/html"
+      );
+      const titles = Array.from(
+        document.querySelectorAll(".settings-card-title")
+      ).map((item) => item.textContent?.trim());
+      const activeNavigationItem = document.querySelector(
+        'nav[aria-label="设置分组"] button[aria-current="page"]'
+      );
+
+      expect(titles).toEqual(["系统 Git 认证"]);
+      expect(activeNavigationItem?.textContent).toContain(
+        "系统 Git 凭据"
+      );
+      expect(html).toContain(
+        "所有远程 Git 操作均使用系统认证"
+      );
+      expect(html).not.toContain("添加 GitNest 账号");
+      expect(html).not.toContain("GitNest 账号中心");
+      expect(html).not.toContain("HTTPS Token");
+      expect(html).not.toContain("仓库绑定");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("groups the current preferences by their purpose", () => {
     vi.stubGlobal("React", React);
     try {
       const html = renderToStaticMarkup(
         <ApplicationSettingsPage
-          accounts={emptyAccounts()}
           appSettings={settingsController()}
           gitEnvironment={null}
           terminalProfiles={[]}
-          workspace={null}
         />
       );
       const document = new DOMParser().parseFromString(
@@ -173,11 +375,9 @@ describe("ApplicationSettingsPage", () => {
       act(() => {
         root.render(
           <ApplicationSettingsPage
-            accounts={emptyAccounts()}
             appSettings={appSettings}
             gitEnvironment={null}
             terminalProfiles={terminalProfiles}
-            workspace={null}
           />
         );
       });
@@ -221,45 +421,142 @@ describe("ApplicationSettingsPage", () => {
     }
   });
 
-  it("keeps the AI API Key hidden by default and clears it after saving", async () => {
+  it("matches the prototype Git environment information card", () => {
     vi.stubGlobal("React", React);
+    const gitEnvironment: GitEnvironmentDto = {
+      executablePath: "C:\\Program Files\\Git\\cmd\\git.exe",
+      version: "2.53.0.windows.3",
+      lfs: {
+        available: true,
+        version: "3.7.1"
+      },
+      identity: {
+        name: "GitNest User",
+        email: "gitnest@example.com"
+      },
+      credentialHelpers: ["manager"],
+      ssh: {
+        command: "ssh",
+        authSockConfigured: true,
+        configPath: "C:\\Users\\test\\.ssh\\config",
+        configExists: true
+      },
+      detectedAt: "2026-09-24T00:00:00.000Z"
+    };
+
+    try {
+      const html = renderToStaticMarkup(
+        <ApplicationSettingsPage
+          appSettings={settingsController()}
+          gitEnvironment={gitEnvironment}
+          initialSection="git"
+          terminalProfiles={[]}
+        />
+      );
+      const document = new DOMParser().parseFromString(
+        html,
+        "text/html"
+      );
+      const card = Array.from(
+        document.querySelectorAll(".settings-card")
+      ).find(
+        (item) =>
+          item.querySelector(".settings-card-title")?.textContent ===
+          "Git 运行环境"
+      );
+      const badge = card?.querySelector(
+        ".settings-card-header > .status-pill"
+      );
+      const items = card?.querySelectorAll(".settings-info-item");
+
+      expect(badge?.textContent).toContain("可用");
+      expect(badge?.classList.contains("green")).toBe(true);
+      expect(badge?.querySelector(".icon")).not.toBeNull();
+      expect(items).toHaveLength(2);
+      expect(card?.textContent).toContain("Git 版本");
+      expect(card?.textContent).toContain(gitEnvironment.version);
+      expect(card?.textContent).toContain("执行文件");
+      expect(card?.textContent).toContain(
+        gitEnvironment.executablePath
+      );
+      expect(card?.querySelector(".detail-list")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reveals a stored AI API Key on demand without rewriting it", async () => {
+    vi.stubGlobal("React", React);
+    const readAiApiKey = vi.fn(
+      async ({ reveal }: { reveal: boolean }) => ({
+        ok: true as const,
+        value: {
+          apiKey: reveal ? "sk-stored-secret" : null,
+          length: 16
+        }
+      })
+    );
+    vi.stubGlobal("gitnest", {
+      settings: { readAiApiKey }
+    });
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
-    const appSettings = settingsController();
+    const settings = createDefaultAppSettings();
+    settings.ai.apiKeyConfigured = true;
+    const appSettings = settingsController({ settings });
 
     try {
-      act(() => {
+      await act(async () => {
         root.render(
           <ApplicationSettingsPage
-            accounts={emptyAccounts()}
             appSettings={appSettings}
             gitEnvironment={null}
             initialSection="ai"
             terminalProfiles={[]}
-            workspace={null}
           />
         );
+        await Promise.resolve();
       });
 
       const getKeyInput = () =>
         container.querySelector<HTMLInputElement>("#ai-api-key");
       const keyInput = getKeyInput();
       expect(keyInput?.type).toBe("password");
-
-      act(() => {
-        setNativeInputValue(keyInput, "sk-current-draft");
-        keyInput?.dispatchEvent(
-          new Event("input", { bubbles: true })
-        );
+      expect(keyInput?.value).toBe("*".repeat(16));
+      expect(keyInput?.readOnly).toBe(true);
+      expect(container.textContent).not.toContain("清空 Key");
+      expect(readAiApiKey).toHaveBeenCalledWith({
+        reveal: false
       });
 
-      const showKey = container.querySelector<HTMLButtonElement>(
-        '[aria-label="显示 API Key"]'
-      );
-      act(() => showKey?.click());
+      await act(async () => {
+        container
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="显示 API Key"]'
+          )
+          ?.click();
+        await Promise.resolve();
+      });
+
+      expect(readAiApiKey).toHaveBeenCalledTimes(2);
+      expect(readAiApiKey).toHaveBeenLastCalledWith({
+        reveal: true
+      });
       expect(getKeyInput()?.type).toBe("text");
-      expect(getKeyInput()?.value).toBe("sk-current-draft");
+      expect(getKeyInput()?.value).toBe("sk-stored-secret");
+      expect(getKeyInput()?.readOnly).toBe(false);
+
+      act(() => {
+        container
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="隐藏 API Key"]'
+          )
+          ?.click();
+      });
+      expect(getKeyInput()?.type).toBe("password");
+      expect(getKeyInput()?.value).toBe("*".repeat(16));
+      expect(getKeyInput()?.readOnly).toBe(true);
 
       const save = Array.from(
         container.querySelectorAll<HTMLButtonElement>("button")
@@ -271,8 +568,66 @@ describe("ApplicationSettingsPage", () => {
         await Promise.resolve();
       });
 
-      expect(getKeyInput()?.value).toBe("");
-      expect(getKeyInput()?.type).toBe("password");
+      const savedAiPatch = vi.mocked(appSettings.update).mock
+        .calls.at(-1)?.[0].ai;
+      expect(savedAiPatch).not.toHaveProperty("apiKey");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("saves a newly entered AI API Key while hiding it by default", async () => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const appSettings = settingsController();
+
+    try {
+      act(() => {
+        root.render(
+          <ApplicationSettingsPage
+            appSettings={appSettings}
+            gitEnvironment={null}
+            initialSection="ai"
+            terminalProfiles={[]}
+          />
+        );
+      });
+
+      const getKeyInput = () =>
+        container.querySelector<HTMLInputElement>("#ai-api-key");
+      const keyInput = getKeyInput();
+      expect(keyInput?.type).toBe("password");
+      expect(keyInput?.readOnly).toBe(false);
+
+      act(() => {
+        setNativeInputValue(keyInput, "sk-current-draft");
+        keyInput?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+        container
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="显示 API Key"]'
+          )
+          ?.click();
+      });
+      expect(getKeyInput()?.type).toBe("text");
+      expect(getKeyInput()?.value).toBe("sk-current-draft");
+
+      await act(async () => {
+        Array.from(
+          container.querySelectorAll<HTMLButtonElement>("button")
+        )
+          .find((button) =>
+            button.textContent?.includes("保存 AI 设置")
+          )
+          ?.click();
+        await Promise.resolve();
+      });
+
       expect(appSettings.update).toHaveBeenCalledWith(
         {
           ai: expect.objectContaining({
@@ -299,12 +654,10 @@ describe("ApplicationSettingsPage", () => {
     const render = (controller: AppSettingsController) => {
       root.render(
         <ApplicationSettingsPage
-          accounts={emptyAccounts()}
           appSettings={controller}
           gitEnvironment={null}
           initialSection="ai"
           terminalProfiles={[]}
-          workspace={null}
         />
       );
     };
@@ -352,12 +705,10 @@ describe("ApplicationSettingsPage", () => {
     const render = (controller: AppSettingsController) => {
       root.render(
         <ApplicationSettingsPage
-          accounts={emptyAccounts()}
           appSettings={controller}
           gitEnvironment={null}
           initialSection="analysis"
           terminalProfiles={[]}
-          workspace={null}
         />
       );
     };
@@ -414,12 +765,10 @@ describe("ApplicationSettingsPage", () => {
       act(() => {
         root.render(
           <ApplicationSettingsPage
-            accounts={emptyAccounts()}
             appSettings={settingsController()}
             gitEnvironment={null}
             initialSection="analysis"
             terminalProfiles={[]}
-            workspace={null}
           />
         );
       });
@@ -579,12 +928,10 @@ describe("ApplicationSettingsPage", () => {
       act(() => {
         root.render(
           <ApplicationSettingsPage
-            accounts={emptyAccounts()}
             appSettings={appSettings}
             gitEnvironment={null}
             initialSection="ai"
             terminalProfiles={[]}
-            workspace={null}
           />
         );
       });
@@ -640,12 +987,10 @@ describe("ApplicationSettingsPage", () => {
     const render = (controller: AppSettingsController) => {
       root.render(
         <ApplicationSettingsPage
-          accounts={emptyAccounts()}
           appSettings={controller}
           gitEnvironment={null}
           initialSection="analysis"
           terminalProfiles={[]}
-          workspace={null}
         />
       );
     };
@@ -721,12 +1066,10 @@ describe("ApplicationSettingsPage", () => {
       act(() => {
         root.render(
           <ApplicationSettingsPage
-            accounts={emptyAccounts()}
             appSettings={appSettings}
             gitEnvironment={null}
             initialSection="analysis"
             terminalProfiles={[]}
-            workspace={null}
           />
         );
       });
@@ -796,6 +1139,49 @@ describe("ApplicationSettingsPage", () => {
           "#analysis-graph-depth"
         )?.value
       ).toBe("8");
+      const periodicRefreshInput =
+        container.querySelector<HTMLInputElement>(
+          "#analysis-periodic-refresh-minutes"
+        );
+      const autoRefreshDebounceInput =
+        container.querySelector<HTMLInputElement>(
+          "#analysis-auto-refresh-debounce-ms"
+        );
+      expect(periodicRefreshInput?.value).toBe(
+        String(DEFAULT_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES)
+      );
+      expect(periodicRefreshInput?.min).toBe(
+        String(MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES)
+      );
+      expect(periodicRefreshInput?.max).toBe(
+        String(MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES)
+      );
+      expect(
+        container.querySelector<HTMLButtonElement>(
+          'button[aria-label="定时更新分析快照"]'
+        )?.getAttribute("aria-pressed")
+      ).toBe("true");
+      expect(
+        autoRefreshDebounceInput?.closest(
+          ".mcp-registration-grid"
+        )
+      ).toBe(
+        periodicRefreshInput?.closest(".mcp-registration-grid")
+      );
+      expect(
+        autoRefreshDebounceInput
+          ?.closest(".gn-input-field")
+          ?.querySelector(".gn-input-field__help")
+          ?.getAttribute("aria-hidden")
+      ).toBe("true");
+      expect(
+        periodicRefreshInput
+          ?.closest(".gn-input-field")
+          ?.querySelector(".gn-input-field__help")
+          ?.getAttribute("title")
+      ).toBe(
+        "最短 5 分钟；更新在后台运行，不切换当前代码分析视图。"
+      );
       const performanceFields = container.querySelectorAll(
         ".settings-card-body > .analysis-settings-number-grid .gn-input-field"
       );
@@ -823,6 +1209,10 @@ describe("ApplicationSettingsPage", () => {
         graphEdgesInput?.dispatchEvent(
           new Event("input", { bubbles: true })
         );
+        setNativeInputValue(periodicRefreshInput, "0");
+        periodicRefreshInput?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
       });
       const save = Array.from(
         container.querySelectorAll<HTMLButtonElement>("button")
@@ -831,6 +1221,17 @@ describe("ApplicationSettingsPage", () => {
           "保存代码分析设置"
         )
       );
+      expect(
+        periodicRefreshInput?.getAttribute("aria-invalid")
+      ).toBe("true");
+      expect(save?.disabled).toBe(true);
+      act(() => {
+        setNativeInputValue(periodicRefreshInput, "120");
+        periodicRefreshInput?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+      });
+      expect(save?.disabled).toBe(false);
       await act(async () => {
         save?.click();
         await Promise.resolve();
@@ -840,7 +1241,11 @@ describe("ApplicationSettingsPage", () => {
         {
           codeAnalysis: expect.objectContaining({
             maxGraphNodes: 45_000,
-            maxGraphEdges: 120_000
+            maxGraphEdges: 120_000,
+            autoRefresh: expect.objectContaining({
+              periodicEnabled: true,
+              periodicIntervalMinutes: 120
+            })
           })
         },
         expect.objectContaining({
@@ -854,7 +1259,7 @@ describe("ApplicationSettingsPage", () => {
     }
   });
 
-  it("exposes MCP controls separately and saves only MCP settings", async () => {
+  it("exposes MCP controls under code analysis and saves only MCP settings", async () => {
     vi.stubGlobal("React", React);
     const container = document.createElement("div");
     document.body.append(container);
@@ -865,12 +1270,10 @@ describe("ApplicationSettingsPage", () => {
       await act(async () => {
         root.render(
           <ApplicationSettingsPage
-            accounts={emptyAccounts()}
             appSettings={settingsController({ update })}
             gitEnvironment={null}
-            initialSection="mcp"
+            initialSection="analysis"
             terminalProfiles={[]}
-            workspace={null}
           />
         );
       });
@@ -878,9 +1281,41 @@ describe("ApplicationSettingsPage", () => {
         container.querySelector(
           'nav[aria-label="设置分组"] button[aria-current="page"] .settings-nav-item-title'
         )?.textContent
-      ).toBe("MCP");
+      ).toBe("代码分析");
       expect(container.querySelector("#analysis-max-graph-nodes"))
-        .toBeNull();
+        .not.toBeNull();
+      expect(
+        Array.from(
+          container.querySelectorAll(
+            'nav[aria-label="设置分组"] .settings-nav-item-title'
+          )
+        ).some((item) => item.textContent?.trim() === "MCP")
+      ).toBe(false);
+      expect(container.textContent).toContain("MCP 服务");
+      expect(container.textContent).toContain("Codex 连接");
+      const mcpCard = Array.from(
+        container.querySelectorAll<HTMLElement>(".settings-card")
+      ).find(
+        (card) =>
+          card.querySelector(".settings-card-title")?.textContent ===
+          "MCP 服务"
+      );
+      const mcpHeader = mcpCard?.querySelector(
+        ".settings-card-header"
+      );
+      const mcpToggle = mcpCard?.querySelector<HTMLButtonElement>(
+        'button[aria-label="启用 MCP 服务"]'
+      );
+      expect(mcpToggle?.parentElement).toBe(mcpHeader);
+      expect(
+        mcpCard?.querySelector(
+          ".settings-card-body > .settings-setting-row"
+        )
+      ).toBeNull();
+      expect(
+        mcpCard?.querySelector(".settings-card-description")
+          ?.textContent
+      ).toContain("关闭后仅停止返回 MCP 数据");
       const responseLimit =
         container.querySelector<HTMLInputElement>(
           "#analysis-mcp-response-kb"
@@ -888,6 +1323,38 @@ describe("ApplicationSettingsPage", () => {
       expect(responseLimit?.value).toBe("256");
       expect(responseLimit?.min).toBe("64");
       expect(responseLimit?.max).toBe("1024");
+      const staleAgeInput =
+        container.querySelector<HTMLInputElement>(
+          "#analysis-mcp-max-stale-age-days"
+        );
+      expect(staleAgeInput?.value).toBe(
+        String(DEFAULT_MCP_MAX_STALE_AGE_DAYS)
+      );
+      expect(staleAgeInput?.min).toBe(
+        String(MIN_MCP_MAX_STALE_AGE_DAYS)
+      );
+      expect(staleAgeInput?.max).toBe(
+        String(MAX_MCP_MAX_STALE_AGE_DAYS)
+      );
+      expect(
+        responseLimit?.closest(".mcp-registration-grid")
+      ).toBe(
+        staleAgeInput?.closest(".mcp-registration-grid")
+      );
+      expect(
+        responseLimit
+          ?.closest(".gn-input-field")
+          ?.querySelector(".gn-input-field__help")
+          ?.getAttribute("aria-hidden")
+      ).toBe("true");
+      expect(
+        staleAgeInput
+          ?.closest(".gn-input-field")
+          ?.querySelector(".gn-input-field__help")
+          ?.getAttribute("title")
+      ).toBe(
+        "仅限制已确认陈旧或无法验证的快照；与当前源码一致的快照不会因时间过期。"
+      );
       const toggle = (label: string) =>
         container.querySelector<HTMLButtonElement>(
           `button[aria-label="${label}"]`
@@ -896,6 +1363,10 @@ describe("ApplicationSettingsPage", () => {
         toggle("启用 MCP 服务")?.click();
         setNativeInputValue(responseLimit, "512");
         responseLimit?.dispatchEvent(
+          new Event("input", { bubbles: true })
+        );
+        setNativeInputValue(staleAgeInput, "14");
+        staleAgeInput?.dispatchEvent(
           new Event("input", { bubbles: true })
         );
       });
@@ -916,19 +1387,20 @@ describe("ApplicationSettingsPage", () => {
             mcp: {
               enabled: false,
               allowSourceSnippets: true,
-              maxResponseKb: 512
+              maxResponseKb: 512,
+              maxStaleAgeDays: 14
             }
           }
         },
         { notice: "MCP 设置已保存。" }
       );
       act(() => {
-        setNativeInputValue(responseLimit, "0");
-        responseLimit?.dispatchEvent(
+        setNativeInputValue(staleAgeInput, "0");
+        staleAgeInput?.dispatchEvent(
           new Event("input", { bubbles: true })
         );
       });
-      expect(responseLimit?.getAttribute("aria-invalid")).toBe(
+      expect(staleAgeInput?.getAttribute("aria-invalid")).toBe(
         "true"
       );
       expect(save?.disabled).toBe(true);
@@ -950,12 +1422,10 @@ describe("ApplicationSettingsPage", () => {
     const render = (appSettings: AppSettingsController) =>
       root.render(
         <ApplicationSettingsPage
-          accounts={emptyAccounts()}
           appSettings={appSettings}
           gitEnvironment={null}
           initialSection="analysis"
           terminalProfiles={[]}
-          workspace={null}
         />
       );
 
@@ -970,13 +1440,6 @@ describe("ApplicationSettingsPage", () => {
         lspCommand?.dispatchEvent(
           new Event("input", { bubbles: true })
         );
-        Array.from(
-          container.querySelectorAll<HTMLButtonElement>(
-            'nav[aria-label="设置分组"] button'
-          )
-        ).find((button) =>
-          button.textContent?.includes("MCP")
-        )?.click();
       });
       await act(async () => {
         container.querySelector<HTMLButtonElement>(
@@ -1003,15 +1466,6 @@ describe("ApplicationSettingsPage", () => {
         }
       };
       act(() => render(persisted));
-      act(() => {
-        Array.from(
-          container.querySelectorAll<HTMLButtonElement>(
-            'nav[aria-label="设置分组"] button'
-          )
-        ).find((button) =>
-          button.textContent?.includes("LSP 与代码分析")
-        )?.click();
-      });
       expect(
         container.querySelector<HTMLInputElement>(
           "#lsp-command-typescript-language-server"
@@ -1049,8 +1503,8 @@ describe("ApplicationSettingsPage", () => {
       executablePath: "C:\\GitNest\\GitNest.exe",
       entryScriptPath: "C:\\GitNest\\resources\\mcp\\gitnest-mcp.mjs",
       dataDirectory: "C:\\Users\\test\\AppData\\GitNest",
-      command: "codex mcp add gitnest -- ...",
-      configSnippet: "[mcp_servers.gitnest]",
+      command: "codex mcp add GitNest_code_lsp -- ...",
+      configSnippet: "[mcp_servers.GitNest_code_lsp]",
       registered: false,
       codexAvailable: true,
       serverAvailable: true,
@@ -1081,17 +1535,60 @@ describe("ApplicationSettingsPage", () => {
       await act(async () => {
         root.render(
           <ApplicationSettingsPage
-            accounts={emptyAccounts()}
             appSettings={settingsController()}
             gitEnvironment={null}
-            initialSection="mcp"
+            initialSection="analysis"
             terminalProfiles={[]}
-            workspace={null}
           />
         );
       });
       expect(container.textContent).toContain(registration.dataDirectory);
-      expect(container.textContent).toContain(registration.command);
+      expect(container.textContent).not.toContain(registration.command);
+      const registrationPanel = container.querySelector(
+        ".mcp-registration"
+      );
+      const registrationCard = registrationPanel?.closest(
+        ".settings-card"
+      );
+      const registrationBadge = registrationCard?.querySelector(
+        ".settings-card-header > .status-pill"
+      );
+      const registrationActions = container.querySelector(
+        ".mcp-registration-actions"
+      );
+      expect(registrationActions?.parentElement).toBe(
+        registrationPanel
+      );
+      expect(registrationPanel?.lastElementChild).toBe(
+        registrationActions
+      );
+      expect(
+        registrationPanel?.querySelector(
+          ".mcp-registration-command"
+        )
+      ).toBeNull();
+      expect(
+        registrationActions?.querySelectorAll("button")
+      ).toHaveLength(1);
+      expect(registrationActions?.textContent).not.toContain("复制");
+      expect(
+        registrationPanel?.querySelector(
+          ".mcp-registration-hint"
+        )
+      ).toBeNull();
+      expect(
+        registrationPanel?.querySelector(
+          ".mcp-registration-status"
+        )
+      ).toBeNull();
+      expect(registrationPanel?.textContent).toContain(
+        "GitNest_code_lsp"
+      );
+      expect(registrationBadge?.textContent).toBe("未注册");
+      expect(registrationBadge?.classList.contains("neutral")).toBe(
+        true
+      );
+      expect(document.querySelector(".toast")).toBeNull();
       await act(async () => {
         Array.from(
           container.querySelectorAll<HTMLButtonElement>("button")
@@ -1103,7 +1600,16 @@ describe("ApplicationSettingsPage", () => {
       expect(setMcpRegistration).toHaveBeenCalledWith({
         registered: true
       });
-      expect(container.textContent).toContain("已注册到本机 Codex");
+      expect(registrationBadge?.textContent).toBe("已注册");
+      expect(registrationBadge?.classList.contains("green")).toBe(
+        true
+      );
+      expect(document.querySelector(".toast")?.textContent).toContain(
+        "MCP 已注册"
+      );
+      expect(document.querySelector(".toast")?.textContent).toContain(
+        "已注册，重新启动 Codex 后生效。"
+      );
     } finally {
       act(() => root.unmount());
       container.remove();
@@ -1141,12 +1647,10 @@ describe("ApplicationSettingsPage", () => {
       await act(async () => {
         root.render(
           <ApplicationSettingsPage
-            accounts={emptyAccounts()}
             appSettings={settingsController()}
             gitEnvironment={null}
-            initialSection="mcp"
+            initialSection="analysis"
             terminalProfiles={[]}
-            workspace={null}
           />
         );
       });
@@ -1156,7 +1660,17 @@ describe("ApplicationSettingsPage", () => {
         button.textContent?.includes("一键注册")
       );
       expect(register?.disabled).toBe(true);
-      expect(container.textContent).toContain("开发版不提供");
+      const registrationBadge = container.querySelector(
+        ".settings-card-header > .status-pill"
+      );
+      expect(registrationBadge?.textContent).toBe("注册不可用");
+      expect(registrationBadge?.classList.contains("red")).toBe(true);
+      expect(document.querySelector(".toast")?.textContent).toContain(
+        "开发版不提供"
+      );
+      expect(
+        container.querySelector(".mcp-registration-hint")
+      ).toBeNull();
       expect(container.textContent).not.toContain(
         "invalid development command"
       );
@@ -1178,6 +1692,20 @@ function setNativeInputValue(
     "value"
   )?.set;
   setter?.call(input, value);
+}
+
+function rectAt(top: number, height = 100): DOMRect {
+  return {
+    bottom: top + height,
+    height,
+    left: 0,
+    right: 100,
+    top,
+    width: 100,
+    x: 0,
+    y: top,
+    toJSON: () => ({})
+  };
 }
 
 function settingsController(
@@ -1205,26 +1733,4 @@ function deferred<Value>() {
     resolve = resolvePromise;
   });
   return { promise, resolve };
-}
-
-function emptyAccounts(): AccountController {
-  return {
-    overview: {
-      accounts: [],
-      bindings: []
-    },
-    removalImpact: null,
-    active: null,
-    error: null,
-    notice: null,
-    reload: vi.fn(async () => undefined),
-    save: vi.fn(async () => false),
-    bind: vi.fn(async () => false),
-    unbind: vi.fn(async () => false),
-    test: vi.fn(async () => false),
-    requestRemoval: vi.fn(async () => false),
-    confirmRemoval: vi.fn(async () => false),
-    dismissRemoval: vi.fn(),
-    clearFeedback: vi.fn()
-  };
 }

@@ -7,6 +7,7 @@ import {
 
 import type {
   CodeAnalysisScopeDto,
+  CodeAnalysisSnapshotDetailDto,
   CodeAnalysisSnapshotDto,
   CodeAnalysisStateDto,
   GitReadErrorDto,
@@ -17,7 +18,9 @@ import type {
 export interface CodeAnalysisController {
   state: CodeAnalysisStateDto;
   snapshot: CodeAnalysisSnapshotDto | null;
+  snapshotDetail: CodeAnalysisSnapshotDetailDto | null;
   loading: boolean;
+  loadingFullSnapshot: boolean;
   action:
     | "starting"
     | "restoring"
@@ -29,6 +32,7 @@ export interface CodeAnalysisController {
   restoreSnapshot(
     scope: CodeAnalysisScopeDto
   ): Promise<boolean>;
+  loadFullSnapshot(): Promise<boolean>;
   cancel(): Promise<boolean>;
   installLanguageServer(
     language: InstallableLanguageServerDto
@@ -50,6 +54,8 @@ export function useCodeAnalysis(
   const [snapshot, setSnapshot] =
     useState<CodeAnalysisSnapshotDto | null>(null);
   const [loading, setLoading] = useState(enabled);
+  const [loadingFullSnapshot, setLoadingFullSnapshot] =
+    useState(false);
   const [action, setAction] = useState<
     "starting" | "restoring" | "cancelling" | null
   >(null);
@@ -69,15 +75,22 @@ export function useCodeAnalysis(
   const loadSnapshot = useCallback(
     async (
       expectedState: CodeAnalysisStateDto,
-      generation = generationRef.current
-    ) => {
+      generation = generationRef.current,
+      detail: CodeAnalysisSnapshotDetailDto = "navigation"
+    ): Promise<boolean> => {
       const expectationKey =
         snapshotExpectationKey(expectedState);
+      const requestKey = snapshotRequestKey(
+        expectedState,
+        detail
+      );
       const requestId = ++snapshotRequestRef.current;
-      requestedSnapshotKeyRef.current = expectationKey;
+      requestedSnapshotKeyRef.current = requestKey;
       try {
         const result =
-          await window.gitnest.codeAnalysis.getSnapshot();
+          await window.gitnest.codeAnalysis.getSnapshot({
+            detail
+          });
         if (
           generation !== generationRef.current ||
           requestId !== snapshotRequestRef.current ||
@@ -86,12 +99,12 @@ export function useCodeAnalysis(
           expectationKey !==
             snapshotExpectationKey(stateRef.current)
         ) {
-          return;
+          return false;
         }
         if (!result.ok) {
           requestedSnapshotKeyRef.current = "";
           setError(result.error);
-          return;
+          return false;
         }
         if (
           !snapshotMatchesState(
@@ -108,12 +121,21 @@ export function useCodeAnalysis(
               "代码分析快照与当前 Workspace 状态不匹配。",
             details: {}
           });
-          return;
+          return false;
         }
-        setSnapshot(result.value);
-        snapshotKeyRef.current = result.value
-          ? `${result.value.analysisId}:${result.value.generatedAt}`
+        const nextSnapshot = result.value
+          ? {
+              ...result.value,
+              detailLevel:
+                result.value.detailLevel ?? detail
+            }
+          : null;
+        setSnapshot(nextSnapshot);
+        snapshotKeyRef.current = nextSnapshot
+          ? `${expectationKey}\0${nextSnapshot.detailLevel}`
           : "";
+        requestedSnapshotKeyRef.current = "";
+        return nextSnapshot !== null;
       } catch (reason) {
         if (
           generation === generationRef.current &&
@@ -125,6 +147,7 @@ export function useCodeAnalysis(
           requestedSnapshotKeyRef.current = "";
           setError(unexpectedError(reason));
         }
+        return false;
       }
     },
     []
@@ -144,6 +167,7 @@ export function useCodeAnalysis(
         snapshotExpectationRef.current = expectationKey;
         snapshotRequestRef.current += 1;
         requestedSnapshotKeyRef.current = "";
+        setLoadingFullSnapshot(false);
       }
       setState(nextState);
       setAction(null);
@@ -163,10 +187,16 @@ export function useCodeAnalysis(
         nextState.analysisId &&
         nextState.generatedAt
       ) {
-        const key = `${nextState.analysisId}:${nextState.generatedAt}`;
+        const key = expectationKey;
         if (
-          snapshotKeyRef.current !== key &&
-          requestedSnapshotKeyRef.current !== expectationKey
+          !snapshotKeyMatchesExpectation(
+            snapshotKeyRef.current,
+            key
+          ) &&
+          !snapshotKeyMatchesExpectation(
+            requestedSnapshotKeyRef.current,
+            key
+          )
         ) {
           void loadSnapshot(nextState);
         }
@@ -174,7 +204,10 @@ export function useCodeAnalysis(
         loadAvailableSnapshot &&
         nextState.snapshotAvailable &&
         !snapshotKeyRef.current &&
-        requestedSnapshotKeyRef.current !== expectationKey
+        !snapshotKeyMatchesExpectation(
+          requestedSnapshotKeyRef.current,
+          expectationKey
+        )
       ) {
         void loadSnapshot(nextState);
       }
@@ -202,6 +235,7 @@ export function useCodeAnalysis(
       } else {
         setSnapshot(null);
         snapshotKeyRef.current = "";
+        setLoadingFullSnapshot(false);
       }
     } catch (reason) {
       if (generation === generationRef.current) {
@@ -213,6 +247,38 @@ export function useCodeAnalysis(
       }
     }
   }, [applyState, loadSnapshot]);
+
+  const loadFullSnapshot = useCallback(async () => {
+    const expectedState = stateRef.current;
+    if (!expectedState.snapshotAvailable) {
+      return false;
+    }
+    const expectationKey =
+      snapshotExpectationKey(expectedState);
+    if (
+      snapshotKeyRef.current ===
+      snapshotRequestKey(expectedState, "full")
+    ) {
+      return true;
+    }
+
+    const generation = generationRef.current;
+    setLoadingFullSnapshot(true);
+    try {
+      return await loadSnapshot(
+        expectedState,
+        generation,
+        "full"
+      );
+    } finally {
+      if (
+        generation === generationRef.current &&
+        expectationKey === snapshotExpectationRef.current
+      ) {
+        setLoadingFullSnapshot(false);
+      }
+    }
+  }, [loadSnapshot]);
 
   useEffect(() => {
     if (!enabled) {
@@ -335,12 +401,17 @@ export function useCodeAnalysis(
   return {
     state,
     snapshot,
+    snapshotDetail: snapshot
+      ? snapshot.detailLevel ?? "full"
+      : null,
     loading,
+    loadingFullSnapshot,
     action,
     installingLanguage,
     error,
     start,
     restoreSnapshot,
+    loadFullSnapshot,
     cancel,
     installLanguageServer,
     reload,
@@ -376,6 +447,20 @@ function snapshotExpectationKey(
     return `ready\0${context}\0${state.analysisId}\0${state.generatedAt}`;
   }
   return `available\0${context}`;
+}
+
+function snapshotRequestKey(
+  state: CodeAnalysisStateDto,
+  detail: CodeAnalysisSnapshotDetailDto
+): string {
+  return `${snapshotExpectationKey(state)}\0${detail}`;
+}
+
+function snapshotKeyMatchesExpectation(
+  key: string,
+  expectationKey: string
+): boolean {
+  return key.startsWith(`${expectationKey}\0`);
 }
 
 function snapshotMatchesState(

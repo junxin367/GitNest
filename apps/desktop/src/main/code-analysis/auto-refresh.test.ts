@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   CodeAnalysisAutoRefreshScheduler,
+  CodeAnalysisPeriodicRefreshScheduler,
   analysisSelectionKey,
   shouldAutoRefresh,
   waitForAnalysisCompletion
@@ -153,6 +154,116 @@ describe("CodeAnalysisAutoRefreshScheduler", () => {
     scheduler.dispose();
     scheduler.request();
     await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("CodeAnalysisPeriodicRefreshScheduler", () => {
+  it("runs only after the configured interval is due", async () => {
+    let now = 0;
+    const run = vi.fn(async () => undefined);
+    const scheduler = new CodeAnalysisPeriodicRefreshScheduler({
+      checkIntervalMs: 5,
+      clock: () => now,
+      configuration: async () => ({
+        enabled: true,
+        intervalMs: 100
+      }),
+      run
+    });
+
+    scheduler.start();
+    now = 99;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(run).not.toHaveBeenCalled();
+
+    now = 100;
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    scheduler.dispose();
+  });
+
+  it("re-reads disabled configuration before each run", async () => {
+    let enabled = false;
+    let now = 100;
+    const run = vi.fn(async () => undefined);
+    const scheduler = new CodeAnalysisPeriodicRefreshScheduler({
+      checkIntervalMs: 5,
+      clock: () => now,
+      configuration: async () => ({
+        enabled,
+        intervalMs: 100
+      }),
+      run
+    });
+
+    scheduler.start();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(run).not.toHaveBeenCalled();
+
+    enabled = true;
+    now = 200;
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    scheduler.dispose();
+  });
+
+  it("reset aborts an active run and restarts the interval", async () => {
+    let now = 0;
+    let activeSignal: AbortSignal | undefined;
+    const run = vi.fn(
+      (signal: AbortSignal) =>
+        new Promise<void>((resolve) => {
+          activeSignal = signal;
+          signal.addEventListener("abort", () => resolve(), {
+            once: true
+          });
+        })
+    );
+    const scheduler = new CodeAnalysisPeriodicRefreshScheduler({
+      checkIntervalMs: 5,
+      clock: () => now,
+      configuration: async () => ({
+        enabled: true,
+        intervalMs: 100
+      }),
+      run
+    });
+
+    scheduler.start();
+    now = 100;
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    expect(scheduler.running).toBe(true);
+
+    now = 150;
+    scheduler.reset();
+    expect(activeSignal?.aborted).toBe(true);
+    await vi.waitFor(() => expect(scheduler.running).toBe(false));
+
+    now = 249;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(run).toHaveBeenCalledTimes(1);
+
+    now = 250;
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    scheduler.dispose();
+  });
+
+  it("does not schedule after dispose", async () => {
+    let now = 100;
+    const run = vi.fn(async () => undefined);
+    const scheduler = new CodeAnalysisPeriodicRefreshScheduler({
+      checkIntervalMs: 5,
+      clock: () => now,
+      configuration: async () => ({
+        enabled: true,
+        intervalMs: 100
+      }),
+      run
+    });
+
+    scheduler.start();
+    scheduler.dispose();
+    now = 1_000;
+    await new Promise((resolve) => setTimeout(resolve, 25));
     expect(run).not.toHaveBeenCalled();
   });
 });

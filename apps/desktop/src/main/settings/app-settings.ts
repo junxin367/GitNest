@@ -10,7 +10,9 @@ import {
   MAX_LSP_REQUESTS,
   MAX_LSP_SYMBOLS_PER_DOCUMENT,
   MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+  MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
   MAX_MCP_MAX_RESPONSE_KB,
+  MAX_MCP_MAX_STALE_AGE_DAYS,
   MAX_DIFF_COMMIT_PANEL_HEIGHT,
   MIN_CODE_ANALYSIS_DIAGNOSTICS,
   MIN_CODE_ANALYSIS_GRAPH_EDGES,
@@ -22,11 +24,14 @@ import {
   MIN_LSP_REQUESTS,
   MIN_LSP_SYMBOLS_PER_DOCUMENT,
   MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
+  MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
   MIN_MCP_MAX_RESPONSE_KB,
+  MIN_MCP_MAX_STALE_AGE_DAYS,
   MIN_DIFF_COMMIT_PANEL_HEIGHT,
   LANGUAGE_SERVER_LANGUAGES,
   createDefaultAppSettings,
   createDefaultCodeAnalysisSettings,
+  type AiApiKeyValueDto,
   type CodeAnalysisSettingsDto,
   type AppSettingsDto,
   type AppSettingsLoadDto,
@@ -136,6 +141,21 @@ type StoredLanguageServerSettings = Omit<
     >
   >;
 
+type StoredMcpServerSettings = Omit<
+  McpServerSettingsDto,
+  "maxStaleAgeDays"
+> & {
+  maxStaleAgeDays?: number;
+};
+
+type StoredCodeAnalysisAutoRefreshSettings = Omit<
+  CodeAnalysisAutoRefreshSettingsDto,
+  "periodicEnabled" | "periodicIntervalMinutes"
+> & {
+  periodicEnabled?: boolean;
+  periodicIntervalMinutes?: number;
+};
+
 type StoredCodeAnalysisSettings = Omit<
   CodeAnalysisSettingsDto,
   | "maxTotalSourceMb"
@@ -147,8 +167,8 @@ type StoredCodeAnalysisSettings = Omit<
   | "autoRefresh"
   | LanguageServerLanguageDto
 > & {
-  mcp?: McpServerSettingsDto;
-  autoRefresh?: CodeAnalysisAutoRefreshSettingsDto;
+  mcp?: StoredMcpServerSettings;
+  autoRefresh?: StoredCodeAnalysisAutoRefreshSettings;
   maxTotalSourceMb?: number;
   maxGraphNodes?: number;
   maxGraphEdges?: number;
@@ -408,6 +428,24 @@ export class AppSettingsService {
       }
       return toPublicSettings(next);
     });
+  }
+
+  async readAiApiKey(
+    reveal: boolean
+  ): Promise<AiApiKeyValueDto> {
+    const document = await this.#load();
+    const credentialRef = document.ai.apiKeyCredentialRef;
+    if (!credentialRef) {
+      return {
+        apiKey: null,
+        length: 0
+      };
+    }
+    const apiKey = await this.#secretVault.read(credentialRef);
+    return {
+      apiKey: reveal ? apiKey : null,
+      length: apiKey.length
+    };
   }
 
   async getInternalAiSettings(
@@ -1117,7 +1155,15 @@ function isAutoRefreshSettings(value: unknown): boolean {
       value.debounceMs,
       MIN_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
       MAX_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS
-    )
+    ) &&
+    (value.periodicEnabled === undefined ||
+      typeof value.periodicEnabled === "boolean") &&
+    (value.periodicIntervalMinutes === undefined ||
+      isIntegerInRange(
+        value.periodicIntervalMinutes,
+        MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
+        MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES
+      ))
   );
 }
 
@@ -1130,7 +1176,13 @@ function isMcpServerSettings(value: unknown): boolean {
       value.maxResponseKb,
       MIN_MCP_MAX_RESPONSE_KB,
       MAX_MCP_MAX_RESPONSE_KB
-    )
+    ) &&
+    (value.maxStaleAgeDays === undefined ||
+      isIntegerInRange(
+        value.maxStaleAgeDays,
+        MIN_MCP_MAX_STALE_AGE_DAYS,
+        MAX_MCP_MAX_STALE_AGE_DAYS
+      ))
   );
 }
 
@@ -1148,7 +1200,13 @@ function cloneCodeAnalysisSettings(
         defaults.autoRefresh.enabled,
       debounceMs:
         settings.autoRefresh?.debounceMs ??
-        defaults.autoRefresh.debounceMs
+        defaults.autoRefresh.debounceMs,
+      periodicEnabled:
+        settings.autoRefresh?.periodicEnabled ??
+        defaults.autoRefresh.periodicEnabled,
+      periodicIntervalMinutes:
+        settings.autoRefresh?.periodicIntervalMinutes ??
+        defaults.autoRefresh.periodicIntervalMinutes
     },
     mcp: {
       enabled: settings.mcp?.enabled ?? defaults.mcp.enabled,
@@ -1157,7 +1215,10 @@ function cloneCodeAnalysisSettings(
         defaults.mcp.allowSourceSnippets,
       maxResponseKb:
         settings.mcp?.maxResponseKb ??
-        defaults.mcp.maxResponseKb
+        defaults.mcp.maxResponseKb,
+      maxStaleAgeDays:
+        settings.mcp?.maxStaleAgeDays ??
+        defaults.mcp.maxStaleAgeDays
     },
     maxFiles: settings.maxFiles,
     maxTotalSourceMb:

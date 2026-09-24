@@ -385,7 +385,7 @@ export class CodeAnalysisEngine {
     }
     const graph = buildCodeGraph({
       files: graphFiles,
-      scope: input.scope,
+      scope: input.resultScope ?? input.scope,
       graphDepth: input.settings.graphDepth,
       limits: {
         maxNodes: input.settings.maxGraphNodes,
@@ -531,7 +531,7 @@ export class CodeAnalysisEngine {
         schemaVersion: 1,
         analysisId: input.analysisId,
         workspaceId: input.workspaceId,
-        scope: input.scope,
+        scope: input.resultScope ?? input.scope,
         generatedAt,
         roots: input.roots,
         ...(input.worktreeStatuses

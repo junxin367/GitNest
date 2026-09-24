@@ -202,6 +202,74 @@ describe("CodeAnalysisEngine", () => {
     }
   });
 
+  it("can use changed-file discovery to emit an updated full workspace graph", async () => {
+    const fixture = await createFixture();
+    const engine = new CodeAnalysisEngine();
+    try {
+      await writeFile(
+        join(fixture.backendRoot.path, "HealthService.java"),
+        [
+          "@Service",
+          "public class HealthService {",
+          "  public String health() {",
+          '    return "ok";',
+          "  }",
+          "}"
+        ].join("\n"),
+        "utf8"
+      );
+      const full = await engine.analyze(
+        analysisInput(fixture, {
+          analysisId: "workspace-before-refresh",
+          scope: "workspace",
+          changedPaths: []
+        })
+      );
+      expect(
+        full.nodes.some((node) => node.name === "health")
+      ).toBe(true);
+
+      await writeFile(
+        fixture.frontendFile,
+        `${frontendSource()}\n// changed\n`,
+        "utf8"
+      );
+      const refreshed = await engine.analyze({
+        ...analysisInput(fixture, {
+          analysisId: "workspace-from-changed-discovery",
+          scope: "changed",
+          changedPaths: [
+            changedPath(fixture.frontendRoot, "client.ts")
+          ]
+        }),
+        resultScope: "workspace"
+      });
+
+      expect(refreshed).toMatchObject({
+        scope: "workspace",
+        indexStatus: {
+          fullIndexAvailable: true
+        }
+      });
+      expect(refreshed.nodes).toHaveLength(full.nodes.length);
+      expect(refreshed.nodes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "health",
+            changed: false
+          }),
+          expect.objectContaining({
+            name: "loadUser",
+            changed: true
+          })
+        ])
+      );
+    } finally {
+      await engine.dispose();
+      await fixture.dispose();
+    }
+  });
+
   it("keeps changed analysis partial when the cached workspace semantic index was incomplete", async () => {
     const fixture = await createFixture();
     const engine = new CodeAnalysisEngine(

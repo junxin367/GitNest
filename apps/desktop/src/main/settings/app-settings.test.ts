@@ -10,7 +10,9 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
   DEFAULT_DIFF_COMMIT_PANEL_HEIGHT,
+  DEFAULT_MCP_MAX_STALE_AGE_DAYS,
   createDefaultAppSettings,
   type UpdateAppSettingsRequest
 } from "@gitnest/contracts";
@@ -82,6 +84,23 @@ describe("AppSettingsService", () => {
       initial.settings.codeAnalysis.java
         .maxTypeHierarchyRequests
     ).toBe(80);
+    expect(
+      initial.settings.codeAnalysis.autoRefresh
+        .periodicEnabled
+    ).toBe(true);
+    expect(
+      initial.settings.codeAnalysis.autoRefresh
+        .periodicIntervalMinutes
+    ).toBe(
+      DEFAULT_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES
+    );
+    expect(
+      initial.settings.codeAnalysis.mcp.maxStaleAgeDays
+    ).toBe(DEFAULT_MCP_MAX_STALE_AGE_DAYS);
+    await expect(service.readAiApiKey(false)).resolves.toEqual({
+      apiKey: null,
+      length: 0
+    });
 
     const updated = await service.update({
       appearance: { theme: "light" },
@@ -89,6 +108,13 @@ describe("AppSettingsService", () => {
       codeAnalysis: {
         maxGraphNodes: 45_000,
         maxGraphEdges: 120_000,
+        autoRefresh: {
+          periodicEnabled: false,
+          periodicIntervalMinutes: 180
+        },
+        mcp: {
+          maxStaleAgeDays: 30
+        },
         java: {
           maxDocuments: 500,
           maxTypeHierarchyRequests: 160,
@@ -104,9 +130,22 @@ describe("AppSettingsService", () => {
     });
 
     expect(updated.ai.apiKeyConfigured).toBe(true);
+    await expect(service.readAiApiKey(false)).resolves.toEqual({
+      apiKey: null,
+      length: 19
+    });
+    await expect(service.readAiApiKey(true)).resolves.toEqual({
+      apiKey: "plain-text-test-key",
+      length: 19
+    });
     expect(updated.git.pushStrategy).toBe("merge");
     expect(updated.codeAnalysis.maxGraphNodes).toBe(45_000);
     expect(updated.codeAnalysis.maxGraphEdges).toBe(120_000);
+    expect(updated.codeAnalysis.autoRefresh).toMatchObject({
+      periodicEnabled: false,
+      periodicIntervalMinutes: 180
+    });
+    expect(updated.codeAnalysis.mcp.maxStaleAgeDays).toBe(30);
     expect(updated.codeAnalysis.java).toMatchObject({
       maxDocuments: 500,
       maxTypeHierarchyRequests: 160,
@@ -124,6 +163,13 @@ describe("AppSettingsService", () => {
       codeAnalysis: {
         maxGraphNodes: number;
         maxGraphEdges: number;
+        autoRefresh: {
+          periodicEnabled: boolean;
+          periodicIntervalMinutes: number;
+        };
+        mcp: {
+          maxStaleAgeDays: number;
+        };
         java: {
           maxDocuments: number;
           maxTypeHierarchyRequests: number;
@@ -140,6 +186,11 @@ describe("AppSettingsService", () => {
     );
     expect(document.codeAnalysis.maxGraphNodes).toBe(45_000);
     expect(document.codeAnalysis.maxGraphEdges).toBe(120_000);
+    expect(document.codeAnalysis.autoRefresh).toMatchObject({
+      periodicEnabled: false,
+      periodicIntervalMinutes: 180
+    });
+    expect(document.codeAnalysis.mcp.maxStaleAgeDays).toBe(30);
     expect(document.codeAnalysis.java).toMatchObject({
       maxDocuments: 500,
       maxTypeHierarchyRequests: 160,
@@ -148,6 +199,80 @@ describe("AppSettingsService", () => {
     await expect(
       vault.read("settings_ai_api_key_test")
     ).resolves.toBe("plain-text-test-key");
+  });
+
+  it("merges partial periodic refresh and MCP updates without resetting sibling settings", async () => {
+    const filePath = await createSettingsPath();
+    const service = new AppSettingsService(
+      filePath,
+      new MemorySecretVault()
+    );
+
+    await service.update({
+      codeAnalysis: {
+        autoRefresh: {
+          enabled: false,
+          debounceMs: 2_500,
+          periodicEnabled: false,
+          periodicIntervalMinutes: 120
+        },
+        mcp: {
+          enabled: false,
+          allowSourceSnippets: false,
+          maxResponseKb: 512,
+          maxStaleAgeDays: 14
+        }
+      }
+    });
+
+    const updated = await service.update({
+      codeAnalysis: {
+        autoRefresh: {
+          periodicIntervalMinutes: 240
+        },
+        mcp: {
+          maxStaleAgeDays: 21
+        }
+      }
+    });
+
+    expect(updated.codeAnalysis.autoRefresh).toEqual({
+      enabled: false,
+      debounceMs: 2_500,
+      periodicEnabled: false,
+      periodicIntervalMinutes: 240
+    });
+    expect(updated.codeAnalysis.mcp).toEqual({
+      enabled: false,
+      allowSourceSnippets: false,
+      maxResponseKb: 512,
+      maxStaleAgeDays: 21
+    });
+
+    const persisted = JSON.parse(
+      await readFile(filePath, "utf8")
+    ) as {
+      codeAnalysis: {
+        autoRefresh: {
+          enabled: boolean;
+          debounceMs: number;
+          periodicEnabled: boolean;
+          periodicIntervalMinutes: number;
+        };
+        mcp: {
+          enabled: boolean;
+          allowSourceSnippets: boolean;
+          maxResponseKb: number;
+          maxStaleAgeDays: number;
+        };
+      };
+    };
+    expect(persisted.codeAnalysis.autoRefresh).toEqual(
+      updated.codeAnalysis.autoRefresh
+    );
+    expect(persisted.codeAnalysis.mcp).toEqual(
+      updated.codeAnalysis.mcp
+    );
   });
 
   it("preserves an omitted key and requires explicit confirmation before clearing it", async () => {
@@ -421,6 +546,9 @@ describe("AppSettingsService", () => {
     });
     await vault.delete("settings_ai_api_key_missing");
 
+    await expect(service.readAiApiKey(true)).rejects.toMatchObject({
+      code: "MISSING_SECRET"
+    });
     await expect(
       service.clearAiApiKey(true)
     ).resolves.toMatchObject({
@@ -785,6 +913,101 @@ describe("AppSettingsService", () => {
       command: "custom-gopls",
       args: ["serve"]
     });
+  });
+
+  it("backfills and rewrites periodic refresh and MCP stale-age settings in schema v3 documents", async () => {
+    const filePath = await createSettingsPath();
+    const defaults = createDefaultAppSettings();
+    const legacyCodeAnalysis = structuredClone(
+      defaults.codeAnalysis
+    ) as unknown as {
+      autoRefresh: {
+        enabled: boolean;
+        debounceMs: number;
+        periodicEnabled?: boolean;
+        periodicIntervalMinutes?: number;
+      };
+      mcp: {
+        enabled: boolean;
+        allowSourceSnippets: boolean;
+        maxResponseKb: number;
+        maxStaleAgeDays?: number;
+      };
+    } & Record<string, unknown>;
+    legacyCodeAnalysis.autoRefresh.enabled = false;
+    legacyCodeAnalysis.autoRefresh.debounceMs = 2_000;
+    delete legacyCodeAnalysis.autoRefresh.periodicEnabled;
+    delete legacyCodeAnalysis.autoRefresh
+      .periodicIntervalMinutes;
+    legacyCodeAnalysis.mcp.enabled = false;
+    legacyCodeAnalysis.mcp.allowSourceSnippets = false;
+    legacyCodeAnalysis.mcp.maxResponseKb = 512;
+    delete legacyCodeAnalysis.mcp.maxStaleAgeDays;
+
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
+        general: defaults.general,
+        appearance: defaults.appearance,
+        diff: defaults.diff,
+        git: defaults.git,
+        ai: {
+          enabled: defaults.ai.enabled,
+          apiUrl: defaults.ai.apiUrl,
+          model: defaults.ai.model,
+          prompt: defaults.ai.prompt
+        },
+        codeAnalysis: legacyCodeAnalysis,
+        navigation: defaults.navigation,
+        updatedAt: "2026-09-23T00:00:00.000Z"
+      }),
+      "utf8"
+    );
+
+    const service = new AppSettingsService(
+      filePath,
+      new MemorySecretVault()
+    );
+    const loaded = await service.get();
+
+    expect(loaded.settings.codeAnalysis.autoRefresh).toEqual({
+      enabled: false,
+      debounceMs: 2_000,
+      periodicEnabled: true,
+      periodicIntervalMinutes:
+        DEFAULT_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES
+    });
+    expect(loaded.settings.codeAnalysis.mcp).toEqual({
+      enabled: false,
+      allowSourceSnippets: false,
+      maxResponseKb: 512,
+      maxStaleAgeDays: DEFAULT_MCP_MAX_STALE_AGE_DAYS
+    });
+
+    const persisted = JSON.parse(
+      await readFile(filePath, "utf8")
+    ) as {
+      schemaVersion: number;
+      codeAnalysis: {
+        autoRefresh: {
+          periodicEnabled: boolean;
+          periodicIntervalMinutes: number;
+        };
+        mcp: {
+          maxStaleAgeDays: number;
+        };
+      };
+    };
+    expect(persisted.schemaVersion).toBe(3);
+    expect(persisted.codeAnalysis.autoRefresh).toMatchObject({
+      periodicEnabled: true,
+      periodicIntervalMinutes:
+        DEFAULT_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES
+    });
+    expect(
+      persisted.codeAnalysis.mcp.maxStaleAgeDays
+    ).toBe(DEFAULT_MCP_MAX_STALE_AGE_DAYS);
   });
 
   it("retries a legacy migration after a transient vault failure", async () => {

@@ -21,6 +21,18 @@ function readCssBundle(
   );
 }
 
+function readCssRule(source: string, selector: string): string {
+  const escapedSelector = selector.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&"
+  );
+  return (
+    source.match(
+      new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`)
+    )?.[1] ?? ""
+  );
+}
+
 const css = readCssBundle(
   new URL(
     "../renderer/src/app/styles/global.css",
@@ -70,9 +82,7 @@ const standardDialogSources = [
   "../renderer/src/features/application-update/VersionDialog.tsx",
   "../renderer/src/features/repository-command/RepositoryCommandDialog.tsx",
   "../renderer/src/features/worktree-command/WorktreeCommandDialog.tsx",
-  "../renderer/src/pages/repository/RepositoryStashActions.tsx",
-  "../renderer/src/pages/settings/SettingsPage.tsx",
-  "../renderer/src/pages/settings/ApplicationSettingsPage.tsx"
+  "../renderer/src/pages/repository/RepositoryStashActions.tsx"
 ].map((path) =>
   readFileSync(
     fileURLToPath(new URL(path, import.meta.url)),
@@ -139,6 +149,21 @@ const applicationSettingsPageSource = readFileSync(
       "../renderer/src/pages/settings/ApplicationSettingsPage.tsx",
       import.meta.url
     )
+  ),
+  "utf8"
+);
+const accountSettingsPageSource = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../renderer/src/pages/settings/SettingsPage.tsx",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+const registerServicesSource = readFileSync(
+  fileURLToPath(
+    new URL("./bootstrap/register-services.ts", import.meta.url)
   ),
   "utf8"
 );
@@ -491,17 +516,295 @@ describe("renderer design-system guardrails", () => {
     }
   });
 
+  it("keeps system Git authentication as the only account source", () => {
+    const accountSectionStart = prototypeShellHtml.indexOf(
+      'if (section === "account")'
+    );
+    const accountSectionEnd = prototypeShellHtml.indexOf(
+      'if (section === "git")',
+      accountSectionStart
+    );
+    const accountSectionSource = prototypeShellHtml.slice(
+      accountSectionStart,
+      accountSectionEnd
+    );
+    const systemAuthIndex = accountSectionSource.indexOf(
+      '<div class="settings-card-title">系统 Git 认证</div>'
+    );
+
+    expect(systemAuthIndex).toBeGreaterThan(-1);
+    expect(accountSectionSource).toContain("默认用户名");
+    expect(accountSectionSource).toContain("默认邮箱");
+    expect(accountSectionSource).toContain(
+      "所有远程 Git 操作均使用系统认证"
+    );
+
+    for (const source of [
+      accountSettingsPageSource,
+      prototypeShellHtml
+    ]) {
+      expect(source).not.toContain("添加 GitNest 账号");
+      expect(source).not.toContain("GitNest 账号中心");
+      expect(source).not.toContain("settings-account-add");
+      expect(source).not.toContain("settings-account-center");
+    }
+
+    expect(registerServicesSource).toContain(
+      "const gitClient = new GitCliClient();"
+    );
+    expect(registerServicesSource).not.toContain(
+      "remoteEnvironmentProvider"
+    );
+    expect(registerServicesSource).not.toContain(
+      "openAuthenticationSession"
+    );
+
+    for (const source of [css, prototypeShellHtml]) {
+      expect(source).toMatch(
+        /\.system-auth-info-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/
+      );
+      expect(source).toMatch(
+        /\.settings-info-item\s*\{[\s\S]*?background:\s*var\(--surface-2\);[\s\S]*?border:\s*1px solid var\(--border-soft\);/
+      );
+    }
+  });
+
+  it("keeps the prototype Git remote-check strategy aligned with the application", () => {
+    for (const copy of [
+      "远程检查策略",
+      "选择应用启动并完成 Workspace 加载后的远程检查方式。",
+      "只有明确点击 Fetch 时才更新远程跟踪引用。",
+      "每次启动且 Workspace 加载完成后，对全部仓库执行一次 Fetch。",
+      "仅更新远程跟踪引用",
+      "启动检查不会执行 Pull、Merge、Rebase，也不会修改工作区、暂存区或未提交改动。"
+    ]) {
+      expect(applicationSettingsPageSource).toContain(copy);
+      expect(prototypeShellHtml).toContain(copy);
+    }
+
+    expect(prototypeShellHtml).toContain(
+      '<div class="settings-safety-note">'
+    );
+    expect(prototypeShellHtml).toMatch(
+      /<div class="settings-card-title">远程检查策略<\/div>[\s\S]*?<div class="settings-card-body">/
+    );
+    expect(prototypeShellHtml).not.toContain(
+      '<div class="settings-card-title">默认同步策略</div>'
+    );
+  });
+
+  it("keeps the Git environment card aligned with the prototype", () => {
+    for (const copy of [
+      "Git 运行环境",
+      "查看当前 Git 版本与运行环境。",
+      "Git 版本",
+      "执行文件"
+    ]) {
+      expect(applicationSettingsPageSource).toContain(copy);
+      expect(prototypeShellHtml).toContain(copy);
+    }
+
+    expect(applicationSettingsPageSource).toContain(
+      'badgeTone={gitEnvironment ? "green" : "red"}'
+    );
+    expect(applicationSettingsPageSource).toContain(
+      'className="settings-info-grid"'
+    );
+    expect(prototypeShellHtml).toMatch(
+      /<div class="settings-card-title">Git 运行环境<\/div>[\s\S]*?<span class="status-pill green">[\s\S]*?可用<\/span>[\s\S]*?<div class="settings-info-grid">/
+    );
+  });
+
+  it("aligns the settings title top spacing with the operation center", () => {
+    for (const source of [css, prototypeShellHtml]) {
+      const settingsScrollRule = source.match(
+        /\.settings-page-scroll\s*\{([^}]*)\}/
+      )?.[1];
+
+      expect(settingsScrollRule).toBeDefined();
+      expect(settingsScrollRule).toContain(
+        "padding-bottom: var(--space-7)"
+      );
+      expect(settingsScrollRule).not.toContain("padding-top");
+    }
+  });
+
+  it("aligns settings card content spacing with the application", () => {
+    const unpaddedInnerLayouts = [
+      ".settings-info-grid",
+      ".settings-preference-groups",
+      ".settings-ai-field-grid",
+      ".settings-option-grid",
+      ".analysis-settings-number-grid",
+      ".mcp-registration-grid"
+    ];
+
+    for (const source of [css, prototypeShellHtml]) {
+      const bodyRule = readCssRule(
+        source,
+        ".settings-card-body"
+      );
+      expect(bodyRule).toContain("display: grid");
+      expect(bodyRule).toContain("gap: var(--space-3)");
+      expect(bodyRule).toContain("padding: var(--space-4)");
+
+      const settingRowRule = readCssRule(
+        source,
+        ".settings-setting-row"
+      );
+      expect(settingRowRule).toContain("min-height: 48px");
+      expect(settingRowRule).not.toMatch(/\bpadding\s*:/);
+      expect(settingRowRule).not.toContain("border-bottom");
+
+      for (const selector of unpaddedInnerLayouts) {
+        const rule = readCssRule(source, selector);
+        expect(rule).not.toBe("");
+        expect(rule).not.toMatch(
+          /\bpadding(?:-(?:top|right|bottom|left))?\s*:/
+        );
+      }
+
+      const actionsRule = readCssRule(
+        source,
+        ".settings-ai-actions"
+      );
+      expect(actionsRule).toContain(
+        "padding-top: var(--space-1)"
+      );
+
+      const breadcrumbRule = readCssRule(
+        source,
+        ".settings-lsp-breadcrumb"
+      );
+      expect(breadcrumbRule).toContain(
+        "padding-bottom: var(--space-1)"
+      );
+      expect(breadcrumbRule).not.toMatch(/\bpadding\s*:/);
+
+      expect(
+        readCssRule(source, ".settings-lsp-editor")
+      ).not.toMatch(/\bmargin\s*:/);
+    }
+
+    expect(prototypeShellHtml).not.toContain(
+      "settings-card-grid-body"
+    );
+  });
+
+  it("keeps settings groups, card anchors, and scroll-aware subnavigation aligned", () => {
+    const settingsCardAnchors = [
+      "settings-general-behavior",
+      "settings-general-terminal",
+      "settings-general-preferences",
+      "settings-analysis-overview",
+      "settings-analysis-budget",
+      "settings-analysis-language-servers",
+      "settings-analysis-mcp",
+      "settings-analysis-codex",
+      "settings-ai-commit-message",
+      "settings-git-environment",
+      "settings-git-fetch",
+      "settings-git-push",
+      "settings-account-system"
+    ];
+
+    for (const anchor of settingsCardAnchors) {
+      if (anchor === "settings-account-system") {
+        expect(applicationSettingsPageSource).toContain(
+          `cardId="${anchor}"`
+        );
+        expect(accountSettingsPageSource).toContain("id={cardId}");
+      } else {
+        expect(applicationSettingsPageSource).toContain(
+          `id="${anchor}"`
+        );
+      }
+      expect(prototypeShellHtml).toContain(
+        `id: "${anchor}"`
+      );
+      expect(prototypeShellHtml).toContain(
+        `id="${anchor}" class="panel settings-card"`
+      );
+    }
+
+    expect(prototypeShellHtml).toContain(
+      'class="settings-nav-group ${active ? "is-active" : ""}"'
+    );
+    expect(prototypeShellHtml).toContain(
+      'aria-expanded="${active}"'
+    );
+    expect(prototypeShellHtml).toContain(
+      'onclick="scrollToSettingsCard(\'${card.id}\')"'
+    );
+    expect(prototypeShellHtml).toContain(
+      'item.setAttribute("aria-current", "location")'
+    );
+    expect(applicationSettingsPageSource).toContain(
+      "onScroll={syncSettingsCardFromScroll}"
+    );
+    expect(applicationSettingsPageSource).toContain(
+      "pendingSettingsCardScrollRef"
+    );
+    expect(prototypeShellHtml).toContain(
+      'onscroll="syncSettingsCardFromScroll()"'
+    );
+    expect(prototypeShellHtml).toContain(
+      "function setActiveSettingsCard(cardId)"
+    );
+    expect(prototypeShellHtml).toContain(
+      "function syncSettingsCardFromScroll()"
+    );
+    expect(prototypeShellHtml).toMatch(
+      /state\.view === "settings"[\s\S]*?state\.settingsSection === section[\s\S]*?scrollToSettingsCard\(nextCardId\);[\s\S]*?return;/
+    );
+
+    for (const source of [css, prototypeShellHtml]) {
+      const groupRule = readCssRule(
+        source,
+        ".settings-nav-group"
+      );
+      expect(groupRule).toContain("display: contents");
+
+      const subnavRule = readCssRule(
+        source,
+        ".settings-nav-subnav"
+      );
+      expect(subnavRule).toContain("display: grid");
+      expect(subnavRule).toContain(
+        "border-left: 1px solid var(--border-soft)"
+      );
+      expect(subnavRule).toContain(
+        "animation: settings-subnav-in 160ms ease-out"
+      );
+
+      const activeSubitemRule = readCssRule(
+        source,
+        ".settings-nav-subitem.active"
+      );
+      expect(activeSubitemRule).toContain("color: var(--accent)");
+      expect(
+        readCssRule(source, ".settings-card")
+      ).toContain("scroll-margin-top: var(--space-4)");
+      expect(source).toMatch(
+        /@media \(max-width: 760px\)[\s\S]*?\.settings-nav\s*\{[\s\S]*?grid-template-columns:\s*repeat\(5,\s*max-content\)/
+      );
+      expect(source).toMatch(
+        /@media \(max-width: 760px\)[\s\S]*?\.settings-nav-subnav\s*\{[\s\S]*?display:\s*flex/
+      );
+    }
+  });
+
   it("reserves one truncated help line below analysis budget inputs", () => {
     expect(
       applicationSettingsPageSource.match(
         /reserveHelpSpace/g
       )
-    ).toHaveLength(17);
+    ).toHaveLength(21);
     expect(
       prototypeShellHtml.match(
         /reserveHelpSpace:\s*true/g
       )
-    ).toHaveLength(10);
+    ).toHaveLength(14);
 
     for (const source of [
       sharedButtonCss,
@@ -565,12 +868,120 @@ describe("renderer design-system guardrails", () => {
         "container: settings-content / inline-size"
       );
       expect(source).toMatch(
-        /@container settings-content \(min-width: 700px\)[\s\S]*?\.analysis-settings-number-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/
+        /@container settings-content \(min-width: 700px\)[\s\S]*?\.analysis-settings-number-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/
       );
       expect(source).toMatch(
-        /\.analysis-settings-number-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/
+        /\.analysis-settings-number-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/
       );
     }
+  });
+
+  it("keeps prototype refresh and MCP settings aligned with the application", () => {
+    for (const label of [
+      "文件变更后增量更新",
+      "定时更新分析快照",
+      "启用 MCP 服务",
+      "陈旧快照最长使用（天）",
+      "Codex 连接"
+    ]) {
+      expect(applicationSettingsPageSource).toContain(label);
+      expect(prototypeShellHtml).toContain(label);
+    }
+
+    for (const source of [
+      applicationSettingsPageSource,
+      prototypeShellHtml
+    ]) {
+      expect(source).not.toContain("Workspace 保持只读");
+    }
+
+    expect(applicationSettingsPageSource).toMatch(
+      /<SettingsCard[\s\S]*?action=\{[\s\S]*?<SettingsSwitch[\s\S]*?label="启用 MCP 服务"[\s\S]*?title="MCP 服务"/
+    );
+    expect(prototypeShellHtml).toMatch(
+      /<div class="settings-card-title">MCP 服务<\/div>[\s\S]*?<button[^>]*aria-label="启用 MCP 服务"[\s\S]*?<\/div>\s*<div class="settings-card-body">/
+    );
+    expect(prototypeShellHtml).not.toContain(
+      '${settingsToggle("启用 MCP 服务"'
+    );
+
+    for (const fieldId of [
+      "analysis-auto-refresh-debounce-ms",
+      "analysis-periodic-refresh-minutes",
+      "analysis-mcp-response-kb",
+      "analysis-mcp-max-stale-age-days"
+    ]) {
+      expect(applicationSettingsPageSource).toContain(fieldId);
+      expect(prototypeShellHtml).toContain(`id: "${fieldId}"`);
+    }
+
+    expect(prototypeShellHtml).toMatch(
+      /label:\s*"代码分析",[\s\S]*?subtitle:\s*"索引、LSP 与 MCP"/
+    );
+    expect(prototypeShellHtml).toContain(
+      "analysisPeriodicRefreshMinutes: 60"
+    );
+    expect(prototypeShellHtml).toContain(
+      "analysisMcpMaxStaleAgeDays: 7"
+    );
+    expect(prototypeShellHtml).toContain("GitNest_code_lsp");
+    expect(applicationSettingsPageSource).toContain(
+      'closeLabel="关闭 MCP 注册提示"'
+    );
+    expect(applicationSettingsPageSource).toContain(
+      "badge={registrationBadge}"
+    );
+    expect(applicationSettingsPageSource).toContain(
+      "badgeTone={registrationBadgeTone}"
+    );
+    expect(prototypeShellHtml).toContain(
+      'state.analysisMcpRegistered ? "MCP 已注册" : "MCP 已卸载"'
+    );
+    expect(prototypeShellHtml).toContain(
+      '<span class="status-pill ${state.analysisMcpRegistered ? "green" : "neutral"}">${state.analysisMcpRegistered ? "已注册" : "未注册"}</span>'
+    );
+    for (const source of [
+      applicationSettingsPageSource,
+      css,
+      prototypeShellHtml
+    ]) {
+      expect(source).not.toContain("mcp-registration-hint");
+      expect(source).not.toContain("mcp-registration-status");
+      expect(source).not.toContain("mcp-registration-dot");
+      expect(source).not.toContain("mcp-registration-command");
+      expect(source).not.toContain("复制命令");
+      expect(source).not.toContain("复制 config.toml");
+    }
+
+    for (const source of [css, prototypeShellHtml]) {
+      expect(source).toMatch(
+        /\.mcp-registration-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/
+      );
+      expect(
+        source.match(/\.settings-ai-actions\s*\{([^}]*)\}/)?.[1]
+      ).toContain("justify-content: flex-end");
+    }
+
+    expect(applicationSettingsPageSource).toMatch(
+      /label="定时更新分析快照"[\s\S]*?<div className="mcp-registration-grid">[\s\S]*?id="analysis-auto-refresh-debounce-ms"[\s\S]*?id="analysis-periodic-refresh-minutes"/
+    );
+    expect(prototypeShellHtml).toMatch(
+      /定时更新分析快照[\s\S]*?<div class="mcp-registration-grid">[\s\S]*?id: "analysis-auto-refresh-debounce-ms"[\s\S]*?id: "analysis-periodic-refresh-minutes"/
+    );
+
+    const languageServerIndex = prototypeShellHtml.indexOf(
+      "${renderAnalysisLanguageServerSettings()}"
+    );
+    const mcpServiceIndex = prototypeShellHtml.indexOf(
+      '<div class="settings-card-title">MCP 服务</div>'
+    );
+    const codexConnectionIndex = prototypeShellHtml.indexOf(
+      '<div class="settings-card-title">Codex 连接</div>'
+    );
+
+    expect(languageServerIndex).toBeGreaterThan(-1);
+    expect(mcpServiceIndex).toBeGreaterThan(languageServerIndex);
+    expect(codexConnectionIndex).toBeGreaterThan(mcpServiceIndex);
   });
 
   it("auto-fits compact settings preference groups to the available width", () => {
@@ -648,19 +1059,7 @@ describe("renderer design-system guardrails", () => {
     );
   });
 
-  it("keeps the AI API Key opt-in visible and clears it after saving", () => {
-    const saveAiSettingsStart =
-      applicationSettingsPageSource.indexOf(
-        "const saveAiSettings = async () =>"
-      );
-    const saveAiSettingsSource =
-      applicationSettingsPageSource.slice(
-        saveAiSettingsStart,
-        applicationSettingsPageSource.indexOf(
-          "const testAiConnection",
-          saveAiSettingsStart
-        )
-      );
+  it("keeps stored AI API Keys masked until explicit reveal", () => {
     const prototypeApiKeyStart = prototypeShellHtml.indexOf(
       'id: "aiCommitApiKey"'
     );
@@ -669,13 +1068,11 @@ describe("renderer design-system guardrails", () => {
       prototypeApiKeyStart + 1_200
     );
 
-    expect(saveAiSettingsStart).toBeGreaterThan(-1);
-    expect(saveAiSettingsSource).toContain('setAiKey("")');
-    expect(saveAiSettingsSource).toContain(
-      "setAiKeyVisible(false)"
+    expect(applicationSettingsPageSource).toContain(
+      '.readAiApiKey({ reveal: false })'
     );
     expect(applicationSettingsPageSource).toContain(
-      "useState(false)"
+      '"*".repeat(aiKeyLength)'
     );
     expect(applicationSettingsPageSource).toContain(
       'type={aiKeyVisible ? "text" : "password"}'
@@ -683,9 +1080,18 @@ describe("renderer design-system guardrails", () => {
     expect(applicationSettingsPageSource).toContain(
       'aria-label={\n                          aiKeyVisible'
     );
+    expect(applicationSettingsPageSource).not.toContain(
+      "清空 Key"
+    );
 
     expect(prototypeShellHtml).toContain(
       "function toggleAiApiKeyVisibility()"
+    );
+    expect(prototypeShellHtml).toContain(
+      'apiKey: "sk-prototype-only-not-a-real-key"'
+    );
+    expect(prototypeShellHtml).toContain(
+      "aiKeyVisible: false"
     );
     expect(prototypeApiKeyStart).toBeGreaterThan(-1);
     expect(prototypeApiKeySource).toContain(
@@ -694,6 +1100,10 @@ describe("renderer design-system guardrails", () => {
     expect(prototypeApiKeySource).toContain(
       'onclick="toggleAiApiKeyVisibility()"'
     );
+    expect(prototypeShellHtml).not.toContain(
+      "function clearAiApiKey()"
+    );
+    expect(prototypeShellHtml).not.toContain("清空 Key");
   });
 
   it("keeps code-analysis cards level and its diff drawer aligned to the graph", () => {
@@ -903,7 +1313,7 @@ describe("renderer design-system guardrails", () => {
     );
   });
 
-  it("keeps the prototype analysis time first and updates it only after a successful run", () => {
+  it("keeps the prototype analysis time first without repeating the selected scope", () => {
     const runtimeStripStart = prototypeShellHtml.indexOf(
       '<div class="analysis-runtime-strip">'
     );
@@ -915,7 +1325,10 @@ describe("renderer design-system guardrails", () => {
       -1
     );
     expect(runtimeStrip.indexOf("分析时间")).toBeLessThan(
-      runtimeStrip.indexOf('workspaceScope ? "全部代码"')
+      runtimeStrip.indexOf("耗时")
+    );
+    expect(runtimeStrip).not.toContain(
+      'workspaceScope ? "全部代码"'
     );
     expect(prototypeShellHtml).toContain(
       "state.analysisGeneratedAt = new Date().toISOString();"
@@ -1106,6 +1519,9 @@ describe("renderer design-system guardrails", () => {
     );
     expect(prototypeShellHtml).toContain(
       "LSP：${connectedServers.length} 个已连接"
+    );
+    expect(prototypeShellHtml).toContain(
+      'label: "在代码节点中查看"'
     );
     for (const source of [css, prototypeShellHtml]) {
       expect(source).toMatch(

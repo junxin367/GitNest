@@ -38,6 +38,10 @@ export interface GitEnvironmentDto {
     available: boolean;
     version?: string;
   };
+  identity: {
+    name?: string;
+    email?: string;
+  };
   credentialHelpers: string[];
   ssh: {
     command: string;

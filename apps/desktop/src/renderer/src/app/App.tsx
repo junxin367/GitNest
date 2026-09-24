@@ -30,7 +30,6 @@ import type {
   RepositoryChangeLocation,
   RepositoryChangeSelectionRequest
 } from "../entities/repository/changeSelection";
-import { useAccounts } from "../features/account-manage/useAccounts";
 import { useExternalApplications } from "../features/external-application/useExternalApplications";
 import { useExternalTerminals } from "../features/external-terminal/useExternalTerminals";
 import { VersionDialog } from "../features/application-update/VersionDialog";
@@ -147,7 +146,6 @@ export function App() {
           }
         : undefined
   );
-  const accounts = useAccounts();
   const runtimeRefreshing = workspace.operations.some(
     (operation) =>
       operation.state === "queued" ||
@@ -784,26 +782,25 @@ export function App() {
                   />
                 ) : (
                   <ApplicationSettingsPage
-                    accounts={accounts}
                     appSettings={appSettings}
                     gitEnvironment={gitEnvironment}
                     initialSection={settingsSection}
                     terminalProfiles={externalTerminals.profiles}
-                    workspace={workspace.workspace}
                   />
                 )}
               </Suspense>
             </main>
             {inspectorVisible && (
               <DetailInspector
-                accountOverview={accounts.overview}
                 commit={selectedCommit}
                 gitEnvironment={gitEnvironment}
                 gitError={gitError}
                 busy={workspace.busy}
                 monitor={workspace.monitor}
                 onClose={() => setInspectorOpen(false)}
-                onOpenSettings={() => navigate("settings")}
+                onOpenSettings={() =>
+                  navigate("settings", "account")
+                }
                 operations={workspace.operations}
                 runtimeInfo={runtimeInfo}
                 snapshots={workspace.snapshots}

@@ -92,6 +92,7 @@ export async function createApplication(): Promise<void> {
       clearTimeout(updateCheckTimer);
     }
     services.applicationUpdate.dispose();
+    services.codeAnalysisRefresh.dispose();
     void (async () => {
       try {
         const [codeAnalysisResult, workspaceResult] =

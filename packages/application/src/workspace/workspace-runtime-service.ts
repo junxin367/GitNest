@@ -1038,7 +1038,11 @@ export class WorkspaceRuntimeService {
     await this.#refreshWorkspaceSummaries(workspace);
     await this.#loadRuntimeWorkspace(workspace);
 
-    await this.#restartMonitoring();
+    const refreshInBackground =
+      this.#autoRefresh && Boolean(workspace.path);
+    if (!refreshInBackground) {
+      await this.#restartMonitoring();
+    }
     const cleanupWarnings = [
       ...(configurationCleanupWarning ? [configurationCleanupWarning] : []),
       ...(cleanupFailures.length > 0
@@ -1052,14 +1056,11 @@ export class WorkspaceRuntimeService {
         message: this.#cleanupWarning
       };
     }
-    if (this.#autoRefresh && workspace.path) {
-      this.#refreshScheduler.request(
-        listWorkspaceTargets(workspace),
-        "workspace-change",
-        true
-      );
-    }
     this.#emit();
+    if (refreshInBackground) {
+      this.#startupRequested = true;
+      this.#beginWorkspaceRefresh("startup");
+    }
     return this.#createState();
   }
 

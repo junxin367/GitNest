@@ -52,6 +52,10 @@ export {
 } from "./graph-query";
 export { normalizeRoute } from "./source-parser";
 export {
+  createChangedAnalysisSnapshot,
+  mergeIncrementalWorkspaceSnapshot
+} from "./snapshot-scope";
+export {
   codeAnalysisSettingsFromPersisted,
   type PersistedCodeAnalysisSettings,
   type PersistedLanguageServerSettings

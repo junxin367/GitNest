@@ -56,8 +56,13 @@ export function createGitNestBridge(
         ),
       cancel: (request) =>
         invoke(IPC_CHANNELS.codeAnalysisCancel, request),
-      getSnapshot: () =>
-        invoke(IPC_CHANNELS.codeAnalysisGetSnapshot),
+      getSnapshot: (request) =>
+        request === undefined
+          ? invoke(IPC_CHANNELS.codeAnalysisGetSnapshot)
+          : invoke(
+              IPC_CHANNELS.codeAnalysisGetSnapshot,
+              request
+            ),
       readFile: (request) =>
         invoke(IPC_CHANNELS.codeAnalysisReadFile, request),
       installLanguageServer: (request) =>
@@ -78,6 +83,8 @@ export function createGitNestBridge(
       get: () => invoke(IPC_CHANNELS.settingsGet),
       update: (request) =>
         invoke(IPC_CHANNELS.settingsUpdate, request),
+      readAiApiKey: (request) =>
+        invoke(IPC_CHANNELS.settingsReadAiApiKey, request),
       clearAiApiKey: (request) =>
         invoke(IPC_CHANNELS.settingsClearAiApiKey, request),
       onChanged: subscribeAppSettings
@@ -88,27 +95,11 @@ export function createGitNestBridge(
       generateCommitMessage: (request) =>
         invoke(IPC_CHANNELS.aiGenerateCommitMessage, request)
     },
-    account: {
-      list: () => invoke(IPC_CHANNELS.accountList),
-      save: (request) =>
-        invoke(IPC_CHANNELS.accountSave, request),
-      bind: (request) =>
-        invoke(IPC_CHANNELS.accountBind, request),
-      unbind: (request) =>
-        invoke(IPC_CHANNELS.accountUnbind, request),
-      getRemovalImpact: (request) =>
-        invoke(
-          IPC_CHANNELS.accountGetRemovalImpact,
-          request
-        ),
-      remove: (request) =>
-        invoke(IPC_CHANNELS.accountRemove, request),
-      test: (request) =>
-        invoke(IPC_CHANNELS.accountTest, request)
-    },
     system: {
       getRuntimeInfo: () =>
         invoke(IPC_CHANNELS.systemGetRuntimeInfo),
+      openIssuesPage: () =>
+        invoke(IPC_CHANNELS.systemOpenIssuesPage),
       listExternalApplications: () =>
         invoke(
           IPC_CHANNELS.systemListExternalApplications

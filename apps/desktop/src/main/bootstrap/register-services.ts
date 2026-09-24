@@ -9,13 +9,10 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   dirname,
-  join,
-  normalize,
-  resolve
+  join
 } from "node:path";
 
 import {
-  AccountService,
   CodeAnalysisService,
   ExternalApplicationService,
   ExternalTerminalService,
@@ -32,12 +29,8 @@ import {
   DEFAULT_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
   IPC_EVENTS
 } from "@gitnest/contracts";
+import { GitCliClient } from "@gitnest/git-cli";
 import {
-  GitCliClient,
-  type GitRemoteCommandEnvironmentProvider
-} from "@gitnest/git-cli";
-import {
-  JsonAccountMetadataStore,
   JsonWorkspaceCollectionStore,
   JsonWorkspaceOperationCollectionStore,
   JsonWorkspaceSnapshotCollectionStore
@@ -50,10 +43,10 @@ import {
 import { WindowsExternalApplicationAdapter } from "../adapters/external-application.adapter";
 import { WindowsExternalTerminalAdapter } from "../adapters/external-terminal.adapter";
 import { SafeStorageCredentialVault } from "../adapters/credential-vault.adapter";
-import { WindowsGitAskPassBroker } from "../adapters/git-askpass.adapter";
 import { NodeWorkspaceWatcher } from "../adapters/watcher.adapter";
 import {
   CodeAnalysisAutoRefreshScheduler,
+  CodeAnalysisPeriodicRefreshScheduler,
   analysisSelectionKey,
   shouldAutoRefresh,
   waitForAnalysisCompletion
@@ -77,10 +70,12 @@ import {
 } from "../update/application-update-service";
 
 export interface ApplicationServices {
-  accounts: AccountService;
   aiCommitMessages: AiCommitMessageService;
   applicationUpdate: ApplicationUpdateService;
   codeAnalysis: CodeAnalysisService;
+  codeAnalysisRefresh: {
+    dispose(): void;
+  };
   dataRegistry: GitNestDataRegistry;
   diagnostics: RotatingDiagnosticLogger;
   externalApplication: ExternalApplicationService;
@@ -99,14 +94,7 @@ export interface ApplicationServices {
 }
 
 export function registerServices(): ApplicationServices {
-  let remoteEnvironmentProvider:
-    | GitRemoteCommandEnvironmentProvider
-    | undefined;
-  const gitClient = new GitCliClient({
-    remoteEnvironmentProvider: (context) =>
-      remoteEnvironmentProvider?.(context) ??
-      Promise.resolve(undefined)
-  });
+  const gitClient = new GitCliClient();
   const userDataPath = app.getPath("userData");
   const dataRegistry = createDataRegistry(userDataPath);
   const diagnostics = new RotatingDiagnosticLogger(
@@ -335,10 +323,43 @@ export function registerServices(): ApplicationServices {
       idFactory: randomUUID
     }
   );
-  // CA-5: keep the cached snapshot close to the working tree so
-  // MCP queries are normally fresh. Only the selected target's
-  // `changed` scope refreshes automatically; the full workspace
-  // scope stays a manual action.
+  const runAutomaticCodeAnalysisRefresh = async (
+    signal: AbortSignal
+  ): Promise<void> => {
+    let state = await codeAnalysis.getState();
+    if (signal.aborted) {
+      return;
+    }
+    if (state.state === "running" && state.analysisId) {
+      await waitForAnalysisCompletion(
+        (listener) => codeAnalysis.subscribe(listener),
+        state.analysisId,
+        signal
+      );
+      if (signal.aborted) {
+        return;
+      }
+      state = await codeAnalysis.getState();
+      if (state.state === "running") {
+        return;
+      }
+    }
+    const incremental = await codeAnalysis.refresh(
+      "changed",
+      signal
+    );
+    if (
+      signal.aborted ||
+      !incremental ||
+      incremental.workspaceSnapshotUpdated
+    ) {
+      return;
+    }
+    await codeAnalysis.refresh("workspace", signal);
+  };
+
+  // Keep the full MCP graph and the focused changed graph current
+  // without changing the scope currently displayed by the renderer.
   const codeAnalysisAutoRefresh =
     new CodeAnalysisAutoRefreshScheduler({
       debounceMs:
@@ -354,45 +375,48 @@ export function registerServices(): ApplicationServices {
         );
         return preferences.autoRefresh.enabled;
       },
-      run: async (signal) => {
-        let state = await codeAnalysis.getState();
-        if (signal.aborted) {
-          return;
-        }
-        // Only the incremental `changed` scope refreshes itself, and
-        // only while that is the scope on screen: the service holds
-        // one snapshot at a time, so refreshing a different scope
-        // would swap the graph the user is currently reading.
-        // A full `workspace` re-analysis stays a manual action.
-        if (state.scope !== "changed") {
-          return;
-        }
-        if (state.state === "running" && state.analysisId) {
-          await waitForAnalysisCompletion(
-            (listener) => codeAnalysis.subscribe(listener),
-            state.analysisId,
-            signal
-          );
-          if (signal.aborted) {
-            return;
-          }
-          state = await codeAnalysis.getState();
-          if (state.scope !== "changed" || state.state === "running") {
-            return;
-          }
-        }
-        if (signal.aborted) {
-          return;
-        }
-        const accepted = await codeAnalysis.start("changed");
-        await waitForAnalysisCompletion(
-          (listener) => codeAnalysis.subscribe(listener),
-          accepted.analysisId,
-          signal
-        );
-      },
-      onError: () => undefined
+      run: runAutomaticCodeAnalysisRefresh,
+      onError: (error) => {
+        void diagnostics
+          .warning("code-analysis.auto-refresh-failed", {
+            error
+          })
+          .catch(() => undefined);
+      }
     });
+  const codeAnalysisPeriodicRefresh =
+    new CodeAnalysisPeriodicRefreshScheduler({
+      configuration: async () => {
+        const preferences = (await settings.get()).settings
+          .codeAnalysis;
+        const currentWorkspace = await workspace.getCurrent();
+        return {
+          enabled:
+            preferences.enabled &&
+            preferences.autoRefresh.periodicEnabled &&
+            shouldAutoRefresh(currentWorkspace),
+          intervalMs:
+            preferences.autoRefresh
+              .periodicIntervalMinutes *
+            60_000
+        };
+      },
+      run: runAutomaticCodeAnalysisRefresh,
+      onError: (error) => {
+        void diagnostics
+          .warning("code-analysis.periodic-refresh-failed", {
+            error
+          })
+          .catch(() => undefined);
+      }
+    });
+  codeAnalysisPeriodicRefresh.start();
+  const codeAnalysisRefresh = {
+    dispose(): void {
+      codeAnalysisAutoRefresh.dispose();
+      codeAnalysisPeriodicRefresh.dispose();
+    }
+  };
   const languageServerInstaller =
     new LanguageServerInstaller({
       runtimeDirectory: dataRegistry.paths.languageServers,
@@ -427,42 +451,6 @@ export function registerServices(): ApplicationServices {
       gitExecutablePath: async () =>
         (await gitClient.getEnvironment()).executablePath
     });
-  const accounts = new AccountService(
-    new JsonAccountMetadataStore(
-      dataRegistry.paths.accountMetadata
-    ),
-    credentialVault,
-    new WindowsGitAskPassBroker(
-      dataRegistry.paths.askpassRuntime
-    ),
-    {
-      test: (input) =>
-        gitClient.testRemoteConnection(input)
-    },
-    {
-      idFactory: randomUUID
-    }
-  );
-  remoteEnvironmentProvider = async (context) => {
-    const current = await workspace.getCurrent();
-    const repositoryPath = normalizePathForComparison(
-      context.repositoryPath
-    );
-    const worktree = current.worktrees.find(
-      (candidate) =>
-        normalizePathForComparison(candidate.path) ===
-        repositoryPath
-    );
-    if (!worktree) {
-      return undefined;
-    }
-    return accounts.openAuthenticationSession(
-      worktree.repositoryId,
-      context.remoteUrl,
-      context.signal
-    );
-  };
-
   const operationStates = new Map<string, string>();
   let lastSelectionKey: string | undefined;
   let lastWatchEventAt: string | undefined;
@@ -477,6 +465,7 @@ export function registerServices(): ApplicationServices {
     ) {
       // The queued refresh belongs to the previous selection.
       codeAnalysisAutoRefresh.cancel();
+      codeAnalysisPeriodicRefresh.reset();
     }
     lastSelectionKey = selectionKey;
     const lastEventAt = state.monitor.lastEventAt;
@@ -539,7 +528,6 @@ export function registerServices(): ApplicationServices {
     }
   });
   return {
-    accounts,
     aiCommitMessages: new AiCommitMessageService(
       settings,
       workspace,
@@ -547,6 +535,7 @@ export function registerServices(): ApplicationServices {
     ),
     applicationUpdate,
     codeAnalysis,
+    codeAnalysisRefresh,
     dataRegistry,
     diagnostics,
     externalApplication: new ExternalApplicationService(
@@ -595,8 +584,4 @@ export function registerServices(): ApplicationServices {
     windowState,
     workspace
   };
-}
-
-function normalizePathForComparison(path: string): string {
-  return normalize(resolve(path)).toLocaleLowerCase("en-US");
 }

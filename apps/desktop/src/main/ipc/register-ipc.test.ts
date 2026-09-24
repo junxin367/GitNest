@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createDefaultAppSettings,
   LANGUAGE_SERVER_LANGUAGES,
+  MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
   MAX_CODE_ANALYSIS_DIAGNOSTICS,
   MAX_CODE_ANALYSIS_GRAPH_EDGES,
   MAX_CODE_ANALYSIS_GRAPH_NODES,
@@ -13,6 +14,8 @@ import {
   MAX_LSP_REQUESTS,
   MAX_LSP_SYMBOLS_PER_DOCUMENT,
   MAX_DIFF_COMMIT_PANEL_HEIGHT,
+  MAX_MCP_MAX_STALE_AGE_DAYS,
+  MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
   MIN_CODE_ANALYSIS_DIAGNOSTICS,
   MIN_CODE_ANALYSIS_GRAPH_EDGES,
   MIN_CODE_ANALYSIS_GRAPH_NODES,
@@ -23,6 +26,7 @@ import {
   MIN_LSP_REQUESTS,
   MIN_LSP_SYMBOLS_PER_DOCUMENT,
   MIN_DIFF_COMMIT_PANEL_HEIGHT,
+  MIN_MCP_MAX_STALE_AGE_DAYS,
   type AppSettingsDto
 } from "@gitnest/contracts";
 
@@ -32,23 +36,22 @@ import {
   formatLanguageServerLaunchApprovalDetail,
   isTrustedSenderUrl,
   validateAcknowledgeApplicationUpdatePromptRequest,
-  validateAccountRemovalImpactRequest,
-  validateBindAccountRequest,
   validateCancelRepositoryOperationRequest,
   validateClearAiApiKeyRequest,
   validateAddWorkspaceDirectoryRequest,
   validateCreateWorkspaceRequest,
   validateGenerateAiCommitMessageRequest,
+  validateGetCodeAnalysisSnapshotRequest,
   validateInstallLanguageServerRequest,
   validateOpenDirectoryRequest,
   validateOpenDiffViewerRequest,
   validateOpenExternalApplicationRequest,
   validateOpenExternalTerminalRequest,
   validateOpenFileLocationRequest,
+  validateReadAiApiKeyRequest,
   validateReadCodeAnalysisFileRequest,
   validateRemoveWorkspaceRepositoryRequest,
   validateRestoreCodeAnalysisSnapshotRequest,
-  validateRemoveAccountRequest,
   validateRepositoryCommandExecuteRequest,
   validateRepositoryCommandPreflightRequest,
   validateRepositoryCommitDiffRequest,
@@ -58,11 +61,8 @@ import {
   validateRepositoryStashMutationRequest,
   validateRepositoryStashRequest,
   validateRepositoryStashesRequest,
-  validateSaveAccountRequest,
   validateSetGroupCollapsedRequest,
   validateTestAiConnectionRequest,
-  validateTestAccountRequest,
-  validateUnbindAccountRequest,
   validateUpdateAppSettingsRequest,
   validateWorktreeCommandExecuteRequest,
   validateWorktreeCommandPreflightRequest
@@ -562,101 +562,6 @@ describe("repository command IPC validation", () => {
     );
   });
 
-  it("validates account requests without widening secret-bearing IPC", () => {
-    expect(
-      validateSaveAccountRequest({
-        provider: "github",
-        host: " github.example.test ",
-        username: " user ",
-        authType: "https-token",
-        token: " redacted-test-value ",
-        makeHostDefault: true
-      })
-    ).toEqual({
-      provider: "github",
-      host: "github.example.test",
-      username: "user",
-      authType: "https-token",
-      token: "redacted-test-value",
-      makeHostDefault: true
-    });
-    expect(
-      validateBindAccountRequest({
-        accountId: "account_1",
-        repositoryId: "repository_1"
-      })
-    ).toEqual({
-      accountId: "account_1",
-      repositoryId: "repository_1"
-    });
-    expect(
-      validateUnbindAccountRequest({
-        host: "git.example.test",
-        repositoryId: "repository_1"
-      })
-    ).toEqual({
-      host: "git.example.test",
-      repositoryId: "repository_1"
-    });
-    expect(
-      validateAccountRemovalImpactRequest({
-        accountId: "account_1"
-      })
-    ).toEqual({ accountId: "account_1" });
-    expect(
-      validateRemoveAccountRequest({
-        accountId: "account_1",
-        confirmed: true
-      })
-    ).toEqual({
-      accountId: "account_1",
-      confirmed: true
-    });
-    expect(
-      validateTestAccountRequest({
-        accountId: "account_1",
-        repositoryUrl:
-          "https://git.example.test/team/repository.git"
-      })
-    ).toEqual({
-      accountId: "account_1",
-      repositoryUrl:
-        "https://git.example.test/team/repository.git"
-    });
-  });
-
-  it("rejects tokens on system SSH and malformed account ids without echoing values", () => {
-    expect(() =>
-      validateSaveAccountRequest({
-        provider: "custom",
-        host: "git.example.test",
-        authType: "system-ssh",
-        token: "must-not-be-accepted"
-      })
-    ).toThrowError(
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.not.stringContaining(
-          "must-not-be-accepted"
-        )
-      })
-    );
-    expect(() =>
-      validateBindAccountRequest({
-        accountId: "../account"
-      })
-    ).toThrowError(
-      expect.objectContaining({ code: "INVALID_REQUEST" })
-    );
-    expect(() =>
-      validateTestAccountRequest({
-        accountId: "account_1",
-        repositoryUrl: "https://git.example.test/repo\nnext"
-      })
-    ).toThrowError(
-      expect.objectContaining({ code: "INVALID_REQUEST" })
-    );
-  });
 });
 
 describe("Language Server installation IPC validation", () => {
@@ -706,6 +611,24 @@ describe("Language Server installation IPC validation", () => {
 });
 
 describe("code analysis file IPC validation", () => {
+  it("accepts supported snapshot detail levels", () => {
+    expect(
+      validateGetCodeAnalysisSnapshotRequest(undefined)
+    ).toEqual({ detail: "full" });
+    expect(
+      validateGetCodeAnalysisSnapshotRequest({
+        detail: "navigation"
+      })
+    ).toEqual({ detail: "navigation" });
+    expect(() =>
+      validateGetCodeAnalysisSnapshotRequest({
+        detail: "summary"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+
   it("accepts only supported snapshot scopes", () => {
     expect(
       validateRestoreCodeAnalysisSnapshotRequest({
@@ -1164,6 +1087,12 @@ describe("application settings and AI IPC validation", () => {
       validateClearAiApiKeyRequest({ confirmed: false })
     ).toEqual({ confirmed: false });
     expect(
+      validateReadAiApiKeyRequest({ reveal: false })
+    ).toEqual({ reveal: false });
+    expect(
+      validateReadAiApiKeyRequest({ reveal: true })
+    ).toEqual({ reveal: true });
+    expect(
       validateTestAiConnectionRequest({
         apiUrl: "https://ai.example.test/v1",
         model: "test-model",
@@ -1180,6 +1109,11 @@ describe("application settings and AI IPC validation", () => {
 
     expect(() =>
       validateClearAiApiKeyRequest({ confirmed: "yes" })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+    expect(() =>
+      validateReadAiApiKeyRequest({ reveal: "yes" })
     ).toThrowError(
       expect.objectContaining({ code: "INVALID_REQUEST" })
     );
@@ -1340,6 +1274,81 @@ describe("application settings and AI IPC validation", () => {
         expect.objectContaining({ code: "INVALID_REQUEST" })
       );
     }
+  });
+
+  it("validates periodic refresh and MCP stale-age boundaries", () => {
+    for (const periodicIntervalMinutes of [
+      MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
+      MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES
+    ]) {
+      for (const maxStaleAgeDays of [
+        MIN_MCP_MAX_STALE_AGE_DAYS,
+        MAX_MCP_MAX_STALE_AGE_DAYS
+      ]) {
+        const codeAnalysis = {
+          autoRefresh: {
+            periodicEnabled: true,
+            periodicIntervalMinutes
+          },
+          mcp: {
+            maxStaleAgeDays
+          }
+        };
+        expect(
+          validateUpdateAppSettingsRequest({
+            codeAnalysis
+          })
+        ).toEqual({ codeAnalysis });
+      }
+    }
+
+    for (const periodicIntervalMinutes of [
+      MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES - 1,
+      MAX_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES + 1,
+      30.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY
+    ]) {
+      expect(() =>
+        validateUpdateAppSettingsRequest({
+          codeAnalysis: {
+            autoRefresh: { periodicIntervalMinutes }
+          }
+        })
+      ).toThrowError(
+        expect.objectContaining({ code: "INVALID_REQUEST" })
+      );
+    }
+
+    for (const maxStaleAgeDays of [
+      MIN_MCP_MAX_STALE_AGE_DAYS - 1,
+      MAX_MCP_MAX_STALE_AGE_DAYS + 1,
+      7.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY
+    ]) {
+      expect(() =>
+        validateUpdateAppSettingsRequest({
+          codeAnalysis: {
+            mcp: { maxStaleAgeDays }
+          }
+        })
+      ).toThrowError(
+        expect.objectContaining({ code: "INVALID_REQUEST" })
+      );
+    }
+
+    expect(() =>
+      validateUpdateAppSettingsRequest({
+        codeAnalysis: {
+          autoRefresh: {
+            periodicEnabled: "true"
+          }
+        }
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
   });
 });
 

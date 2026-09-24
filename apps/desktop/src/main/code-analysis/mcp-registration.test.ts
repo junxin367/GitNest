@@ -11,11 +11,35 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
-  MCP_SERVER_NAME,
+  MCP_REGISTRATION_NAME,
   McpRegistrationService
 } from "./mcp-registration";
 
 describe("McpRegistrationService", () => {
+  it("uses the GitNest code analysis registration name", async () => {
+    const registration = new McpRegistrationService({
+      executablePath: "C:\\GitNest\\GitNest.exe",
+      entryScriptPath:
+        "C:\\GitNest\\resources\\mcp\\gitnest-mcp.mjs",
+      dataDirectory: "C:\\GitNest\\user-data",
+      packaged: false,
+      codexCommand: process.execPath
+    });
+
+    const status = await registration.status();
+
+    expect(MCP_REGISTRATION_NAME).toBe("GitNest_code_lsp");
+    expect(status.command).toContain(
+      "codex mcp add GitNest_code_lsp"
+    );
+    expect(status.configSnippet).toContain(
+      "[mcp_servers.GitNest_code_lsp]"
+    );
+    expect(status.configSnippet).toContain(
+      "[mcp_servers.GitNest_code_lsp.env]"
+    );
+  });
+
   it.runIf(process.platform === "win32")(
     "registers through a Windows command shim without changing arguments",
     async () => {
@@ -72,7 +96,7 @@ describe("McpRegistrationService", () => {
             "}",
             'if (args[1] === "get") {',
             "  if (existsSync(statePath)) {",
-            `    process.stdout.write("${MCP_SERVER_NAME}\\n");`,
+            `    process.stdout.write("${MCP_REGISTRATION_NAME}\\n");`,
             "    process.exit(0);",
             "  }",
             "  process.exit(1);",
@@ -113,7 +137,7 @@ describe("McpRegistrationService", () => {
         ).toEqual([
           "mcp",
           "add",
-          MCP_SERVER_NAME,
+          MCP_REGISTRATION_NAME,
           "--env",
           "ELECTRON_RUN_AS_NODE=1",
           "--",
