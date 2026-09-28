@@ -1,0 +1,70 @@
+appId: io.gitnest.desktop
+productName: GitNest
+copyright: Copyright © 2026 GitNest Contributors
+
+directories:
+  output: ../../release
+  buildResources: build
+
+asar: true
+compression: normal
+npmRebuild: false
+forceCodeSigning: false
+publish: []
+afterPack: build/after-pack.cjs
+
+files:
+  - out/**/*
+  - package.json
+  - "!out/**/*.map"
+  # The MCP server is shipped through `extraResources` below, so it
+  # must not also be packed into `app.asar` (the release audit rejects
+  # entries outside its whitelist).
+  - "!out/main/mcp/**"
+  - "!out/**/node_modules/**"
+  - "!node_modules/**"
+  - "!**/*.test.*"
+  - "!**/*.spec.*"
+
+extraResources:
+  - from: out/main/mcp
+    to: mcp
+    filter:
+      - "**/*"
+      - "!**/*.map"
+
+extraMetadata:
+  main: out/main/index.js
+  dependencies: {}
+
+electronLanguages:
+  - en-US
+  - zh-CN
+
+artifactName: GitNest-${version}-${arch}.${ext}
+
+win:
+  executableName: GitNest
+  icon: build/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+
+nsis:
+  artifactName: GitNest-Setup-${version}-${arch}.${ext}
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: GitNest
+  deleteAppDataOnUninstall: false
+  differentialPackage: false
+
+portable:
+  artifactName: GitNest-Portable-${version}-${arch}.${ext}
+  requestExecutionLevel: user

@@ -1,0 +1,149 @@
+.toast-viewport {
+  position: fixed;
+  top: calc(var(--control-default) + var(--space-3));
+  left: 50%;
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  width: min(400px, calc(100vw - var(--space-6)));
+  max-height: calc(
+    100vh - var(--control-default) - var(--space-6)
+  );
+  overflow: auto;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.toast {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
+  min-width: min(300px, 100%);
+  max-width: 100%;
+  min-height: var(--control-large);
+  padding: var(--space-3)
+    calc(var(--space-3) + var(--control-compact))
+    var(--space-3)
+    var(--space-3);
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-large);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+  pointer-events: auto;
+  animation: toast-enter var(--motion-micro)
+    var(--ease-enter, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.toast-success {
+  border-color: color-mix(
+    in srgb,
+    var(--green) 32%,
+    var(--border)
+  );
+}
+
+.toast-error {
+  border-color: color-mix(
+    in srgb,
+    var(--red) 42%,
+    var(--border)
+  );
+}
+
+.toast-info {
+  border-color: color-mix(
+    in srgb,
+    var(--accent) 32%,
+    var(--border)
+  );
+}
+
+.toast-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  background: transparent;
+}
+
+.toast-icon > .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.toast-success .toast-icon {
+  color: var(--green);
+}
+
+.toast-error .toast-icon {
+  color: var(--red);
+}
+
+.toast-info .toast-icon {
+  color: var(--accent);
+}
+
+.toast-copy {
+  min-width: 0;
+}
+
+.toast-copy strong,
+.toast-copy span {
+  display: block;
+}
+
+.toast-copy strong {
+  color: var(--text);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+}
+
+.toast-copy span {
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+}
+
+.toast-close {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: grid;
+  place-items: center;
+  width: var(--control-compact);
+  height: var(--control-compact);
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-regular);
+}
+
+.toast-close:hover,
+.toast-close:focus-visible {
+  color: var(--text);
+  background: transparent;
+  border-color: transparent;
+}
+
+.toast-close:focus-visible {
+  outline: 1px solid var(--color-focus);
+  outline-offset: 1px;
+}
+
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}

@@ -1,0 +1,1634 @@
+import {
+  AnalysisSnapshotCache,
+  codeAnalysisSnapshotConfigurationKey,
+  codeAnalysisWorktreeStatusFingerprint,
+  createChangedAnalysisSnapshot,
+  mergeIncrementalWorkspaceSnapshot,
+  type CodeAnalysisProgress,
+  type CodeAnalysisScope,
+  type CodeAnalysisSettings,
+  type CodeAnalysisSnapshot,
+  type CodeAnalysisSnapshotStore,
+  type CodeAnalysisStats
+} from "@gitnest/code-analysis";
+import {
+  readFile as readTextFile,
+  realpath,
+  stat
+} from "node:fs/promises";
+import {
+  isAbsolute,
+  relative,
+  resolve,
+  sep
+} from "node:path";
+import type {
+  GitClient,
+  RepositorySnapshot
+} from "@gitnest/git-core";
+import {
+  WorkspaceError,
+  listWorkspaceTargets,
+  repositoryTargetKey,
+  type Workspace,
+  type WorkspaceWorktree
+} from "@gitnest/workspace-core";
+
+import type { CodeAnalysisRunnerPort } from "./code-analysis-runner";
+
+interface WorkspaceReader {
+  getCurrent(): Promise<Workspace>;
+}
+
+export interface CodeAnalysisState {
+  state:
+    | "idle"
+    | "running"
+    | "ready"
+    | "failed"
+    | "cancelled";
+  snapshotAvailable: boolean;
+  analysisId?: string;
+  workspaceId?: string;
+  scope?: CodeAnalysisScope;
+  startedAt?: string;
+  progress?: CodeAnalysisProgress;
+  generatedAt?: string;
+  stats?: CodeAnalysisStats;
+  error?: {
+    code:
+      | "INVALID_REQUEST"
+      | "DIRECTORY_UNAVAILABLE"
+      | "COMMAND_CANCELLED"
+      | "COMMAND_FAILED";
+    message: string;
+    details: Readonly<
+      Record<string, string | number | boolean>
+    >;
+  };
+}
+
+export interface CodeAnalysisAccepted {
+  analysisId: string;
+}
+
+export interface CodeAnalysisRefreshResult {
+  analysisId: string;
+  workspaceSnapshotUpdated: boolean;
+  changedSnapshotUpdated: boolean;
+}
+
+export interface CodeAnalysisFile {
+  nodeId: string;
+  path: string;
+  language:
+    | "typescript"
+    | "javascript"
+    | "vue"
+    | "java"
+    | "python"
+    | "go"
+    | "kotlin"
+    | "csharp"
+    | "rust";
+  content: string;
+  startLine: number;
+  endLine: number;
+  totalLines: number;
+  truncated: boolean;
+}
+
+export type CodeAnalysisSnapshotDetail =
+  | "navigation"
+  | "full";
+
+export type CodeAnalysisSnapshotView =
+  CodeAnalysisSnapshot & {
+    detailLevel?: CodeAnalysisSnapshotDetail;
+    totalNodeCount?: number;
+  };
+
+export interface CodeAnalysisServiceOptions {
+  cacheDirectory: string;
+  lspDataDirectory: string;
+  settingsProvider(): Promise<CodeAnalysisSettings>;
+  settingsValidator?(
+    settings: CodeAnalysisSettings
+  ): Promise<void>;
+  idFactory?: () => string;
+  clock?: () => string;
+  runner: CodeAnalysisRunnerPort;
+  snapshotStore?: CodeAnalysisSnapshotStore;
+}
+
+type StateListener = (state: CodeAnalysisState) => void;
+const MAX_CODE_FILE_BYTES = 4 * 1_024 * 1_024;
+const MAX_CODE_FILE_LINES = 600;
+
+export class CodeAnalysisService {
+  readonly #workspace: WorkspaceReader;
+  readonly #git: Pick<GitClient, "readRepositorySnapshot">;
+  readonly #cacheDirectory: string;
+  readonly #lspDataDirectory: string;
+  readonly #settingsProvider: () => Promise<CodeAnalysisSettings>;
+  readonly #settingsValidator:
+    | ((settings: CodeAnalysisSettings) => Promise<void>)
+    | undefined;
+  readonly #idFactory: () => string;
+  readonly #clock: () => string;
+  readonly #runner: CodeAnalysisRunnerPort;
+  readonly #snapshotStore: CodeAnalysisSnapshotStore;
+  readonly #listeners = new Set<StateListener>();
+  #state: CodeAnalysisState = {
+    state: "idle",
+    snapshotAvailable: false
+  };
+  #snapshot: CodeAnalysisSnapshot | null = null;
+  #snapshotConfigurationKey = "";
+  #snapshotInputConfigurationKey = "";
+  #runQueue: Promise<void> = Promise.resolve();
+  #selectionKey = "";
+  #selectionGeneration = 0;
+  #scopeRestoreGeneration = 0;
+  #hydratedCacheKey = "";
+  #restore:
+    | {
+        cacheKey: string;
+        task: Promise<void>;
+      }
+    | undefined;
+  #disposed = false;
+  #active:
+    | {
+        analysisId: string;
+        selectionKey: string;
+        controller: AbortController;
+      }
+    | undefined;
+  #background:
+    | {
+        analysisId: string;
+        selectionKey: string;
+        controller: AbortController;
+      }
+    | undefined;
+
+  constructor(
+    workspace: WorkspaceReader,
+    git: Pick<GitClient, "readRepositorySnapshot">,
+    options: CodeAnalysisServiceOptions
+  ) {
+    this.#workspace = workspace;
+    this.#git = git;
+    this.#cacheDirectory = options.cacheDirectory;
+    this.#lspDataDirectory = options.lspDataDirectory;
+    this.#settingsProvider = options.settingsProvider;
+    this.#settingsValidator = options.settingsValidator;
+    this.#idFactory =
+      options.idFactory ??
+      (() =>
+        `analysis_${Date.now()}_${Math.random()
+          .toString(36)
+          .slice(2, 10)}`);
+    this.#clock =
+      options.clock ?? (() => new Date().toISOString());
+    this.#runner = options.runner;
+    this.#snapshotStore =
+      options.snapshotStore ??
+      new AnalysisSnapshotCache(options.cacheDirectory);
+  }
+
+  async getState(): Promise<CodeAnalysisState> {
+    const [workspace, settings] = await Promise.all([
+      this.#workspace.getCurrent(),
+      this.#settingsProvider()
+    ]);
+    await this.#ensureSnapshotHydrated(
+      workspace,
+      settings
+    );
+    return cloneState(this.#state);
+  }
+
+  subscribe(listener: StateListener): () => void {
+    this.#listeners.add(listener);
+    try {
+      listener(cloneState(this.#state));
+    } catch {
+      // A closed renderer must not interrupt analysis state management.
+    }
+    return () => {
+      this.#listeners.delete(listener);
+    };
+  }
+
+  async start(
+    scope: CodeAnalysisScope
+  ): Promise<CodeAnalysisAccepted> {
+    this.#assertNotDisposed();
+    this.#scopeRestoreGeneration += 1;
+    const settings = await this.#settingsProvider();
+    this.#assertNotDisposed();
+    if (!settings.enabled) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "Code analysis is disabled in application settings."
+      );
+    }
+    await this.#settingsValidator?.(settings);
+    this.#assertNotDisposed();
+    const workspace = await this.#workspace.getCurrent();
+    this.#assertNotDisposed();
+    const context = resolveAnalysisContext(workspace);
+    await this.#ensureSnapshotHydrated(
+      workspace,
+      settings,
+      context
+    );
+    this.#assertNotDisposed();
+    const selectionKey = analysisSelectionKey(
+      workspace,
+      context
+    );
+
+    this.#background?.controller.abort(
+      new AnalysisCancelledError(
+        "A manual code analysis replaced the background refresh."
+      )
+    );
+    if (this.#active) {
+      this.#active.controller.abort(
+        new AnalysisCancelledError(
+          "A newer code analysis replaced the running task."
+        )
+      );
+    }
+
+    const analysisId = this.#idFactory();
+    const controller = new AbortController();
+    this.#active = {
+      analysisId,
+      selectionKey,
+      controller
+    };
+    this.#setState({
+      state: "running",
+      snapshotAvailable:
+        this.#snapshot?.workspaceId === workspace.id &&
+        this.#snapshot.scope === scope,
+      analysisId,
+      workspaceId: workspace.id,
+      scope,
+      startedAt: this.#clock(),
+      progress: {
+        stage: "discovering",
+        completed: 0,
+        total: 1,
+        message: "正在准备代码分析"
+      }
+    });
+
+    const queuedRun = this.#runQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (this.#active?.analysisId !== analysisId) {
+          return;
+        }
+        await this.#run({
+          analysisId,
+          workspace,
+          context,
+          scope,
+          settings,
+          selectionKey,
+          controller
+        });
+      });
+    this.#runQueue = queuedRun;
+    void queuedRun;
+    return { analysisId };
+  }
+
+  /**
+   * Refreshes persisted snapshots without switching the renderer to a
+   * running state. A changed refresh reuses the complete index and
+   * writes both the full workspace graph and the focused changed view.
+   */
+  async refresh(
+    scope: CodeAnalysisScope,
+    signal?: AbortSignal
+  ): Promise<CodeAnalysisRefreshResult | null> {
+    this.#assertNotDisposed();
+    if (signal?.aborted) {
+      return null;
+    }
+    const settings = await this.#settingsProvider();
+    this.#assertNotDisposed();
+    if (!settings.enabled) {
+      return null;
+    }
+    await this.#settingsValidator?.(settings);
+    this.#assertNotDisposed();
+    const workspace = await this.#workspace.getCurrent();
+    this.#assertNotDisposed();
+    const context = resolveAnalysisContext(workspace);
+    await this.#ensureSnapshotHydrated(
+      workspace,
+      settings,
+      context
+    );
+    this.#assertNotDisposed();
+    if (this.#active || this.#background || signal?.aborted) {
+      return null;
+    }
+
+    const selectionKey = analysisSelectionKey(
+      workspace,
+      context
+    );
+    const analysisId = this.#idFactory();
+    const controller = new AbortController();
+    const abort = () =>
+      controller.abort(
+        signal?.reason ??
+          new AnalysisCancelledError(
+            "The background code analysis was cancelled."
+          )
+      );
+    signal?.addEventListener("abort", abort, { once: true });
+    this.#background = {
+      analysisId,
+      selectionKey,
+      controller
+    };
+
+    const queuedRun = this.#runQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (
+          this.#background?.analysisId !== analysisId ||
+          controller.signal.aborted
+        ) {
+          return null;
+        }
+        return this.#runBackground({
+          analysisId,
+          workspace,
+          context,
+          scope,
+          settings,
+          selectionKey,
+          controller
+        });
+      });
+    this.#runQueue = queuedRun.then(() => undefined);
+    try {
+      return await queuedRun;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      if (this.#background?.analysisId === analysisId) {
+        this.#background = undefined;
+      }
+    }
+  }
+
+  async restoreSnapshot(
+    scope: CodeAnalysisScope
+  ): Promise<boolean> {
+    this.#assertNotDisposed();
+    if (this.#active) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "Wait for the running code analysis to finish before switching cached scopes."
+      );
+    }
+    const restoreGeneration =
+      ++this.#scopeRestoreGeneration;
+    const [workspace, settings] = await Promise.all([
+      this.#workspace.getCurrent(),
+      this.#settingsProvider()
+    ]);
+    this.#assertNotDisposed();
+    if (
+      restoreGeneration !==
+      this.#scopeRestoreGeneration
+    ) {
+      return false;
+    }
+    const context = resolveAnalysisContext(workspace);
+    await this.#ensureSnapshotHydrated(
+      workspace,
+      settings,
+      context
+    );
+    this.#assertNotDisposed();
+    if (
+      restoreGeneration !==
+      this.#scopeRestoreGeneration
+    ) {
+      return false;
+    }
+    if (this.#active) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "Wait for the running code analysis to finish before switching cached scopes."
+      );
+    }
+
+    const selectionKey = analysisSelectionKey(
+      workspace,
+      context
+    );
+    const configurationKey =
+      codeAnalysisSnapshotConfigurationKey(
+        settings,
+        context.roots
+      );
+    if (
+      this.#snapshot?.scope === scope &&
+      (this.#snapshotConfigurationKey === configurationKey ||
+        this.#snapshotInputConfigurationKey ===
+          configurationKey) &&
+      snapshotMatchesContext(
+        this.#snapshot,
+        workspace,
+        context
+      )
+    ) {
+      this.#setState(stateFromSnapshot(this.#snapshot));
+      return true;
+    }
+
+    const generation = this.#selectionGeneration;
+    let snapshot: CodeAnalysisSnapshot | null = null;
+    try {
+      snapshot = await this.#snapshotStore.load(
+        workspace.id,
+        settings,
+        context.roots,
+        scope
+      );
+    } catch {
+      return false;
+    }
+    if (
+      this.#disposed ||
+      this.#active !== undefined ||
+      restoreGeneration !==
+        this.#scopeRestoreGeneration ||
+      generation !== this.#selectionGeneration ||
+      selectionKey !== this.#selectionKey ||
+      !snapshot ||
+      snapshot.scope !== scope ||
+      !snapshotMatchesContext(
+        snapshot,
+        workspace,
+        context
+      )
+    ) {
+      return false;
+    }
+
+    this.#snapshot = snapshot;
+    this.#snapshotConfigurationKey = configurationKey;
+    this.#snapshotInputConfigurationKey = "";
+    this.#hydratedCacheKey = `${selectionKey}\0${configurationKey}`;
+    this.#setState(stateFromSnapshot(snapshot));
+    return true;
+  }
+
+  cancel(analysisId: string): void {
+    if (
+      !this.#active ||
+      this.#active.analysisId !== analysisId
+    ) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The requested code analysis task is no longer running."
+      );
+    }
+    this.#active.controller.abort(
+      new AnalysisCancelledError(
+        "Code analysis was cancelled by the user."
+      )
+    );
+  }
+
+  async getSnapshot(
+    detail?: CodeAnalysisSnapshotDetail
+  ): Promise<CodeAnalysisSnapshotView | null> {
+    const [workspace, settings] = await Promise.all([
+      this.#workspace.getCurrent(),
+      this.#settingsProvider()
+    ]);
+    const context = tryResolveAnalysisContext(workspace);
+    await this.#ensureSnapshotHydrated(
+      workspace,
+      settings,
+      context
+    );
+    if (!this.#snapshot) {
+      return null;
+    }
+    if (
+      !context ||
+      !snapshotMatchesContext(
+        this.#snapshot,
+        workspace,
+        context
+      )
+    ) {
+      return null;
+    }
+    const snapshot =
+      detail === "navigation"
+        ? createNavigationSnapshot(this.#snapshot)
+        : this.#snapshot;
+    const result = structuredClone(
+      snapshot
+    ) as CodeAnalysisSnapshotView;
+    if (detail) {
+      result.detailLevel = detail;
+      result.totalNodeCount = this.#snapshot.nodes.length;
+    }
+    return result;
+  }
+
+  async readFile(nodeId: string): Promise<CodeAnalysisFile> {
+    const snapshot = await this.getSnapshot();
+    if (!snapshot) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "Run code analysis before opening node source."
+      );
+    }
+    const node = snapshot.nodes.find(
+      (candidate) => candidate.id === nodeId
+    );
+    if (!node) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The requested code analysis node is no longer available."
+      );
+    }
+    const root = snapshot.roots.find(
+      (candidate) =>
+        candidate.repositoryId ===
+          node.location.repositoryId &&
+        candidate.worktreeId === node.location.worktreeId
+    );
+    if (!root) {
+      throw new WorkspaceError(
+        "DIRECTORY_UNAVAILABLE",
+        "The Worktree for this code analysis node is unavailable."
+      );
+    }
+
+    let canonicalRoot: string;
+    let canonicalFile: string;
+    let fileStats;
+    try {
+      canonicalRoot = await realpath(root.path);
+      canonicalFile = await realpath(
+        resolve(root.path, node.location.path)
+      );
+      fileStats = await stat(canonicalFile);
+    } catch (error) {
+      throw new WorkspaceError(
+        "DIRECTORY_UNAVAILABLE",
+        `Unable to read ${node.location.path}.`,
+        {
+          path: node.location.path,
+          reason: filesystemErrorCode(error)
+        }
+      );
+    }
+
+    if (!isWithinPath(canonicalRoot, canonicalFile)) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The requested code file is outside its analyzed Worktree."
+      );
+    }
+    if (!fileStats.isFile()) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The requested code analysis node does not point to a file."
+      );
+    }
+    if (fileStats.size > MAX_CODE_FILE_BYTES) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The requested code file is too large to preview safely.",
+        {
+          path: node.location.path,
+          size: fileStats.size,
+          limit: MAX_CODE_FILE_BYTES
+        }
+      );
+    }
+
+    let buffer: Buffer;
+    try {
+      buffer = await readTextFile(canonicalFile);
+    } catch (error) {
+      throw new WorkspaceError(
+        "DIRECTORY_UNAVAILABLE",
+        `Unable to read ${node.location.path}.`,
+        {
+          path: node.location.path,
+          reason: filesystemErrorCode(error)
+        }
+      );
+    }
+    if (buffer.includes(0)) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The requested code file is not a text file."
+      );
+    }
+
+    const preview = createCodeFilePreview(
+      buffer.toString("utf8"),
+      node.location.line,
+      typeof node.metadata.endLine === "number"
+        ? node.metadata.endLine
+        : node.location.line
+    );
+    return {
+      nodeId: node.id,
+      path: node.location.path,
+      language: node.language,
+      ...preview
+    };
+  }
+
+  handleWorkspaceChanged(workspace: Workspace): void {
+    const context = tryResolveAnalysisContext(workspace);
+    this.#acceptWorkspaceSelection(workspace, context);
+    void this.#settingsProvider()
+      .then((settings) =>
+        this.#ensureSnapshotHydrated(
+          workspace,
+          settings,
+          context
+        )
+      )
+      .catch(() => undefined);
+  }
+
+  #acceptWorkspaceSelection(
+    workspace: Workspace,
+    context: AnalysisContext | null
+  ): void {
+    const selectionKey = context
+      ? analysisSelectionKey(workspace, context)
+      : `${workspace.id}\0unavailable`;
+    const selectionChanged =
+      selectionKey !== this.#selectionKey;
+
+    if (
+      this.#active &&
+      selectionKey !== this.#active.selectionKey
+    ) {
+      const active = this.#active;
+      this.#active = undefined;
+      active.controller.abort(
+        new AnalysisCancelledError(
+          "Workspace selection changed during code analysis."
+        )
+      );
+    }
+    if (
+      this.#background &&
+      selectionKey !== this.#background.selectionKey
+    ) {
+      this.#background.controller.abort(
+        new AnalysisCancelledError(
+          "Workspace selection changed during background code analysis."
+        )
+      );
+    }
+
+    const snapshotMatches = Boolean(
+      context &&
+        this.#snapshot &&
+        snapshotMatchesContext(
+          this.#snapshot,
+          workspace,
+          context
+        )
+    );
+    if (!snapshotMatches) {
+      this.#snapshot = null;
+      this.#snapshotConfigurationKey = "";
+      this.#snapshotInputConfigurationKey = "";
+    }
+
+    if (!selectionChanged) {
+      return;
+    }
+
+    this.#selectionKey = selectionKey;
+    this.#selectionGeneration += 1;
+    this.#hydratedCacheKey = "";
+    this.#restore = undefined;
+    if (!snapshotMatches) {
+      this.#setIdleState(workspace, context);
+    }
+  }
+
+  async #ensureSnapshotHydrated(
+    workspace: Workspace,
+    settings: CodeAnalysisSettings,
+    providedContext?: AnalysisContext | null
+  ): Promise<void> {
+    const context =
+      providedContext === undefined
+        ? tryResolveAnalysisContext(workspace)
+        : providedContext;
+    this.#acceptWorkspaceSelection(workspace, context);
+    if (!context || this.#disposed) {
+      return;
+    }
+
+    const selectionKey = analysisSelectionKey(
+      workspace,
+      context
+    );
+    const configurationKey =
+      codeAnalysisSnapshotConfigurationKey(
+        settings,
+        context.roots
+      );
+    const cacheKey = `${selectionKey}\0${configurationKey}`;
+
+    if (
+      this.#snapshot &&
+      (this.#snapshotConfigurationKey === configurationKey ||
+        this.#snapshotInputConfigurationKey ===
+          configurationKey) &&
+      snapshotMatchesContext(
+        this.#snapshot,
+        workspace,
+        context
+      )
+    ) {
+      this.#hydratedCacheKey = cacheKey;
+      return;
+    }
+
+    if (
+      this.#active?.selectionKey === selectionKey ||
+      this.#hydratedCacheKey === cacheKey
+    ) {
+      return;
+    }
+
+    if (this.#snapshot) {
+      this.#snapshot = null;
+      this.#snapshotConfigurationKey = "";
+      this.#snapshotInputConfigurationKey = "";
+      this.#setIdleState(workspace, context);
+    }
+
+    if (this.#restore?.cacheKey === cacheKey) {
+      await this.#restore.task;
+      return;
+    }
+
+    const generation = this.#selectionGeneration;
+    const task = (async () => {
+      let snapshot: CodeAnalysisSnapshot | null = null;
+      try {
+        snapshot = await this.#snapshotStore.load(
+          workspace.id,
+          settings,
+          context.roots
+        );
+      } catch {
+        // A missing or invalid cache is equivalent to no prior analysis.
+      }
+
+      if (
+        this.#disposed ||
+        generation !== this.#selectionGeneration ||
+        selectionKey !== this.#selectionKey
+      ) {
+        return;
+      }
+
+      this.#hydratedCacheKey = cacheKey;
+      if (
+        !snapshot ||
+        !snapshotMatchesContext(
+          snapshot,
+          workspace,
+          context
+        )
+      ) {
+        return;
+      }
+
+      this.#snapshot = snapshot;
+      this.#snapshotConfigurationKey = configurationKey;
+      this.#snapshotInputConfigurationKey = "";
+      if (this.#active?.selectionKey === selectionKey) {
+        this.#setState({
+          ...this.#state,
+          snapshotAvailable: true
+        });
+        return;
+      }
+      this.#setState(stateFromSnapshot(snapshot));
+    })();
+    this.#restore = {
+      cacheKey,
+      task
+    };
+    try {
+      await task;
+    } finally {
+      if (this.#restore?.task === task) {
+        this.#restore = undefined;
+      }
+    }
+  }
+
+  #setIdleState(
+    workspace: Workspace,
+    _context: AnalysisContext | null
+  ): void {
+    this.#setState({
+      state: "idle",
+      snapshotAvailable: false,
+      workspaceId: workspace.id
+    });
+  }
+
+  async dispose(): Promise<void> {
+    this.#disposed = true;
+    this.#selectionGeneration += 1;
+    this.#scopeRestoreGeneration += 1;
+    const active = this.#active;
+    this.#active = undefined;
+    const background = this.#background;
+    this.#background = undefined;
+    active?.controller.abort(
+      new AnalysisCancelledError("GitNest is shutting down.")
+    );
+    background?.controller.abort(
+      new AnalysisCancelledError("GitNest is shutting down.")
+    );
+    await this.#runQueue.catch(() => undefined);
+    await this.#restore?.task.catch(() => undefined);
+    await this.#runner.dispose();
+    this.#listeners.clear();
+  }
+
+  #assertNotDisposed(): void {
+    if (!this.#disposed) {
+      return;
+    }
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "The code analysis service has been disposed."
+    );
+  }
+
+  async #run(input: {
+    analysisId: string;
+    workspace: Workspace;
+    context: AnalysisContext;
+    scope: CodeAnalysisScope;
+    settings: CodeAnalysisSettings;
+    selectionKey: string;
+    controller: AbortController;
+  }): Promise<void> {
+    try {
+      const repositoryState =
+        await this.#readRepositoryState(
+          input.context.roots,
+          input.scope === "changed",
+          input.controller.signal
+        );
+      const snapshot = await this.#runner.analyze({
+        analysisId: input.analysisId,
+        workspaceId: input.workspace.id,
+        workspaceRootPath: input.context.workspaceRootPath,
+        roots: input.context.roots.map((root) => ({
+          repositoryId: root.repositoryId,
+          worktreeId: root.worktreeId,
+          name: root.name,
+          path: root.path,
+          revision:
+            repositoryState.revisions.get(
+              repositoryTargetKey(root)
+            ) ?? root.revision
+        })),
+        scope: input.scope,
+        changedPaths: repositoryState.changedPaths,
+        freshnessChangedPaths:
+          repositoryState.freshnessChangedPaths,
+        worktreeStatuses: repositoryState.worktreeStatuses,
+        cacheDirectory: this.#cacheDirectory,
+        lspDataDirectory: this.#lspDataDirectory,
+        settings: input.settings,
+        signal: input.controller.signal,
+        onProgress: (progress) => {
+          if (this.#active?.analysisId !== input.analysisId) {
+            return;
+          }
+          this.#setState({
+            ...this.#state,
+            state: "running",
+            progress
+          });
+        }
+      });
+      if (this.#active?.analysisId !== input.analysisId) {
+        return;
+      }
+      let completedSnapshot = snapshot;
+      try {
+        await this.#snapshotStore.save(
+          snapshot,
+          input.settings
+        );
+      } catch (error) {
+        completedSnapshot = {
+          ...snapshot,
+          warnings: [
+            ...snapshot.warnings,
+            `无法保存完整分析快照：${errorMessage(error)}`
+          ]
+        };
+      }
+      if (this.#active?.analysisId !== input.analysisId) {
+        return;
+      }
+      this.#snapshot = completedSnapshot;
+      this.#snapshotConfigurationKey =
+        codeAnalysisSnapshotConfigurationKey(
+          input.settings,
+          completedSnapshot.roots
+        );
+      this.#snapshotInputConfigurationKey =
+        codeAnalysisSnapshotConfigurationKey(
+          input.settings,
+          input.context.roots
+        );
+      this.#hydratedCacheKey = `${input.selectionKey}\0${this.#snapshotConfigurationKey}`;
+      this.#active = undefined;
+      this.#setState({
+        state: "ready",
+        snapshotAvailable: true,
+        analysisId: input.analysisId,
+        workspaceId: input.workspace.id,
+        scope: input.scope,
+        generatedAt: completedSnapshot.generatedAt,
+        stats: completedSnapshot.stats
+      });
+    } catch (error) {
+      if (this.#active?.analysisId !== input.analysisId) {
+        return;
+      }
+      this.#active = undefined;
+      if (
+        input.controller.signal.aborted ||
+        error instanceof AnalysisCancelledError
+      ) {
+        this.#setState({
+          state: "cancelled",
+          snapshotAvailable:
+            this.#snapshot?.workspaceId === input.workspace.id &&
+            this.#snapshot.scope === input.scope,
+          analysisId: input.analysisId,
+          workspaceId: input.workspace.id,
+          scope: input.scope,
+          error: {
+            code: "COMMAND_CANCELLED",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Code analysis was cancelled.",
+            details: {}
+          }
+        });
+        return;
+      }
+      this.#setState({
+        state: "failed",
+        snapshotAvailable:
+          this.#snapshot?.workspaceId === input.workspace.id &&
+          this.#snapshot.scope === input.scope,
+        analysisId: input.analysisId,
+        workspaceId: input.workspace.id,
+        scope: input.scope,
+        error: {
+          code: errorCode(error),
+          message:
+            error instanceof Error
+              ? error.message
+              : "Code analysis failed.",
+          details: {}
+        }
+      });
+    }
+  }
+
+  async #runBackground(input: {
+    analysisId: string;
+    workspace: Workspace;
+    context: AnalysisContext;
+    scope: CodeAnalysisScope;
+    settings: CodeAnalysisSettings;
+    selectionKey: string;
+    controller: AbortController;
+  }): Promise<CodeAnalysisRefreshResult | null> {
+    try {
+      const repositoryState =
+        await this.#readRepositoryState(
+          input.context.roots,
+          input.scope === "changed",
+          input.controller.signal
+        );
+      const previousWorkspaceSnapshot =
+        input.scope === "changed"
+          ? await this.#loadWorkspaceSnapshotForRefresh(
+              input.workspace,
+              input.context,
+              input.settings
+            )
+          : null;
+      const snapshot = await this.#runner.analyze({
+        analysisId: input.analysisId,
+        workspaceId: input.workspace.id,
+        workspaceRootPath: input.context.workspaceRootPath,
+        roots: input.context.roots.map((root) => ({
+          repositoryId: root.repositoryId,
+          worktreeId: root.worktreeId,
+          name: root.name,
+          path: root.path,
+          revision:
+            repositoryState.revisions.get(
+              repositoryTargetKey(root)
+            ) ?? root.revision
+        })),
+        scope: input.scope,
+        ...(input.scope === "changed"
+          ? { resultScope: "workspace" as const }
+          : {}),
+        changedPaths: repositoryState.changedPaths,
+        freshnessChangedPaths:
+          repositoryState.freshnessChangedPaths,
+        worktreeStatuses: repositoryState.worktreeStatuses,
+        cacheDirectory: this.#cacheDirectory,
+        lspDataDirectory: this.#lspDataDirectory,
+        settings: input.settings,
+        signal: input.controller.signal
+      });
+      if (
+        this.#background?.analysisId !== input.analysisId ||
+        input.controller.signal.aborted
+      ) {
+        return null;
+      }
+
+      const workspaceCandidate =
+        input.scope === "workspace" ||
+        snapshot.indexStatus?.fullIndexAvailable === true
+          ? {
+              ...snapshot,
+              scope: "workspace" as const
+            }
+          : undefined;
+      const workspaceSnapshot =
+        input.scope === "changed" && workspaceCandidate
+          ? previousWorkspaceSnapshot &&
+            hasConsistentWorkspaceFileStats(
+              previousWorkspaceSnapshot
+            )
+            ? mergeIncrementalWorkspaceSnapshot(
+                previousWorkspaceSnapshot,
+                workspaceCandidate,
+                repositoryState.changedPaths
+              )
+            : undefined
+          : workspaceCandidate;
+      const changedSnapshot =
+        input.scope === "changed"
+          ? createChangedAnalysisSnapshot(snapshot)
+          : undefined;
+      const snapshots = [
+        changedSnapshot,
+        workspaceSnapshot
+      ].filter(
+        (
+          candidate
+        ): candidate is CodeAnalysisSnapshot =>
+          candidate !== undefined
+      );
+      const currentScope =
+        this.#snapshot?.scope ?? this.#state.scope;
+      snapshots.sort((left, right) => {
+        if (left.scope === currentScope) {
+          return 1;
+        }
+        if (right.scope === currentScope) {
+          return -1;
+        }
+        return left.scope === "changed" ? -1 : 1;
+      });
+      for (const candidate of snapshots) {
+        await this.#snapshotStore.save(
+          candidate,
+          input.settings
+        );
+      }
+      if (
+        this.#background?.analysisId !== input.analysisId ||
+        input.controller.signal.aborted
+      ) {
+        return null;
+      }
+
+      const currentSnapshot = snapshots.find(
+        (candidate) => candidate.scope === currentScope
+      );
+      if (currentSnapshot) {
+        this.#snapshot = currentSnapshot;
+        this.#snapshotConfigurationKey =
+          codeAnalysisSnapshotConfigurationKey(
+            input.settings,
+            currentSnapshot.roots
+          );
+        this.#snapshotInputConfigurationKey =
+          codeAnalysisSnapshotConfigurationKey(
+            input.settings,
+            input.context.roots
+          );
+        this.#hydratedCacheKey = `${input.selectionKey}\0${this.#snapshotConfigurationKey}`;
+        this.#setState(stateFromSnapshot(currentSnapshot));
+      }
+      return {
+        analysisId: input.analysisId,
+        workspaceSnapshotUpdated:
+          workspaceSnapshot !== undefined,
+        changedSnapshotUpdated:
+          changedSnapshot !== undefined
+      };
+    } catch (error) {
+      if (
+        input.controller.signal.aborted ||
+        error instanceof AnalysisCancelledError
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async #loadWorkspaceSnapshotForRefresh(
+    workspace: Workspace,
+    context: AnalysisContext,
+    settings: CodeAnalysisSettings
+  ): Promise<CodeAnalysisSnapshot | null> {
+    if (
+      this.#snapshot?.scope === "workspace" &&
+      snapshotMatchesContext(
+        this.#snapshot,
+        workspace,
+        context
+      )
+    ) {
+      return this.#snapshot;
+    }
+    try {
+      return await this.#snapshotStore.load(
+        workspace.id,
+        settings,
+        context.roots,
+        "workspace"
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  async #readRepositoryState(
+    roots: AnalysisRootContext[],
+    includeChangedPaths: boolean,
+    signal: AbortSignal
+  ) {
+    const changedPaths: Array<{
+      repositoryId: string;
+      worktreeId: string;
+      path: string;
+    }> = [];
+    const freshnessChangedPaths: typeof changedPaths = [];
+    const worktreeStatuses: Array<{
+      repositoryId: string;
+      worktreeId: string;
+      fingerprint: string;
+    }> = [];
+    const revisions = new Map<string, string>();
+    for (const root of roots) {
+      throwIfAborted(signal);
+      const snapshot = await this.#git.readRepositorySnapshot(
+        root.path,
+        {
+          includeChangeStats: false,
+          signal
+        }
+      );
+      revisions.set(
+        repositoryTargetKey(root),
+        snapshot.head
+      );
+      worktreeStatuses.push({
+        repositoryId: root.repositoryId,
+        worktreeId: root.worktreeId,
+        fingerprint: codeAnalysisWorktreeStatusFingerprint(
+          snapshot.changes
+        )
+      });
+      appendChangedPaths(
+        freshnessChangedPaths,
+        root,
+        snapshot
+      );
+      if (includeChangedPaths) {
+        appendChangedPaths(changedPaths, root, snapshot);
+      }
+    }
+    return {
+      changedPaths,
+      freshnessChangedPaths,
+      worktreeStatuses,
+      revisions
+    };
+  }
+
+  #setState(state: CodeAnalysisState): void {
+    this.#state = cloneState(state);
+    const published = cloneState(this.#state);
+    for (const listener of this.#listeners) {
+      try {
+        listener(published);
+      } catch {
+        // A closed renderer must not interrupt analysis completion.
+      }
+    }
+  }
+}
+
+interface AnalysisRootContext {
+  repositoryId: string;
+  worktreeId: string;
+  name: string;
+  path: string;
+  revision: string;
+}
+
+interface AnalysisContext {
+  workspaceRootPath: string;
+  roots: AnalysisRootContext[];
+}
+
+function tryResolveAnalysisContext(
+  workspace: Workspace
+): AnalysisContext | null {
+  try {
+    return resolveAnalysisContext(workspace);
+  } catch {
+    return null;
+  }
+}
+
+function resolveAnalysisContext(
+  workspace: Workspace
+): AnalysisContext {
+  if (!workspace.path) {
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "Configure a Workspace root before starting code analysis."
+    );
+  }
+  const repositories = new Map(
+    workspace.repositories.map((repository) => [
+      repository.id,
+      repository
+    ])
+  );
+  const worktrees = new Map(
+    workspace.worktrees.map((worktree) => [
+      repositoryTargetKey({
+        repositoryId: worktree.repositoryId,
+        worktreeId: worktree.id
+      }),
+      worktree
+    ])
+  );
+  const roots = listWorkspaceTargets(workspace).flatMap((target) => {
+    const worktree = worktrees.get(repositoryTargetKey(target));
+    if (!worktree || worktree.isBare) {
+      return [];
+    }
+    return [
+      toAnalysisRoot(
+        worktree,
+        repositories.get(target.repositoryId)?.name
+      )
+    ];
+  });
+  const unique = new Map(
+    roots.map((root) => [
+      normalizedPathKey(root.path),
+      root
+    ])
+  );
+  if (unique.size === 0) {
+    throw new WorkspaceError(
+      "DIRECTORY_UNAVAILABLE",
+      "The current Workspace has no readable Worktree."
+    );
+  }
+  return {
+    workspaceRootPath: workspace.path,
+    roots: [...unique.values()]
+  };
+}
+
+function analysisSelectionKey(
+  workspace: Workspace,
+  context: AnalysisContext
+): string {
+  return [
+    workspace.id,
+    ...context.roots
+      .map(
+        (root) =>
+          `${root.repositoryId}\0${root.worktreeId}\0${normalizedPathKey(
+            root.path
+          )}`
+      )
+      .sort()
+  ].join("\0");
+}
+
+function snapshotMatchesContext(
+  snapshot: CodeAnalysisSnapshot,
+  workspace: Workspace,
+  context: AnalysisContext
+): boolean {
+  if (
+    snapshot.workspaceId !== workspace.id
+  ) {
+    return false;
+  }
+  const snapshotRoots = snapshot.roots
+    .map(
+      (root) =>
+        `${root.repositoryId}\0${root.worktreeId}\0${normalizedPathKey(
+          root.path
+        )}`
+    )
+    .sort();
+  const contextRoots = context.roots
+    .map(
+      (root) =>
+        `${root.repositoryId}\0${root.worktreeId}\0${normalizedPathKey(
+          root.path
+        )}`
+    )
+    .sort();
+  return (
+    snapshotRoots.length === contextRoots.length &&
+    snapshotRoots.every(
+      (root, index) => root === contextRoots[index]
+    )
+  );
+}
+
+function createNavigationSnapshot(
+  snapshot: CodeAnalysisSnapshot
+): CodeAnalysisSnapshot {
+  const nodeIds = new Set<string>();
+  const edgeIds = new Set<string>();
+
+  for (const chain of snapshot.requestChains) {
+    nodeIds.add(chain.clientNodeId);
+    nodeIds.add(chain.endpointNodeId);
+    for (const nodeId of chain.nodeIds) {
+      nodeIds.add(nodeId);
+    }
+    for (const edgeId of chain.edgeIds) {
+      edgeIds.add(edgeId);
+    }
+  }
+
+  const edges = snapshot.edges.filter(
+    (edge) =>
+      edgeIds.has(edge.id) ||
+      (nodeIds.has(edge.from) && nodeIds.has(edge.to))
+  );
+  for (const edge of edges) {
+    nodeIds.add(edge.from);
+    nodeIds.add(edge.to);
+  }
+
+  return {
+    ...snapshot,
+    nodes: snapshot.nodes.filter((node) =>
+      nodeIds.has(node.id)
+    ),
+    edges
+  };
+}
+
+function stateFromSnapshot(
+  snapshot: CodeAnalysisSnapshot
+): CodeAnalysisState {
+  return {
+    state: "ready",
+    snapshotAvailable: true,
+    analysisId: snapshot.analysisId,
+    workspaceId: snapshot.workspaceId,
+    scope: snapshot.scope,
+    generatedAt: snapshot.generatedAt,
+    stats: snapshot.stats
+  };
+}
+
+function hasConsistentWorkspaceFileStats(
+  snapshot: CodeAnalysisSnapshot
+): boolean {
+  const fileNodeCount = snapshot.nodes.filter(
+    (node) => node.kind === "file"
+  ).length;
+  return (
+    fileNodeCount === 0 ||
+    snapshot.stats.analyzedFiles === fileNodeCount
+  );
+}
+
+function toAnalysisRoot(
+  worktree: WorkspaceWorktree,
+  repositoryName?: string
+): AnalysisRootContext {
+  return {
+    repositoryId: worktree.repositoryId,
+    worktreeId: worktree.id,
+    name: repositoryName ?? worktree.name,
+    path: worktree.path,
+    revision: worktree.head
+  };
+}
+
+function appendChangedPaths(
+  target: Array<{
+    repositoryId: string;
+    worktreeId: string;
+    path: string;
+  }>,
+  root: AnalysisRootContext,
+  snapshot: RepositorySnapshot
+): void {
+  for (const change of snapshot.changes) {
+    for (const path of new Set([
+      change.path,
+      ...(change.originalPath ? [change.originalPath] : [])
+    ])) {
+      target.push({
+        repositoryId: root.repositoryId,
+        worktreeId: root.worktreeId,
+        path
+      });
+    }
+  }
+}
+
+function normalizedPathKey(path: string): string {
+  return process.platform === "win32"
+    ? path.toLocaleLowerCase("en-US")
+    : path;
+}
+
+function isWithinPath(rootPath: string, filePath: string): boolean {
+  const relativePath = relative(rootPath, filePath);
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${sep}`) &&
+      !isAbsolute(relativePath))
+  );
+}
+
+function createCodeFilePreview(
+  content: string,
+  requestedStartLine: number,
+  requestedEndLine: number
+): Pick<
+  CodeAnalysisFile,
+  | "content"
+  | "startLine"
+  | "endLine"
+  | "totalLines"
+  | "truncated"
+> {
+  const lines = content.split(/\r\n|\n|\r/);
+  const totalLines = Math.max(1, lines.length);
+  const focusStart = Math.min(
+    totalLines,
+    Math.max(1, Math.trunc(requestedStartLine))
+  );
+  const focusEnd = Math.min(
+    totalLines,
+    Math.max(
+      focusStart,
+      Number.isFinite(requestedEndLine)
+        ? Math.trunc(requestedEndLine)
+        : focusStart
+    )
+  );
+  const focusSpan = focusEnd - focusStart + 1;
+  let startLine = 1;
+  let endLine = totalLines;
+
+  if (totalLines > MAX_CODE_FILE_LINES) {
+    const contextBefore =
+      focusSpan >= MAX_CODE_FILE_LINES
+        ? 0
+        : Math.floor(
+            (MAX_CODE_FILE_LINES - focusSpan) / 3
+          );
+    startLine = Math.max(1, focusStart - contextBefore);
+    endLine = Math.min(
+      totalLines,
+      startLine + MAX_CODE_FILE_LINES - 1
+    );
+    startLine = Math.max(
+      1,
+      endLine - MAX_CODE_FILE_LINES + 1
+    );
+  }
+
+  return {
+    content: lines.slice(startLine - 1, endLine).join("\n"),
+    startLine,
+    endLine,
+    totalLines,
+    truncated: startLine > 1 || endLine < totalLines
+  };
+}
+
+function filesystemErrorCode(error: unknown): string {
+  return error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string"
+    ? error.code
+    : "UNKNOWN";
+}
+
+function cloneState(state: CodeAnalysisState): CodeAnalysisState {
+  return structuredClone(state);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "Unknown persistence error.";
+}
+
+function errorCode(
+  error: unknown
+): "INVALID_REQUEST" | "DIRECTORY_UNAVAILABLE" | "COMMAND_FAILED" {
+  if (error instanceof WorkspaceError) {
+    if (
+      error.code === "INVALID_REQUEST" ||
+      error.code === "DIRECTORY_UNAVAILABLE"
+    ) {
+      return error.code;
+    }
+  }
+  return "COMMAND_FAILED";
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new AnalysisCancelledError(
+          "Code analysis was cancelled."
+        );
+  }
+}
+
+class AnalysisCancelledError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AnalysisCancelledError";
+  }
+}

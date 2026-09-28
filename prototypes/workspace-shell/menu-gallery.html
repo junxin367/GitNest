@@ -1,0 +1,5316 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#090d12" />
+  <title>GitNest · 组件规范总览</title>
+  <link rel="stylesheet" href="./button.css" />
+  <link rel="stylesheet" href="./input.css" />
+  <link rel="stylesheet" href="./textarea.css" />
+  <link rel="stylesheet" href="./toast.css" />
+  <link rel="stylesheet" href="./diff-search-popover.css" />
+  <link rel="stylesheet" href="./diff-panel.css" />
+  <link rel="stylesheet" href="./diff-workspace.css" />
+  <style>
+    :root {
+      color-scheme: dark;
+
+      --font-sans: Inter, "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+      --font-mono: "Cascadia Code", Consolas, monospace;
+      --font-size-body: 14px;
+      --font-size-caption: 12px;
+      --font-size-emphasis: 16px;
+      --font-size-title: 24px;
+      --font-size-section: 18px;
+      --line-height-body: 1.5;
+      --line-height-title: 1.3;
+      --font-weight-regular: 400;
+      --font-weight-medium: 500;
+      --font-weight-semibold: 600;
+
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 24px;
+      --space-6: 32px;
+      --space-7: 48px;
+      --radius-small: 4px;
+      --radius-regular: 8px;
+      --radius-large: 12px;
+      --control-compact: 32px;
+      --control-default: 35px;
+      --control-large: 40px;
+      --icon-small: 16px;
+      --icon-regular: 20px;
+      --icon-large: 24px;
+      --motion-micro: 180ms;
+
+      --color-primary: #36c7b5;
+      --color-primary-strong: #23aa9b;
+      --color-primary-soft: rgba(54, 199, 181, 0.13);
+      --color-success: #56d18b;
+      --color-success-soft: rgba(86, 209, 139, 0.13);
+      --color-warning: #f0c66a;
+      --color-warning-soft: rgba(240, 198, 106, 0.14);
+      --color-danger: #ff737b;
+      --color-danger-soft: rgba(255, 115, 123, 0.13);
+      --color-info: #64a8ff;
+      --color-info-soft: rgba(100, 168, 255, 0.13);
+      --color-text-primary: #e8eef6;
+      --color-text-secondary: #c1ccd8;
+      --color-text-muted: #91a0b0;
+      --color-text-disabled: #657486;
+      --color-bg-page: #0d131b;
+      --color-bg-surface: #131c27;
+      --color-bg-subtle: #182330;
+      --color-bg-muted: #1d2a38;
+      --color-bg-hover: #223141;
+      --color-border: #2b3b4d;
+      --color-border-subtle: #1e2a37;
+      --color-focus: #7de3d7;
+      --titlebar: #090d12;
+      --canvas: var(--color-bg-page);
+      --surface: var(--color-bg-surface);
+      --surface-2: var(--color-bg-subtle);
+      --surface-3: var(--color-bg-muted);
+      --surface-hover: var(--color-bg-hover);
+      --border: var(--color-border);
+      --border-soft: var(--color-border-subtle);
+      --text: var(--color-text-primary);
+      --text-soft: var(--color-text-secondary);
+      --muted: var(--color-text-muted);
+      --accent: var(--color-primary);
+      --accent-strong: var(--color-primary-strong);
+      --accent-soft: var(--color-primary-soft);
+      --blue: var(--color-info);
+      --blue-soft: var(--color-info-soft);
+      --green: var(--color-success);
+      --green-soft: var(--color-success-soft);
+      --yellow: var(--color-warning);
+      --yellow-soft: var(--color-warning-soft);
+      --red: var(--color-danger);
+      --red-soft: var(--color-danger-soft);
+      --shadow-popover: 0 14px 38px rgb(0 0 0 / 28%);
+      --shadow-modal: 0 24px 72px rgb(0 0 0 / 38%);
+      --shadow: 0 24px 64px rgb(0 0 0 / 32%);
+
+      --z-content: 0;
+      --z-navigation: 100;
+      --z-popover: 200;
+      --z-tooltip: 300;
+      --z-overlay: 400;
+      --z-modal: 500;
+      --z-toast: 600;
+      --page-header-height: 64px;
+    }
+
+    html[data-theme="light"] {
+      color-scheme: light;
+      --color-primary: #06736a;
+      --color-primary-strong: #055951;
+      --color-primary-soft: rgba(6, 115, 106, 0.1);
+      --color-success: #177245;
+      --color-success-soft: rgba(23, 114, 69, 0.1);
+      --color-warning: #805300;
+      --color-warning-soft: rgba(128, 83, 0, 0.11);
+      --color-danger: #b82e3a;
+      --color-danger-soft: rgba(184, 46, 58, 0.09);
+      --color-info: #1f60a8;
+      --color-info-soft: rgba(31, 96, 168, 0.1);
+      --color-text-primary: #1b2733;
+      --color-text-secondary: #3f4f61;
+      --color-text-muted: #586a7d;
+      --color-text-disabled: #98a5b2;
+      --color-bg-page: #f2f5f8;
+      --color-bg-surface: #ffffff;
+      --color-bg-subtle: #f7f9fb;
+      --color-bg-muted: #eef3f7;
+      --color-bg-hover: #e8eff5;
+      --color-border: #cfdae4;
+      --color-border-subtle: #e4eaf0;
+      --color-focus: #06736a;
+      --titlebar: #e9eef4;
+      --shadow-popover: 0 14px 38px rgb(37 55 72 / 16%);
+      --shadow-modal: 0 24px 72px rgb(37 55 72 / 20%);
+      --shadow: 0 24px 64px rgb(37 55 72 / 16%);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      min-width: 720px;
+      background: var(--canvas);
+      scroll-padding-top: calc(var(--page-header-height) + var(--control-large) + var(--space-5));
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 50% -10%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 34%),
+        var(--canvas);
+      font-family: var(--font-sans);
+      font-size: var(--font-size-body);
+      line-height: var(--line-height-body);
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      color: inherit;
+    }
+
+    button:not(:disabled) {
+      cursor: pointer;
+    }
+
+    button:focus-visible,
+    input:focus-visible {
+      outline: 1px solid var(--color-focus);
+      outline-offset: 2px;
+    }
+
+    .icon {
+      display: block;
+      flex: 0 0 auto;
+      width: 16px;
+      height: 16px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .page-header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: var(--space-4);
+      min-height: var(--page-header-height);
+      padding: var(--space-3) clamp(20px, 4vw, 48px);
+      background: color-mix(in srgb, var(--titlebar) 92%, transparent);
+      border-bottom: 1px solid var(--border-soft);
+      backdrop-filter: blur(18px);
+    }
+
+    .page-brand {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      min-width: 0;
+    }
+
+    .page-brand-mark {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      color: #071411;
+      background: linear-gradient(145deg, #67ead8, #2eb7a7);
+      border-radius: var(--radius-regular);
+      box-shadow: 0 0 0 1px rgb(255 255 255 / 12%) inset;
+    }
+
+    .page-brand-copy {
+      display: grid;
+      min-width: 0;
+    }
+
+    .page-brand-copy strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .page-brand-copy span {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .page-header-spacer {
+      flex: 1;
+    }
+
+    .page-control {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-height: var(--control-compact);
+      padding: 0 var(--space-3);
+      color: var(--text-soft);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-regular);
+    }
+
+    .page-control:hover {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    main {
+      width: min(1480px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: var(--space-6) 0 var(--space-7);
+    }
+
+    .intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: var(--space-5);
+      align-items: end;
+      margin-bottom: var(--space-6);
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--accent);
+      font-size: var(--font-size-caption);
+      font-weight: var(--font-weight-semibold);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      margin-bottom: var(--space-2);
+      font-size: clamp(26px, 4vw, 42px);
+      line-height: 1.15;
+      letter-spacing: -0.035em;
+    }
+
+    .intro p {
+      max-width: 760px;
+      margin-bottom: 0;
+      color: var(--muted);
+    }
+
+    .scope-note {
+      max-width: 360px;
+      padding: var(--space-3) var(--space-4);
+      color: var(--text-soft);
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-large);
+      font-size: var(--font-size-caption);
+    }
+
+    .layer-scale {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: var(--space-2);
+      margin-bottom: var(--space-6);
+    }
+
+    .layer-chip {
+      display: grid;
+      gap: var(--space-1);
+      min-width: 0;
+      padding: var(--space-3);
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .layer-chip strong {
+      color: var(--text);
+      font-size: var(--font-size-caption);
+    }
+
+    .layer-chip span {
+      overflow: hidden;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .gallery-tabs {
+      position: sticky;
+      top: var(--page-header-height);
+      z-index: var(--z-navigation);
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      margin-top: var(--space-6);
+      padding: var(--space-1);
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-large);
+      box-shadow: 0 12px 26px color-mix(in srgb, var(--canvas) 28%, transparent);
+      backdrop-filter: blur(16px);
+    }
+
+    .gallery-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-height: var(--control-default);
+      padding: 0 var(--space-3);
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-regular);
+      font-size: var(--font-size-caption);
+      font-weight: var(--font-weight-medium);
+    }
+
+    .gallery-tab:hover,
+    .gallery-tab:focus-visible {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .gallery-tab[aria-selected="true"] {
+      color: var(--text);
+      background: var(--surface-hover);
+      border-color: var(--border);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+    }
+
+    .gallery-tab-count {
+      min-width: 22px;
+      padding: 1px var(--space-1);
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-radius: 999px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1.3;
+      text-align: center;
+    }
+
+    .gallery-tab-panel[hidden] {
+      display: none;
+    }
+
+    .gallery-tab-panel {
+      scroll-margin-top: calc(var(--page-header-height) + var(--control-large) + var(--space-5));
+    }
+
+    .section {
+      margin-top: var(--space-7);
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: var(--space-4);
+      margin-bottom: var(--space-4);
+    }
+
+    .section-heading h2 {
+      margin-bottom: var(--space-1);
+      font-size: var(--font-size-section);
+    }
+
+    .section-heading p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .section-count {
+      flex: 0 0 auto;
+      padding: 2px var(--space-2);
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-radius: 999px;
+      font-family: var(--font-mono);
+      font-size: var(--font-size-caption);
+    }
+
+    .menu-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--space-4);
+      align-items: stretch;
+    }
+
+    .sample-card {
+      display: grid;
+      grid-template-rows: auto minmax(260px, 1fr) auto;
+      min-width: 0;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--surface) 74%, var(--canvas));
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-large);
+    }
+
+    .sample-card.span-2 {
+      grid-column: span 2;
+    }
+
+    .sample-card.full {
+      grid-column: 1 / -1;
+    }
+
+    .sample-title {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: var(--space-3);
+      padding: var(--space-4);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .sample-title h3 {
+      margin-bottom: var(--space-1);
+      font-size: var(--font-size-emphasis);
+    }
+
+    .sample-title p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .sample-index {
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: var(--font-size-caption);
+    }
+
+    .sample-stage {
+      position: relative;
+      display: grid;
+      place-items: start center;
+      min-width: 0;
+      padding: var(--space-5);
+      overflow: visible;
+      background:
+        linear-gradient(90deg, color-mix(in srgb, var(--border-soft) 55%, transparent) 1px, transparent 1px),
+        linear-gradient(color-mix(in srgb, var(--border-soft) 55%, transparent) 1px, transparent 1px),
+        color-mix(in srgb, var(--canvas) 80%, var(--surface));
+      background-size: 24px 24px;
+    }
+
+    .sample-stage.center {
+      place-items: center;
+    }
+
+    .sample-stage.wide {
+      place-items: start;
+      overflow-x: auto;
+    }
+
+    .sample-specs {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      background: var(--border-soft);
+      border-top: 1px solid var(--border-soft);
+    }
+
+    .sample-spec {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+      padding: var(--space-3);
+      background: var(--surface);
+    }
+
+    .sample-spec span {
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .sample-spec strong {
+      overflow: hidden;
+      color: var(--text-soft);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: var(--font-weight-regular);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .trigger-strip {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      padding: var(--space-1);
+      background: var(--titlebar);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .trigger-strip button {
+      height: var(--control-compact);
+      padding: 0 var(--space-2);
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-small);
+    }
+
+    .trigger-strip button:hover,
+    .trigger-strip button.active {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .titlebar-menu-pair {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-5);
+    }
+
+    .titlebar-menu-demo {
+      display: grid;
+      gap: var(--space-2);
+    }
+
+    .titlebar-menu-demo > strong {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .titlebar-file-popover {
+      display: grid;
+      width: 222px;
+      padding: var(--space-2);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-large);
+      box-shadow: var(--shadow-popover);
+    }
+
+    .titlebar-file-popover button {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-height: var(--control-compact);
+      padding: 0 var(--space-2);
+      color: var(--text-soft);
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-regular);
+      font-size: var(--font-size-caption);
+      line-height: 1;
+    }
+
+    .titlebar-file-popover button:hover:not(:disabled) {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .titlebar-file-popover button:disabled {
+      color: var(--color-text-disabled);
+      cursor: not-allowed;
+      opacity: 0.72;
+    }
+
+    .workspace-switcher-menu {
+      display: grid;
+      gap: var(--space-1);
+      width: 286px;
+      max-width: calc(100vw - var(--space-4));
+      padding: var(--space-2);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-right-color: color-mix(in srgb, var(--border) 72%, var(--text));
+      border-radius: var(--radius-large);
+      box-shadow: var(--shadow-popover);
+    }
+
+    .workspace-switcher-menu-heading {
+      padding: var(--space-1) var(--space-2) var(--space-2);
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+      font-weight: var(--font-weight-semibold);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .workspace-switcher-option,
+    .workspace-switcher-create {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      align-items: center;
+      gap: var(--space-2);
+      min-width: 0;
+      min-height: var(--control-compact);
+      padding: 0 var(--space-2);
+      color: var(--text-soft);
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-regular);
+    }
+
+    .workspace-switcher-option:hover,
+    .workspace-switcher-create:hover {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .workspace-switcher-option > span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .workspace-switcher-create {
+      grid-template-columns: 22px minmax(0, 1fr);
+    }
+
+    @media (max-width: 1240px) {
+      .workspace-switcher-menu {
+        width: 244px;
+      }
+    }
+
+    .menu-separator {
+      height: 1px;
+      margin: var(--space-2) 0;
+      background: var(--border-soft);
+    }
+
+    .sidebar-repository-menu {
+      display: grid;
+      gap: var(--space-1);
+      width: 222px;
+      padding: var(--space-2);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-large);
+      box-shadow: var(--shadow-popover);
+    }
+
+    .sidebar-repository-menu-option {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      align-items: center;
+      gap: var(--space-2);
+      width: 100%;
+      min-height: var(--control-compact);
+      padding: 0 var(--space-2);
+      color: var(--text-soft);
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-regular);
+    }
+
+    .sidebar-repository-menu-option:hover {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .sidebar-repository-menu-option > span {
+      display: grid;
+      gap: 1px;
+      min-width: 0;
+    }
+
+    .sidebar-repository-menu-option strong {
+      overflow: hidden;
+      color: inherit;
+      font-size: var(--font-size-caption);
+      font-weight: var(--font-weight-regular);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .open-in-menu {
+      display: grid;
+      width: 222px;
+      padding: var(--space-2);
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-large);
+      box-shadow: var(--shadow-popover);
+    }
+
+    .open-in-menu-heading,
+    .workspace-context-open-in-submenu-heading {
+      padding: var(--space-1) var(--space-2) var(--space-2);
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+      font-weight: var(--font-weight-semibold);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .open-in-menu button,
+    .workspace-context-open-in-submenu button {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      align-items: center;
+      gap: var(--space-2);
+      min-height: var(--control-compact);
+      padding: 0 var(--space-2);
+      color: var(--text-soft);
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-regular);
+      font-size: var(--font-size-caption);
+    }
+
+    .open-in-menu button:hover,
+    .open-in-menu button:focus-visible,
+    .workspace-context-open-in-submenu button:hover {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .open-in-menu button > span:nth-child(2),
+    .workspace-context-open-in-submenu button > span:nth-child(2) {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .open-in-app-icon {
+      display: block;
+      flex: 0 0 18px;
+      width: 18px;
+      height: 18px;
+      object-fit: contain;
+    }
+
+    .toolbar-menu-popover {
+      display: grid;
+      width: 222px;
+      padding: var(--space-2);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-large);
+      box-shadow: var(--shadow-popover);
+    }
+
+    .toolbar-menu-popover button {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-height: var(--control-compact);
+      padding: 0 var(--space-2);
+      color: var(--text-soft);
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-regular);
+      font-size: var(--font-size-caption);
+    }
+
+    .toolbar-menu-popover button:hover {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .toolbar-menu-popover button:disabled {
+      color: var(--color-text-disabled);
+      cursor: not-allowed;
+      opacity: 0.72;
+    }
+
+    .settings-terminal-demo {
+      display: grid;
+      gap: var(--space-1);
+      width: min(360px, 100%);
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .settings-terminal-menu {
+      display: grid;
+      gap: var(--space-1);
+      width: 100%;
+    }
+
+    .settings-terminal-trigger {
+      --dropdown-size-small: var(--control-compact);
+      --dropdown-size-medium: var(--control-default);
+      --dropdown-size-large: var(--control-large);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-2);
+      width: 100%;
+      min-height: var(--dropdown-size-medium);
+      padding: 0 var(--space-3);
+      color: var(--text);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-regular);
+    }
+
+    .settings-terminal-trigger[data-size="small"] {
+      min-height: var(--dropdown-size-small);
+    }
+
+    .settings-terminal-trigger[data-size="large"] {
+      min-height: var(--dropdown-size-large);
+    }
+
+    .settings-terminal-trigger:hover {
+      background: var(--surface-hover);
+      border-color: var(--accent);
+    }
+
+    .settings-terminal-trigger-value {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-width: 0;
+    }
+
+    .settings-terminal-trigger-value span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .settings-terminal-options {
+      display: grid;
+      gap: var(--space-1);
+      width: 100%;
+      max-height: 260px;
+      overflow: auto;
+      padding: var(--space-2);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-large);
+      box-shadow: var(--shadow-popover);
+    }
+
+    .settings-terminal-option {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      align-items: center;
+      gap: var(--space-2);
+      min-width: 0;
+      min-height: var(--control-compact);
+      padding: 0 var(--space-2);
+      color: var(--text-soft);
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-regular);
+      font-size: var(--font-size-caption);
+    }
+
+    .settings-terminal-option:hover,
+    .settings-terminal-option.hover {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .settings-terminal-option.is-selected,
+    .settings-terminal-option.is-selected:hover,
+    .settings-terminal-option.is-selected:focus-visible {
+      color: var(--text);
+      background: var(--accent-soft);
+    }
+
+    .settings-terminal-option > span:nth-child(2) {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dropdown-size-showcase {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--space-2);
+      width: 100%;
+    }
+
+    .dropdown-size-demo {
+      display: grid;
+      gap: var(--space-1);
+      min-width: 0;
+    }
+
+    .dropdown-size-demo > span {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .dropdown-size-demo .settings-terminal-trigger {
+      min-width: 0;
+      padding: 0 var(--space-2);
+    }
+
+    .dropdown-control-stack {
+      display: grid;
+      gap: var(--space-4);
+      width: min(390px, 100%);
+    }
+
+    .dropdown-control-label {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .open-in-control-demo {
+      display: inline-flex;
+      align-items: stretch;
+      max-width: 100%;
+    }
+
+    .open-in-primary-demo,
+    .open-in-trigger-demo,
+    .branch-selector-demo {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-2);
+      height: var(--control-compact);
+      color: var(--text-soft);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+    }
+
+    .open-in-primary-demo {
+      width: var(--control-compact);
+      min-width: var(--control-compact);
+      padding: 0;
+      border-radius: var(--radius-regular) 0 0 var(--radius-regular);
+    }
+
+    .open-in-trigger-demo {
+      width: 20px;
+      min-width: 20px;
+      flex: 0 0 20px;
+      padding: 0;
+      border-left-color: var(--border-soft);
+      border-radius: 0 var(--radius-regular) var(--radius-regular) 0;
+    }
+
+    .open-in-trigger-demo .icon {
+      width: 12px;
+      height: 12px;
+    }
+
+    .open-in-primary-demo:hover,
+    .branch-selector-demo:hover {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .branch-selector-demo {
+      justify-content: flex-start;
+      width: min(210px, 100%);
+      padding: 0 var(--space-3);
+      border-radius: var(--radius-regular);
+    }
+
+    .branch-selector-demo span {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .branch-selector-demo > .icon:last-child {
+      flex: 0 0 auto;
+      margin-left: auto;
+    }
+
+    .workspace-context-menu {
+      display: grid;
+      width: 222px;
+      padding: var(--space-2);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-large);
+      box-shadow: var(--shadow-popover);
+    }
+
+    .workspace-context-menu > button,
+    .workspace-context-open-in-trigger {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-height: var(--control-compact);
+      padding: 0 var(--space-2);
+      color: var(--text-soft);
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-regular);
+      font-size: var(--font-size-caption);
+    }
+
+    .workspace-context-menu > button:hover:not(:disabled) {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .workspace-context-menu > button.danger {
+      color: var(--red);
+    }
+
+    .workspace-context-menu > button.danger:hover:not(:disabled) {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .workspace-context-menu > button.danger:disabled {
+      color: var(--color-text-disabled);
+      opacity: 0.72;
+    }
+
+    .workspace-context-menu-separator {
+      height: 1px;
+      margin: var(--space-2) 0;
+      background: var(--border-soft);
+    }
+
+    .workspace-context-menu > .workspace-context-open-in-trigger {
+      display: grid;
+      grid-template-columns: 16px minmax(0, 1fr) 16px;
+      width: 100%;
+    }
+
+    .workspace-context-open-in-trigger > span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .workspace-context-open-in-trigger > .icon:last-child {
+      color: var(--muted);
+    }
+
+    .workspace-context-open-in-trigger:hover {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .nested-menu-stage {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-2);
+      min-width: 470px;
+    }
+
+    .workspace-context-open-in-submenu {
+      display: grid;
+      width: 222px;
+      padding: var(--space-2);
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-large);
+      box-shadow: var(--shadow-popover);
+    }
+
+    .command-overlay-demo {
+      display: grid;
+      place-items: start center;
+      width: 100%;
+      min-height: 360px;
+      padding: var(--space-5);
+      background: color-mix(in srgb, var(--titlebar) 68%, var(--canvas));
+      border-radius: var(--radius-regular);
+    }
+
+    .command-palette-demo {
+      width: min(610px, 100%);
+      max-height: 320px;
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-large);
+      box-shadow: var(--shadow-modal);
+    }
+
+    .command-input-demo {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      height: 40px;
+      padding: 0 var(--space-4);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .command-input-demo .icon {
+      color: var(--accent);
+    }
+
+    .command-input-demo input {
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      color: var(--text);
+      background: transparent;
+      border: 0;
+      outline: 0;
+    }
+
+    .command-input-demo kbd,
+    .command-result-demo kbd {
+      display: inline-grid;
+      place-items: center;
+      min-width: var(--control-compact);
+      height: var(--space-6);
+      padding: 0 var(--space-2);
+      color: var(--muted);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-small);
+      font: inherit;
+      font-size: var(--font-size-caption);
+      line-height: 1;
+    }
+
+    .command-results-demo {
+      max-height: 248px;
+      overflow: auto;
+      padding: var(--space-2);
+    }
+
+    .command-group-label-demo {
+      padding: var(--space-2);
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+      font-weight: var(--font-weight-semibold);
+      letter-spacing: 0.02em;
+    }
+
+    .command-result-demo {
+      display: grid;
+      grid-template-columns: var(--control-compact) minmax(0, 1fr) auto;
+      align-items: center;
+      column-gap: var(--space-2);
+      width: 100%;
+      min-height: var(--control-large);
+      padding: 0 var(--space-2);
+      color: inherit;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-regular);
+    }
+
+    .command-result-demo.hover {
+      background: var(--surface-hover);
+    }
+
+    .command-result-demo .command-status {
+      flex: 0 0 auto;
+      margin-left: var(--space-3);
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+      white-space: nowrap;
+    }
+
+    .command-result-icon-demo {
+      display: grid;
+      place-items: center;
+      width: var(--control-compact);
+      height: var(--control-compact);
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .command-result-copy-demo {
+      display: grid;
+      min-width: 0;
+    }
+
+    .command-result-copy-demo strong {
+      overflow: hidden;
+      color: var(--text-soft);
+      font-size: var(--font-size-body);
+      font-weight: var(--font-weight-medium);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .command-result-copy-demo span {
+      overflow: hidden;
+      margin-top: calc(var(--space-1) / 2);
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .branch-switch-dialog {
+      width: min(520px, 100%);
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-large);
+      box-shadow: var(--shadow-modal);
+    }
+
+    .branch-switch-dialog-header {
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr) 32px;
+      align-items: center;
+      gap: var(--space-3);
+      min-height: 56px;
+      padding: var(--space-3) var(--space-5);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .branch-dialog-icon {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .branch-dialog-icon .icon {
+      width: var(--icon-small);
+      height: var(--icon-small);
+    }
+
+    .branch-switch-dialog-header h3 {
+      overflow: hidden;
+      margin: 0;
+      font-size: var(--font-size-emphasis);
+      line-height: var(--line-height-title);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .branch-dialog-close {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-regular);
+    }
+
+    .branch-dialog-close:hover {
+      color: var(--text);
+      background: transparent;
+      border-color: transparent;
+    }
+
+    .branch-switch-dialog-content {
+      display: grid;
+      gap: var(--space-3);
+      padding: var(--space-4) var(--space-5);
+    }
+
+    .branch-switch-dialog-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      color: var(--text-soft);
+      font-size: var(--font-size-caption);
+    }
+
+    .branch-switch-dialog-heading span {
+      color: var(--muted);
+    }
+
+    .branch-switch-list {
+      display: grid;
+      gap: var(--space-2);
+    }
+
+    .branch-switch-option {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      width: 100%;
+      min-height: 54px;
+      padding: var(--space-3);
+      color: var(--text);
+      text-align: left;
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .branch-switch-option:hover:not(:disabled) {
+      background: var(--surface-hover);
+      border-color: var(--accent);
+    }
+
+    .branch-switch-option.current {
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-color: color-mix(in srgb, var(--accent) 36%, var(--border-soft));
+    }
+
+    .branch-switch-option-main {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-width: 0;
+    }
+
+    .branch-switch-option-main > span {
+      display: grid;
+      gap: var(--space-1);
+      min-width: 0;
+    }
+
+    .branch-switch-option-main strong,
+    .branch-switch-option-main small {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .branch-switch-option-main strong {
+      font-size: var(--font-size-body);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .branch-switch-option-main small {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .branch-switch-option-status {
+      flex: 0 0 auto;
+      color: var(--accent);
+      font-size: var(--font-size-caption);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .branch-switch-dialog-actions {
+      display: flex;
+      justify-content: flex-end;
+      padding: var(--space-3) var(--space-5);
+      border-top: 1px solid var(--border-soft);
+    }
+
+    body.has-dialog-showcase {
+      overflow: hidden;
+    }
+
+    .dialog-family-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--space-3);
+      width: 100%;
+    }
+
+    .dialog-family-card {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: var(--space-3);
+      min-height: 190px;
+      padding: var(--space-4);
+      color: var(--text-soft);
+      text-align: left;
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-large);
+    }
+
+    .dialog-family-card:hover {
+      background: color-mix(in srgb, var(--surface-hover) 54%, var(--surface));
+      border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+    }
+
+    .dialog-family-card.danger:hover {
+      border-color: color-mix(in srgb, var(--red) 44%, var(--border));
+    }
+
+    .dialog-family-icon {
+      display: grid;
+      place-items: center;
+      width: var(--control-large);
+      height: var(--control-large);
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-radius: var(--radius-large);
+    }
+
+    .dialog-family-card.danger .dialog-family-icon {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .dialog-family-copy {
+      display: grid;
+      align-content: start;
+      gap: var(--space-1);
+    }
+
+    .dialog-family-copy strong {
+      color: var(--text);
+      font-size: var(--font-size-emphasis);
+    }
+
+    .dialog-family-copy span,
+    .dialog-family-meta {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .dialog-family-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+    }
+
+    .dialog-family-meta span {
+      padding: 2px var(--space-2);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: 999px;
+    }
+
+    .dialog-standard-layout {
+      display: grid;
+      grid-template-columns: minmax(460px, 620px) minmax(280px, 1fr);
+      align-items: center;
+      gap: var(--space-5);
+      width: min(1080px, 100%);
+    }
+
+    .dialog-standard-stage {
+      display: grid;
+      place-items: center;
+      width: 100%;
+      min-height: 300px;
+      padding: var(--space-6);
+      background:
+        linear-gradient(var(--border-soft) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border-soft) 1px, transparent 1px),
+        color-mix(in srgb, var(--canvas) 86%, var(--surface));
+      background-size: 24px 24px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-large);
+    }
+
+    .dialog-standard-preview {
+      width: min(520px, 100%);
+    }
+
+    .dialog-standard-preview .dialog-showcase {
+      width: 100%;
+      max-height: none;
+    }
+
+    .dialog-standard-rules {
+      display: grid;
+      gap: var(--space-2);
+    }
+
+    .dialog-standard-rule {
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr);
+      gap: var(--space-3);
+      padding: var(--space-3);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .dialog-standard-rule > strong {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-radius: var(--radius-regular);
+      font-family: var(--font-mono);
+      font-size: var(--font-size-caption);
+    }
+
+    .dialog-standard-rule > div {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .dialog-standard-rule span {
+      color: var(--text);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .dialog-standard-rule small {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+      line-height: 1.45;
+    }
+
+    .dialog-size-scale {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--space-2);
+    }
+
+    .dialog-size-scale div {
+      display: grid;
+      gap: 2px;
+      padding: var(--space-3);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .dialog-size-scale strong {
+      color: var(--text);
+    }
+
+    .dialog-size-scale span {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .dialog-showcase-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: var(--z-modal);
+      display: grid;
+      place-items: center;
+      overflow: auto;
+      padding: var(--space-5);
+      background: color-mix(in srgb, var(--titlebar) 78%, transparent);
+      backdrop-filter: blur(7px);
+    }
+
+    .dialog-showcase-backdrop[hidden] {
+      display: none;
+    }
+
+    .dialog-showcase-backdrop[data-placement="top"] {
+      place-items: start center;
+      padding-top: 12vh;
+      backdrop-filter: blur(5px);
+    }
+
+    .dialog-showcase-backdrop > div {
+      display: grid;
+      place-items: center;
+      width: 100%;
+    }
+
+    .dialog-showcase {
+      display: grid;
+      grid-template-rows: auto minmax(0, auto) auto;
+      width: min(720px, calc(100vw - 48px));
+      max-height: min(680px, calc(100vh - 48px));
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-large);
+      box-shadow: var(--shadow-modal);
+    }
+
+    .dialog-showcase[data-size="compact"] {
+      width: min(520px, calc(100vw - 48px));
+    }
+
+    .dialog-showcase[data-size="target"] {
+      width: min(560px, calc(100vw - 48px));
+    }
+
+    .dialog-showcase[data-size="version"] {
+      width: min(620px, calc(100vw - 48px));
+    }
+
+    .dialog-showcase[data-size="search"] {
+      width: min(610px, calc(100vw - 48px));
+      grid-template-rows: minmax(0, 1fr);
+    }
+
+    .dialog-showcase.is-danger {
+      border-color: color-mix(in srgb, var(--red) 42%, var(--border));
+    }
+
+    .dialog-showcase-header {
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-3);
+      min-height: 56px;
+      padding: var(--space-3) var(--space-5);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .dialog-showcase-icon {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .dialog-showcase-icon .icon {
+      width: var(--icon-small);
+      height: var(--icon-small);
+    }
+
+    .dialog-showcase.is-danger .dialog-showcase-icon {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .dialog-showcase-heading {
+      min-width: 0;
+    }
+
+    .dialog-showcase-heading h2 {
+      overflow: hidden;
+      margin: 0;
+      font-size: var(--font-size-emphasis);
+      line-height: var(--line-height-title);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dialog-showcase-close {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-regular);
+    }
+
+    .dialog-showcase-close:hover {
+      color: var(--text);
+      background: transparent;
+      border-color: transparent;
+    }
+
+    .dialog-showcase-body {
+      display: grid;
+      gap: var(--space-3);
+      min-height: 0;
+      overflow: auto;
+      padding: var(--space-4) var(--space-5);
+    }
+
+    .dialog-showcase-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      min-height: 56px;
+      padding: var(--space-3) var(--space-5);
+      background: color-mix(in srgb, var(--surface-2) 60%, var(--surface));
+      border-top: 1px solid var(--border-soft);
+    }
+
+    .dialog-showcase-footer.only-actions {
+      justify-content: flex-end;
+    }
+
+    .dialog-showcase-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: var(--space-2);
+    }
+
+    .dialog-showcase-actions .button {
+      min-width: 72px;
+    }
+
+    .dialog-field {
+      display: grid;
+      gap: var(--space-2);
+    }
+
+    .dialog-field label {
+      color: var(--text-soft);
+      font-size: var(--font-size-caption);
+      font-weight: var(--font-weight-medium);
+    }
+
+    .dialog-field input {
+      width: 100%;
+      height: var(--control-default);
+      padding: 0 var(--space-3);
+      color: var(--text);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-regular);
+      outline: 0;
+    }
+
+    .dialog-field input:focus {
+      border-color: var(--color-focus);
+    }
+
+    .dialog-risk,
+    .dialog-target,
+    .dialog-impact-card,
+    .dialog-version-card {
+      padding: var(--space-3);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .dialog-risk {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-2);
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .dialog-risk.warning {
+      color: var(--yellow);
+      background: var(--yellow-soft);
+      border-color: color-mix(in srgb, var(--yellow) 30%, var(--border-soft));
+    }
+
+    .dialog-risk.danger {
+      color: var(--red);
+      background: var(--red-soft);
+      border-color: color-mix(in srgb, var(--red) 30%, var(--border-soft));
+    }
+
+    .dialog-target {
+      display: grid;
+      gap: var(--space-1);
+    }
+
+    .dialog-target span {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .dialog-target strong,
+    .dialog-target code {
+      overflow: hidden;
+      color: var(--text);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dialog-target code {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-caption);
+    }
+
+    .dialog-impact-grid,
+    .dialog-version-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--space-3);
+    }
+
+    .dialog-impact-card,
+    .dialog-version-card {
+      display: grid;
+      gap: var(--space-1);
+    }
+
+    .dialog-impact-card span,
+    .dialog-version-card span {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .dialog-impact-card strong,
+    .dialog-version-card strong {
+      color: var(--text);
+    }
+
+    .dialog-warning-list {
+      display: grid;
+      gap: var(--space-2);
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .dialog-warning-list li {
+      display: flex;
+      gap: var(--space-2);
+      color: var(--text-soft);
+      font-size: var(--font-size-caption);
+    }
+
+    .dialog-warning-list .icon {
+      margin-top: 1px;
+      color: var(--yellow);
+    }
+
+    .dialog-progress {
+      display: grid;
+      gap: var(--space-2);
+    }
+
+    .dialog-progress[hidden] {
+      display: none;
+    }
+
+    .dialog-progress-head {
+      display: flex;
+      justify-content: space-between;
+      gap: var(--space-3);
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .dialog-progress-track {
+      height: 8px;
+      overflow: hidden;
+      background: var(--surface-3);
+      border-radius: 999px;
+    }
+
+    .dialog-progress-bar {
+      width: 0;
+      height: 100%;
+      background: var(--accent);
+      border-radius: inherit;
+      transition: width var(--motion-micro) ease;
+    }
+
+    .dialog-release-notes {
+      display: grid;
+      gap: var(--space-2);
+      margin: 0;
+      padding-left: 18px;
+      color: var(--text-soft);
+      font-size: var(--font-size-caption);
+    }
+
+    .dialog-search-shell {
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .dialog-search-shell .command-results-demo {
+      max-height: min(408px, 60vh);
+    }
+
+    .dialog-search-shell .command-result-demo[aria-selected="true"] {
+      background: var(--surface-hover);
+    }
+
+    .dialog-component-map td:first-child {
+      color: var(--text);
+      font-weight: var(--font-weight-medium);
+    }
+
+    .dialog-behavior-yes {
+      color: var(--green);
+    }
+
+    .dialog-behavior-conditional {
+      color: var(--yellow);
+    }
+
+    .dialog-behavior-no {
+      color: var(--muted);
+    }
+
+    .commit-detail-demo-stage {
+      display: grid;
+      grid-template-rows: minmax(230px, 1fr) auto;
+      min-height: 420px;
+      overflow: hidden;
+      padding: var(--space-3);
+      background:
+        radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--accent) 6%, transparent), transparent 34%),
+        var(--canvas);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .commit-detail-demo-list {
+      display: grid;
+      align-content: start;
+      gap: var(--space-1);
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .commit-detail-demo-row {
+      display: grid;
+      grid-template-columns: 12px minmax(0, 1fr) 128px 84px 78px;
+      align-items: center;
+      gap: var(--space-3);
+      width: 100%;
+      min-height: 62px;
+      padding: var(--space-2) var(--space-3);
+      color: inherit;
+      text-align: left;
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .commit-detail-demo-row:hover,
+    .commit-detail-demo-row:focus-visible,
+    .commit-detail-demo-row[aria-current="true"] {
+      background: var(--surface-hover);
+      border-color: var(--accent);
+    }
+
+    .commit-detail-demo-node {
+      width: 10px;
+      height: 10px;
+      background: var(--surface);
+      border: 2px solid var(--accent);
+      border-radius: 50%;
+    }
+
+    .commit-detail-demo-copy {
+      display: grid;
+      gap: var(--space-1);
+      min-width: 0;
+    }
+
+    .commit-detail-demo-subject,
+    .commit-detail-demo-meta {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .commit-detail-demo-subject {
+      color: var(--text-soft);
+      font-weight: var(--font-weight-medium);
+    }
+
+    .commit-detail-demo-meta,
+    .commit-detail-demo-date,
+    .commit-detail-demo-author,
+    .commit-detail-demo-id {
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: var(--font-size-caption);
+    }
+
+    .commit-detail-demo-date,
+    .commit-detail-demo-author,
+    .commit-detail-demo-id {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .commit-detail-demo-id {
+      color: var(--accent);
+    }
+
+    .commit-detail-demo-ref {
+      display: inline-flex;
+      padding: 2px var(--space-1);
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-radius: 999px;
+      font-family: var(--font-mono);
+      font-size: var(--font-size-caption);
+      white-space: nowrap;
+    }
+
+    .commit-detail-demo-panel {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      max-height: 350px;
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-regular);
+      box-shadow: none;
+    }
+
+    .commit-detail-demo-panel-head {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      min-height: var(--control-default);
+      padding: 0 var(--space-3);
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .commit-detail-demo-panel-head strong {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .commit-detail-demo-panel-head .icon {
+      color: var(--accent);
+    }
+
+    .commit-detail-demo-body {
+      min-height: 0;
+      overflow-y: auto;
+      padding: var(--space-3) var(--space-4);
+    }
+
+    .commit-detail-demo-title {
+      margin: 0;
+      color: var(--text);
+      font-size: var(--font-size-body);
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .commit-detail-demo-description {
+      margin: var(--space-2) 0;
+      color: var(--text-soft);
+      font-size: var(--font-size-caption);
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .commit-detail-demo-panel-meta,
+    .commit-detail-demo-panel-refs {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .commit-detail-demo-panel-meta {
+      margin-top: var(--space-1);
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .commit-detail-demo-panel-meta code {
+      color: var(--accent);
+      font-family: var(--font-mono);
+    }
+
+    .commit-detail-demo-panel-refs {
+      margin-top: var(--space-2);
+    }
+
+    .commit-detail-demo-panel-refs span {
+      padding: calc(var(--space-1) / 2) var(--space-2);
+      color: var(--blue);
+      background: var(--blue-soft);
+      border-radius: 999px;
+      font-family: var(--font-mono);
+      font-size: var(--font-size-caption);
+      white-space: nowrap;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 0;
+      height: var(--control-default);
+      padding: 0 var(--space-3);
+      color: var(--text-soft);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-regular);
+    }
+
+    .button:hover {
+      color: var(--text);
+      background: var(--surface-hover);
+      border-color: var(--border);
+    }
+
+    .button.primary {
+      color: #071411;
+      background: var(--accent);
+      border-color: var(--accent);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .button.primary:hover {
+      background: color-mix(in srgb, var(--accent) 88%, white);
+    }
+
+    .button.danger {
+      color: var(--red);
+      background: var(--red-soft);
+      border-color: color-mix(in srgb, var(--red) 28%, transparent);
+    }
+
+    .button.danger.primary {
+      color: #fff;
+      background: var(--red);
+      border-color: var(--red);
+    }
+
+    .button.small {
+      height: var(--control-compact);
+      padding: 0 var(--space-3);
+      font-size: var(--font-size-caption);
+    }
+
+    .button.large {
+      height: var(--control-large);
+      padding: 0 var(--space-5);
+      font-size: var(--font-size-emphasis);
+    }
+
+    .button.block {
+      width: 100%;
+    }
+
+    .button.is-loading {
+      position: relative;
+      color: transparent;
+      pointer-events: none;
+    }
+
+    .button.is-loading::after {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      content: "";
+      border: 2px solid color-mix(in srgb, var(--text-soft) 32%, transparent);
+      border-top-color: var(--text-soft);
+      border-radius: 50%;
+      animation: gallery-spin 700ms linear infinite;
+    }
+
+    .button.primary.is-loading::after {
+      border-top-color: #071411;
+    }
+
+    .button:disabled,
+    .gallery-icon-button:disabled {
+      color: var(--color-text-disabled);
+      background: var(--surface-2);
+      border-color: var(--border-soft);
+      cursor: not-allowed;
+      opacity: 0.72;
+    }
+
+    @keyframes gallery-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .gallery-icon-button {
+      display: inline-grid;
+      place-items: center;
+      width: var(--control-compact);
+      height: var(--control-compact);
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-regular);
+    }
+
+    .gallery-icon-button:hover,
+    .gallery-icon-button.focus {
+      color: var(--text);
+      background: var(--surface-hover);
+      border-color: var(--border);
+    }
+
+    .button-showcase {
+      display: grid;
+      gap: var(--space-4);
+      width: min(720px, 100%);
+    }
+
+    .button-showcase-group {
+      display: grid;
+      gap: var(--space-2);
+    }
+
+    .button-showcase-label {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .button-showcase-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .button-showcase-row .button.block,
+    .button-showcase-row .gn-button[data-full-width="true"] {
+      flex: 1 1 240px;
+    }
+
+    .toolbar-button-demo,
+    .quick-button-demo {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--text-soft);
+      border-radius: var(--radius-regular);
+      font-size: var(--font-size-caption);
+    }
+
+    .toolbar-button-demo {
+      min-height: var(--control-compact);
+      padding: 0 var(--space-3);
+      background: transparent;
+      border: 1px solid transparent;
+    }
+
+    .toolbar-button-demo:hover,
+    .toolbar-button-demo.primary {
+      color: var(--text);
+      background: var(--accent-soft);
+      border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+    }
+
+    .quick-button-demo {
+      min-height: var(--control-compact);
+      padding: 0 var(--space-3);
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+    }
+
+    .quick-button-demo:hover {
+      color: var(--text);
+      background: var(--surface-hover);
+      border-color: var(--border);
+    }
+
+    .toggle-demo {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-start;
+      width: 42px;
+      height: 24px;
+      max-height: 24px;
+      padding: 2px;
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      cursor: pointer;
+    }
+
+    .toggle-demo span {
+      display: block;
+      width: 18px;
+      height: 18px;
+      background: var(--text-soft);
+      border-radius: 50%;
+      box-shadow: 0 1px 2px rgb(0 0 0 / 24%);
+    }
+
+    .toggle-demo.active {
+      justify-content: flex-end;
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .toggle-demo.active span {
+      background: #071411;
+    }
+
+    .toast-showcase {
+      display: grid;
+      gap: var(--space-4);
+      width: min(100%, 400px);
+    }
+
+    .toast-showcase-stack {
+      display: grid;
+      justify-items: center;
+      gap: var(--space-2);
+    }
+
+    .toast-showcase-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+    }
+
+    .input-showcase {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--space-4);
+      width: min(760px, 100%);
+    }
+
+    .input-size-showcase {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .input-field-demo {
+      display: grid;
+      gap: var(--space-1);
+      min-width: 0;
+    }
+
+    .input-field-demo.full {
+      grid-column: 1 / -1;
+    }
+
+    .input-field-demo > label,
+    .input-field-demo > span {
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .gallery-input {
+      width: 100%;
+      color: var(--text);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-regular);
+      outline: 0;
+      transition: background-color var(--motion-micro) ease, border-color var(--motion-micro) ease;
+    }
+
+    .gallery-input {
+      height: var(--control-default);
+      padding: 0 var(--space-3);
+    }
+
+    .gallery-input:hover {
+      border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+    }
+
+    .gallery-input.focus {
+      border-color: var(--color-focus);
+      box-shadow: none;
+    }
+
+    .gallery-input.error {
+      border-color: var(--red);
+      background: color-mix(in srgb, var(--red-soft) 48%, var(--surface-2));
+    }
+
+    .gallery-input:disabled {
+      color: var(--color-text-disabled);
+      cursor: not-allowed;
+      opacity: 0.72;
+    }
+
+    .gallery-input::placeholder {
+      color: var(--muted);
+    }
+
+    .search-field-demo {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-height: var(--control-compact);
+      padding: 0 var(--space-2);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-regular);
+    }
+
+    .search-field-demo .icon {
+      color: var(--muted);
+    }
+
+    .search-field-demo input {
+      flex: 1;
+      min-width: 0;
+      height: 30px;
+      color: var(--text);
+      background: transparent;
+      border: 0;
+      outline: 0;
+    }
+
+    .search-field-demo button {
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: var(--radius-small);
+    }
+
+    .search-field-demo button:hover {
+      color: var(--text);
+      background: transparent;
+    }
+
+    .input-state-note {
+      color: var(--red);
+      font-size: 11px;
+    }
+
+    .inventory-wrap {
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-large);
+    }
+
+    .inventory-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: var(--font-size-caption);
+    }
+
+    .inventory-table th,
+    .inventory-table td {
+      padding: var(--space-3);
+      text-align: left;
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .inventory-table th {
+      color: var(--muted);
+      background: var(--surface-2);
+      font-weight: var(--font-weight-medium);
+    }
+
+    .inventory-table td {
+      color: var(--text-soft);
+    }
+
+    .inventory-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .inventory-table code {
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+
+    .status-key {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+      margin-top: var(--space-3);
+    }
+
+    .status-key span {
+      padding: 2px var(--space-2);
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: 999px;
+      font-size: var(--font-size-caption);
+    }
+
+    .status-key .hover {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .status-key .danger {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .placeholder-note {
+      display: grid;
+      gap: var(--space-3);
+      width: min(420px, 100%);
+      padding: var(--space-5);
+      color: var(--text-soft);
+      background: var(--surface);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-large);
+    }
+
+    .placeholder-note strong {
+      color: var(--yellow);
+    }
+
+    .placeholder-note p {
+      margin: 0;
+      color: var(--muted);
+      font-size: var(--font-size-caption);
+    }
+
+    .diff-component-stage {
+      place-items: stretch;
+      padding: var(--space-4);
+      overflow: hidden;
+    }
+
+    .diff-component-mount {
+      width: 100%;
+      height: 560px;
+      min-width: 0;
+    }
+
+    @media (max-width: 1120px) {
+      .menu-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .sample-card.full {
+        grid-column: 1 / -1;
+      }
+
+      .layer-scale {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 820px) {
+      .intro {
+        grid-template-columns: 1fr;
+      }
+
+      .menu-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .sample-card.span-2,
+      .sample-card.full {
+        grid-column: auto;
+      }
+
+      .layer-scale {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .input-size-showcase {
+        grid-template-columns: 1fr;
+      }
+
+      .dialog-family-grid,
+      .dialog-impact-grid,
+      .dialog-version-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .dialog-standard-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .dialog-standard-stage {
+        min-height: 280px;
+        padding: var(--space-4);
+      }
+
+      .dialog-showcase-footer {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .dialog-showcase-actions {
+        justify-content: flex-end;
+        width: 100%;
+      }
+
+      .commit-detail-demo-row {
+        grid-template-columns: 12px minmax(0, 1fr);
+      }
+
+      .commit-detail-demo-date,
+      .commit-detail-demo-author,
+      .commit-detail-demo-id {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <svg aria-hidden="true" width="0" height="0" style="position:absolute">
+    <defs>
+      <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 16 9 5 9-5"/></symbol>
+      <symbol id="i-repository" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 4v16"/><path d="M11 8h5M11 12h5"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+      <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+      <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/></symbol>
+      <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 7 5 5-5 5M12 17h7"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 9v5M12 17h.01"/></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 5h5v5"/><path d="m19 5-9 9"/><path d="M18 13v6H5V6h6"/></symbol>
+      <symbol id="i-panel" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M15 4v16"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+      <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="m7 10 5-5 5 5M12 5v14"/></symbol>
+      <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="m7 14 5 5 5-5M12 5v14"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 7 4 12l5 5"/><path d="M4 12h9a7 7 0 0 1 7 7"/></symbol>
+      <symbol id="i-activity" viewBox="0 0 24 24"><path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19V3"/></symbol>
+      <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/><path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+      <symbol id="i-commit" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M3 12h6M15 12h6"/></symbol>
+      <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10M8 9c5 0 8-1 8-3"/></symbol>
+      <symbol id="i-diff" viewBox="0 0 24 24"><circle cx="7" cy="5" r="2"/><circle cx="17" cy="19" r="2"/><path d="M7 7v10M17 7v10M13 7h8M17 3v8"/></symbol>
+      <symbol id="i-wrap" viewBox="0 0 24 24"><path d="M4 6h11"/><path d="M4 10h13a3 3 0 0 1 0 6h-3"/><path d="m16 13-3 3 3 3"/><path d="M4 16h5"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    </defs>
+  </svg>
+
+  <header class="page-header">
+    <div class="page-brand">
+      <span class="page-brand-mark"><svg class="icon"><use href="#i-branch"></use></svg></span>
+      <span class="page-brand-copy">
+        <strong>GitNest 组件规范</strong>
+        <span>菜单、弹窗、表单控件与 Diff 工作区</span>
+      </span>
+    </div>
+    <span class="page-header-spacer"></span>
+    <button class="page-control" id="themeToggle" type="button">
+      <svg class="icon"><use href="#i-sun"></use></svg>
+      <span>切换明暗主题</span>
+    </button>
+  </header>
+
+  <main>
+    <section class="intro">
+      <div>
+        <span class="eyebrow"><svg class="icon"><use href="#i-layers"></use></svg>Component system standard</span>
+        <h1>菜单、弹窗、控件与 Diff 按统一规范分类展示</h1>
+          <p>以共用 Token、控件尺寸和交互状态为基准，集中展示菜单、弹窗、下拉组件、按钮、输入框与 Diff 工作区。弹窗规范覆盖当前项目的搜索、选择、表单、预检、危险确认和版本进度场景。</p>
+        <div class="status-key" aria-label="状态图例">
+          <span>默认</span>
+          <span class="hover">悬停 / 焦点</span>
+          <span class="danger">危险操作</span>
+        </div>
+      </div>
+      <aside class="scope-note">
+        普通菜单默认不增加标题描述；Workspace 切换、默认终端等选择器允许必要标题。置灰、危险红色、选中态与分隔线保持独立语义。
+      </aside>
+    </section>
+
+    <section class="layer-scale" aria-label="当前层级标尺">
+      <div class="layer-chip"><strong>内容</strong><span>z-content · 0</span></div>
+      <div class="layer-chip"><strong>导航</strong><span>z-navigation · 100</span></div>
+      <div class="layer-chip"><strong>菜单浮层</strong><span>z-popover · 200</span></div>
+      <div class="layer-chip"><strong>提示</strong><span>z-tooltip · 300</span></div>
+      <div class="layer-chip"><strong>遮罩</strong><span>z-overlay · 400</span></div>
+      <div class="layer-chip"><strong>模态</strong><span>z-modal · 500</span></div>
+    </section>
+
+    <nav class="gallery-tabs" aria-label="菜单与控件规范分类" role="tablist">
+      <button class="gallery-tab" id="gallery-tab-entry" type="button" role="tab" aria-selected="true" aria-controls="gallery-panel-entry" tabindex="0" data-gallery-tab="entry">
+        <span>入口菜单</span>
+        <span class="gallery-tab-count">5</span>
+      </button>
+      <button class="gallery-tab" id="gallery-tab-dropdown" type="button" role="tab" aria-selected="false" aria-controls="gallery-panel-dropdown" tabindex="-1" data-gallery-tab="dropdown">
+        <span>下拉组件</span>
+        <span class="gallery-tab-count">2</span>
+      </button>
+      <button class="gallery-tab" id="gallery-tab-context" type="button" role="tab" aria-selected="false" aria-controls="gallery-panel-context" tabindex="-1" data-gallery-tab="context">
+        <span>右键与子菜单</span>
+        <span class="gallery-tab-count">4</span>
+      </button>
+      <button class="gallery-tab" id="gallery-tab-surface" type="button" role="tab" aria-selected="false" aria-controls="gallery-panel-surface" tabindex="-1" data-gallery-tab="surface">
+        <span>浮层与选择器</span>
+        <span class="gallery-tab-count">4</span>
+      </button>
+      <button class="gallery-tab" id="gallery-tab-dialog" type="button" role="tab" aria-selected="false" aria-controls="gallery-panel-dialog" tabindex="-1" data-gallery-tab="dialog">
+        <span>弹窗</span>
+        <span class="gallery-tab-count">6</span>
+      </button>
+      <button class="gallery-tab" id="gallery-tab-buttons" type="button" role="tab" aria-selected="false" aria-controls="gallery-panel-buttons" tabindex="-1" data-gallery-tab="buttons">
+        <span>按钮</span>
+        <span class="gallery-tab-count">8</span>
+      </button>
+      <button class="gallery-tab" id="gallery-tab-toast" type="button" role="tab" aria-selected="false" aria-controls="gallery-panel-toast" tabindex="-1" data-gallery-tab="toast">
+        <span>提示信息</span>
+        <span class="gallery-tab-count">3</span>
+      </button>
+      <button class="gallery-tab" id="gallery-tab-inputs" type="button" role="tab" aria-selected="false" aria-controls="gallery-panel-inputs" tabindex="-1" data-gallery-tab="inputs">
+        <span>输入框</span>
+        <span class="gallery-tab-count">5</span>
+      </button>
+      <button class="gallery-tab" id="gallery-tab-diff" type="button" role="tab" aria-selected="false" aria-controls="gallery-panel-diff" tabindex="-1" data-gallery-tab="diff">
+        <span>Diff</span>
+        <span class="gallery-tab-count">1</span>
+      </button>
+      <button class="gallery-tab" id="gallery-tab-spec" type="button" role="tab" aria-selected="false" aria-controls="gallery-panel-spec" tabindex="-1" data-gallery-tab="spec">
+        <span>规格速览</span>
+        <span class="gallery-tab-count">30</span>
+      </button>
+    </nav>
+
+    <section class="section gallery-tab-panel" id="gallery-panel-entry" data-gallery-panel="entry" role="tabpanel" aria-labelledby="gallery-tab-entry">
+      <div class="section-heading">
+        <div>
+          <h2>入口与一级菜单</h2>
+          <p>标题栏、Workspace 切换、仓库筛选与工具栏菜单。</p>
+        </div>
+        <span class="section-count">5 variants</span>
+      </div>
+
+      <div class="menu-grid">
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>标题栏菜单条</h3>
+              <p>“文件”与“帮助”均为真实弹出菜单，共享菜单容器、分隔线与键盘导航。</p>
+            </div>
+            <span class="sample-index">01</span>
+          </div>
+          <div class="sample-stage wide">
+            <div>
+              <div class="trigger-strip">
+                <button class="active" type="button">文件</button>
+                <button type="button">帮助</button>
+              </div>
+              <div class="titlebar-menu-pair" style="margin-top:12px">
+                <div class="titlebar-menu-demo">
+                  <strong>文件</strong>
+                  <div class="titlebar-file-popover" role="menu">
+                    <button type="button" role="menuitem">
+                      <svg class="icon"><use href="#i-layers"></use></svg>
+                      <span>新建 Workspace</span>
+                    </button>
+                  </div>
+                </div>
+                <div class="titlebar-menu-demo">
+                  <strong>帮助</strong>
+                  <div class="titlebar-file-popover" role="menu">
+                    <button type="button" role="menuitem">
+                      <svg class="icon"><use href="#i-search"></use></svg>
+                      <span>快捷键与命令面板</span>
+                    </button>
+                    <div class="menu-separator"></div>
+                    <button type="button" role="menuitem" data-dialog-open="version">
+                      <svg class="icon"><use href="#i-sparkle"></use></svg>
+                      <span>版本 v0.0.1</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
+            <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
+            <div class="sample-spec"><span>Padding</span><strong>8px</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card">
+          <div class="sample-title">
+            <div>
+              <h3>Workspace 切换菜单</h3>
+              <p>标题、双行选项、当前项和底部创建入口。</p>
+            </div>
+            <span class="sample-index">02</span>
+          </div>
+          <div class="sample-stage">
+            <div class="workspace-switcher-menu" role="menu">
+              <div class="workspace-switcher-menu-heading">
+                <strong>Workspace</strong>
+              </div>
+              <button class="workspace-switcher-option" type="button" role="menuitem">
+                <svg class="icon"><use href="#i-layers"></use></svg>
+                <span>GitNest Workspace</span>
+              </button>
+              <button class="workspace-switcher-option" type="button" role="menuitem">
+                <svg class="icon"><use href="#i-repository"></use></svg>
+                <span>sample-portal</span>
+              </button>
+              <div class="menu-separator"></div>
+              <button class="workspace-switcher-create" type="button" role="menuitem">
+                <svg class="icon"><use href="#i-plus"></use></svg>
+                <span>新建 Workspace</span>
+              </button>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Width</span><strong>244px / 286px</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
+            <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
+            <div class="sample-spec"><span>Shadow</span><strong>popover</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card">
+          <div class="sample-title">
+            <div>
+              <h3>仓库筛选菜单</h3>
+              <p>侧栏更多按钮打开，当前只有两项操作。</p>
+            </div>
+            <span class="sample-index">03</span>
+          </div>
+          <div class="sample-stage">
+            <div class="sidebar-repository-menu" role="menu">
+              <button class="sidebar-repository-menu-option" type="button" role="menuitem">
+                <svg class="icon"><use href="#i-file"></use></svg>
+                <span><strong>变更仓库</strong></span>
+              </button>
+              <button class="sidebar-repository-menu-option" type="button" role="menuitem">
+                <svg class="icon"><use href="#i-chevron-right"></use></svg>
+                <span><strong>收起分组</strong></span>
+              </button>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
+            <div class="sample-spec"><span>Padding</span><strong>8px</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
+            <div class="sample-spec"><span>Shadow</span><strong>popover</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card">
+          <div class="sample-title">
+            <div>
+              <h3>变更视图菜单</h3>
+              <p>变更文件面板左下定位的紧凑工具栏菜单。</p>
+            </div>
+            <span class="sample-index">04</span>
+          </div>
+          <div class="sample-stage">
+            <div class="toolbar-menu-popover" role="menu">
+              <button type="button" role="menuitem">
+                <svg class="icon"><use href="#i-file"></use></svg>
+                <span>以列表形式查看</span>
+              </button>
+              <button type="button" role="menuitem">
+                <svg class="icon"><use href="#i-chevron-right"></use></svg>
+                <span>收起全部目录</span>
+              </button>
+              <button type="button" role="menuitem" disabled>
+                <svg class="icon"><use href="#i-folder"></use></svg>
+                <span>目录操作不可用</span>
+              </button>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
+            <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
+            <div class="sample-spec"><span>Align</span><strong>left / bottom</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card">
+          <div class="sample-title">
+            <div>
+              <h3>Open in 应用菜单</h3>
+              <p>统一菜单视觉基准，不保留右侧勾选或选中占位。</p>
+            </div>
+            <span class="sample-index">05</span>
+          </div>
+          <div class="sample-stage">
+            <div class="open-in-menu" role="menu">
+              <span class="open-in-menu-heading">Open in</span>
+              <button type="button" role="menuitem">
+                <img class="open-in-app-icon" src="./assets/open-in/vscode.png" alt="" />
+                <span>VS Code</span>
+              </button>
+              <button type="button" role="menuitem">
+                <img class="open-in-app-icon" src="./assets/open-in/cursor.png" alt="" />
+                <span>Cursor</span>
+              </button>
+              <button type="button" role="menuitem">
+                <img class="open-in-app-icon" src="./assets/open-in/intellij-idea.png" alt="" />
+                <span>IntelliJ IDEA</span>
+              </button>
+              <button type="button" role="menuitem">
+                <img class="open-in-app-icon" src="./assets/open-in/sublime-text.png" alt="" />
+                <span>Sublime Text</span>
+              </button>
+              <button type="button" role="menuitem">
+                <img class="open-in-app-icon" src="./assets/open-in/file-explorer.png" alt="" />
+                <span>File Explorer</span>
+              </button>
+              <button type="button" role="menuitem">
+                <img class="open-in-app-icon" src="./assets/open-in/terminal.png" alt="" />
+                <span>Terminal</span>
+              </button>
+              <button type="button" role="menuitem">
+                <img class="open-in-app-icon" src="./assets/open-in/git-bash.ico" alt="" />
+                <span>Git Bash</span>
+              </button>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
+            <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
+            <div class="sample-spec"><span>Heading</span><strong>uppercase</strong></div>
+          </div>
+        </article>
+
+      </div>
+    </section>
+
+    <section class="section gallery-tab-panel" id="gallery-panel-dropdown" data-gallery-panel="dropdown" role="tabpanel" aria-labelledby="gallery-tab-dropdown">
+      <div class="section-heading">
+        <div>
+          <h2>下拉组件</h2>
+          <p>默认选择器支持 32 / 35 / 40px 三档尺寸；已选项只使用 accent-soft 整行高亮，禁止使用 √ 或尾随 check 图标。</p>
+        </div>
+        <span class="section-count">3 sizes</span>
+      </div>
+
+      <div class="menu-grid">
+        <article class="sample-card">
+          <div class="sample-title">
+            <div>
+              <h3>默认终端选择器</h3>
+              <p>通用设置中的独立选择器；打开态通过整行高亮表示当前项，不增加选中图标。</p>
+            </div>
+            <span class="sample-index">06</span>
+          </div>
+          <div class="sample-stage">
+            <div class="settings-terminal-demo">
+              <span>尺寸效果</span>
+              <div class="dropdown-size-showcase">
+                <div class="dropdown-size-demo">
+                  <span>Small · 32px</span>
+                  <button class="settings-terminal-trigger" type="button" data-size="small" aria-label="Small 尺寸默认终端">
+                    <span>终端</span>
+                    <svg class="icon"><use href="#i-chevron-down"></use></svg>
+                  </button>
+                </div>
+                <div class="dropdown-size-demo">
+                  <span>Medium · 35px</span>
+                  <button class="settings-terminal-trigger" type="button" data-size="medium" aria-label="Medium 尺寸默认终端">
+                    <span>终端</span>
+                    <svg class="icon"><use href="#i-chevron-down"></use></svg>
+                  </button>
+                </div>
+                <div class="dropdown-size-demo">
+                  <span>Large · 40px</span>
+                  <button class="settings-terminal-trigger" type="button" data-size="large" aria-label="Large 尺寸默认终端">
+                    <span>终端</span>
+                    <svg class="icon"><use href="#i-chevron-down"></use></svg>
+                  </button>
+                </div>
+              </div>
+              <span>默认终端 · medium</span>
+              <div class="settings-terminal-menu">
+                <button class="settings-terminal-trigger" type="button" data-size="medium" aria-haspopup="menu" aria-expanded="true">
+                  <span class="settings-terminal-trigger-value">
+                    <svg class="icon"><use href="#i-terminal"></use></svg>
+                    <span>Windows Terminal</span>
+                  </span>
+                  <svg class="icon"><use href="#i-chevron-down"></use></svg>
+                </button>
+                <div class="settings-terminal-options" role="menu" aria-label="默认终端">
+                  <button class="settings-terminal-option is-selected" type="button" role="menuitemradio" aria-checked="true">
+                    <svg class="icon"><use href="#i-terminal"></use></svg>
+                    <span>Windows Terminal</span>
+                  </button>
+                  <button class="settings-terminal-option hover" type="button" role="menuitemradio" aria-checked="false">
+                    <svg class="icon"><use href="#i-terminal"></use></svg>
+                    <span>PowerShell</span>
+                  </button>
+                  <button class="settings-terminal-option" type="button" role="menuitemradio" aria-checked="false">
+                    <svg class="icon"><use href="#i-terminal"></use></svg>
+                    <span>命令提示符</span>
+                  </button>
+                  <button class="settings-terminal-option" type="button" role="menuitemradio" aria-checked="false">
+                    <svg class="icon"><use href="#i-terminal"></use></svg>
+                    <span>Git Bash</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Trigger</span><strong>max 360px / 35px</strong></div>
+            <div class="sample-spec"><span>Menu</span><strong>100% / max 260px</strong></div>
+            <div class="sample-spec"><span>Selected</span><strong>accent-soft · no check</strong></div>
+            <div class="sample-spec"><span>Role</span><strong>menuitemradio</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card">
+          <div class="sample-title">
+            <div>
+              <h3>组合下拉触发器</h3>
+              <p>Open in 的主操作与下拉按钮共享边界；分支选择器采用同一紧凑高度。</p>
+            </div>
+            <span class="sample-index">07</span>
+          </div>
+          <div class="sample-stage">
+            <div class="dropdown-control-stack">
+              <div class="dropdown-control-label">Open in</div>
+              <div class="open-in-control-demo">
+                <button class="open-in-primary-demo" type="button" aria-label="Open in VS Code" title="Open in VS Code">
+                  <img class="open-in-app-icon" src="./assets/open-in/vscode.png" alt="" />
+                </button>
+                <button class="open-in-trigger-demo open" type="button" aria-haspopup="menu" aria-expanded="true" aria-label="选择打开方式">
+                  <svg class="icon"><use href="#i-chevron-down"></use></svg>
+                </button>
+              </div>
+              <div class="dropdown-control-label">分支选择器</div>
+              <button class="branch-selector-demo" type="button" aria-haspopup="dialog">
+                <svg class="icon"><use href="#i-branch"></use></svg>
+                <span>test</span>
+                <svg class="icon"><use href="#i-chevron-down"></use></svg>
+              </button>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Height</span><strong>32px</strong></div>
+            <div class="sample-spec"><span>Split</span><strong>32px + 20px</strong></div>
+            <div class="sample-spec"><span>Radius</span><strong>8px</strong></div>
+            <div class="sample-spec"><span>Open</span><strong>surface-hover</strong></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section gallery-tab-panel" id="gallery-panel-context" data-gallery-panel="context" role="tabpanel" aria-labelledby="gallery-tab-context">
+      <div class="section-heading">
+        <div>
+          <h2>右键菜单与子菜单</h2>
+          <p>同一个基础容器根据目标类型产生五种内容结构，储藏项复用指针定位、键盘导航与危险操作语义。</p>
+        </div>
+        <span class="section-count">5 variants</span>
+      </div>
+
+      <div class="menu-grid">
+        <article class="sample-card">
+          <div class="sample-title">
+            <div>
+              <h3>Workspace / 仓库项</h3>
+              <p>普通操作、分隔线和危险操作。</p>
+            </div>
+            <span class="sample-index">08</span>
+          </div>
+          <div class="sample-stage">
+            <div class="workspace-context-menu" role="menu">
+              <button type="button" role="menuitem">
+                <svg class="icon"><use href="#i-settings"></use></svg>
+                <span>修改显示名称</span>
+              </button>
+              <button type="button" role="menuitem">
+                <svg class="icon"><use href="#i-refresh"></use></svg>
+                <span>重新扫描</span>
+              </button>
+              <div class="workspace-context-menu-separator"></div>
+              <button class="danger" type="button" role="menuitem">
+                <svg class="icon"><use href="#i-alert"></use></svg>
+                <span>移出 Workspace</span>
+              </button>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
+            <div class="sample-spec"><span>Danger</span><strong>red text</strong></div>
+            <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card">
+          <div class="sample-title">
+            <div>
+              <h3>仓库分组</h3>
+              <p>删除操作根据分组是否为空切换禁用态。</p>
+            </div>
+            <span class="sample-index">09</span>
+          </div>
+          <div class="sample-stage">
+            <div class="workspace-context-menu" role="menu">
+              <button type="button" role="menuitem">
+                <svg class="icon"><use href="#i-settings"></use></svg>
+                <span>重命名分组</span>
+              </button>
+              <div class="workspace-context-menu-separator"></div>
+              <button class="danger" type="button" role="menuitem" disabled>
+                <svg class="icon"><use href="#i-alert"></use></svg>
+                <span>删除分组</span>
+              </button>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
+            <div class="sample-spec"><span>Disabled</span><strong>opacity .72</strong></div>
+            <div class="sample-spec"><span>Separator</span><strong>8px margin</strong></div>
+            <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card">
+          <div class="sample-title">
+            <div>
+              <h3>仓库面板空白区</h3>
+              <p>普通菜单不增加标题或说明，直接呈现操作项。</p>
+            </div>
+            <span class="sample-index">10</span>
+          </div>
+          <div class="sample-stage">
+            <div class="workspace-context-menu" role="menu">
+              <button type="button" role="menuitem">
+                <svg class="icon"><use href="#i-plus"></use></svg>
+                <span>添加分组</span>
+              </button>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Width</span><strong>222px</strong></div>
+            <div class="sample-spec"><span>Heading</span><strong>none</strong></div>
+            <div class="sample-spec"><span>Row</span><strong>32px</strong></div>
+            <div class="sample-spec"><span>Padding</span><strong>8px</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card">
+          <div class="sample-title">
+            <div>
+              <h3>储藏记录</h3>
+              <p>右键选中目标记录，按“恢复 / 删除 / 恢复并删除”顺序展示。</p>
+            </div>
+            <span class="sample-index">11</span>
+          </div>
+          <div class="sample-stage">
+            <div class="workspace-context-menu" role="menu" aria-label="stash@{0} 储藏操作">
+              <button type="button" role="menuitem">
+                <svg class="icon"><use href="#i-refresh"></use></svg>
+                <span>恢复</span>
+              </button>
+              <button class="danger" type="button" role="menuitem">
+                <svg class="icon"><use href="#i-alert"></use></svg>
+                <span>删除</span>
+              </button>
+              <button class="danger" type="button" role="menuitem">
+                <svg class="icon"><use href="#i-layers"></use></svg>
+                <span>恢复并删除</span>
+              </button>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Position</span><strong>pointer + clamp</strong></div>
+            <div class="sample-spec"><span>Focus</span><strong>first item</strong></div>
+            <div class="sample-spec"><span>Close</span><strong>Esc / outside / scroll</strong></div>
+            <div class="sample-spec"><span>Confirm</span><strong>required</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>文件“打开方式”二级菜单</h3>
+              <p>一级右键菜单向右展开应用子菜单；子菜单沿用 Open in 的 222px / 12px 体系。</p>
+            </div>
+            <span class="sample-index">12</span>
+          </div>
+          <div class="sample-stage wide">
+            <div class="nested-menu-stage">
+              <div class="workspace-context-menu" role="menu">
+                <button class="workspace-context-open-in-trigger" type="button" role="menuitem">
+                  <svg class="icon"><use href="#i-external"></use></svg>
+                  <span>打开方式</span>
+                  <svg class="icon"><use href="#i-chevron-right"></use></svg>
+                </button>
+              </div>
+              <div class="workspace-context-open-in-submenu" role="menu">
+                <span class="workspace-context-open-in-submenu-heading">Open in</span>
+                <button type="button" role="menuitem">
+                  <img class="open-in-app-icon" src="./assets/open-in/vscode.png" alt="" />
+                  <span>VS Code</span>
+                </button>
+                <button type="button" role="menuitem">
+                  <img class="open-in-app-icon" src="./assets/open-in/cursor.png" alt="" />
+                  <span>Cursor</span>
+                </button>
+                <button type="button" role="menuitem">
+                  <img class="open-in-app-icon" src="./assets/open-in/intellij-idea.png" alt="" />
+                  <span>IntelliJ IDEA</span>
+                </button>
+                <button type="button" role="menuitem">
+                  <img class="open-in-app-icon" src="./assets/open-in/file-explorer.png" alt="" />
+                  <span>File Explorer</span>
+                </button>
+                <button type="button" role="menuitem">
+                  <img class="open-in-app-icon" src="./assets/open-in/git-bash.ico" alt="" />
+                  <span>Git Bash</span>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Parent</span><strong>222px / r12</strong></div>
+            <div class="sample-spec"><span>Child</span><strong>222px / r12</strong></div>
+            <div class="sample-spec"><span>Offset</span><strong>8px right</strong></div>
+            <div class="sample-spec"><span>Nested z</span><strong>local · 1</strong></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section gallery-tab-panel" id="gallery-panel-surface" data-gallery-panel="surface" role="tabpanel" aria-labelledby="gallery-tab-surface">
+      <div class="section-heading">
+        <div>
+          <h2>边界案例：菜单型浮层与选择器</h2>
+          <p>它们不是 role="menu"，但在视觉层级上容易与菜单混淆。</p>
+        </div>
+        <span class="section-count">4 variants</span>
+      </div>
+
+      <div class="menu-grid">
+        <article class="sample-card span-2">
+          <div class="sample-title">
+            <div>
+              <h3>Diff 搜索浮层</h3>
+              <p>紧凑工具浮层，包含输入、计数和连续图标操作。</p>
+            </div>
+            <span class="sample-index">12</span>
+          </div>
+          <div class="sample-stage center">
+            <div id="diffSearchPopoverShowcase"></div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Width</span><strong>360px</strong></div>
+            <div class="sample-spec"><span>Height</span><strong>32px+</strong></div>
+            <div class="sample-spec"><span>Actions</span><strong>24 × 28px</strong></div>
+            <div class="sample-spec"><span>Role</span><strong>search</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>Ctrl+K 命令面板</h3>
+              <p>全屏遮罩上的搜索型浮层，包含分组结果、键盘提示和焦点态。</p>
+            </div>
+            <span class="sample-index">13</span>
+          </div>
+          <div class="sample-stage">
+            <div class="command-overlay-demo">
+              <section class="command-palette-demo" role="dialog" aria-modal="true" aria-label="GitNest 命令面板">
+                <div class="command-input-demo">
+                  <svg class="icon"><use href="#i-search"></use></svg>
+                  <input value="sc" aria-label="搜索仓库、分支或命令" />
+                  <kbd>Esc</kbd>
+                </div>
+                <div class="command-results-demo">
+                  <div class="command-group-label-demo">仓库</div>
+                  <button class="command-result-demo hover" type="button">
+                    <span class="command-result-icon-demo"><svg class="icon"><use href="#i-repository"></use></svg></span>
+                    <span class="command-result-copy-demo"><strong>sample-portal</strong><span>test · web\sample-portal</span></span>
+                    <span class="command-status">1 变更</span>
+                  </button>
+                  <div class="command-group-label-demo">命令</div>
+                  <button class="command-result-demo" type="button">
+                    <span class="command-result-icon-demo"><svg class="icon"><use href="#i-refresh"></use></svg></span>
+                    <span class="command-result-copy-demo"><strong>重新扫描 Workspace</strong><span>发现新增、移动或移除的仓库</span></span>
+                    <kbd>Enter</kbd>
+                  </button>
+                  <button class="command-result-demo" type="button">
+                    <span class="command-result-icon-demo"><svg class="icon"><use href="#i-sun"></use></svg></span>
+                    <span class="command-result-copy-demo"><strong>切换深色 / 浅色主题</strong><span>修改当前界面外观</span></span>
+                    <kbd>Enter</kbd>
+                  </button>
+                </div>
+              </section>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Width</span><strong>610px / viewport</strong></div>
+            <div class="sample-spec"><span>Layer</span><strong>modal · 500</strong></div>
+            <div class="sample-spec"><span>Keyboard</span><strong>Esc / ↑↓ / Home End</strong></div>
+            <div class="sample-spec"><span>Backdrop</span><strong>blur + click close</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card span-2">
+          <div class="sample-title">
+            <div>
+              <h3>分支切换选择器</h3>
+              <p>由分支按钮触发，但实际是模态对话框，不属于菜单浮层。</p>
+            </div>
+            <span class="sample-index">14</span>
+          </div>
+          <div class="sample-stage center">
+            <section class="branch-switch-dialog" role="dialog">
+              <div class="branch-switch-dialog-header">
+                <span class="branch-dialog-icon"><svg class="icon"><use href="#i-branch"></use></svg></span>
+                <h3>切换分支</h3>
+                <button class="branch-dialog-close" type="button" aria-label="关闭">
+                  <svg class="icon"><use href="#i-x"></use></svg>
+                </button>
+              </div>
+              <div class="branch-switch-dialog-content">
+                <div class="branch-switch-dialog-heading">
+                  <strong>本地分支</strong>
+                  <span>3 个分支</span>
+                </div>
+                <div class="branch-switch-list">
+                  <button class="branch-switch-option current" type="button">
+                    <span class="branch-switch-option-main">
+                      <svg class="icon"><use href="#i-branch"></use></svg>
+                      <span><strong>test</strong><small>跟踪 origin/test</small></span>
+                    </span>
+                    <span class="branch-switch-option-status">当前</span>
+                  </button>
+                  <button class="branch-switch-option" type="button">
+                    <span class="branch-switch-option-main">
+                      <svg class="icon"><use href="#i-branch"></use></svg>
+                      <span><strong>main</strong><small>跟踪 origin/main</small></span>
+                    </span>
+                    <span class="branch-switch-option-status">切换</span>
+                  </button>
+                  <button class="branch-switch-option" type="button">
+                    <span class="branch-switch-option-main">
+                      <svg class="icon"><use href="#i-branch"></use></svg>
+                      <span><strong>feature/menu-guidelines</strong><small>跟踪 origin/feature/menu-guidelines</small></span>
+                    </span>
+                    <span class="branch-switch-option-status">切换</span>
+                  </button>
+                </div>
+              </div>
+              <div class="branch-switch-dialog-actions">
+                <button class="gn-button" data-full-width="false" data-icon-only="false" data-size="small" data-variant="default" type="button"><span class="gn-button__label">取消</span></button>
+              </div>
+            </section>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Width</span><strong>520px</strong></div>
+            <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
+            <div class="sample-spec"><span>Layer</span><strong>modal · 500</strong></div>
+            <div class="sample-spec"><span>Role</span><strong>dialog</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>提交详情底部展示</h3>
+              <p>点击任意提交记录，下方详情区域按程序布局展示主题、作者、Commit、时间、分支和正文。</p>
+            </div>
+            <span class="sample-index">15</span>
+          </div>
+          <div class="sample-stage">
+            <div class="commit-detail-demo-stage" data-commit-detail-demo>
+              <div class="commit-detail-demo-list" role="list" aria-label="提交记录示例">
+                <button
+                  class="commit-detail-demo-row"
+                  type="button"
+                  data-commit-detail-trigger
+                  data-subject="feat(版本)：版本号+1"
+                  data-body="更新版本号并同步发布前检查。"
+                  data-hash="e3d9234"
+                  data-author="test"
+                  data-time="今天 15:52"
+                  data-ref="test"
+                >
+                  <span class="commit-detail-demo-node" aria-hidden="true"></span>
+                  <span class="commit-detail-demo-copy">
+                    <strong class="commit-detail-demo-subject">feat(版本)：版本号+1</strong>
+                    <span class="commit-detail-demo-meta"><span class="commit-detail-demo-ref">test</span></span>
+                  </span>
+                  <span class="commit-detail-demo-date">今天 15:52</span>
+                  <span class="commit-detail-demo-author">test</span>
+                  <code class="commit-detail-demo-id">e3d9234</code>
+                </button>
+                <button
+                  class="commit-detail-demo-row"
+                  type="button"
+                  data-commit-detail-trigger
+                  data-subject="chore(core)：更新仓库配置"
+                  data-body="同步仓库配置并保留当前分支状态。"
+                  data-hash="e3d92a1"
+                  data-author="test"
+                  data-time="今天 14:28"
+                  data-ref="test"
+                >
+                  <span class="commit-detail-demo-node" aria-hidden="true"></span>
+                  <span class="commit-detail-demo-copy">
+                    <strong class="commit-detail-demo-subject">chore(core)：更新仓库配置</strong>
+                    <span class="commit-detail-demo-meta"><span class="commit-detail-demo-ref">test</span></span>
+                  </span>
+                  <span class="commit-detail-demo-date">今天 14:28</span>
+                  <span class="commit-detail-demo-author">test</span>
+                  <code class="commit-detail-demo-id">e3d92a1</code>
+                </button>
+                <button
+                  class="commit-detail-demo-row"
+                  type="button"
+                  data-commit-detail-trigger
+                  data-subject="fix(core)：补充状态检查"
+                  data-body="补充仓库状态检查和只读快照提示。"
+                  data-hash="e3d92b2"
+                  data-author="test"
+                  data-time="今天 13:40"
+                  data-ref="test"
+                >
+                  <span class="commit-detail-demo-node" aria-hidden="true"></span>
+                  <span class="commit-detail-demo-copy">
+                    <strong class="commit-detail-demo-subject">fix(core)：补充状态检查</strong>
+                    <span class="commit-detail-demo-meta"><span class="commit-detail-demo-ref">test</span></span>
+                  </span>
+                  <span class="commit-detail-demo-date">今天 13:40</span>
+                  <span class="commit-detail-demo-author">test</span>
+                  <code class="commit-detail-demo-id">e3d92b2</code>
+                </button>
+              </div>
+              <section class="commit-detail-demo-panel" data-commit-detail-panel aria-labelledby="commitDetailDemoTitle">
+                <header class="commit-detail-demo-panel-head">
+                  <strong id="commitDetailDemoTitle"><svg class="icon" aria-hidden="true"><use href="#i-commit"></use></svg>提交详情</strong>
+                </header>
+                <div class="commit-detail-demo-body">
+                  <h4 class="commit-detail-demo-title" data-commit-detail-title></h4>
+                  <div class="commit-detail-demo-panel-meta">
+                    <span data-commit-detail-author></span>
+                    <code data-commit-detail-hash></code>
+                    <span data-commit-detail-time></span>
+                  </div>
+                  <div class="commit-detail-demo-panel-refs">
+                    <span data-commit-detail-ref></span>
+                  </div>
+                  <p class="commit-detail-demo-description" data-commit-detail-description></p>
+                </div>
+              </section>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Trigger</span><strong>commit row click</strong></div>
+            <div class="sample-spec"><span>Height</span><strong>max 350px</strong></div>
+            <div class="sample-spec"><span>Scroll</span><strong>content body only</strong></div>
+            <div class="sample-spec"><span>Update</span><strong>selection sync</strong></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section gallery-tab-panel" id="gallery-panel-dialog" data-gallery-panel="dialog" role="tabpanel" aria-labelledby="gallery-tab-dialog">
+      <div class="section-heading">
+        <div>
+          <h2>弹窗组件规范</h2>
+          <p>先使用同一套公共弹窗骨架，再按搜索、选择、表单、预检、危险确认和进度场景扩展内容。</p>
+        </div>
+        <span class="section-count">1 base · 6 families · 13 components</span>
+      </div>
+
+      <div class="menu-grid">
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>公共弹窗 · 常驻基准</h3>
+              <p>无需点击即可直接检查真实比例。所有业务弹窗默认继承这一标题、正文和操作区骨架。</p>
+            </div>
+            <span class="sample-index">D1</span>
+          </div>
+          <div class="sample-stage wide">
+            <div class="dialog-standard-layout">
+              <div class="dialog-standard-stage">
+                <div class="dialog-standard-preview">
+                  <section class="dialog-showcase" data-size="compact" aria-label="公共弹窗常驻示例">
+                    <header class="dialog-showcase-header">
+                      <span class="dialog-showcase-icon"><svg class="icon"><use href="#i-settings"></use></svg></span>
+                      <div class="dialog-showcase-heading">
+                        <h2>重命名仓库分组</h2>
+                      </div>
+                      <button class="dialog-showcase-close" type="button" tabindex="-1" aria-label="关闭示例">
+                        <svg class="icon"><use href="#i-x"></use></svg>
+                      </button>
+                    </header>
+                    <div class="dialog-showcase-body">
+                      <div class="dialog-field">
+                        <label for="dialog-standard-name">分组名称</label>
+                        <input id="dialog-standard-name" value="服务端仓库" readonly />
+                      </div>
+                    </div>
+                    <footer class="dialog-showcase-footer only-actions">
+                      <div class="dialog-showcase-actions">
+                        <button class="button small" type="button">取消</button>
+                        <button class="button small primary" type="button">保存更改</button>
+                      </div>
+                    </footer>
+                  </section>
+                </div>
+              </div>
+              <div class="dialog-standard-rules" aria-label="公共弹窗结构规范">
+                <div class="dialog-standard-rule">
+                  <strong>01</strong>
+                  <div>
+                    <span>标题区只表达身份</span>
+                    <small>左右内边距 24px；图标容器 32px、图形 16px；只保留 16px / 600 单行标题，不使用上下文标签或副标题。关闭按钮固定 32px。</small>
+                  </div>
+                </div>
+                <div class="dialog-standard-rule">
+                  <strong>02</strong>
+                  <div>
+                    <span>正文只保留任务内容</span>
+                    <small>上下 16px、左右 24px，内容间距 12px。非必要的解释性文字不显示；超高时仅正文滚动。</small>
+                  </div>
+                </div>
+                <div class="dialog-standard-rule">
+                  <strong>03</strong>
+                  <div>
+                    <span>操作区固定且克制</span>
+                    <small>最小高度 56px，默认只显示右侧操作按钮。仅在直接影响决策或安全时补充说明；默认 2 个按钮，最多 3 个。</small>
+                  </div>
+                </div>
+                <div class="dialog-size-scale" aria-label="弹窗尺寸层级">
+                  <div><strong>520px · 默认</strong><span>表单、选择器、简单确认</span></div>
+                  <div><strong>560px · 目标</strong><span>带路径或对象详情的确认</span></div>
+                  <div><strong>620px · 信息</strong><span>版本、账号影响与进度</span></div>
+                  <div><strong>720px · 复杂</strong><span>预检、影响范围和批量操作</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Header</span><strong>56px / single title</strong></div>
+            <div class="sample-spec"><span>Body</span><strong>16px × 24px / gap 12px</strong></div>
+            <div class="sample-spec"><span>Footer</span><strong>56px / actions only</strong></div>
+            <div class="sample-spec"><span>Max height</span><strong>680px / viewport</strong></div>
+            <div class="sample-spec"><span>Radius</span><strong>12px</strong></div>
+            <div class="sample-spec"><span>Backdrop</span><strong>overlay + blur 7px</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>六类弹窗效果</h3>
+              <p>六类业务弹窗都复用上方公共骨架；点击卡片只用于检查各自的内容与交互差异。</p>
+            </div>
+            <span class="sample-index">D2</span>
+          </div>
+          <div class="sample-stage wide">
+            <div class="dialog-family-grid">
+              <button class="dialog-family-card" type="button" data-dialog-open="search">
+                <span class="dialog-family-icon"><svg class="icon"><use href="#i-search"></use></svg></span>
+                <span class="dialog-family-copy">
+                  <strong>搜索 / 命令面板</strong>
+                  <span>顶部定位、键盘结果导航，允许点击遮罩关闭。</span>
+                </span>
+                <span class="dialog-family-meta"><span>610px</span><span>dialog</span></span>
+              </button>
+              <button class="dialog-family-card" type="button" data-dialog-open="branch">
+                <span class="dialog-family-icon"><svg class="icon"><use href="#i-branch"></use></svg></span>
+                <span class="dialog-family-copy">
+                  <strong>分支选择器</strong>
+                  <span>列表加载、当前项、占用禁用与切换忙碌态。</span>
+                </span>
+                <span class="dialog-family-meta"><span>520px</span><span>dialog</span></span>
+              </button>
+              <button class="dialog-family-card" type="button" data-dialog-open="form">
+                <span class="dialog-family-icon"><svg class="icon"><use href="#i-settings"></use></svg></span>
+                <span class="dialog-family-copy">
+                  <strong>表单编辑</strong>
+                  <span>单字段输入、校验禁用、Enter 提交与保存中状态。</span>
+                </span>
+                <span class="dialog-family-meta"><span>520px</span><span>dialog</span></span>
+              </button>
+              <button class="dialog-family-card" type="button" data-dialog-open="preflight">
+                <span class="dialog-family-icon"><svg class="icon"><use href="#i-check"></use></svg></span>
+                <span class="dialog-family-copy">
+                  <strong>执行前确认</strong>
+                  <span>影响范围、风险列表、重新校验和主操作确认。</span>
+                </span>
+                <span class="dialog-family-meta"><span>720px</span><span>dialog</span></span>
+              </button>
+              <button class="dialog-family-card danger" type="button" data-dialog-open="danger">
+                <span class="dialog-family-icon"><svg class="icon"><use href="#i-alert"></use></svg></span>
+                <span class="dialog-family-copy">
+                  <strong>危险确认</strong>
+                  <span>目标信息、不可撤销提示，默认焦点始终落在取消。</span>
+                </span>
+                <span class="dialog-family-meta"><span>520–720px</span><span>alertdialog</span></span>
+              </button>
+              <button class="dialog-family-card" type="button" data-dialog-open="version">
+                <span class="dialog-family-icon"><svg class="icon"><use href="#i-activity"></use></svg></span>
+                <span class="dialog-family-copy">
+                  <strong>版本 / 多阶段进度</strong>
+                  <span>检查、可更新、下载、校验、启动和错误状态。</span>
+                </span>
+                <span class="dialog-family-meta"><span>620px</span><span>dialog</span></span>
+              </button>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Focus</span><strong>trap + restore</strong></div>
+            <div class="sample-spec"><span>Busy</span><strong>disable destructive close</strong></div>
+            <div class="sample-spec"><span>Danger</span><strong>semantic red only</strong></div>
+            <div class="sample-spec"><span>Motion</span><strong>none</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>交互行为矩阵</h3>
+              <p>关闭策略遵循当前项目实际行为，不将所有弹窗强制统一成同一种交互。</p>
+            </div>
+            <span class="sample-index">D3</span>
+          </div>
+          <div class="inventory-wrap">
+            <table class="inventory-table">
+              <thead>
+                <tr>
+                  <th>弹窗家族</th>
+                  <th>Esc</th>
+                  <th>遮罩关闭</th>
+                  <th>标题栏关闭</th>
+                  <th>初始焦点</th>
+                  <th>忙碌时策略</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td>搜索 / 命令面板</td><td class="dialog-behavior-yes">支持</td><td class="dialog-behavior-yes">支持</td><td class="dialog-behavior-no">无</td><td>搜索输入框</td><td>加载不阻断关闭</td></tr>
+                <tr><td>分支选择器</td><td class="dialog-behavior-yes">支持</td><td class="dialog-behavior-no">不支持</td><td class="dialog-behavior-yes">支持</td><td>首个可操作项</td><td>切换中禁用列表</td></tr>
+                <tr><td>表单编辑</td><td class="dialog-behavior-no">当前不支持</td><td class="dialog-behavior-no">不支持</td><td class="dialog-behavior-no">无</td><td>文本输入框</td><td>锁定输入与操作</td></tr>
+                <tr><td>执行前确认</td><td class="dialog-behavior-conditional">非忙碌支持</td><td class="dialog-behavior-no">不支持</td><td class="dialog-behavior-no">无</td><td>主操作</td><td>禁用关闭与操作</td></tr>
+                <tr><td>危险确认</td><td class="dialog-behavior-conditional">非忙碌支持</td><td class="dialog-behavior-no">不支持</td><td class="dialog-behavior-no">无</td><td>取消按钮</td><td>禁用关闭与操作</td></tr>
+                <tr><td>版本 / 进度</td><td class="dialog-behavior-yes">支持</td><td class="dialog-behavior-no">不支持</td><td class="dialog-behavior-no">无</td><td>当前主操作</td><td>下载、校验时仍可关闭</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>当前组件映射</h3>
+              <p>业务组件继续保留语义差异，视觉结构统一归入对应家族。</p>
+            </div>
+            <span class="sample-index">D4</span>
+          </div>
+          <div class="inventory-wrap">
+            <table class="inventory-table dialog-component-map">
+              <thead>
+                <tr>
+                  <th>实际组件</th>
+                  <th>家族</th>
+                  <th>宽度</th>
+                  <th>Role</th>
+                  <th>关键状态 / 用途</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td><code>GlobalSearchDialog</code></td><td>搜索 / 命令面板</td><td>610px</td><td>dialog</td><td>空、结果、骨架、部分失败、键盘导航</td></tr>
+                <tr><td><code>BranchSwitchDialog</code></td><td>分支选择器</td><td>520px</td><td>dialog</td><td>加载、错误、空、当前、占用、切换</td></tr>
+                <tr><td><code>WorkspaceGroupRenameDialog</code></td><td>表单编辑</td><td>520px</td><td>dialog</td><td>输入、校验、保存中</td></tr>
+                <tr><td><code>WorkspaceTapdKeywordDialog</code></td><td>表单编辑</td><td>520px</td><td>dialog</td><td>本地偏好、输入、保存中</td></tr>
+                <tr><td><code>RepositoryCommandDialog</code></td><td>执行前确认</td><td>720px</td><td>dialog</td><td>影响范围、分级风险、重新校验</td></tr>
+                <tr><td><code>WorktreeCommandDialog</code></td><td>执行前确认</td><td>720px</td><td>dialog</td><td>Worktree 影响、风险和执行状态</td></tr>
+                <tr><td><code>WorkspaceRepositoryRemoveDialog</code></td><td>危险确认</td><td>520px</td><td>alertdialog</td><td>移出配置，不删除磁盘仓库</td></tr>
+                <tr><td><code>WorkspaceDeleteDialog</code></td><td>危险确认</td><td>520px</td><td>alertdialog</td><td>删除 GitNest 配置、缓存和历史</td></tr>
+                <tr><td><code>DiffDiscardConfirmationDialog</code></td><td>危险确认</td><td>560px</td><td>alertdialog</td><td>文件 / 分组范围、未跟踪文件永久删除</td></tr>
+                <tr><td><code>StashActionDialog</code></td><td>危险确认</td><td>560px</td><td>alertdialog</td><td>恢复、删除、恢复并删除</td></tr>
+                <tr><td><code>ClearAiKeyDialog</code></td><td>危险确认</td><td>520px</td><td>dialog</td><td>紧凑确认、无正文区</td></tr>
+                <tr><td><code>AccountRemovalDialog</code></td><td>危险确认</td><td>620px</td><td>dialog</td><td>Host 默认账号与仓库绑定影响</td></tr>
+                <tr><td><code>VersionDialog</code></td><td>版本 / 多阶段进度</td><td>620px</td><td>dialog</td><td>检查、下载、校验、启动、错误、发行说明</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section gallery-tab-panel" id="gallery-panel-buttons" data-gallery-panel="buttons" role="tabpanel" aria-labelledby="gallery-tab-buttons">
+      <div class="section-heading">
+        <div>
+          <h2>按钮</h2>
+          <p>普通按钮按内容宽度展示；只有明确设置 fullWidth 的按钮才占满容器。</p>
+        </div>
+        <span class="section-count">3 sizes · shared states</span>
+      </div>
+
+      <div class="menu-grid">
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>尺寸效果</h3>
+              <p>使用同一语义按钮对比 small、medium、large 三种控件高度。</p>
+            </div>
+            <span class="sample-index">16</span>
+          </div>
+          <div class="sample-stage">
+            <div class="button-showcase">
+              <div class="button-showcase-group">
+                <span class="button-showcase-label">尺寸</span>
+                <div class="button-showcase-row" data-button-showcase="sizes"></div>
+              </div>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Small</span><strong>32px</strong></div>
+            <div class="sample-spec"><span>Medium</span><strong>35px</strong></div>
+            <div class="sample-spec"><span>Large</span><strong>40px</strong></div>
+            <div class="sample-spec"><span>States</span><strong>shared 32px</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>操作按钮状态</h3>
+              <p>以下示例统一使用 32px small；hover 仅将当前背景色提亮 12%，文字和边框颜色保持不变。</p>
+            </div>
+            <span class="sample-index">17</span>
+          </div>
+          <div class="sample-stage">
+            <div class="button-showcase">
+              <div class="button-showcase-group">
+                <span class="button-showcase-label">层级</span>
+                <div class="button-showcase-row" data-button-showcase="variants"></div>
+              </div>
+              <div class="button-showcase-group">
+                <span class="button-showcase-label">危险与禁用</span>
+                <div class="button-showcase-row" data-button-showcase="danger"></div>
+              </div>
+              <div class="button-showcase-group">
+                <span class="button-showcase-label">加载与满宽</span>
+                <div class="button-showcase-row" data-button-showcase="states"></div>
+              </div>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Shared size</span><strong>32px / small</strong></div>
+            <div class="sample-spec"><span>Padding</span><strong>12px</strong></div>
+            <div class="sample-spec"><span>Width</span><strong>content / explicit full</strong></div>
+            <div class="sample-spec"><span>Primary</span><strong>blue / white</strong></div>
+            <div class="sample-spec"><span>Danger</span><strong>red / red-soft</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>图标、工具栏与切换按钮</h3>
+              <p>以下示例统一使用 32px small；图标按钮保留无文本语义。</p>
+            </div>
+            <span class="sample-index">18</span>
+          </div>
+          <div class="sample-stage">
+            <div class="button-showcase">
+              <div class="button-showcase-group">
+                <span class="button-showcase-label">图标按钮</span>
+                <div class="button-showcase-row" data-button-showcase="icons"></div>
+              </div>
+              <div class="button-showcase-group">
+                <span class="button-showcase-label">工具栏 / 快捷操作</span>
+                <div class="button-showcase-row" data-button-showcase="tools"></div>
+              </div>
+              <div class="button-showcase-group">
+                <span class="button-showcase-label">开关</span>
+                <div class="button-showcase-row">
+                  <span class="toggle-demo" role="switch" aria-checked="false"><span></span></span>
+                  <span class="toggle-demo active" role="switch" aria-checked="true"><span></span></span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Icon</span><strong>32 × 32px</strong></div>
+            <div class="sample-spec"><span>Toolbar</span><strong>32px / transparent</strong></div>
+            <div class="sample-spec"><span>Quick</span><strong>32px / surface-2</strong></div>
+            <div class="sample-spec"><span>Switch</span><strong>42 × 24px</strong></div>
+          </div>
+        </article>
+
+      </div>
+    </section>
+
+    <section class="section gallery-tab-panel" id="gallery-panel-toast" data-gallery-panel="toast" role="tabpanel" aria-labelledby="gallery-tab-toast">
+      <div class="section-heading">
+        <div>
+          <h2>提示信息</h2>
+          <p>集中展示操作完成、普通状态和失败反馈，不与按钮组件混合分类。</p>
+        </div>
+        <span class="section-count">3 tones</span>
+      </div>
+
+      <div class="menu-grid">
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>提示信息 / Toast 弹窗</h3>
+              <p>用于操作完成、普通状态和失败反馈；顶部居中显示，可关闭、自动消失并支持多条堆叠。</p>
+            </div>
+            <span class="sample-index">19</span>
+          </div>
+          <div class="sample-stage wide">
+            <div class="toast-showcase">
+              <div class="toast-showcase-stack" data-toast-showcase="states"></div>
+              <div class="toast-showcase-actions" data-toast-showcase="actions"></div>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Tones</span><strong>success / info / error</strong></div>
+            <div class="sample-spec"><span>Width</span><strong>300–400px</strong></div>
+            <div class="sample-spec"><span>Position</span><strong>top center / z 600</strong></div>
+            <div class="sample-spec"><span>Behavior</span><strong>close / 3100ms / stack</strong></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section gallery-tab-panel" id="gallery-panel-inputs" data-gallery-panel="inputs" role="tabpanel" aria-labelledby="gallery-tab-inputs">
+      <div class="section-heading">
+        <div>
+          <h2>输入框</h2>
+          <p>顶部单独展示尺寸差异；其余状态与功能示例统一使用 35px medium。</p>
+        </div>
+        <span class="section-count">3 sizes</span>
+      </div>
+
+      <div class="menu-grid">
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>尺寸效果</h3>
+              <p>使用同一内容对比 small、medium、large 三种控件高度。</p>
+            </div>
+            <span class="sample-index">20</span>
+          </div>
+          <div class="sample-stage">
+            <div class="input-showcase input-size-showcase">
+              <div class="input-field-demo">
+                <span>Small · 32px</span>
+                <div data-input-mount="size-small"></div>
+              </div>
+              <div class="input-field-demo">
+                <span>Medium · 35px</span>
+                <div data-input-mount="size-medium"></div>
+              </div>
+              <div class="input-field-demo">
+                <span>Large · 40px</span>
+                <div data-input-mount="size-large"></div>
+              </div>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Small</span><strong>32px</strong></div>
+            <div class="sample-spec"><span>Medium</span><strong>35px</strong></div>
+            <div class="sample-spec"><span>Large</span><strong>40px</strong></div>
+            <div class="sample-spec"><span>States</span><strong>shared 35px</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>表单输入状态</h3>
+              <p>以下示例统一使用 35px medium；错误态改用危险色边框和浅色背景。</p>
+            </div>
+            <span class="sample-index">21</span>
+          </div>
+          <div class="sample-stage">
+            <div class="input-showcase">
+              <div class="input-field-demo">
+                <label for="gallery-input-default">默认</label>
+                <div data-input-mount="default"></div>
+              </div>
+              <div class="input-field-demo">
+                <label for="gallery-input-focus">焦点</label>
+                <div data-input-mount="focus"></div>
+              </div>
+              <div class="input-field-demo">
+                <label for="gallery-input-error">错误</label>
+                <div data-input-mount="error"></div>
+              </div>
+              <div class="input-field-demo">
+                <label for="gallery-input-disabled">禁用</label>
+                <div data-input-mount="disabled"></div>
+              </div>
+              <div class="input-field-demo full">
+                <label for="gallery-textarea-default">多行输入</label>
+                <div data-input-mount="textarea"></div>
+              </div>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Shared size</span><strong>35px / medium</strong></div>
+            <div class="sample-spec"><span>Textarea</span><strong>min 96px / left 8px</strong></div>
+            <div class="sample-spec"><span>Focus</span><strong>focus color</strong></div>
+            <div class="sample-spec"><span>Error</span><strong>red border + soft</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>搜索与组合输入</h3>
+              <p>以下示例统一使用 35px medium；清除与右侧功能保持独立配置。</p>
+            </div>
+            <span class="sample-index">22</span>
+          </div>
+          <div class="sample-stage">
+            <div class="input-showcase">
+              <div class="input-field-demo full">
+                <span>侧栏搜索</span>
+                <div data-input-mount="search"></div>
+              </div>
+              <div class="input-field-demo">
+                <span>历史筛选</span>
+                <div data-input-mount="history"></div>
+              </div>
+              <div class="input-field-demo">
+                <span>命令搜索</span>
+                <div data-input-mount="command"></div>
+              </div>
+              <div class="input-field-demo full">
+                <span>提交信息</span>
+                <div data-input-mount="commit"></div>
+              </div>
+            </div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Shared size</span><strong>35px / medium</strong></div>
+            <div class="sample-spec"><span>Leading</span><strong>icon configurable</strong></div>
+            <div class="sample-spec"><span>Trailing</span><strong>actions / kbd</strong></div>
+            <div class="sample-spec"><span>Clear</span><strong>transparent hover</strong></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section gallery-tab-panel" id="gallery-panel-diff" data-gallery-panel="diff" role="tabpanel" aria-labelledby="gallery-tab-diff" hidden>
+      <div class="section-heading">
+        <div>
+          <h2>Diff 工作区组件</h2>
+          <p>同一个完整 DiffWorkspace 通过功能配置服务仓库变更页和独立 Diff 窗口；标题栏仍由页面外壳负责。</p>
+        </div>
+        <span class="section-count">2 configurations</span>
+      </div>
+
+      <div class="menu-grid">
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>仓库变更页配置</h3>
+              <p>启用文件导航、暂存、储藏浏览、提交区和独立窗口入口；文档工具栏及底部状态栏关闭。</p>
+            </div>
+            <span class="sample-index">23</span>
+          </div>
+          <div class="sample-stage diff-component-stage">
+            <div class="diff-component-mount" id="diffWorkspaceShowcase"></div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Sidebar</span><strong>files + stash + commit</strong></div>
+            <div class="sample-spec"><span>DiffPanel</span><strong>repository / unified</strong></div>
+            <div class="sample-spec"><span>Extension</span><strong>open standalone</strong></div>
+            <div class="sample-spec"><span>Search</span><strong>files + Ctrl+F</strong></div>
+          </div>
+        </article>
+
+        <article class="sample-card full">
+          <div class="sample-title">
+            <div>
+              <h3>独立 Diff 窗口配置</h3>
+              <p>复用同一文件导航和文档组件，启用布局、换行、变更导航、刷新与底部状态栏，不显示仓库操作。</p>
+            </div>
+            <span class="sample-index">24</span>
+          </div>
+          <div class="sample-stage diff-component-stage">
+            <div class="diff-component-mount" id="diffWorkspaceStandaloneShowcase"></div>
+          </div>
+          <div class="sample-specs">
+            <div class="sample-spec"><span>Sidebar</span><strong>files + refresh</strong></div>
+            <div class="sample-spec"><span>DiffPanel</span><strong>split / unified</strong></div>
+            <div class="sample-spec"><span>Status</span><strong>24px</strong></div>
+            <div class="sample-spec"><span>Repository</span><strong>extensions hidden</strong></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section gallery-tab-panel" id="gallery-panel-spec" data-gallery-panel="spec" role="tabpanel" aria-labelledby="gallery-tab-spec">
+      <div class="section-heading">
+        <div>
+          <h2>统一规格速览</h2>
+          <p>菜单、弹窗、下拉组件与表单控件统一记录尺寸、间距、状态与层级。</p>
+        </div>
+      </div>
+      <div class="inventory-wrap">
+        <table class="inventory-table">
+          <thead>
+            <tr>
+              <th>菜单</th>
+              <th>宽度</th>
+              <th>圆角</th>
+              <th>容器内边距</th>
+              <th>行高</th>
+              <th>阴影 / 层级</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>标题栏菜单</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>popover / 200</td></tr>
+            <tr><td>Workspace 切换</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>popover / 200</td></tr>
+            <tr><td>仓库筛选</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>popover / 200</td></tr>
+            <tr><td>变更视图</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>popover / 200</td></tr>
+            <tr><td>Open in</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>popover / 200</td></tr>
+            <tr><td>默认终端选择器</td><td><code>100% / max 360px</code></td><td>8px / 12px</td><td>12px / 8px</td><td>35px / 32px</td><td>popover / 200</td></tr>
+            <tr><td>右键菜单</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>popover / 200</td></tr>
+            <tr><td>右键二级菜单</td><td><code>222px</code></td><td>12px</td><td>8px</td><td>32px</td><td>local z-index 1</td></tr>
+            <tr><td>Diff 搜索</td><td><code>360px</code></td><td>8px</td><td>2px 4px</td><td>32px+</td><td>popover / 200</td></tr>
+            <tr><td>Ctrl+K 命令面板</td><td><code>610px / viewport</code></td><td>12px</td><td>16px / 8px</td><td>48px / 48px</td><td>modal / 500</td></tr>
+            <tr><td>分支切换</td><td><code>520px</code></td><td>12px</td><td>16px / 24px</td><td>54px</td><td>modal / 500</td></tr>
+            <tr><td>表单编辑弹窗</td><td><code>520px / viewport</code></td><td>12px</td><td>24px / 16px</td><td>35px input</td><td>modal / 500</td></tr>
+            <tr><td>执行前确认弹窗</td><td><code>720px / viewport</code></td><td>12px</td><td>24px / 16px</td><td>content</td><td>modal / 500</td></tr>
+            <tr><td>危险确认弹窗</td><td><code>520–720px</code></td><td>12px</td><td>24px / 16px</td><td>content</td><td>modal / 500</td></tr>
+            <tr><td>版本与进度弹窗</td><td><code>620px / viewport</code></td><td>12px</td><td>24px / 16px</td><td>8px progress</td><td>modal / 500</td></tr>
+            <tr><td>弹窗遮罩</td><td><code>viewport</code></td><td>0</td><td>24px</td><td>center / 12vh</td><td>overlay + blur</td></tr>
+            <tr><td>弹窗焦点管理</td><td><code>modal scope</code></td><td>—</td><td>—</td><td>Tab loop</td><td>inert + restore</td></tr>
+            <tr><td>组合下拉触发器</td><td><code>32px + 20px</code></td><td>8px</td><td>0</td><td>32px</td><td>popover / 200</td></tr>
+            <tr><td>默认按钮</td><td><code>auto</code></td><td>8px</td><td>0 12px</td><td>32px</td><td>content / 0</td></tr>
+            <tr><td>Medium 按钮</td><td><code>auto</code></td><td>8px</td><td>0 16px</td><td>35px</td><td>content / 0</td></tr>
+            <tr><td>图标按钮</td><td><code>32px</code></td><td>8px</td><td>0</td><td>32px</td><td>content / 0</td></tr>
+            <tr><td>工具栏按钮</td><td><code>auto</code></td><td>8px</td><td>0 12px</td><td>32px</td><td>content / 0</td></tr>
+            <tr><td>快捷操作按钮</td><td><code>auto</code></td><td>8px</td><td>0 12px</td><td>32px</td><td>content / 0</td></tr>
+            <tr><td>设置开关</td><td><code>42px</code></td><td>999px</td><td>2px</td><td>24px max</td><td>content / 0</td></tr>
+            <tr><td>提示信息 / Toast 弹窗</td><td><code>300–400px / viewport</code></td><td>12px</td><td>12px</td><td>48px+</td><td>toast / 600</td></tr>
+            <tr><td>表单输入框</td><td><code>100%</code></td><td>8px</td><td>0 8px</td><td>35px</td><td>content / 0</td></tr>
+            <tr><td>多行输入框</td><td><code>100%</code></td><td>8px</td><td>8px 12px 8px 8px</td><td>min 96px</td><td>content / 0</td></tr>
+            <tr><td>搜索输入框</td><td><code>100%</code></td><td>8px</td><td>0 8px</td><td>32px</td><td>content / 0</td></tr>
+            <tr><td>命令搜索输入</td><td><code>100%</code></td><td>12px 12px 0 0</td><td>0 16px</td><td>40px</td><td>modal / 500</td></tr>
+            <tr><td>Diff 工作区</td><td><code>100% / min 760px</code></td><td>12px</td><td>8px 0 24px</td><td>48px / 44px / 20px</td><td>content + popover</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div class="dialog-showcase-backdrop" id="dialogShowcaseBackdrop" data-placement="center" hidden>
+    <div id="dialogShowcaseMount"></div>
+  </div>
+
+  <script src="./button.js"></script>
+  <script src="./input.js"></script>
+  <script src="./textarea.js"></script>
+  <script src="./toast.js"></script>
+  <script src="./diff-search-popover.js"></script>
+  <script src="./diff-panel.js"></script>
+  <script src="./diff-workspace.js"></script>
+  <script>
+    const root = document.documentElement;
+    const themeToggle = document.getElementById("themeToggle");
+    const galleryTabs = [...document.querySelectorAll("[data-gallery-tab]")];
+    const galleryPanels = [...document.querySelectorAll("[data-gallery-panel]")];
+    const galleryCategories = new Set(galleryTabs.map((tab) => tab.dataset.galleryTab));
+
+    const galleryIcon = (name) =>
+      `<svg class="icon" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
+
+    const dialogShowcaseBackdrop = document.getElementById("dialogShowcaseBackdrop");
+    const dialogShowcaseMount = document.getElementById("dialogShowcaseMount");
+    const dialogBackgroundNodes = [
+      document.querySelector(".page-header"),
+      document.querySelector("main")
+    ].filter(Boolean);
+    let activeDialogTrigger = null;
+    let activeDialogConfig = null;
+    let activeDialogBusy = false;
+    let dialogBackdropPointerDown = false;
+    let dialogTimers = [];
+    let dialogProgressTimer = null;
+
+    function dialogHeader({ title, icon, closeButton = false, titleId }) {
+      return `
+        <header class="dialog-showcase-header">
+          <span class="dialog-showcase-icon">${galleryIcon(icon)}</span>
+          <div class="dialog-showcase-heading">
+            <h2 id="${titleId}">${title}</h2>
+          </div>
+          ${closeButton ? `
+            <button class="dialog-showcase-close" type="button" data-dialog-close aria-label="关闭">
+              ${galleryIcon("x")}
+            </button>
+          ` : ""}
+        </header>
+      `;
+    }
+
+    function buildDialogShowcase(type) {
+      if (type === "search") {
+        return {
+          closeOnBackdrop: true,
+          escape: true,
+          busyClosable: true,
+          placement: "top",
+          markup: `
+            <section class="dialog-showcase dialog-search-shell" data-size="search" role="dialog" aria-modal="true" aria-labelledby="dialogSearchTitle">
+              <span id="dialogSearchTitle" hidden>搜索仓库、分支或命令</span>
+              <div class="command-input-demo">
+                ${galleryIcon("search")}
+                <input data-dialog-search-input data-dialog-initial-focus value="sc" aria-label="搜索仓库、分支或命令" autocomplete="off" />
+                <kbd>Esc</kbd>
+              </div>
+              <div class="command-results-demo" role="listbox" aria-label="搜索结果">
+                <div class="command-group-label-demo">仓库</div>
+                <button class="command-result-demo" type="button" role="option" aria-selected="true" data-dialog-search-option>
+                  <span class="command-result-icon-demo">${galleryIcon("repository")}</span>
+                  <span class="command-result-copy-demo"><strong>sample-portal</strong><span>test · web\\sample-portal</span></span>
+                  <span class="command-status">1 变更</span>
+                </button>
+                <button class="command-result-demo" type="button" role="option" aria-selected="false" data-dialog-search-option>
+                  <span class="command-result-icon-demo">${galleryIcon("repository")}</span>
+                  <span class="command-result-copy-demo"><strong>sample-workspace</strong><span>master · E:\\Demo\\sample-workspace</span></span>
+                  <span class="command-status">当前 Workspace</span>
+                </button>
+                <div class="command-group-label-demo">命令</div>
+                <button class="command-result-demo" type="button" role="option" aria-selected="false" data-dialog-search-option>
+                  <span class="command-result-icon-demo">${galleryIcon("refresh")}</span>
+                  <span class="command-result-copy-demo"><strong>重新扫描 Workspace</strong><span>发现新增、移动或移除的仓库</span></span>
+                  <kbd>Enter</kbd>
+                </button>
+              </div>
+            </section>
+          `
+        };
+      }
+
+      if (type === "branch") {
+        return {
+          closeOnBackdrop: false,
+          escape: true,
+          busyClosable: false,
+          placement: "center",
+          markup: `
+            <section class="dialog-showcase" data-size="compact" role="dialog" aria-modal="true" aria-labelledby="dialogBranchTitle">
+              ${dialogHeader({
+                title: "切换分支",
+                icon: "branch",
+                closeButton: true,
+                titleId: "dialogBranchTitle"
+              })}
+              <div class="dialog-showcase-body">
+                <div class="branch-switch-dialog-heading">
+                  <strong>本地分支</strong>
+                  <span>4 个分支</span>
+                </div>
+                <div class="branch-switch-list">
+                  <button class="branch-switch-option current" type="button" disabled>
+                    <span class="branch-switch-option-main">${galleryIcon("branch")}<span><strong>test</strong><small>跟踪 origin/test</small></span></span>
+                    <span class="branch-switch-option-status">当前</span>
+                  </button>
+                  <button class="branch-switch-option" type="button" data-dialog-branch-option data-dialog-initial-focus>
+                    <span class="branch-switch-option-main">${galleryIcon("branch")}<span><strong>main</strong><small>跟踪 origin/main</small></span></span>
+                    <span class="branch-switch-option-status">切换</span>
+                  </button>
+                  <button class="branch-switch-option" type="button" data-dialog-branch-option>
+                    <span class="branch-switch-option-main">${galleryIcon("branch")}<span><strong>feature/menu-guidelines</strong><small>跟踪 origin/feature/menu-guidelines</small></span></span>
+                    <span class="branch-switch-option-status">切换</span>
+                  </button>
+                  <button class="branch-switch-option" type="button" disabled>
+                    <span class="branch-switch-option-main">${galleryIcon("branch")}<span><strong>release/0.0.1</strong><small>被 Worktree E:\\release\\GitNest 占用</small></span></span>
+                    <span class="branch-switch-option-status">已占用</span>
+                  </button>
+                </div>
+              </div>
+              <footer class="dialog-showcase-footer only-actions">
+                <div class="dialog-showcase-actions">
+                  <button class="button small" type="button" data-dialog-close data-dialog-lock>取消</button>
+                </div>
+              </footer>
+            </section>
+          `
+        };
+      }
+
+      if (type === "form") {
+        return {
+          closeOnBackdrop: false,
+          escape: false,
+          busyClosable: false,
+          placement: "center",
+          markup: `
+            <form class="dialog-showcase" data-size="compact" role="dialog" aria-modal="true" aria-labelledby="dialogFormTitle" data-dialog-form>
+              ${dialogHeader({
+                title: "重命名分组",
+                icon: "settings",
+                titleId: "dialogFormTitle"
+              })}
+              <div class="dialog-showcase-body">
+                <div class="dialog-field">
+                  <label for="dialogGroupName">分组名称</label>
+                  <input id="dialogGroupName" name="groupName" value="服务端仓库" maxlength="40" data-dialog-form-input data-dialog-initial-focus />
+                </div>
+              </div>
+              <footer class="dialog-showcase-footer only-actions">
+                <div class="dialog-showcase-actions">
+                  <button class="button small" type="button" data-dialog-close data-dialog-lock>取消</button>
+                  <button class="button small primary" type="submit" data-dialog-form-submit data-dialog-lock>保存</button>
+                </div>
+              </footer>
+            </form>
+          `
+        };
+      }
+
+      if (type === "preflight") {
+        return {
+          closeOnBackdrop: false,
+          escape: true,
+          busyClosable: false,
+          placement: "center",
+          markup: `
+            <section class="dialog-showcase" role="dialog" aria-modal="true" aria-labelledby="dialogPreflightTitle" aria-describedby="dialogPreflightDescription">
+              ${dialogHeader({
+                title: "Pull 当前仓库",
+                icon: "refresh",
+                titleId: "dialogPreflightTitle"
+              })}
+              <div class="dialog-showcase-body">
+                <div class="dialog-target">
+                  <span>目标仓库</span>
+                  <strong>GitNest</strong>
+                  <code>E:\\Demo\\GitNest · main</code>
+                </div>
+                <div class="dialog-impact-grid">
+                  <div class="dialog-impact-card"><span>远程变化</span><strong>落后 1 个提交</strong></div>
+                  <div class="dialog-impact-card"><span>本地工作区</span><strong>3 个未提交文件</strong></div>
+                  <div class="dialog-impact-card"><span>执行方式</span><strong>Fast-forward only</strong></div>
+                  <div class="dialog-impact-card"><span>远程分支</span><strong>origin/main</strong></div>
+                </div>
+                <ul class="dialog-warning-list" id="dialogPreflightDescription">
+                  <li>${galleryIcon("alert")}<span>工作区存在未提交变更；Pull 前需确认不会与远程提交冲突。</span></li>
+                  <li>${galleryIcon("activity")}<span>预检结果是当前快照，执行前可重新校验。</span></li>
+                </ul>
+              </div>
+              <footer class="dialog-showcase-footer only-actions">
+                <div class="dialog-showcase-actions">
+                  <button class="button small" type="button" data-dialog-recheck data-dialog-lock>重新校验</button>
+                  <button class="button small" type="button" data-dialog-close data-dialog-lock>取消</button>
+                  <button class="button small primary" type="button" data-dialog-confirm data-dialog-lock data-dialog-initial-focus>确认 Pull</button>
+                </div>
+              </footer>
+            </section>
+          `
+        };
+      }
+
+      if (type === "danger") {
+        return {
+          closeOnBackdrop: false,
+          escape: true,
+          busyClosable: false,
+          placement: "center",
+          markup: `
+            <section class="dialog-showcase is-danger" data-size="target" role="alertdialog" aria-modal="true" aria-labelledby="dialogDangerTitle" aria-describedby="dialogDangerDescription">
+              ${dialogHeader({
+                title: "删除 Workspace",
+                icon: "alert",
+                titleId: "dialogDangerTitle"
+              })}
+              <div class="dialog-showcase-body">
+                <div class="dialog-target">
+                  <span>目标 Workspace</span>
+                  <strong>GitNest Workspace</strong>
+                  <code>E:\\Demo\\GitNest</code>
+                </div>
+                <div class="dialog-risk danger" id="dialogDangerDescription">
+                  ${galleryIcon("alert")}
+                  <span>将删除 GitNest 中的配置、快照和历史记录；不会删除磁盘目录、Git 仓库或提交。</span>
+                </div>
+              </div>
+              <footer class="dialog-showcase-footer only-actions">
+                <div class="dialog-showcase-actions">
+                  <button class="button small" type="button" data-dialog-close data-dialog-lock data-dialog-initial-focus>取消</button>
+                  <button class="button small danger primary" type="button" data-dialog-danger-confirm data-dialog-lock>删除 Workspace</button>
+                </div>
+              </footer>
+            </section>
+          `
+        };
+      }
+
+      return {
+        closeOnBackdrop: false,
+        escape: true,
+        busyClosable: true,
+        placement: "center",
+        markup: `
+          <section class="dialog-showcase" data-size="version" role="dialog" aria-modal="true" aria-labelledby="dialogVersionTitle" aria-describedby="dialogVersionDescription">
+            ${dialogHeader({
+              title: "版本 v0.0.1",
+              icon: "sparkle",
+              titleId: "dialogVersionTitle"
+            })}
+            <div class="dialog-showcase-body">
+              <div class="dialog-version-grid">
+                <div class="dialog-version-card"><span>当前版本</span><strong>v0.0.1</strong></div>
+                <div class="dialog-version-card"><span>最新版本</span><strong data-version-latest>v0.0.2</strong></div>
+                <div class="dialog-version-card"><span>运行方式</span><strong>Windows x64 安装版</strong></div>
+                <div class="dialog-version-card"><span>检查时间</span><strong data-version-checked>刚刚</strong></div>
+              </div>
+              <div class="dialog-risk" id="dialogVersionDescription" data-version-state>
+                ${galleryIcon("activity")}
+                <span><strong data-version-title>发现新版本 v0.0.2</strong><br /><span data-version-message>已准备好下载安装包，下载完成后将校验并启动安装程序。</span></span>
+              </div>
+              <div class="dialog-progress" data-version-progress hidden>
+                <div class="dialog-progress-head"><span data-version-progress-label>正在下载</span><strong data-version-progress-value>0%</strong></div>
+                <div class="dialog-progress-track"><div class="dialog-progress-bar" data-version-progress-bar></div></div>
+              </div>
+              <div>
+                <strong>发行说明</strong>
+                <ul class="dialog-release-notes">
+                  <li>完善 Workspace 单仓库与多仓库操作边界。</li>
+                  <li>补充版本检查、下载安装和启动安装流程。</li>
+                  <li>统一窗口最大化与恢复图标状态。</li>
+                </ul>
+              </div>
+            </div>
+            <footer class="dialog-showcase-footer only-actions">
+              <div class="dialog-showcase-actions">
+                <button class="button small" type="button" data-dialog-close>关闭</button>
+                <button class="button small" type="button" data-version-check>重新检查</button>
+                <button class="button small primary" type="button" data-version-action="install" data-dialog-initial-focus>下载并安装</button>
+              </div>
+            </footer>
+          </section>
+        `
+      };
+    }
+
+    function getDialogFocusables() {
+      if (!dialogShowcaseMount) return [];
+      return [...dialogShowcaseMount.querySelectorAll(
+        'button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'
+      )].filter((element) => !element.hidden && element.offsetParent !== null);
+    }
+
+    function queueDialogTimeout(callback, delay) {
+      const timer = window.setTimeout(callback, delay);
+      dialogTimers.push(timer);
+      return timer;
+    }
+
+    function clearDialogTimers() {
+      dialogTimers.forEach((timer) => window.clearTimeout(timer));
+      dialogTimers = [];
+      if (dialogProgressTimer !== null) {
+        window.clearInterval(dialogProgressTimer);
+        dialogProgressTimer = null;
+      }
+    }
+
+    function setDialogBackgroundInert(inert) {
+      dialogBackgroundNodes.forEach((node) => {
+        node.inert = inert;
+      });
+    }
+
+    function setDialogBusy(busy, label, action) {
+      activeDialogBusy = busy;
+      dialogShowcaseMount.querySelectorAll("[data-dialog-lock]").forEach((element) => {
+        element.disabled = busy;
+      });
+      if (action && label) action.textContent = label;
+    }
+
+    function openDialogShowcase(type, trigger) {
+      if (!dialogShowcaseBackdrop || !dialogShowcaseMount) return;
+      if (!dialogShowcaseBackdrop.hidden) closeDialogShowcase(true);
+      activeDialogTrigger = trigger || document.activeElement;
+      activeDialogConfig = buildDialogShowcase(type);
+      activeDialogBusy = false;
+      dialogShowcaseBackdrop.dataset.placement = activeDialogConfig.placement;
+      dialogShowcaseMount.innerHTML = activeDialogConfig.markup;
+      dialogShowcaseBackdrop.hidden = false;
+      document.body.classList.add("has-dialog-showcase");
+      setDialogBackgroundInert(true);
+      window.requestAnimationFrame(() => {
+        const initialFocus =
+          dialogShowcaseMount.querySelector("[data-dialog-initial-focus]:not(:disabled)") ||
+          getDialogFocusables()[0];
+        initialFocus?.focus();
+        if (type === "search") {
+          const input = dialogShowcaseMount.querySelector("[data-dialog-search-input]");
+          input?.select();
+        }
+      });
+    }
+
+    function closeDialogShowcase(force = false) {
+      if (!dialogShowcaseBackdrop || dialogShowcaseBackdrop.hidden) return;
+      if (!force && activeDialogBusy && !activeDialogConfig?.busyClosable) return;
+      clearDialogTimers();
+      dialogShowcaseBackdrop.hidden = true;
+      dialogShowcaseMount.replaceChildren();
+      document.body.classList.remove("has-dialog-showcase");
+      setDialogBackgroundInert(false);
+      activeDialogBusy = false;
+      activeDialogConfig = null;
+      const returnTarget = activeDialogTrigger;
+      activeDialogTrigger = null;
+      window.requestAnimationFrame(() => returnTarget?.focus?.());
+    }
+
+    function finishDialogPreview(title, message) {
+      GitNestToast?.show?.({ tone: "success", title, message, duration: 2600 });
+      closeDialogShowcase(true);
+    }
+
+    function setVersionShowcaseState(state, progress = 0) {
+      const title = dialogShowcaseMount.querySelector("[data-version-title]");
+      const message = dialogShowcaseMount.querySelector("[data-version-message]");
+      const latest = dialogShowcaseMount.querySelector("[data-version-latest]");
+      const checked = dialogShowcaseMount.querySelector("[data-version-checked]");
+      const action = dialogShowcaseMount.querySelector("[data-version-action]");
+      const check = dialogShowcaseMount.querySelector("[data-version-check]");
+      const progressWrap = dialogShowcaseMount.querySelector("[data-version-progress]");
+      const progressLabel = dialogShowcaseMount.querySelector("[data-version-progress-label]");
+      const progressValue = dialogShowcaseMount.querySelector("[data-version-progress-value]");
+      const progressBar = dialogShowcaseMount.querySelector("[data-version-progress-bar]");
+      if (!title || !message || !action || !check || !progressWrap) return;
+
+      checked.textContent = "刚刚";
+      progressWrap.hidden = !["downloading", "verifying", "launching"].includes(state);
+      check.disabled = state !== "available";
+      action.disabled = state !== "available";
+
+      if (state === "checking") {
+        title.textContent = "正在检查正式版本";
+        message.textContent = "正在读取 GitHub Releases 的最新正式版信息。";
+        latest.textContent = "检查中…";
+        action.textContent = "检查中…";
+        return;
+      }
+      if (state === "available") {
+        title.textContent = "发现新版本 v0.0.2";
+        message.textContent = "已准备好下载安装包，下载完成后将校验并启动安装程序。";
+        latest.textContent = "v0.0.2";
+        action.textContent = "下载并安装";
+        action.disabled = false;
+        check.disabled = false;
+        activeDialogBusy = false;
+        return;
+      }
+      if (state === "downloading") {
+        title.textContent = "正在下载 v0.0.2";
+        message.textContent = "下载期间可以关闭弹窗，任务仍会继续。";
+        progressLabel.textContent = "正在下载";
+        progressValue.textContent = `${progress}%`;
+        progressBar.style.width = `${progress}%`;
+        action.textContent = "下载中…";
+        return;
+      }
+      if (state === "verifying") {
+        title.textContent = "正在校验安装包";
+        message.textContent = "正在验证下载文件完整性。";
+        progressLabel.textContent = "校验中";
+        progressValue.textContent = "100%";
+        progressBar.style.width = "100%";
+        action.textContent = "校验中…";
+        return;
+      }
+      title.textContent = "准备启动安装程序";
+      message.textContent = "校验已通过，正在启动安装程序。";
+      progressLabel.textContent = "准备安装";
+      progressValue.textContent = "100%";
+      progressBar.style.width = "100%";
+      action.textContent = "正在启动…";
+    }
+
+    function activateSearchResult(option) {
+      const title = option.querySelector("strong")?.textContent || "所选项目";
+      finishDialogPreview("已选择", `${title}（规范预览未执行真实操作）`);
+    }
+
+    document.addEventListener("click", (event) => {
+      const trigger = event.target.closest("[data-dialog-open]");
+      if (!trigger) return;
+      event.preventDefault();
+      openDialogShowcase(trigger.dataset.dialogOpen, trigger);
+    });
+
+    dialogShowcaseBackdrop?.addEventListener("pointerdown", (event) => {
+      dialogBackdropPointerDown = event.target === dialogShowcaseBackdrop;
+    });
+
+    dialogShowcaseBackdrop?.addEventListener("pointerup", (event) => {
+      const releasedOnBackdrop = event.target === dialogShowcaseBackdrop;
+      if (dialogBackdropPointerDown && releasedOnBackdrop && activeDialogConfig?.closeOnBackdrop) {
+        closeDialogShowcase();
+      }
+      dialogBackdropPointerDown = false;
+    });
+
+    dialogShowcaseBackdrop?.addEventListener("click", (event) => {
+      const close = event.target.closest("[data-dialog-close]");
+      if (close) {
+        closeDialogShowcase();
+        return;
+      }
+
+      const searchOption = event.target.closest("[data-dialog-search-option]");
+      if (searchOption) {
+        activateSearchResult(searchOption);
+        return;
+      }
+
+      const branchOption = event.target.closest("[data-dialog-branch-option]");
+      if (branchOption && !activeDialogBusy) {
+        setDialogBusy(true, "切换中…", branchOption);
+        dialogShowcaseMount.querySelectorAll(".branch-switch-option").forEach((option) => {
+          option.disabled = true;
+        });
+        queueDialogTimeout(() => {
+          finishDialogPreview("分支已切换", "规范预览未执行真实 Git 命令。");
+        }, 700);
+        return;
+      }
+
+      const recheck = event.target.closest("[data-dialog-recheck]");
+      if (recheck && !activeDialogBusy) {
+        setDialogBusy(true, "重新校验中…", recheck);
+        queueDialogTimeout(() => {
+          activeDialogBusy = false;
+          dialogShowcaseMount.querySelectorAll("[data-dialog-lock]").forEach((element) => {
+            element.disabled = false;
+          });
+          recheck.textContent = "重新校验";
+          GitNestToast?.show?.({
+            tone: "info",
+            title: "预检结果已更新",
+            message: "当前示例仍有 3 个未提交文件。",
+            duration: 2200
+          });
+        }, 800);
+        return;
+      }
+
+      const confirm = event.target.closest("[data-dialog-confirm]");
+      if (confirm && !activeDialogBusy) {
+        setDialogBusy(true, "执行中…", confirm);
+        queueDialogTimeout(() => {
+          finishDialogPreview("操作已确认", "规范预览未执行真实 Git 命令。");
+        }, 750);
+        return;
+      }
+
+      const dangerConfirm = event.target.closest("[data-dialog-danger-confirm]");
+      if (dangerConfirm && !activeDialogBusy) {
+        setDialogBusy(true, "删除中…", dangerConfirm);
+        queueDialogTimeout(() => {
+          finishDialogPreview("危险操作预览完成", "没有删除任何 Workspace 或磁盘文件。");
+        }, 750);
+        return;
+      }
+
+      const versionCheck = event.target.closest("[data-version-check]");
+      if (versionCheck && !activeDialogBusy) {
+        activeDialogBusy = true;
+        setVersionShowcaseState("checking");
+        queueDialogTimeout(() => setVersionShowcaseState("available"), 850);
+        return;
+      }
+
+      const versionAction = event.target.closest('[data-version-action="install"]');
+      if (versionAction && !activeDialogBusy) {
+        activeDialogBusy = true;
+        let progress = 0;
+        setVersionShowcaseState("downloading", progress);
+        dialogProgressTimer = window.setInterval(() => {
+          progress = Math.min(progress + 10, 100);
+          setVersionShowcaseState("downloading", progress);
+          if (progress < 100) return;
+          window.clearInterval(dialogProgressTimer);
+          dialogProgressTimer = null;
+          setVersionShowcaseState("verifying", 100);
+          queueDialogTimeout(() => {
+            setVersionShowcaseState("launching", 100);
+            queueDialogTimeout(() => {
+              finishDialogPreview("安装程序已准备", "规范预览不会启动真实安装程序。");
+            }, 700);
+          }, 650);
+        }, 120);
+      }
+    });
+
+    dialogShowcaseBackdrop?.addEventListener("submit", (event) => {
+      const form = event.target.closest("[data-dialog-form]");
+      if (!form) return;
+      event.preventDefault();
+      if (activeDialogBusy) return;
+      const input = form.querySelector("[data-dialog-form-input]");
+      if (!input?.value.trim()) {
+        input?.focus();
+        return;
+      }
+      const submit = form.querySelector("[data-dialog-form-submit]");
+      setDialogBusy(true, "保存中…", submit);
+      input.disabled = true;
+      queueDialogTimeout(() => {
+        finishDialogPreview("分组名称已保存", "规范预览未修改 Workspace 配置。");
+      }, 700);
+    });
+
+    dialogShowcaseBackdrop?.addEventListener("input", (event) => {
+      if (event.target.matches("[data-dialog-form-input]")) {
+        const submit = dialogShowcaseMount.querySelector("[data-dialog-form-submit]");
+        if (submit) submit.disabled = !event.target.value.trim();
+        return;
+      }
+      if (!event.target.matches("[data-dialog-search-input]")) return;
+      const query = event.target.value.trim().toLocaleLowerCase();
+      const options = [...dialogShowcaseMount.querySelectorAll("[data-dialog-search-option]")];
+      let firstVisible = null;
+      options.forEach((option) => {
+        const visible = !query || option.textContent.toLocaleLowerCase().includes(query);
+        option.hidden = !visible;
+        option.setAttribute("aria-selected", "false");
+        if (visible && !firstVisible) firstVisible = option;
+      });
+      firstVisible?.setAttribute("aria-selected", "true");
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (!dialogShowcaseBackdrop || dialogShowcaseBackdrop.hidden) return;
+
+      if (event.key === "Escape") {
+        if (activeDialogConfig?.escape && (!activeDialogBusy || activeDialogConfig.busyClosable)) {
+          event.preventDefault();
+          closeDialogShowcase();
+        }
+        return;
+      }
+
+      const searchInput = event.target.closest?.("[data-dialog-search-input]");
+      if (searchInput && ["ArrowDown", "ArrowUp", "Home", "End", "Enter"].includes(event.key)) {
+        const options = [...dialogShowcaseMount.querySelectorAll("[data-dialog-search-option]")]
+          .filter((option) => !option.hidden);
+        if (!options.length) return;
+        const currentIndex = Math.max(0, options.findIndex((option) => option.getAttribute("aria-selected") === "true"));
+        if (event.key === "Enter") {
+          event.preventDefault();
+          activateSearchResult(options[currentIndex]);
+          return;
+        }
+        event.preventDefault();
+        const nextIndex = event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? options.length - 1
+            : (currentIndex + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+        options.forEach((option, index) => {
+          option.setAttribute("aria-selected", String(index === nextIndex));
+        });
+        options[nextIndex].scrollIntoView({ block: "nearest" });
+        return;
+      }
+
+      if (event.key !== "Tab") return;
+      const focusables = getDialogFocusables();
+      if (!focusables.length) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+
+    function mountInputShowcases() {
+      const showcaseSize = "medium";
+      const create = (name, options) => {
+        const target = document.querySelector(`[data-input-mount="${name}"]`);
+        if (!target) return;
+        target.replaceChildren(GitNestInput.create({
+          fullWidth: true,
+          ...options
+        }));
+      };
+
+      create("size-small", {
+        id: "gallery-input-size-small",
+        value: "GitNest Workspace",
+        size: "small",
+        ariaLabel: "Small 尺寸输入框"
+      });
+      create("size-medium", {
+        id: "gallery-input-size-medium",
+        value: "GitNest Workspace",
+        size: "medium",
+        ariaLabel: "Medium 尺寸输入框"
+      });
+      create("size-large", {
+        id: "gallery-input-size-large",
+        value: "GitNest Workspace",
+        size: "large",
+        ariaLabel: "Large 尺寸输入框"
+      });
+
+      create("default", {
+        id: "gallery-input-default",
+        placeholder: "输入 Workspace 名称",
+        size: showcaseSize
+      });
+      create("focus", {
+        id: "gallery-input-focus",
+        value: "sample-workspace",
+        size: showcaseSize,
+        state: "focus"
+      });
+      create("error", {
+        id: "gallery-input-error",
+        value: "无效路径",
+        size: showcaseSize,
+        state: "error",
+        ariaInvalid: true,
+        helpText: "路径不存在，请重新选择。"
+      });
+      create("disabled", {
+        id: "gallery-input-disabled",
+        value: "只读值",
+        size: showcaseSize,
+        disabled: true
+      });
+      const createTextarea = (name, options) => {
+        const target = document.querySelector(`[data-input-mount="${name}"]`);
+        if (!target) return;
+        target.replaceChildren(GitNestTextarea.create({
+          fullWidth: true,
+          ...options
+        }));
+      };
+
+      createTextarea("textarea", {
+        id: "gallery-textarea-default",
+        placeholder: "输入提交信息或提示词…",
+        size: showcaseSize,
+        rows: 3
+      });
+      create("search", {
+        id: "gallery-input-search",
+        value: "sc",
+        size: showcaseSize,
+        ariaLabel: "筛选仓库",
+        leadingIcon: galleryIcon("search"),
+        clearButton: {
+          icon: galleryIcon("x"),
+          ariaLabel: "清除筛选"
+        }
+      });
+      create("history", {
+        id: "gallery-input-history",
+        value: "作者 / Hash",
+        size: showcaseSize
+      });
+      create("command", {
+        id: "gallery-input-command",
+        value: "重新扫描 Workspace",
+        size: showcaseSize,
+        state: "focus",
+        leadingIcon: galleryIcon("search"),
+        trailing: "<kbd>Esc</kbd>",
+        ariaLabel: "命令搜索"
+      });
+      createTextarea("commit", {
+        id: "gallery-textarea-commit",
+        placeholder: "输入提交信息…",
+        size: showcaseSize,
+        rows: 3
+      });
+    }
+
+    function mountButtonShowcases() {
+      const showcaseSize = "small";
+      const create = (options) =>
+        GitNestButton.create({
+          type: "button",
+          icon: options.iconName ? galleryIcon(options.iconName) : "",
+          ...options
+        });
+      const mount = (name, options) => {
+        const target = document.querySelector(`[data-button-showcase="${name}"]`);
+        if (!target) return;
+        target.replaceChildren(...options.map(create));
+      };
+
+      mount("sizes", [
+        { label: "Small · 32px", size: "small", variant: "default" },
+        { label: "Medium · 35px", size: showcaseSize, variant: "default" },
+        { label: "Large · 40px", size: "large", variant: "default" }
+      ]);
+      mount("variants", [
+        { label: "默认按钮", size: showcaseSize, variant: "default" },
+        { label: "主要操作", size: showcaseSize, variant: "primary" }
+      ]);
+      mount("danger", [
+        { label: "危险按钮", size: showcaseSize, variant: "danger" },
+        { label: "确认删除", size: showcaseSize, variant: "danger", emphasis: "strong" },
+        { label: "不可用", size: showcaseSize, variant: "default", disabled: true }
+      ]);
+      mount("states", [
+        { label: "保存设置", size: showcaseSize, variant: "primary", loading: true, ariaLabel: "正在保存" },
+        { label: "满宽提交", size: showcaseSize, variant: "default", fullWidth: true }
+      ]);
+      mount("icons", [
+        { label: "更多操作", size: showcaseSize, variant: "icon", iconName: "more", ariaLabel: "更多操作" },
+        { label: "刷新", size: showcaseSize, variant: "icon", iconName: "refresh", selected: true, ariaLabel: "刷新" },
+        { label: "不可用", size: showcaseSize, variant: "icon", iconName: "settings", disabled: true, ariaLabel: "不可用" }
+      ]);
+      mount("tools", [
+        { label: "重新扫描", size: showcaseSize, variant: "toolbar", iconName: "refresh" },
+        { label: "已选中", size: showcaseSize, variant: "toolbar", iconName: "check", selected: true },
+        { label: "打开目录", size: showcaseSize, variant: "quick", iconName: "folder" }
+      ]);
+    }
+
+    function mountToastShowcase() {
+      const stateMount = document.querySelector(
+        '[data-toast-showcase="states"]'
+      );
+      const actionMount = document.querySelector(
+        '[data-toast-showcase="actions"]'
+      );
+      if (!stateMount || !actionMount) return;
+
+      const examples = [
+        {
+          tone: "success",
+          title: "设置已保存",
+          message: "AI 提交信息设置已写入 app-settings.json。"
+        },
+        {
+          tone: "info",
+          title: "正在刷新仓库",
+          message: "GitNest 正在更新远程跟踪引用。"
+        },
+        {
+          tone: "error",
+          title: "连接测试失败",
+          message: "请检查 API URL、模型和 API Key。"
+        }
+      ];
+
+      stateMount.replaceChildren(
+        ...examples.map((example) =>
+          GitNestToast.create({
+            ...example,
+            closable: true
+          })
+        )
+      );
+
+      const labels = {
+        success: "显示成功提示",
+        info: "显示信息提示",
+        error: "显示错误提示"
+      };
+      actionMount.replaceChildren(
+        ...examples.map((example) =>
+          GitNestButton.create({
+            label: labels[example.tone],
+            size: "small",
+            variant:
+              example.tone === "error"
+                ? "danger"
+                : example.tone === "success"
+                  ? "primary"
+                  : "default",
+            onClick: () =>
+              GitNestToast.show({
+                ...example,
+                duration: 3100
+              })
+          })
+        )
+      );
+    }
+
+    function mountDiffSearchPopoverShowcase() {
+      const mount = document.getElementById("diffSearchPopoverShowcase");
+      let activeMatch = 1;
+      const totalMatches = 8;
+      let searchPopover;
+      const syncCount = (hasQuery = true) => {
+        searchPopover.update({
+          countLabel: hasQuery
+            ? `${activeMatch + 1} / ${totalMatches}`
+            : "0 / 0",
+          hasMatches: hasQuery
+        });
+      };
+      searchPopover = GitNestDiffSearchPopover.create({
+        value: "repository",
+        countLabel: "2 / 8",
+        hasMatches: true,
+        inputAriaLabel: "搜索词",
+        icons: {
+          search: galleryIcon("search"),
+          previous: galleryIcon("arrow-up"),
+          next: galleryIcon("arrow-down"),
+          close: galleryIcon("x")
+        },
+        onInput: (value) => {
+          const hasQuery = Boolean(value.trim());
+          activeMatch = hasQuery ? Math.min(activeMatch, totalMatches - 1) : 0;
+          syncCount(hasQuery);
+        },
+        onPrevious: () => {
+          activeMatch =
+            (activeMatch - 1 + totalMatches) % totalMatches;
+          syncCount();
+        },
+        onNext: () => {
+          activeMatch = (activeMatch + 1) % totalMatches;
+          syncCount();
+        },
+        onClose: () => searchPopover.update({ open: false })
+      });
+      mount.replaceChildren(searchPopover.element);
+    }
+
+    function mountDiffWorkspaceShowcase() {
+      const mount = document.getElementById("diffWorkspaceShowcase");
+      if (!mount) return;
+
+      const workspaceStateRows = [
+        { kind: "hunk", text: "@@ -56,10 +56,17 @@ public final class WorkspaceStateService {" },
+        { kind: "context", oldNo: 56, newNo: 56, text: "    public WorkspaceSnapshot collect(Path root) {" },
+        { kind: "delete", oldNo: 57, text: "        GitStatus status = gitClient.status(root);" },
+        { kind: "add", newNo: 57, text: "        requireReadableDirectory(root);" },
+        { kind: "add", newNo: 58, text: "        GitStatus status = gitClient.status(root);" },
+        { kind: "add", newNo: 59, text: "        List<ChangedFile> changedFiles = status.changedFiles();" },
+        { kind: "context", oldNo: 58, newNo: 60, text: "" },
+        { kind: "pair", oldNo: 59, newNo: 61, oldText: "        return new WorkspaceSnapshot(status.branch(), status.count());", newText: "        return new WorkspaceSnapshot(status.branch(), changedFiles);" },
+        { kind: "context", oldNo: 60, newNo: 62, text: "    }" },
+        { kind: "add", newNo: 63, text: "" },
+        { kind: "add", newNo: 64, text: "    private void requireReadableDirectory(Path root) {" },
+        { kind: "add", newNo: 65, text: "        if (!Files.isReadable(root)) {" },
+        { kind: "add", newNo: 66, text: "            throw new IllegalArgumentException(\"Workspace is not readable\");" },
+        { kind: "add", newNo: 67, text: "        }" },
+        { kind: "add", newNo: 68, text: "    }" },
+        { kind: "hunk", text: "@@ -91,6 +98,12 @@ private WorkspaceSnapshot emptySnapshot(Path root) {" },
+        { kind: "context", oldNo: 91, newNo: 98, text: "        return WorkspaceSnapshot.builder()" },
+        { kind: "delete", oldNo: 92, text: "            .root(root)" },
+        { kind: "add", newNo: 99, text: "            .root(root.toAbsolutePath().normalize())" },
+        { kind: "add", newNo: 100, text: "            .readable(Files.isReadable(root))" },
+        { kind: "context", oldNo: 93, newNo: 101, text: "            .branch(\"main\")" },
+        { kind: "context", oldNo: 94, newNo: 102, text: "            .changedFiles(List.of())" },
+        { kind: "context", oldNo: 95, newNo: 103, text: "            .build();" },
+        { kind: "context", oldNo: 96, newNo: 104, text: "    }" }
+      ];
+      const workspaceStateFullRows = [
+        workspaceStateRows[0],
+        { kind: "context", oldNo: 50, newNo: 50, text: "    private final GitClient gitClient;" },
+        { kind: "context", oldNo: 51, newNo: 51, text: "    private final Clock clock;" },
+        { kind: "context", oldNo: 52, newNo: 52, text: "" },
+        { kind: "context", oldNo: 53, newNo: 53, text: "    WorkspaceStateService(GitClient gitClient, Clock clock) {" },
+        { kind: "context", oldNo: 54, newNo: 54, text: "        this.gitClient = gitClient;" },
+        { kind: "context", oldNo: 55, newNo: 55, text: "        this.clock = clock;" },
+        ...workspaceStateRows.slice(1, 15),
+        { kind: "context", oldNo: 61, newNo: 69, text: "" },
+        { kind: "context", oldNo: 62, newNo: 70, text: "    private WorkspaceSnapshot loadCachedSnapshot(Path root) {" },
+        { kind: "context", oldNo: 63, newNo: 71, text: "        return snapshotCache.get(root);" },
+        { kind: "context", oldNo: 64, newNo: 72, text: "    }" },
+        { kind: "context", oldNo: 65, newNo: 73, text: "" },
+        { kind: "context", oldNo: 66, newNo: 74, text: "    private Instant collectedAt() {" },
+        { kind: "context", oldNo: 67, newNo: 75, text: "        return clock.instant();" },
+        { kind: "context", oldNo: 68, newNo: 76, text: "    }" },
+        workspaceStateRows[15],
+        { kind: "context", oldNo: 85, newNo: 92, text: "    private WorkspaceSnapshot emptySnapshot(Path root) {" },
+        { kind: "context", oldNo: 86, newNo: 93, text: "        if (root == null) {" },
+        { kind: "context", oldNo: 87, newNo: 94, text: "            return WorkspaceSnapshot.empty();" },
+        { kind: "context", oldNo: 88, newNo: 95, text: "        }" },
+        { kind: "context", oldNo: 89, newNo: 96, text: "" },
+        { kind: "context", oldNo: 90, newNo: 97, text: "        // 保留构建快照所需的完整方法上下文" },
+        ...workspaceStateRows.slice(16),
+        { kind: "context", oldNo: 97, newNo: 105, text: "" },
+        { kind: "context", oldNo: 98, newNo: 106, text: "    private boolean isRepository(Path root) {" },
+        { kind: "context", oldNo: 99, newNo: 107, text: "        return Files.exists(root.resolve(\".git\"));" },
+        { kind: "context", oldNo: 100, newNo: 108, text: "    }" },
+        { kind: "context", oldNo: 101, newNo: 109, text: "}" }
+      ];
+      const diffWorkspace = GitNestDiffWorkspace.create({
+        ariaLabel: "完整 Diff Workspace 组件示例",
+        selectedKey: "workspace-state",
+        config: {
+          layouts: ["unified"],
+          defaultLayout: "unified",
+          showToolbar: false,
+          allowWrap: false,
+          showHunkNavigation: false,
+          allowContextExpansion: true
+        },
+        features: {
+          allowTreeView: true,
+          allowRefresh: false,
+          openStandaloneDiff: true,
+          commitRegion: true,
+          pushRegion: true,
+          stashBrowser: true,
+          statusbar: false
+        },
+        commit: {
+          message: "",
+          push: false,
+          aiEnabled: false,
+          conflicts: 0
+        },
+        stashes: [
+          {
+            hash: "90d2fa712a8c",
+            ref: "stash@{0}",
+            title: "WIP on test: 调整 Diff 工作区交互",
+            branch: "test",
+            author: "林舟",
+            relativeTime: "8 分钟前",
+            files: [
+              {
+                path: "src/main/java/com/faisco/core/service/WorkspaceStateService.java",
+                additions: 28,
+                deletions: 11
+              },
+              {
+                path: "src/test/java/com/faisco/core/service/WorkspaceStateServiceTest.java",
+                additions: 19,
+                deletions: 3
+              }
+            ]
+          },
+          {
+            hash: "c14b96ec1440",
+            ref: "stash@{1}",
+            title: "On master: 临时保留配置升级",
+            branch: "master",
+            author: "陈屿",
+            relativeTime: "昨天",
+            files: [
+              {
+                path: "src/main/java/com/faisco/core/config/CoreApplicationConfig.java",
+                additions: 12,
+                deletions: 6
+              },
+              {
+                path: "docs/git-status-test-cases.md",
+                additions: 21,
+                deletions: 0
+              },
+              {
+                path: "assets/diff-preview.png",
+                binary: true
+              }
+            ]
+          }
+        ],
+        files: [
+          {
+            key: "application-config",
+            path: "src/main/java/com/faisco/core/config/CoreApplicationConfig.java",
+            status: "modified",
+            staged: true,
+            language: "Java",
+            rows: [
+              { kind: "hunk", text: "@@ -18,6 +18,10 @@ public class CoreApplicationConfig {" },
+              { kind: "context", oldNo: 18, newNo: 18, text: "public class CoreApplicationConfig {" },
+              { kind: "delete", oldNo: 19, text: "    private boolean diffEnabled = false;" },
+              { kind: "add", newNo: 19, text: "    private boolean diffEnabled = true;" },
+              { kind: "add", newNo: 20, text: "    private String defaultLayout = \"unified\";" },
+              { kind: "context", oldNo: 20, newNo: 21, text: "}" }
+            ]
+          },
+          {
+            key: "workspace-state",
+            path: "src/main/java/com/faisco/core/service/WorkspaceStateService.java",
+            status: "modified",
+            staged: false,
+            language: "Java",
+            rows: workspaceStateRows,
+            fullRows: workspaceStateFullRows
+          },
+          {
+            key: "workspace-test",
+            path: "src/test/java/com/faisco/core/service/WorkspaceStateServiceTest.java",
+            status: "modified",
+            staged: false,
+            language: "Java",
+            rows: [
+              { kind: "hunk", text: "@@ -34,7 +34,13 @@ class WorkspaceStateServiceTest {" },
+              { kind: "context", oldNo: 34, newNo: 34, text: "    @Test" },
+              { kind: "delete", oldNo: 35, text: "    void returnsStatusCount() {" },
+              { kind: "add", newNo: 35, text: "    void returnsChangedFiles() {" },
+              { kind: "add", newNo: 36, text: "        assertThat(snapshot.changedFiles()).hasSize(2);" },
+              { kind: "context", oldNo: 36, newNo: 37, text: "    }" }
+            ]
+          },
+          {
+            key: "status-cases",
+            path: "docs/git-status-test-cases.md",
+            status: "untracked",
+            staged: false,
+            language: "Markdown",
+            rows: [
+              { kind: "hunk", text: "@@ -0,0 +1,6 @@" },
+              { kind: "add", newNo: 1, text: "# Git status test cases" },
+              { kind: "add", newNo: 2, text: "" },
+              { kind: "add", newNo: 3, text: "- staged modification" },
+              { kind: "add", newNo: 4, text: "- unstaged modification" },
+              { kind: "add", newNo: 5, text: "- untracked file" },
+              { kind: "add", newNo: 6, text: "- conflict" }
+            ]
+          }
+        ]
+      });
+      mount.replaceChildren(diffWorkspace.element);
+      window.diffWorkspaceShowcase = diffWorkspace;
+
+      const standaloneMount = document.getElementById(
+        "diffWorkspaceStandaloneShowcase"
+      );
+      if (standaloneMount) {
+        const standaloneWorkspace = GitNestDiffWorkspace.create({
+          ariaLabel: "独立 Diff 窗口配置示例",
+          selectedKey: "workspace-state",
+          config: {
+            layouts: ["split", "unified"],
+            defaultLayout: "split",
+            showToolbar: true,
+            allowWrap: true,
+            showHunkNavigation: true,
+            allowContextExpansion: true
+          },
+          features: {
+            allowTreeView: true,
+            allowRefresh: true,
+            openStandaloneDiff: false,
+            commitRegion: false,
+            pushRegion: false,
+            stashBrowser: false,
+            statusbar: true
+          },
+          files: diffWorkspace.options.files
+        });
+        standaloneMount.replaceChildren(standaloneWorkspace.element);
+        window.diffWorkspaceStandaloneShowcase = standaloneWorkspace;
+      }
+    }
+
+    function mountCommitDetailShowcase() {
+      const stage = document.querySelector("[data-commit-detail-demo]");
+      if (!stage) return;
+      const triggers = [...stage.querySelectorAll("[data-commit-detail-trigger]")];
+      const fields = {
+        title: stage.querySelector("[data-commit-detail-title]"),
+        description: stage.querySelector("[data-commit-detail-description]"),
+        hash: stage.querySelector("[data-commit-detail-hash]"),
+        author: stage.querySelector("[data-commit-detail-author]"),
+        time: stage.querySelector("[data-commit-detail-time]"),
+        ref: stage.querySelector("[data-commit-detail-ref]")
+      };
+      const update = (trigger) => {
+        fields.title.textContent = trigger.dataset.subject || "提交详情";
+        fields.description.textContent = trigger.dataset.body || "";
+        fields.hash.textContent = trigger.dataset.hash || "—";
+        fields.author.textContent = trigger.dataset.author || "—";
+        fields.time.textContent = trigger.dataset.time || "—";
+        fields.ref.textContent = trigger.dataset.ref || "—";
+        triggers.forEach((item) => {
+          item.setAttribute(
+            "aria-current",
+            String(item === trigger)
+          );
+        });
+      };
+
+      triggers.forEach((trigger) => {
+        trigger.addEventListener("click", () => update(trigger));
+      });
+      if (triggers[0]) update(triggers[0]);
+    }
+
+    function setGalleryCategory(category, { focus = false, updateHash = true, reveal = false } = {}) {
+      const nextCategory = galleryCategories.has(category) ? category : "entry";
+      galleryTabs.forEach((tab) => {
+        const isSelected = tab.dataset.galleryTab === nextCategory;
+        tab.setAttribute("aria-selected", String(isSelected));
+        tab.tabIndex = isSelected ? 0 : -1;
+        if (focus && isSelected) tab.focus();
+      });
+      galleryPanels.forEach((panel) => {
+        const isVisible = panel.dataset.galleryPanel === nextCategory;
+        panel.hidden = !isVisible;
+        panel.setAttribute("aria-hidden", String(!isVisible));
+      });
+      if (reveal) {
+        const activePanel = galleryPanels.find((panel) => panel.dataset.galleryPanel === nextCategory);
+        activePanel?.scrollIntoView?.({ block: "start" });
+      }
+      if (updateHash && window.location.hash !== `#${nextCategory}`) {
+        try {
+          window.history.replaceState(null, "", `#${nextCategory}`);
+        } catch {
+          // 本地文件预览环境可能限制 history；分类切换本身仍然有效。
+        }
+      }
+    }
+
+    themeToggle.addEventListener("click", () => {
+      root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+    });
+
+    galleryTabs.forEach((tab, index) => {
+      tab.addEventListener("click", () => {
+        setGalleryCategory(tab.dataset.galleryTab, { reveal: true });
+      });
+      tab.addEventListener("keydown", (event) => {
+        if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) {
+          return;
+        }
+        event.preventDefault();
+        const nextIndex = event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? galleryTabs.length - 1
+            : (index + (event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1) + galleryTabs.length) % galleryTabs.length;
+        setGalleryCategory(galleryTabs[nextIndex].dataset.galleryTab, { focus: true, reveal: true });
+      });
+    });
+
+    window.addEventListener("hashchange", () => {
+      setGalleryCategory(window.location.hash.slice(1), { updateHash: false, reveal: true });
+    });
+
+    const initialCategory = window.location.hash.slice(1);
+    mountButtonShowcases();
+    mountToastShowcase();
+    mountInputShowcases();
+    mountDiffSearchPopoverShowcase();
+    mountDiffWorkspaceShowcase();
+    mountCommitDetailShowcase();
+    setGalleryCategory(initialCategory, { updateHash: false, reveal: Boolean(initialCategory) });
+  </script>
+</body>
+</html>

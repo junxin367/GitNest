@@ -1,0 +1,27 @@
+.workspace-directory {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  height: var(--control-compact);
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-regular);
+}
+
+.workspace-directory > .icon {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.workspace-directory > span {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

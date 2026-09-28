@@ -1,0 +1,52 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "@gitnest/contracts": [
+        "./packages/contracts/src/index.ts"
+      ],
+      "@gitnest/git-core": [
+        "./packages/git-core/src/index.ts"
+      ],
+      "@gitnest/git-cli": [
+        "./packages/git-cli/src/index.ts"
+      ],
+      "@gitnest/workspace-core": [
+        "./packages/workspace-core/src/index.ts"
+      ],
+      "@gitnest/persistence-json": [
+        "./packages/persistence-json/src/index.ts"
+      ],
+      "@gitnest/application": [
+        "./packages/application/src/index.ts"
+      ],
+      "@gitnest/testkit": [
+        "./packages/testkit/src/index.ts"
+      ],
+      "@gitnest/design-system": [
+        "./packages/design-system/src/index.ts"
+      ],
+      "@gitnest/code-analysis": [
+        "./packages/code-analysis/src/index.ts"
+      ]
+    }
+  }
+}
