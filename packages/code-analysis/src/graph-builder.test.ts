@@ -120,6 +120,110 @@ describe("buildCodeGraph request chains", () => {
     ).toBe(true);
   });
 
+  it("resolves overloaded declarations by nearest line and uses the lower line for ties", () => {
+    const createParsed = () => {
+      const parsed = parseSourceFile(
+        sourceFile("OffsetController.java", "java"),
+        [
+          "class OffsetController {",
+          "  void handle(int value) {}",
+          "",
+          "",
+          "",
+          "  void handle(String value) {}",
+          "}"
+        ].join("\n")
+      );
+      const methods = parsed.symbols
+        .filter((symbol) => symbol.name === "handle")
+        .sort((left, right) => left.line - right.line);
+      expect(methods).toHaveLength(2);
+      parsed.serverEndpoints = [{
+        method: "GET",
+        route: "/offset",
+        rawRoute: "/offset",
+        line: 4,
+        symbolQualifiedName: methods[0]!.qualifiedName,
+        annotation: "@GetMapping"
+      }];
+      return { parsed, methods };
+    };
+
+    const tied = createParsed();
+    const tiedGraph = buildCodeGraph({
+      files: [tied.parsed],
+      scope: "workspace",
+      graphDepth: 3
+    });
+    expect(
+      tiedGraph.nodes.find(
+        (node) => node.kind === "server-endpoint"
+      )?.location.line
+    ).toBe(tied.methods[0]!.line);
+
+    const nearest = createParsed();
+    nearest.parsed.serverEndpoints[0]!.line = 5;
+    const nearestGraph = buildCodeGraph({
+      files: [nearest.parsed],
+      scope: "workspace",
+      graphDepth: 3
+    });
+    expect(
+      nearestGraph.nodes.find(
+        (node) => node.kind === "server-endpoint"
+      )?.location.line
+    ).toBe(nearest.methods[1]!.line);
+  });
+
+  it("keeps a reused semantic node under its first qualified name", () => {
+    const parsed = parseSourceFile(
+      sourceFile("SemanticIdentity.java", "java"),
+      [
+        "class SemanticIdentity {",
+        "  void first() {}",
+        "  void second() { target(); }",
+        "  void target() {}",
+        "}"
+      ].join("\n")
+    );
+    const first = parsed.symbols.find(
+      (symbol) => symbol.name === "first"
+    );
+    const second = parsed.symbols.find(
+      (symbol) => symbol.name === "second"
+    );
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    first!.semanticId = "shared-semantic-id";
+    second!.semanticId = "shared-semantic-id";
+
+    const graph = buildCodeGraph({
+      files: [parsed],
+      scope: "workspace",
+      graphDepth: 3
+    });
+    const reused = graph.nodes.find(
+      (node) => node.name === "first"
+    );
+    const target = graph.nodes.find(
+      (node) => node.name === "target"
+    );
+
+    expect(reused).toBeDefined();
+    expect(target).toBeDefined();
+    expect(
+      graph.nodes.some((node) => node.name === "second")
+    ).toBe(false);
+    expect(
+      graph.edges.some(
+        (edge) =>
+          edge.kind === "calls" &&
+          edge.from === reused?.id &&
+          edge.to === target?.id
+      )
+    ).toBe(false);
+  });
+
   it("resolves ambiguous Java references to the unique symbol in the source package", () => {
     const first = parseSourceFile(
       sourceFile("a/Flags.java", "java"),

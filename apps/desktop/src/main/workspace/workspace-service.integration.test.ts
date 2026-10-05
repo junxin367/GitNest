@@ -11,6 +11,11 @@ import {
   WorkspaceService
 } from "@gitnest/application";
 import { GitCliClient } from "@gitnest/git-cli";
+import type {
+  GitReadOptions,
+  GitTopologyClient,
+  RepositoryTopology
+} from "@gitnest/git-core";
 import {
   JsonWorkspaceCollectionStore,
   JsonWorkspaceStore
@@ -21,6 +26,10 @@ import {
   type TemporaryDirectoryFixture,
   type WorkspaceFixture
 } from "@gitnest/testkit";
+import {
+  WorkspaceError,
+  listWorkspaceTargets
+} from "@gitnest/workspace-core";
 
 import { NodeWorkspaceFileSystem } from "../adapters/filesystem.adapter";
 
@@ -30,15 +39,18 @@ describe("WorkspaceService integration", () => {
   let service: WorkspaceService;
   let storePath: string;
   let tick = 0;
+  const gitClient = new GitCliClient();
   const clock = () =>
-    `2026-09-04T10:${String(tick++).padStart(2, "0")}:00.000Z`;
+    new Date(
+      Date.UTC(2026, 8, 4, 10, tick++)
+    ).toISOString();
 
   beforeAll(async () => {
     fixture = await createWorkspaceFixture();
     appData = await createTemporaryDirectoryFixture("app-data");
     storePath = join(appData.path, "default.workspace.json");
     service = new WorkspaceService(
-      new GitCliClient(),
+      gitClient,
       new NodeWorkspaceFileSystem(),
       new JsonWorkspaceStore(storePath),
       { clock }
@@ -51,10 +63,14 @@ describe("WorkspaceService integration", () => {
   });
 
   it("discovers nested repositories and linked Worktrees, groups them, and restores persisted state", async () => {
+    const fullInspection = vi.spyOn(gitClient, "inspectRepository");
+    const topology = vi.spyOn(gitClient, "readRepositoryTopology");
     const configured = await service.configureRoot(
       fixture.metaRootPath
     );
 
+    expect(topology).toHaveBeenCalled();
+    expect(fullInspection).not.toHaveBeenCalled();
     expect(configured).toMatchObject({
       path: fixture.metaRootPath,
       excludes: [],
@@ -206,6 +222,313 @@ describe("WorkspaceService integration", () => {
       await expect(createService().getCurrent()).resolves.toEqual(
         added.workspace
       );
+    } finally {
+      await localAppData.dispose();
+    }
+  }, 15_000);
+
+  it("keeps selection and collapsed groups responsive while a rescan is waiting on Git", async () => {
+    const localAppData =
+      await createTemporaryDirectoryFixture(
+        "responsive-rescan-app-data"
+      );
+    const localStorePath = join(
+      localAppData.path,
+      "default.workspace.json"
+    );
+    const gitClient = new DeferredTopologyClient();
+    const localService = new WorkspaceService(
+      gitClient,
+      new NodeWorkspaceFileSystem(),
+      new JsonWorkspaceStore(localStorePath),
+      { clock }
+    );
+
+    try {
+      const configured = await localService.configureRoot(
+        fixture.metaRootPath
+      );
+      const target = listWorkspaceTargets(configured).find(
+        (candidate) =>
+          candidate.repositoryId !==
+            configured.selectedTarget?.repositoryId ||
+          candidate.worktreeId !==
+            configured.selectedTarget?.worktreeId
+      );
+      const group = configured.groups.find(
+        (candidate) => !candidate.collapsed
+      );
+      if (!target || !group) {
+        throw new Error(
+          "Workspace fixture did not provide selection and group alternatives."
+        );
+      }
+
+      const gate = gitClient.deferNextRead();
+      const rescanning = localService.rescan();
+      await gate.started;
+      const selected = await resolveWithin(
+        localService.selectTarget(target),
+        500
+      );
+      const collapsed = await resolveWithin(
+        localService.setGroupCollapsed({
+          groupId: group.id,
+          collapsed: true
+        }),
+        500
+      );
+
+      expect(selected.selectedTarget).toEqual(target);
+      expect(
+        collapsed.groups.find(
+          (candidate) => candidate.id === group.id
+        )?.collapsed
+      ).toBe(true);
+
+      gate.release();
+      const refreshed = await rescanning;
+      expect(refreshed.selectedTarget).toEqual(target);
+      expect(
+        refreshed.groups.find(
+          (candidate) => candidate.id === group.id
+        )?.collapsed
+      ).toBe(true);
+      await expect(
+        new WorkspaceService(
+          new GitCliClient(),
+          new NodeWorkspaceFileSystem(),
+          new JsonWorkspaceStore(localStorePath),
+          { clock }
+        ).getCurrent()
+      ).resolves.toEqual(refreshed);
+    } finally {
+      await localAppData.dispose();
+    }
+  }, 15_000);
+
+  it("discards an older rescan after roots or exclusions change", async () => {
+    const localAppData =
+      await createTemporaryDirectoryFixture(
+        "stale-rescan-topology-app-data"
+      );
+    const gitClient = new DeferredTopologyClient();
+    const localService = new WorkspaceService(
+      gitClient,
+      new NodeWorkspaceFileSystem(),
+      new JsonWorkspaceStore(
+        join(localAppData.path, "default.workspace.json")
+      ),
+      { clock }
+    );
+
+    try {
+      const configured = await localService.configureRoot(
+        fixture.metaRootPath
+      );
+      const nestedTarget = configured.groups
+        .find((group) => group.name === "svr")
+        ?.targets[0];
+      if (!nestedTarget) {
+        throw new Error(
+          "Workspace fixture did not contain a nested repository."
+        );
+      }
+
+      const rootGate = gitClient.deferNextRead();
+      const staleRootRescan = localService.rescan();
+      await rootGate.started;
+      const added = await resolveWithin(
+        localService.addDirectory({
+          path: fixture.standaloneRepositoryPath
+        }),
+        5_000
+      );
+      rootGate.release();
+      const afterRootRescan = await staleRootRescan;
+      expect(afterRootRescan).toEqual(added.workspace);
+      expect(afterRootRescan.additionalRoots).toEqual([
+        expect.objectContaining({
+          path: fixture.standaloneRepositoryPath
+        })
+      ]);
+
+      const excludeGate = gitClient.deferNextRead();
+      const staleExcludeRescan = localService.rescan();
+      await excludeGate.started;
+      const excluded = await resolveWithin(
+        localService.excludeRepository({
+          target: nestedTarget
+        }),
+        5_000
+      );
+      excludeGate.release();
+      const afterExcludeRescan = await staleExcludeRescan;
+      expect(afterExcludeRescan).toEqual(excluded);
+      expect(afterExcludeRescan.excludes).toContain(
+        "svr/resource-server-demo"
+      );
+      expect(listWorkspaceTargets(afterExcludeRescan)).not.toContainEqual(
+        nestedTarget
+      );
+    } finally {
+      await localAppData.dispose();
+    }
+  }, 20_000);
+
+  it("does not let an old collection rescan overwrite a switched or deleted Workspace", async () => {
+    const localAppData =
+      await createTemporaryDirectoryFixture(
+        "stale-collection-rescan-app-data"
+      );
+    const store = new JsonWorkspaceCollectionStore({
+      catalogFilePath: join(localAppData.path, "catalog.json"),
+      workspaceDirectory: join(localAppData.path, "items")
+    });
+    const gitClient = new DeferredTopologyClient();
+    const collection = new WorkspaceCollectionService(
+      gitClient,
+      new NodeWorkspaceFileSystem(),
+      store,
+      {
+        clock,
+        idFactory: () => "workspace_second"
+      }
+    );
+
+    try {
+      await collection.createWorkspace({
+        name: "Primary Workspace",
+        path: fixture.metaRootPath
+      });
+      const second = await collection.createWorkspace({
+        name: "Second Workspace",
+        path: fixture.standaloneRepositoryPath
+      });
+
+      const switchGate = gitClient.deferNextRead();
+      const staleSwitchRescan = collection.rescan();
+      await switchGate.started;
+      const switched = await resolveWithin(
+        collection.switchWorkspace("default"),
+        500
+      );
+      switchGate.release();
+      const afterSwitchRescan = await staleSwitchRescan;
+      expect(switched.id).toBe("default");
+      expect(afterSwitchRescan.id).toBe("default");
+      expect((await collection.getCurrent()).id).toBe("default");
+
+      await collection.switchWorkspace(second.id);
+      const deleteGate = gitClient.deferNextRead();
+      const staleDeleteRescan = collection.rescan();
+      await deleteGate.started;
+      const afterDelete = await resolveWithin(
+        collection.deleteWorkspace(second.id),
+        500
+      );
+      deleteGate.release();
+      const afterDeleteRescan = await staleDeleteRescan;
+      expect(afterDelete.id).toBe("default");
+      expect(afterDeleteRescan.id).toBe("default");
+      expect(
+        (await store.loadCatalog())?.workspaces.map(
+          (workspace) => workspace.id
+        )
+      ).toEqual(["default"]);
+      expect(await store.loadWorkspace(second.id)).toBeNull();
+    } finally {
+      await localAppData.dispose();
+    }
+  }, 20_000);
+
+  it("keeps collection selection responsive and preserves it after the active Workspace rescan", async () => {
+    const localAppData =
+      await createTemporaryDirectoryFixture(
+        "responsive-collection-rescan-app-data"
+      );
+    const store = new JsonWorkspaceCollectionStore({
+      catalogFilePath: join(localAppData.path, "catalog.json"),
+      workspaceDirectory: join(localAppData.path, "items")
+    });
+    const gitClient = new DeferredTopologyClient();
+    const collection = new WorkspaceCollectionService(
+      gitClient,
+      new NodeWorkspaceFileSystem(),
+      store,
+      { clock }
+    );
+
+    try {
+      const configured = await collection.createWorkspace({
+        name: "Primary Workspace",
+        path: fixture.metaRootPath
+      });
+      const target = listWorkspaceTargets(configured).find(
+        (candidate) =>
+          candidate.repositoryId !==
+            configured.selectedTarget?.repositoryId ||
+          candidate.worktreeId !==
+            configured.selectedTarget?.worktreeId
+      );
+      if (!target) {
+        throw new Error(
+          "Workspace fixture did not provide another repository target."
+        );
+      }
+
+      const gate = gitClient.deferNextRead();
+      const rescanning = collection.rescan();
+      await gate.started;
+      const selected = await resolveWithin(
+        collection.selectTarget(target),
+        500
+      );
+      expect(selected.selectedTarget).toEqual(target);
+
+      gate.release();
+      const refreshed = await rescanning;
+      expect(refreshed.id).toBe(configured.id);
+      expect(refreshed.selectedTarget).toEqual(target);
+      expect((await collection.getCurrent()).selectedTarget).toEqual(
+        target
+      );
+    } finally {
+      await localAppData.dispose();
+    }
+  }, 15_000);
+
+  it("does not commit a cancelled rescan", async () => {
+    const localAppData =
+      await createTemporaryDirectoryFixture(
+        "cancelled-rescan-app-data"
+      );
+    const store = new JsonWorkspaceStore(
+      join(localAppData.path, "default.workspace.json")
+    );
+    const gitClient = new DeferredTopologyClient();
+    const localService = new WorkspaceService(
+      gitClient,
+      new NodeWorkspaceFileSystem(),
+      store,
+      { clock }
+    );
+
+    try {
+      const configured = await localService.configureRoot(
+        fixture.metaRootPath
+      );
+      const gate = gitClient.deferNextRead();
+      const controller = new AbortController();
+      const rescanning = localService.rescan(controller.signal);
+      await gate.started;
+      controller.abort();
+
+      await expect(rescanning).rejects.toMatchObject({
+        code: "SCAN_CANCELLED"
+      });
+      expect(await localService.getCurrent()).toEqual(configured);
+      expect(await store.load()).toEqual(configured);
     } finally {
       await localAppData.dispose();
     }
@@ -660,3 +983,103 @@ describe("WorkspaceService integration", () => {
     }
   }, 15_000);
 });
+
+class DeferredTopologyClient implements GitTopologyClient {
+  readonly #delegate = new GitCliClient();
+  #nextGate: DeferredTopologyRead | undefined;
+
+  deferNextRead(): DeferredTopologyRead {
+    if (this.#nextGate) {
+      throw new Error("A topology read is already deferred.");
+    }
+    const gate = new DeferredTopologyRead();
+    this.#nextGate = gate;
+    return gate;
+  }
+
+  async readRepositoryTopology(
+    path: string,
+    options?: GitReadOptions
+  ): Promise<RepositoryTopology> {
+    const gate = this.#nextGate;
+    if (gate) {
+      this.#nextGate = undefined;
+      await gate.wait(options?.signal);
+    }
+    return this.#delegate.readRepositoryTopology(path, options);
+  }
+}
+
+class DeferredTopologyRead {
+  readonly started: Promise<void>;
+  readonly #released: Promise<void>;
+  #markStarted!: () => void;
+  #release!: () => void;
+
+  constructor() {
+    this.started = new Promise<void>((resolve) => {
+      this.#markStarted = resolve;
+    });
+    this.#released = new Promise<void>((resolve) => {
+      this.#release = resolve;
+    });
+  }
+
+  release(): void {
+    this.#release();
+  }
+
+  async wait(signal?: AbortSignal): Promise<void> {
+    this.#markStarted();
+    if (signal?.aborted) {
+      throw scanCancelled();
+    }
+    if (!signal) {
+      await this.#released;
+      return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const cancel = () => {
+        reject(scanCancelled());
+      };
+      signal.addEventListener("abort", cancel, { once: true });
+      void this.#released.then(() => {
+        signal.removeEventListener("abort", cancel);
+        resolve();
+      });
+    });
+  }
+}
+
+function scanCancelled(): WorkspaceError {
+  return new WorkspaceError(
+    "SCAN_CANCELLED",
+    "Workspace 扫描已取消。"
+  );
+}
+
+function resolveWithin<Result>(
+  promise: Promise<Result>,
+  timeoutMs: number
+): Promise<Result> {
+  return new Promise<Result>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(
+        new Error(
+          `Operation did not finish within ${timeoutMs} ms.`
+        )
+      );
+    }, timeoutMs);
+    void promise.then(
+      (result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    );
+  });
+}

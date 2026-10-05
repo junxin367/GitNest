@@ -70,6 +70,128 @@ export interface NodeSearchResult {
   totalMatches: number;
 }
 
+const codeGraphQueryIndexBrand: unique symbol = Symbol(
+  "CodeGraphQueryIndex"
+);
+
+export interface CodeGraphQueryIndex {
+  readonly [codeGraphQueryIndexBrand]: true;
+}
+
+interface IndexedNode {
+  node: CodeGraphNode;
+  sourceIndex: number;
+}
+
+interface IndexedSearchNode extends IndexedNode {
+  normalizedName: string;
+  normalizedQualifiedName: string;
+  normalizedPath: string;
+  normalizedLanguage: string;
+}
+
+interface ScoredNode extends IndexedSearchNode {
+  score: number;
+}
+
+class SnapshotGraphQueryIndex implements CodeGraphQueryIndex {
+  readonly [codeGraphQueryIndexBrand] = true as const;
+  readonly nodes: readonly CodeGraphNode[];
+  readonly edges: readonly CodeGraphEdge[];
+  #nodeById?: Map<string, CodeGraphNode>;
+  #nodesById?: Map<string, IndexedNode[]>;
+  readonly #adjacency = new Map<
+    GraphDirection,
+    Map<string, Array<{ edge: CodeGraphEdge; neighbourId: string }>>
+  >();
+  #searchNodes?: IndexedSearchNode[];
+
+  constructor(
+    snapshot: Pick<CodeAnalysisSnapshot, "nodes" | "edges">
+  ) {
+    this.nodes = snapshot.nodes;
+    this.edges = snapshot.edges;
+  }
+
+  get nodeById(): ReadonlyMap<string, CodeGraphNode> {
+    this.#ensureNodeIndexes();
+    return this.#nodeById as Map<string, CodeGraphNode>;
+  }
+
+  adjacencyFor(
+    direction: GraphDirection
+  ): Map<string, Array<{ edge: CodeGraphEdge; neighbourId: string }>> {
+    const cached = this.#adjacency.get(direction);
+    if (cached) {
+      return cached;
+    }
+    const adjacency = buildAdjacency(this.edges, direction);
+    this.#adjacency.set(direction, adjacency);
+    return adjacency;
+  }
+
+  searchNodes(): readonly IndexedSearchNode[] {
+    this.#ensureNodeIndexes();
+    return this.#searchNodes as IndexedSearchNode[];
+  }
+
+  selectedNodes(visited: ReadonlySet<string>): CodeGraphNode[] {
+    this.#ensureNodeIndexes();
+    const selected: IndexedNode[] = [];
+    for (const nodeId of visited) {
+      selected.push(...(this.#nodesById?.get(nodeId) ?? []));
+    }
+    selected.sort(
+      (left, right) => left.sourceIndex - right.sourceIndex
+    );
+    return selected.map((entry) => entry.node);
+  }
+
+  #ensureNodeIndexes(): void {
+    if (
+      this.#nodeById &&
+      this.#nodesById &&
+      this.#searchNodes
+    ) {
+      return;
+    }
+    const nodeById = new Map<string, CodeGraphNode>();
+    const nodesById = new Map<string, IndexedNode[]>();
+    const searchNodes: IndexedSearchNode[] = [];
+    for (const [sourceIndex, node] of this.nodes.entries()) {
+      nodeById.set(node.id, node);
+      const entries = nodesById.get(node.id) ?? [];
+      entries.push({ node, sourceIndex });
+      nodesById.set(node.id, entries);
+      searchNodes.push(toIndexedSearchNode(node, sourceIndex));
+    }
+    this.#nodeById = nodeById;
+    this.#nodesById = nodesById;
+    this.#searchNodes = searchNodes;
+  }
+}
+
+export function createCodeGraphQueryIndex(
+  snapshot: Pick<CodeAnalysisSnapshot, "nodes" | "edges">
+): CodeGraphQueryIndex {
+  if (
+    !Object.isFrozen(snapshot) ||
+    !Object.isFrozen(snapshot.nodes) ||
+    !Object.isFrozen(snapshot.edges) ||
+    snapshot.nodes.some(
+      (node) =>
+        !Object.isFrozen(node) ||
+        !Object.isFrozen(node.location)
+    ) ||
+    snapshot.edges.some((edge) => !Object.isFrozen(edge))
+  ) {
+    throw new TypeError(
+      "Code graph query indexes require a frozen snapshot."
+    );
+  }
+  return new SnapshotGraphQueryIndex(snapshot);
+}
+
 export interface RequestChainFilter {
   query?: string;
   method?: string;
@@ -141,11 +263,17 @@ export interface ImpactSummary {
 
 export function collectSubgraph(
   snapshot: Pick<CodeAnalysisSnapshot, "nodes" | "edges">,
-  options: SubgraphOptions
+  options: SubgraphOptions,
+  index?: CodeGraphQueryIndex
 ): CodeSubgraph {
-  const nodeById = new Map(
-    snapshot.nodes.map((node) => [node.id, node])
+  const queryIndex = matchingQueryIndex(
+    index,
+    snapshot.nodes,
+    snapshot.edges
   );
+  const nodeById =
+    queryIndex?.nodeById ??
+    new Map(snapshot.nodes.map((node) => [node.id, node]));
   const depth = clampInteger(options.depth, DEFAULT_SUBGRAPH_DEPTH, 0, 12);
   const maxNodes = clampInteger(
     options.maxNodes,
@@ -162,7 +290,9 @@ export function collectSubgraph(
   const edgeKindFilter = toKindSet(options.edgeKinds);
   const nodeKindFilter = toKindSet(options.nodeKinds);
   const direction = options.direction ?? "both";
-  const adjacency = buildAdjacency(snapshot.edges, direction);
+  const adjacency =
+    queryIndex?.adjacencyFor(direction) ??
+    buildAdjacency(snapshot.edges, direction);
 
   const unknownNodeIds: string[] = [];
   const visited = new Set<string>();
@@ -244,9 +374,9 @@ export function collectSubgraph(
     reasons.push("max-depth");
   }
 
-  const nodes = snapshot.nodes.filter((node) =>
-    visited.has(node.id)
-  );
+  const nodes =
+    queryIndex?.selectedNodes(visited) ??
+    snapshot.nodes.filter((node) => visited.has(node.id));
   const edges = [...selectedEdges.values()].filter(
     (edge) => visited.has(edge.from) && visited.has(edge.to)
   );
@@ -262,7 +392,8 @@ export function collectSubgraph(
 
 export function searchGraphNodes(
   snapshot: Pick<CodeAnalysisSnapshot, "nodes">,
-  filter: NodeSearchFilter = {}
+  filter: NodeSearchFilter = {},
+  index?: CodeGraphQueryIndex
 ): NodeSearchResult {
   const limit = clampInteger(
     filter.limit,
@@ -281,14 +412,28 @@ export function searchGraphNodes(
     ? new Set(filter.languages.map((value) => value.toLowerCase()))
     : undefined;
 
-  const scored: Array<{ node: CodeGraphNode; score: number }> = [];
-  for (const node of snapshot.nodes) {
+  const queryIndex = matchingQueryIndex(index, snapshot.nodes);
+  const best: ScoredNode[] = [];
+  let totalMatches = 0;
+  const indexedSearchNodes = queryIndex?.searchNodes();
+  for (
+    let sourceIndex = 0;
+    sourceIndex < snapshot.nodes.length;
+    sourceIndex += 1
+  ) {
+    const node = snapshot.nodes[sourceIndex];
+    if (!node) {
+      continue;
+    }
+    const entry =
+      indexedSearchNodes?.[sourceIndex] ??
+      toIndexedSearchNode(node, sourceIndex);
     if (kindFilter && !kindFilter.has(node.kind)) {
       continue;
     }
     if (
       languageFilter &&
-      !languageFilter.has(node.language.toLowerCase())
+      !languageFilter.has(entry.normalizedLanguage)
     ) {
       continue;
     }
@@ -303,36 +448,24 @@ export function searchGraphNodes(
     }
     if (
       pathPrefix &&
-      !normalizeText(node.location.path).startsWith(pathPrefix)
+      !entry.normalizedPath.startsWith(pathPrefix)
     ) {
       continue;
     }
-    const score = scoreNode(node, query);
+    const score = scoreIndexedNode(entry, query);
     if (score === Number.POSITIVE_INFINITY) {
       continue;
     }
-    scored.push({ node, score });
+    totalMatches += 1;
+    addTopScoredNode(best, { ...entry, score }, limit);
   }
 
-  scored.sort((left, right) => {
-    return (
-      left.score - right.score ||
-      Number(right.node.changed) - Number(left.node.changed) ||
-      nodeKindRank(left.node.kind) - nodeKindRank(right.node.kind) ||
-      left.node.name.localeCompare(right.node.name, "zh-CN") ||
-      left.node.location.path.localeCompare(
-        right.node.location.path,
-        "zh-CN"
-      ) ||
-      left.node.location.line - right.node.location.line ||
-      left.node.id.localeCompare(right.node.id)
-    );
-  });
+  best.sort(compareScoredNodes);
 
   return {
-    nodes: scored.slice(0, limit).map((entry) => entry.node),
-    truncated: scored.length > limit,
-    totalMatches: scored.length
+    nodes: best.map((entry) => entry.node),
+    truncated: totalMatches > limit,
+    totalMatches
   };
 }
 
@@ -620,13 +753,48 @@ function buildAdjacency(
   return adjacency;
 }
 
-function scoreNode(node: CodeGraphNode, query: string): number {
+function matchingQueryIndex(
+  index: CodeGraphQueryIndex | undefined,
+  nodes: readonly CodeGraphNode[],
+  edges?: readonly CodeGraphEdge[]
+): SnapshotGraphQueryIndex | undefined {
+  if (!(index instanceof SnapshotGraphQueryIndex)) {
+    return undefined;
+  }
+  if (index.nodes !== nodes) {
+    return undefined;
+  }
+  if (edges !== undefined && index.edges !== edges) {
+    return undefined;
+  }
+  return index;
+}
+
+function toIndexedSearchNode(
+  node: CodeGraphNode,
+  sourceIndex: number
+): IndexedSearchNode {
+  return {
+    node,
+    sourceIndex,
+    normalizedName: normalizeText(node.name),
+    normalizedQualifiedName: normalizeText(node.qualifiedName),
+    normalizedPath: normalizeText(node.location.path),
+    normalizedLanguage: node.language.toLowerCase()
+  };
+}
+
+function scoreIndexedNode(
+  entry: IndexedSearchNode,
+  query: string
+): number {
+  const node = entry.node;
   if (!query) {
     return node.changed ? 0 : 10;
   }
-  const name = normalizeText(node.name);
-  const qualified = normalizeText(node.qualifiedName);
-  const path = normalizeText(node.location.path);
+  const name = entry.normalizedName;
+  const qualified = entry.normalizedQualifiedName;
+  const path = entry.normalizedPath;
   if (name === query) {
     return 0;
   }
@@ -646,6 +814,102 @@ function scoreNode(node: CodeGraphNode, query: string): number {
     return 5;
   }
   return Number.POSITIVE_INFINITY;
+}
+
+function compareScoredNodes(
+  left: ScoredNode,
+  right: ScoredNode
+): number {
+  return (
+    left.score - right.score ||
+    Number(right.node.changed) - Number(left.node.changed) ||
+    nodeKindRank(left.node.kind) - nodeKindRank(right.node.kind) ||
+    left.node.name.localeCompare(right.node.name, "zh-CN") ||
+    left.node.location.path.localeCompare(
+      right.node.location.path,
+      "zh-CN"
+    ) ||
+    left.node.location.line - right.node.location.line ||
+    left.node.id.localeCompare(right.node.id) ||
+    left.sourceIndex - right.sourceIndex
+  );
+}
+
+function addTopScoredNode(
+  heap: ScoredNode[],
+  candidate: ScoredNode,
+  limit: number
+): void {
+  if (heap.length < limit) {
+    heap.push(candidate);
+    bubbleWorstNodeUp(heap, heap.length - 1);
+    return;
+  }
+  const worst = heap[0];
+  if (!worst || compareScoredNodes(candidate, worst) >= 0) {
+    return;
+  }
+  heap[0] = candidate;
+  sinkWorstNodeDown(heap, 0);
+}
+
+function bubbleWorstNodeUp(
+  heap: ScoredNode[],
+  startIndex: number
+): void {
+  let index = startIndex;
+  while (index > 0) {
+    const parentIndex = Math.floor((index - 1) / 2);
+    const parent = heap[parentIndex];
+    const current = heap[index];
+    if (
+      !parent ||
+      !current ||
+      compareScoredNodes(current, parent) <= 0
+    ) {
+      return;
+    }
+    heap[parentIndex] = current;
+    heap[index] = parent;
+    index = parentIndex;
+  }
+}
+
+function sinkWorstNodeDown(
+  heap: ScoredNode[],
+  startIndex: number
+): void {
+  let index = startIndex;
+  while (true) {
+    const leftIndex = index * 2 + 1;
+    const rightIndex = leftIndex + 1;
+    let worstIndex = index;
+    if (
+      leftIndex < heap.length &&
+      compareScoredNodes(
+        heap[leftIndex] as ScoredNode,
+        heap[worstIndex] as ScoredNode
+      ) > 0
+    ) {
+      worstIndex = leftIndex;
+    }
+    if (
+      rightIndex < heap.length &&
+      compareScoredNodes(
+        heap[rightIndex] as ScoredNode,
+        heap[worstIndex] as ScoredNode
+      ) > 0
+    ) {
+      worstIndex = rightIndex;
+    }
+    if (worstIndex === index) {
+      return;
+    }
+    const current = heap[index] as ScoredNode;
+    heap[index] = heap[worstIndex] as ScoredNode;
+    heap[worstIndex] = current;
+    index = worstIndex;
+  }
 }
 
 function chainSearchText(

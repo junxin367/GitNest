@@ -1,4 +1,4 @@
-import type { GitClient } from "@gitnest/git-core";
+import type { GitTopologyClient } from "@gitnest/git-core";
 import {
   WorkspaceAssembler,
   WorkspaceError,
@@ -39,6 +39,10 @@ interface WorkspaceServiceOptions {
   clock?: () => string;
 }
 
+type WorkspaceRescanCommit = (
+  commit: () => Promise<Workspace>
+) => Promise<Workspace>;
+
 export class WorkspaceService {
   readonly #fileSystem: WorkspaceFileSystem;
   readonly #store: WorkspaceStore;
@@ -46,10 +50,12 @@ export class WorkspaceService {
   readonly #assembler: WorkspaceAssembler;
   readonly #clock: () => string;
   #workspace: Workspace | undefined;
+  #topologyRevision = 0;
+  #rescanGeneration = 0;
   #queue: Promise<void> = Promise.resolve();
 
   constructor(
-    gitClient: GitClient,
+    gitClient: GitTopologyClient,
     fileSystem: WorkspaceFileSystem,
     store: WorkspaceStore,
     options: WorkspaceServiceOptions = {}
@@ -102,6 +108,7 @@ export class WorkspaceService {
         updatedAt: now
       });
       await this.#save(workspace);
+      this.#topologyRevision += 1;
       return workspace;
     });
   }
@@ -144,6 +151,7 @@ export class WorkspaceService {
       });
 
       await this.#save(workspace);
+      this.#topologyRevision += 1;
       return {
         workspace,
         duplicate: false
@@ -151,29 +159,63 @@ export class WorkspaceService {
     });
   }
 
-  rescan(signal?: AbortSignal): Promise<Workspace> {
-    return this.#runExclusive(async () => {
+  async rescan(
+    signal?: AbortSignal,
+    runCommit: WorkspaceRescanCommit = (commit) => commit()
+  ): Promise<Workspace> {
+    // Capture only immutable scan inputs under the queue. Git and file-system
+    // discovery stays outside it so selection and presentation updates remain responsive.
+    const request = await this.#runExclusive(async () => {
       const current = await this.#loadWorkspace();
-      const roots = listWorkspaceRoots(current);
-      if (roots.length === 0) {
-        return current;
-      }
-
-      const now = this.#clock();
-      const scans = await this.#scanRoots(
-        roots,
-        now,
-        signal
-      );
-      const workspace = this.#assembler.assemble({
-        current,
-        scans,
-        updatedAt: now
-      });
-
-      await this.#save(workspace);
-      return workspace;
+      return {
+        workspaceId: current.id,
+        roots: listWorkspaceRoots(current),
+        topologyRevision: this.#topologyRevision,
+        generation: ++this.#rescanGeneration,
+        scannedAt: this.#clock()
+      };
     });
+    const scans =
+      request.roots.length > 0
+        ? await this.#scanRoots(
+            request.roots,
+            request.scannedAt,
+            signal
+          )
+        : [];
+
+    return runCommit(() =>
+      this.#runExclusive(async () => {
+        // A newer scan or topology edit makes these discoveries stale. Selection
+        // and group state are safe to merge from the latest Workspace document.
+        assertNotCancelled(signal);
+        const current = await this.#loadWorkspace();
+        if (
+          scans.length === 0 ||
+          current.id !== request.workspaceId ||
+          request.generation !== this.#rescanGeneration ||
+          request.topologyRevision !== this.#topologyRevision ||
+          !workspaceRootsEqual(
+            request.roots,
+            listWorkspaceRoots(current)
+          )
+        ) {
+          return current;
+        }
+
+        const workspace = this.#assembler.assemble({
+          current,
+          scans,
+          updatedAt: latestTimestamp(
+            current.updatedAt,
+            this.#clock()
+          )
+        });
+
+        await this.#save(workspace);
+        return workspace;
+      })
+    );
   }
 
   excludeRepository(
@@ -262,6 +304,7 @@ export class WorkspaceService {
       });
 
       await this.#save(workspace);
+      this.#topologyRevision += 1;
       return workspace;
     });
   }
@@ -432,5 +475,41 @@ function isEmptyWorkspacePlaceholder(
     workspace.repositories.length === 0 &&
     workspace.worktrees.length === 0 &&
     workspace.selectedTarget === undefined
+  );
+}
+
+function workspaceRootsEqual(
+  left: readonly WorkspaceRoot[],
+  right: readonly WorkspaceRoot[]
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((root, index) => {
+      const candidate = right[index];
+      return Boolean(
+        candidate &&
+        root.path === candidate.path &&
+        root.canonicalPath === candidate.canonicalPath &&
+        root.excludes.length === candidate.excludes.length &&
+        root.excludes.every(
+          (exclude, excludeIndex) =>
+            exclude === candidate.excludes[excludeIndex]
+        )
+      );
+    })
+  );
+}
+
+function latestTimestamp(left: string, right: string): string {
+  return left > right ? left : right;
+}
+
+function assertNotCancelled(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  throw new WorkspaceError(
+    "SCAN_CANCELLED",
+    "Workspace 扫描已取消。"
   );
 }

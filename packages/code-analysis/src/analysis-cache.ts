@@ -1012,7 +1012,9 @@ function isAnalysisSourceState(value: unknown): boolean {
         typeof entry.worktreeId === "string" &&
         typeof entry.path === "string" &&
         isFiniteNumber(entry.size) &&
-        isFiniteNumber(entry.modifiedAtMs)
+        isFiniteNumber(entry.modifiedAtMs) &&
+        (entry.fingerprint === undefined ||
+          typeof entry.fingerprint === "string")
     )
   );
 }

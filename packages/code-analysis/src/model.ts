@@ -367,6 +367,8 @@ export interface CodeAnalysisSnapshot {
       path: string;
       size: number;
       modifiedAtMs: number;
+      /** Content hash captured by source discovery for exact freshness checks. */
+      fingerprint?: string;
     }>;
   };
   nodes: CodeGraphNode[];

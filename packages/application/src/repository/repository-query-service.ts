@@ -93,7 +93,8 @@ export class RepositoryQueryService {
 
   getChanges(
     queryId: string,
-    target: RepositoryTarget
+    target: RepositoryTarget,
+    includeChangeStats = true
   ): Promise<RepositoryChangesResult> {
     return this.#runQuery(queryId, async (signal) => {
       const path = await this.#resolveTargetPath(target);
@@ -101,7 +102,7 @@ export class RepositoryQueryService {
         target,
         snapshot:
           await this.#gitClient.readRepositorySnapshot(path, {
-            includeChangeStats: true,
+            includeChangeStats,
             signal
           })
       };

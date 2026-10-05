@@ -253,6 +253,131 @@ describe("WorkspaceSidebar", () => {
     expect(container.textContent).not.toContain("GitNest Docs");
   });
 
+  it("indexes repository metadata and snapshots once while preserving first matches", () => {
+    const targetCount = 100;
+    const targets = Array.from({ length: targetCount }, (_, index) => ({
+      repositoryId: `repository-${index}`,
+      worktreeId: `worktree-${index}`
+    }));
+    const repositories = targets.map((target, index) => ({
+      id: target.repositoryId,
+      name: `Repository ${index}`,
+      commonDir: `C:\\workspace\\repository-${index}\\.git`,
+      canonicalCommonDir: `c:\\workspace\\repository-${index}\\.git`,
+      primaryWorktreeId: target.worktreeId,
+      worktreeIds: [target.worktreeId]
+    }));
+    const worktrees = targets.map((target, index) => ({
+      id: target.worktreeId,
+      repositoryId: target.repositoryId,
+      name: `Worktree ${index}`,
+      path: `C:\\workspace\\repository-${index}`,
+      canonicalPath: `c:\\workspace\\repository-${index}`,
+      gitDir: `C:\\workspace\\repository-${index}\\.git`,
+      head: `${index}`.padStart(40, "0"),
+      branch: `branch-${index}`,
+      isPrimary: true,
+      isBare: false,
+      isDetached: false,
+      isLocked: false,
+      isPrunable: false
+    }));
+    const largeSnapshots = targets.map((target, index) =>
+      createSnapshot(target, {
+        branch: `snapshot-${index}`,
+        unstaged: index === 0 ? 1 : 0
+      })
+    );
+    const reads = {
+      repositories: 0,
+      worktrees: 0,
+      snapshots: 0
+    };
+    const indexedWorkspace: WorkspaceDetailsDto = {
+      ...workspace,
+      groups: [
+        {
+          ...workspace.groups[0]!,
+          targets
+        }
+      ],
+      repositories: countIndexedReads(
+        repositories,
+        () => reads.repositories += 1
+      ),
+      worktrees: countIndexedReads(
+        worktrees,
+        () => reads.worktrees += 1
+      )
+    };
+
+    renderSidebar({
+      workspace: indexedWorkspace,
+      snapshots: countIndexedReads(
+        largeSnapshots,
+        () => reads.snapshots += 1
+      )
+    });
+
+    expect(
+      container.querySelectorAll(".repository-row")
+    ).toHaveLength(targetCount);
+    expect(reads).toEqual({
+      repositories: targetCount,
+      worktrees: targetCount,
+      snapshots: targetCount
+    });
+
+    const duplicateWorkspace: WorkspaceDetailsDto = {
+      ...workspace,
+      groups: [
+        {
+          ...workspace.groups[0]!,
+          targets: [repositoryTarget]
+        }
+      ],
+      repositories: [
+        {
+          ...workspace.repositories[0]!,
+          name: "First repository"
+        },
+        {
+          ...workspace.repositories[0]!,
+          name: "Second repository"
+        }
+      ],
+      worktrees: [
+        {
+          ...workspace.worktrees[0]!,
+          name: "First worktree"
+        },
+        {
+          ...workspace.worktrees[0]!,
+          name: "Second worktree"
+        }
+      ]
+    };
+    renderSidebar({
+      workspace: duplicateWorkspace,
+      snapshots: [
+        {
+          ...snapshots[0]!,
+          branch: "first-branch"
+        },
+        {
+          ...snapshots[0]!,
+          branch: "second-branch"
+        }
+      ]
+    });
+
+    const row = container.querySelector(".repository-row");
+    expect(row?.textContent).toContain("First worktree");
+    expect(row?.textContent).toContain("first-branch");
+    expect(row?.textContent).not.toContain("Second worktree");
+    expect(row?.textContent).not.toContain("second-branch");
+  });
+
   async function openSidebarContextMenu(kind: "workspace" | "group" | "repository") {
     const origin = kind === "workspace"
       ? container.querySelector<HTMLButtonElement>(".workspace-root-heading")
@@ -992,6 +1117,45 @@ function setInputValue(
   input.dispatchEvent(
     new Event("input", { bubbles: true })
   );
+}
+
+function countIndexedReads<Value>(
+  values: Value[],
+  onRead: () => void
+): Value[] {
+  return new Proxy(values, {
+    get(target, property, receiver) {
+      if (
+        typeof property === "string" &&
+        /^\d+$/.test(property)
+      ) {
+        onRead();
+      }
+      return Reflect.get(target, property, receiver);
+    }
+  });
+}
+
+function createSnapshot(
+  target: RepositoryTargetDto,
+  overrides: Partial<RepositoryStatusSnapshotDto> = {}
+): RepositoryStatusSnapshotDto {
+  return {
+    ...target,
+    branch: "main",
+    head: "a".repeat(40),
+    upstream: "origin/main",
+    ahead: 0,
+    behind: 0,
+    staged: 0,
+    unstaged: 0,
+    untracked: 0,
+    conflicted: 0,
+    refreshPending: false,
+    stale: false,
+    refreshedAt: "2026-10-05T00:00:00.000Z",
+    ...overrides
+  };
 }
 
 const repositoryTarget: RepositoryTargetDto = {

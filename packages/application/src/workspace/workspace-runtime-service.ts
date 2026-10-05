@@ -218,6 +218,7 @@ const DEFAULT_SELECTED_TARGET_HEARTBEAT_INTERVAL_MS = 60_000;
 const DEFAULT_STALE_AFTER_MS = 30_000;
 const DEFAULT_WATCHER_REGISTRATION_LIMIT = 96;
 const BACKGROUND_FAILURE_MERGE_WINDOW_MS = 5 * 60_000;
+const REFRESH_PROGRESS_INTERVAL_MS = 100;
 const MAX_OPERATIONS = 30;
 
 export class WorkspaceRuntimeService {
@@ -422,8 +423,7 @@ export class WorkspaceRuntimeService {
       }
       const workspace =
         await this.#configuration.renameWorkspace(input);
-      await this.#refreshWorkspaceSummaries(workspace);
-      this.#acceptWorkspace(workspace);
+      await this.#publishRequiredWorkspace(workspace);
       return this.#createState();
     });
   }
@@ -447,10 +447,10 @@ export class WorkspaceRuntimeService {
   async rescan(): Promise<Workspace> {
     return this.#queueWorkspaceUpdate(async () => {
       const workspace = await this.#configuration.rescan();
-      await this.#refreshWorkspaceSummaries(workspace);
-      this.#acceptWorkspace(workspace);
+      const published =
+        await this.#publishRequiredWorkspace(workspace);
       this.#startMonitoringAndRefresh("workspace-change");
-      return workspace;
+      return published;
     });
   }
 
@@ -466,12 +466,15 @@ export class WorkspaceRuntimeService {
       }
       const result =
         await this.#configuration.addDirectory(input);
-      await this.#refreshWorkspaceSummaries(result.workspace);
-      this.#acceptWorkspace(result.workspace);
+      const workspace =
+        await this.#publishRequiredWorkspace(result.workspace);
       if (!result.duplicate) {
         this.#startMonitoringAndRefresh("workspace-change");
       }
-      return result;
+      return {
+        ...result,
+        workspace
+      };
     });
   }
 
@@ -481,10 +484,10 @@ export class WorkspaceRuntimeService {
     return this.#queueWorkspaceUpdate(async () => {
       const workspace =
         await this.#configuration.excludeRepository(input);
-      await this.#refreshWorkspaceSummaries(workspace);
-      this.#acceptWorkspace(workspace);
+      const published =
+        await this.#publishRequiredWorkspace(workspace);
       this.#startMonitoringAndRefresh("workspace-change");
-      return workspace;
+      return published;
     });
   }
 
@@ -494,9 +497,7 @@ export class WorkspaceRuntimeService {
     return this.#queueWorkspaceUpdate(async () => {
       const workspace =
         await this.#configuration.setGroupCollapsed(input);
-      await this.#refreshWorkspaceSummaries(workspace);
-      this.#acceptWorkspace(workspace);
-      return workspace;
+      return this.#publishRequiredWorkspace(workspace);
     });
   }
 
@@ -504,10 +505,10 @@ export class WorkspaceRuntimeService {
     return this.#queueWorkspaceUpdate(async () => {
       const workspace =
         await this.#configuration.selectTarget(target);
-      await this.#refreshWorkspaceSummaries(workspace);
-      this.#acceptWorkspace(workspace);
+      const published =
+        await this.#publishRequiredWorkspace(workspace);
       this.#refreshScheduler.requestSelectedIfStale("workspace-change");
-      return workspace;
+      return published;
     });
   }
 
@@ -1188,6 +1189,66 @@ export class WorkspaceRuntimeService {
     }
   }
 
+  async #publishRequiredWorkspace(
+    candidate: Workspace
+  ): Promise<Workspace> {
+    const published = await this.#publishCurrentWorkspace(
+      candidate,
+      this.#workspaceGeneration
+    );
+    if (published) {
+      return published;
+    }
+    throw new WorkspaceError(
+      "INVALID_REQUEST",
+      "The active Workspace changed. Retry in the current Workspace."
+    );
+  }
+
+  async #publishCurrentWorkspace(
+    candidate: Workspace,
+    generation: number,
+    signal?: AbortSignal
+  ): Promise<Workspace | undefined> {
+    await this.#refreshWorkspaceSummaries(candidate);
+    if (
+      signal?.aborted ||
+      generation !== this.#workspaceGeneration ||
+      candidate.id !== this.#workspace?.id
+    ) {
+      return undefined;
+    }
+
+    // Summary reads can wait while another configuration update completes.
+    // Re-read the active document immediately before publishing so neither an
+    // older scan nor an older selection can overwrite newer Workspace state.
+    const current = await this.#configuration.getCurrent();
+    if (
+      signal?.aborted ||
+      generation !== this.#workspaceGeneration ||
+      current.id !== candidate.id ||
+      current.id !== this.#workspace?.id
+    ) {
+      return undefined;
+    }
+
+    this.#updateWorkspaceSummary(current);
+    this.#acceptWorkspace(current);
+    return current;
+  }
+
+  #updateWorkspaceSummary(workspace: Workspace): void {
+    const summary = summarizeWorkspace(workspace);
+    const index = this.#workspaces.findIndex(
+      (candidate) => candidate.id === workspace.id
+    );
+    if (index < 0) {
+      this.#workspaces.push(summary);
+      return;
+    }
+    this.#workspaces[index] = summary;
+  }
+
   #trackBackgroundRefresh(
     requests: BackgroundRefreshRequest[]
   ): Promise<BackgroundRefreshBatchResult> {
@@ -1242,13 +1303,19 @@ export class WorkspaceRuntimeService {
       ) {
         return;
       }
-      await this.#refreshWorkspaceSummaries(workspace);
-      this.#acceptWorkspace(workspace);
+      const published = await this.#publishCurrentWorkspace(
+        workspace,
+        generation,
+        signal
+      );
+      if (!published) {
+        return;
+      }
       await this.#restartMonitoring();
 
       const targets = sortTargetsByWorkspacePriority(
-        workspace,
-        listWorkspaceTargets(workspace)
+        published,
+        listWorkspaceTargets(published)
       );
       if (!operation) {
         this.#refreshScheduler.request(
@@ -1481,7 +1548,33 @@ export class WorkspaceRuntimeService {
     let succeeded = 0;
     let failed = 0;
     let changed = 0;
+    let lastProgressAt = Number.NEGATIVE_INFINITY;
+    let progressTimer: ReturnType<typeof setTimeout> | undefined;
     const failures: BackgroundRefreshFailure[] = [];
+    const clearProgressTimer = () => {
+      if (progressTimer !== undefined) {
+        clearTimeout(progressTimer);
+        progressTimer = undefined;
+      }
+    };
+    const publishProgress = () => {
+      clearProgressTimer();
+      if (
+        this.#disposing ||
+        this.#disposed ||
+        generation !== this.#workspaceGeneration
+      ) {
+        return;
+      }
+      lastProgressAt = Date.now();
+      onProgress?.({
+        completed,
+        total: requests.length,
+        succeeded,
+        failed
+      });
+      this.#emit();
+    };
 
     await Promise.all(
       requests.map(async (request) => {
@@ -1534,21 +1627,32 @@ export class WorkspaceRuntimeService {
           failed += 1;
         } finally {
           completed += 1;
-          onProgress?.({
-            completed,
-            total: requests.length,
-            succeeded,
-            failed
-          });
+          const now = Date.now();
           if (
-            onProgress &&
-            generation === this.#workspaceGeneration
+            generation === this.#workspaceGeneration &&
+            (
+              completed === requests.length ||
+              now - lastProgressAt >= REFRESH_PROGRESS_INTERVAL_MS
+            )
           ) {
-            this.#emit();
+            publishProgress();
+          } else if (
+            generation === this.#workspaceGeneration &&
+            progressTimer === undefined
+          ) {
+            // A later repository may take arbitrarily long. Flush completed
+            // snapshots at the window boundary even if no more reads finish.
+            progressTimer = setTimeout(
+              publishProgress,
+              Math.min(
+                REFRESH_PROGRESS_INTERVAL_MS,
+                Math.max(0, REFRESH_PROGRESS_INTERVAL_MS - (now - lastProgressAt))
+              )
+            );
           }
         }
       })
-    );
+    ).finally(clearProgressTimer);
 
     if (generation !== this.#workspaceGeneration) {
       return emptyRefreshBatchResult();
@@ -1995,8 +2099,7 @@ export class WorkspaceRuntimeService {
 
     try {
       const workspace = await this.#configuration.rescan();
-      await this.#refreshWorkspaceSummaries(workspace);
-      this.#acceptWorkspace(workspace);
+      await this.#publishRequiredWorkspace(workspace);
     } catch (error) {
       warnings.push(
         `Workspace 拓扑重扫失败：${getErrorMessage(error)}`
@@ -3072,24 +3175,30 @@ function createWatchRegistrations(
   }
 
   const registrations: WorkspaceWatchRegistration[] = [];
-  for (const candidate of [...candidates.values()].sort(
-    (left, right) =>
-      normalizeWatchPath(left.path).length -
-        normalizeWatchPath(right.path).length ||
-      normalizeWatchPath(left.path).localeCompare(
-        normalizeWatchPath(right.path)
-      )
+  const recursiveRoots = new Set<string>();
+  for (const [path, candidate] of [...candidates.entries()].sort(
+    ([left], [right]) =>
+      left.length - right.length || left.localeCompare(right)
   )) {
-    if (
-      registrations.some(
-        (registration) =>
-          registration.recursive &&
-          pathContains(registration.path, candidate.path)
-      )
-    ) {
+    // Parents sort before children. Check only this path's ancestors rather
+    // than comparing it with every unrelated registered repository.
+    let ancestor = path;
+    let covered = recursiveRoots.has(ancestor);
+    while (!covered) {
+      const separator = ancestor.lastIndexOf("\\");
+      if (separator < 0) {
+        break;
+      }
+      ancestor = ancestor.slice(0, separator);
+      covered = recursiveRoots.has(ancestor);
+    }
+    if (covered) {
       continue;
     }
     registrations.push(candidate);
+    if (candidate.recursive) {
+      recursiveRoots.add(path);
+    }
   }
   return registrations;
 

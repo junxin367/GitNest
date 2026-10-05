@@ -39,6 +39,13 @@ export interface WorkspaceChangedFilesIndex {
 }
 
 const MAX_CONCURRENT_CHANGE_READS = 4;
+const CHANGE_PUBLISH_DELAY_MS = 16;
+const DISABLED_CHANGED_FILES_INDEX: WorkspaceChangedFilesIndex = {
+  changes: [],
+  failedTargetCount: 0,
+  loaded: false,
+  loading: false
+};
 
 export function useWorkspaceChangedFiles(
   workspace: WorkspaceDetailsDto | null,
@@ -62,7 +69,7 @@ export function useWorkspaceChangedFiles(
   const sequenceRef = useRef(0);
 
   const plans = useMemo<TargetLoadPlan[]>(() => {
-    if (!workspace) {
+    if (!enabled || !workspace) {
       return [];
     }
 
@@ -70,6 +77,14 @@ export function useWorkspaceChangedFiles(
       string,
       Map<string, RepositoryStatusSnapshotDto>
     >();
+    const repositoriesById = indexFirstByKey(
+      workspace.repositories,
+      (repository) => repository.id
+    );
+    const worktreesById = indexFirstByKey(
+      workspace.worktrees,
+      (worktree) => worktree.id
+    );
     for (const snapshot of snapshots) {
       let snapshotsByWorktree = snapshotsByRepository.get(
         snapshot.repositoryId
@@ -98,13 +113,18 @@ export function useWorkspaceChangedFiles(
       );
 
       return {
-        key: targetKey(target),
+        key: targetCacheKey(
+          workspace,
+          target,
+          repositoriesById,
+          worktreesById
+        ),
         revision: getSnapshotContentRevision(snapshot),
         skipRead: freshAndClean,
         target
       };
     });
-  }, [snapshots, workspace]);
+  }, [enabled, snapshots, workspace]);
 
   const planSignature = useMemo(
     () =>
@@ -116,11 +136,16 @@ export function useWorkspaceChangedFiles(
         .join("\u0001"),
     [plans]
   );
-  const scopeKey = JSON.stringify([workspace?.id ?? "", planSignature, enabled]);
+  const scopeKey =
+    enabled && workspace
+      ? JSON.stringify([workspace.id, planSignature])
+      : "";
 
   useEffect(() => {
     const generation = ++generationRef.current;
     let active = true;
+    let publishTimeoutId: number | undefined;
+    let pendingFailedTargetCount = 0;
     const workspaceId = workspace?.id ?? "";
 
     cancelActiveQueries(activeQueriesRef.current);
@@ -128,6 +153,29 @@ export function useWorkspaceChangedFiles(
     if (cacheWorkspaceIdRef.current !== workspaceId) {
       cacheWorkspaceIdRef.current = workspaceId;
       cacheRef.current.clear();
+    }
+
+    const clearScheduledPublish = () => {
+      if (publishTimeoutId !== undefined) {
+        window.clearTimeout(publishTimeoutId);
+        publishTimeoutId = undefined;
+      }
+    };
+    const cleanup = () => {
+      active = false;
+      clearScheduledPublish();
+      cancelActiveQueries(activeQueriesRef.current);
+    };
+
+    if (!enabled || !workspace) {
+      return cleanup;
+    }
+
+    const desiredKeys = new Set(plans.map((plan) => plan.key));
+    for (const key of cacheRef.current.keys()) {
+      if (!desiredKeys.has(key)) {
+        cacheRef.current.delete(key);
+      }
     }
 
     for (const plan of plans) {
@@ -172,13 +220,22 @@ export function useWorkspaceChangedFiles(
         loading
       });
     };
+    const schedulePartialPublish = (
+      failedTargetCount: number
+    ) => {
+      pendingFailedTargetCount = failedTargetCount;
+      if (publishTimeoutId !== undefined) {
+        return;
+      }
+      publishTimeoutId = window.setTimeout(() => {
+        publishTimeoutId = undefined;
+        publish(true, pendingFailedTargetCount);
+      }, CHANGE_PUBLISH_DELAY_MS);
+    };
 
-    if (!enabled || !workspace || pendingPlans.length === 0) {
+    if (pendingPlans.length === 0) {
       publish(false, 0);
-      return () => {
-        active = false;
-        cancelActiveQueries(activeQueriesRef.current);
-      };
+      return cleanup;
     }
 
     let cursor = 0;
@@ -203,7 +260,8 @@ export function useWorkspaceChangedFiles(
           const result =
             await window.gitnest.repository.getChanges({
               queryId,
-              target: plan.target
+              target: plan.target,
+              includeChangeStats: false
             });
 
           if (
@@ -232,14 +290,14 @@ export function useWorkspaceChangedFiles(
           } else {
             failedTargetCount += 1;
           }
-          publish(true, failedTargetCount);
+          schedulePartialPublish(failedTargetCount);
         } catch {
           if (
             active &&
             generationRef.current === generation
           ) {
             failedTargetCount += 1;
-            publish(true, failedTargetCount);
+            schedulePartialPublish(failedTargetCount);
           }
         } finally {
           activeQueriesRef.current.delete(queryId);
@@ -257,13 +315,17 @@ export function useWorkspaceChangedFiles(
         },
         () => worker()
       )
-    ).then(() => publish(false, failedTargetCount));
+    ).then(() => {
+      clearScheduledPublish();
+      publish(false, failedTargetCount);
+    });
 
-    return () => {
-      active = false;
-      cancelActiveQueries(activeQueriesRef.current);
-    };
+    return cleanup;
   }, [enabled, planSignature, workspace?.id]);
+
+  if (!enabled || !workspace) {
+    return DISABLED_CHANGED_FILES_INDEX;
+  }
 
   return state.scopeKey === scopeKey
     ? state
@@ -277,12 +339,46 @@ export function useWorkspaceChangedFiles(
         failedTargetCount: 0,
         loaded: cacheWorkspaceIdRef.current === (workspace?.id ?? "") &&
           plans.every((plan) => plan.skipRead || cacheRef.current.has(plan.key)),
-        loading: enabled && Boolean(workspace)
+        loading: true
       };
 }
 
-function targetKey(target: RepositoryTargetDto): string {
-  return `${target.repositoryId}:${target.worktreeId}`;
+function targetCacheKey(
+  workspace: WorkspaceDetailsDto,
+  target: RepositoryTargetDto,
+  repositoriesById: ReadonlyMap<
+    string,
+    WorkspaceDetailsDto["repositories"][number]
+  >,
+  worktreesById: ReadonlyMap<
+    string,
+    WorkspaceDetailsDto["worktrees"][number]
+  >
+): string {
+  const repository = repositoriesById.get(target.repositoryId);
+  const worktree = worktreesById.get(target.worktreeId);
+  return JSON.stringify([
+    workspace.id,
+    workspace.canonicalPath ?? workspace.path,
+    target.repositoryId,
+    target.worktreeId,
+    repository?.canonicalCommonDir ?? repository?.commonDir ?? "",
+    worktree?.canonicalPath ?? worktree?.path ?? ""
+  ]);
+}
+
+function indexFirstByKey<Value>(
+  values: readonly Value[],
+  getKey: (value: Value) => string
+): Map<string, Value> {
+  const indexed = new Map<string, Value>();
+  for (const value of values) {
+    const key = getKey(value);
+    if (!indexed.has(key)) {
+      indexed.set(key, value);
+    }
+  }
+  return indexed;
 }
 
 function cancelActiveQueries(queryIds: Set<string>) {

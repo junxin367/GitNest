@@ -133,7 +133,8 @@ export function App() {
     workspace.syncCurrentWorkspace
   );
   const externalTerminals = useExternalTerminals(
-    workspace.workspace?.selectedTarget
+    workspace.workspace?.selectedTarget,
+    workspace.workspace?.id
   );
   const externalApplications = useExternalApplications(
     view === "repository" &&
@@ -788,6 +789,7 @@ export function App() {
                     }
                     onReloadSettings={appSettings.reload}
                     settings={appSettings.settings}
+                    snapshots={workspace.snapshots}
                     workspace={workspace.workspace}
                   />
                 ) : view === "operations" ? (

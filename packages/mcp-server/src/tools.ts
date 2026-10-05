@@ -471,7 +471,7 @@ function traceGraph(
     ...(language ? { languages: [language] } : {}),
     ...(pathPrefix ? { pathPrefix } : {}),
     limit: MAX_TRACE_MATCHES
-  });
+  }, target.graphIndex);
   const matchedNodeIds = new Set(
     search.nodes.map((node) => node.id)
   );
@@ -575,7 +575,7 @@ function traceGraph(
           edgeKinds: TRACE_EDGE_KINDS,
           maxNodes: MAX_TRACE_NODES,
           maxEdges: MAX_TRACE_EDGES
-        })
+        }, target.graphIndex)
       : undefined;
   const graphNodes = local?.nodes ??
     priorityNodeIds

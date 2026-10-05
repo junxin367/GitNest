@@ -8,7 +8,7 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { GitError } from "@gitnest/git-core";
 import {
@@ -19,6 +19,7 @@ import {
 } from "@gitnest/testkit";
 
 import { GitCliClient } from "./git-cli-client";
+import * as processRunner from "../process/git-process-runner";
 
 describe("GitCliClient integration", () => {
   let fixture: GitRepositoryFixture;
@@ -149,6 +150,71 @@ describe("GitCliClient integration", () => {
         })
       ])
     );
+  });
+
+  it.each(["primary", "linked"] as const)(
+    "reads %s topology without scanning changes, branches or history",
+    async (target) => {
+      const path = target === "primary"
+        ? fixture.repositoryPath
+        : fixture.linkedWorktreePath;
+      const full = await client.inspectRepository(path);
+      const commands = vi.spyOn(processRunner, "runProcess");
+      try {
+        const topology = await client.readRepositoryTopology(path);
+        expect(topology).toEqual({
+          identity: full.identity,
+          branch: full.snapshot.branch,
+          worktrees: full.worktrees
+        });
+        expect(commands.mock.calls.map(([command]) => command.args))
+          .toEqual(expect.arrayContaining([
+            ["worktree", "list", "--porcelain", "-z"]
+          ]));
+        expect(commands.mock.calls).toHaveLength(5);
+        expect(commands.mock.calls.every(([command]) =>
+          command.args[0] === "rev-parse" || command.args[0] === "worktree"
+        )).toBe(true);
+      } finally {
+        commands.mockRestore();
+      }
+    }
+  );
+
+  it("reads an unborn branch through topology discovery", async () => {
+    const topology = await client.readRepositoryTopology(emptyFixture.path);
+    expect(topology.identity.head).toBe("");
+    expect(topology.branch).toBe("main");
+    expect(topology.worktrees).toEqual([
+      expect.objectContaining({ path: emptyFixture.path, branch: "main", primary: true })
+    ]);
+  });
+
+  it("keeps topology branch names unambiguous and reflects detached HEAD", async () => {
+    const local = await createGitRepositoryFixture();
+    try {
+      await runGit(local.repositoryPath, ["tag", "main"]);
+      await runGit(local.repositoryPath, ["switch", "-c", "heads/topic"]);
+      await runGit(local.repositoryPath, ["tag", "heads/topic"]);
+      expect((await client.readRepositoryTopology(local.repositoryPath)).branch)
+        .toBe("heads/topic");
+      await runGit(local.repositoryPath, ["switch", "--detach", "HEAD"]);
+      const detached = await client.readRepositoryTopology(local.repositoryPath);
+      expect(detached.branch).toBeUndefined();
+      expect(detached.identity.head).toMatch(/^[a-f0-9]{40,64}$/);
+      expect(detached.worktrees.find((worktree) => worktree.path === local.repositoryPath))
+        .toMatchObject({ detached: true });
+    } finally {
+      await local.dispose();
+    }
+  });
+
+  it("honors cancellation before topology discovery", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      client.readRepositoryTopology(fixture.repositoryPath, { signal: controller.signal })
+    ).rejects.toMatchObject({ code: "COMMAND_CANCELLED" });
   });
 
   it("keeps lightweight snapshots free of per-file stats by default", async () => {
@@ -1292,7 +1358,7 @@ describe("GitCliClient integration", () => {
     }
   });
 
-  it("reads root, normal, and merge commit file diffs against the first parent", async () => {
+  it("reads root, normal, and merge commit files and diffs against the first parent", async () => {
     const commitDiffFixture =
       await createTemporaryDirectoryFixture("commit-diff");
     const committedMedia = Buffer.from([0, 1, 2, 3]);
@@ -1434,6 +1500,28 @@ describe("GitCliClient integration", () => {
           "HEAD"
         ])
       ).trim();
+
+      await expect(
+        client.readCommitDetails(commitDiffFixture.path, rootHash)
+      ).resolves.toMatchObject({
+        files: [{ path: "story.txt", additions: 1, deletions: 0, binary: false }],
+        additions: 1,
+        deletions: 0
+      });
+      await expect(
+        client.readCommitDetails(commitDiffFixture.path, normalHash)
+      ).resolves.toMatchObject({
+        files: [{ path: "story.txt", additions: 1, deletions: 1, binary: false }],
+        additions: 1,
+        deletions: 1
+      });
+      await expect(
+        client.readCommitDetails(commitDiffFixture.path, mergeHash)
+      ).resolves.toMatchObject({
+        files: [{ path: "side-only.txt", additions: 1, deletions: 0, binary: false }],
+        additions: 1,
+        deletions: 0
+      });
 
       await expect(
         client.readCommitDiff(commitDiffFixture.path, {

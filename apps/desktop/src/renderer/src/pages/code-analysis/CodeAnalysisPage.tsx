@@ -17,11 +17,16 @@ import type {
   ExternalApplicationKindDto,
   InstallableLanguageServerDto,
   LanguageServerLanguageDto,
+  RepositoryStatusSnapshotDto,
   RepositoryDiffDto,
   WorkspaceDetailsDto
 } from "@gitnest/contracts";
 
 import { useCodeAnalysis } from "../../entities/code-analysis/useCodeAnalysis";
+import {
+  findTargetSnapshot,
+  getSnapshotContentRevision
+} from "../../entities/workspace/model";
 import { useExternalApplications } from "../../features/external-application/useExternalApplications";
 import { Button } from "../../shared/ui/Button";
 import { Icon } from "../../shared/ui/Icon";
@@ -56,6 +61,7 @@ import { useCodeNodeDiff } from "./useCodeNodeDiff";
 
 interface CodeAnalysisPageProps {
   workspace: WorkspaceDetailsDto | null;
+  snapshots?: RepositoryStatusSnapshotDto[];
   settings: AppSettingsDto;
   onOpenSettings(): void;
   onReloadSettings(): Promise<void>;
@@ -102,6 +108,7 @@ type AnalysisFocus =
 
 export function CodeAnalysisPage({
   workspace,
+  snapshots = [],
   settings,
   onOpenSettings,
   onReloadSettings
@@ -143,6 +150,10 @@ export function CodeAnalysisPage({
     workspace?.id ?? analysis.state.workspaceId ?? "";
   const scopeResetKey = `${scopeWorkspaceId}\0${settings.codeAnalysis.defaultScope}`;
   const scopeResetKeyRef = useRef("");
+  const actionScopeRef = useRef({ key: scopeResetKey });
+  if (actionScopeRef.current.key !== scopeResetKey) {
+    actionScopeRef.current = { key: scopeResetKey };
+  }
   const availableSnapshot = analysis.snapshot;
   const snapshot =
     availableSnapshot?.scope === scope &&
@@ -232,6 +243,12 @@ export function CodeAnalysisPage({
   const selectedNode = snapshot?.nodes.find(
     (node) => node.id === inspectedNodeId
   ) ?? null;
+  const selectedNodeDiffRefreshKey =
+    createCodeNodeDiffRefreshKey(
+      workspace,
+      snapshots,
+      selectedNode
+    );
   const graphSelectedNodeId = graphSelectionCleared
     ? null
     : selectedNode?.id ?? graphFocusNodeId;
@@ -581,6 +598,7 @@ export function CodeAnalysisPage({
       return;
     }
     const previousScope = scope;
+    const requestScope = actionScopeRef.current;
     setScope("workspace");
     setNavigationMode("chains");
     setChainQuery("");
@@ -592,7 +610,7 @@ export function CodeAnalysisPage({
     setNodeFileExpanded(false);
     setGraphFullscreen(false);
     const started = await analysis.start("workspace");
-    if (!started) {
+    if (!started && requestScope === actionScopeRef.current) {
       setScope(previousScope);
     }
   };
@@ -1263,6 +1281,7 @@ export function CodeAnalysisPage({
                   <NodeDiffViewer
                     key={`node-diff:${selectedNode.id}`}
                     node={selectedNode}
+                    refreshKey={selectedNodeDiffRefreshKey}
                     onClose={() =>
                       setNodeFileExpanded(false)
                     }
@@ -1990,12 +2009,14 @@ function NodeDetails({
 
 function NodeDiffViewer({
   node,
+  refreshKey,
   onClose
 }: {
   node: CodeGraphNodeDto;
+  refreshKey: string;
   onClose(): void;
 }) {
-  const nodeDiff = useCodeNodeDiff(node);
+  const nodeDiff = useCodeNodeDiff(node, refreshKey);
   const [activeDiffMode, setActiveDiffMode] = useState<
     RepositoryDiffDto["diff"]["mode"] | null
   >(null);
@@ -2233,6 +2254,39 @@ function languageServerName(
     csharp: "C#",
     rust: "Rust"
   }[language];
+}
+
+function createCodeNodeDiffRefreshKey(
+  workspace: WorkspaceDetailsDto | null,
+  snapshots: RepositoryStatusSnapshotDto[],
+  node: CodeGraphNodeDto | null
+): string {
+  if (!node) {
+    return "";
+  }
+  const target = {
+    repositoryId: node.location.repositoryId,
+    worktreeId: node.location.worktreeId
+  };
+  const repository = workspace?.repositories.find(
+    (candidate) => candidate.id === target.repositoryId
+  );
+  const worktree = workspace?.worktrees.find(
+    (candidate) => candidate.id === target.worktreeId
+  );
+  return JSON.stringify([
+    workspace?.id ?? "",
+    workspace?.canonicalPath ?? workspace?.path ?? "",
+    target.repositoryId,
+    target.worktreeId,
+    repository?.canonicalCommonDir ??
+      repository?.commonDir ??
+      "",
+    worktree?.canonicalPath ?? worktree?.path ?? "",
+    getSnapshotContentRevision(
+      findTargetSnapshot(snapshots, target)
+    )
+  ]);
 }
 
 function nodeKindLabel(node: CodeGraphNodeDto): string {

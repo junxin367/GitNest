@@ -36,18 +36,18 @@ export class McpRegistrationService {
   }
 
   status(): Promise<McpRegistrationStatusDto> {
-    return this.#describe(false);
+    return this.#describe();
   }
 
   async setRegistered(
     registered: boolean
   ): Promise<McpRegistrationStatusDto> {
     if (registered && !(await this.#serverAvailable())) {
-      return this.#describe(false);
+      return this.#describe();
     }
     const codex = await this.#resolveCodex();
     if (!codex.available) {
-      return this.#describe(false);
+      return this.#describe();
     }
     try {
       if (registered) {
@@ -76,17 +76,17 @@ export class McpRegistrationService {
       const message =
         error instanceof Error ? error.message : String(error);
       return {
-        ...(await this.#describe(false)),
-        message: `注册失败：${message}`
+        ...(await this.#describe()),
+        message: `${registered ? "注册" : "取消注册"}失败：${message}`
       };
     }
     // Read back through the CLI so the UI never claims success
     // without verification.
-    return this.#describe(true);
+    return this.#describe(registered);
   }
 
   async #describe(
-    verified: boolean
+    verifiedRegistration?: boolean
   ): Promise<McpRegistrationStatusDto> {
     const [codex, serverAvailable] = await Promise.all([
       this.#resolveCodex(),
@@ -126,13 +126,17 @@ export class McpRegistrationService {
       registered,
       codexAvailable: codex.available,
       serverAvailable,
-      message: !serverAvailable
+      message: verifiedRegistration === false && codex.available
+        ? registered
+          ? "已执行取消注册命令，但仍读取到配置。"
+          : "已执行取消注册命令，未读取到配置。"
+        : !serverAvailable
         ? this.#options.packaged === false
           ? "开发版不提供可注册的 MCP 入口，请在安装版中注册。"
           : "MCP 入口文件缺失，请重新安装 GitNest 后注册。"
         : !codex.available
         ? "未找到 codex 命令，请先安装 Codex CLI，或手动复制配置片段。"
-        : verified
+        : verifiedRegistration === true
           ? registered
             ? "已注册，重新启动 Codex 后生效。"
             : "已执行注册命令，但未读取到配置。"

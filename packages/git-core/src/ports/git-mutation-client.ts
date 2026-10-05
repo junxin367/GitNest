@@ -10,6 +10,10 @@ export interface CreateCommitOptions extends GitWriteOptions {
   body?: string;
 }
 
+export interface RestoreWorktreeOptions extends GitWriteOptions {
+  confirmedUntrackedPaths?: readonly string[];
+}
+
 export type StashMutationAction =
   | "apply"
   | "drop"
@@ -33,7 +37,7 @@ export interface GitMutationClient {
   restoreWorktreePaths(
     path: string,
     paths: readonly string[],
-    options?: GitWriteOptions
+    options?: RestoreWorktreeOptions
   ): Promise<void>;
   removeUntrackedPaths(
     path: string,

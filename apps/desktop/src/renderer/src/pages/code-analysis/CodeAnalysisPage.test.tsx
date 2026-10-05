@@ -20,6 +20,7 @@ import {
   type CodeAnalysisSnapshotDto,
   type GitNestBridge,
   type LanguageServerLanguageDto,
+  type RepositoryStatusSnapshotDto,
   type WorkspaceDetailsDto
 } from "@gitnest/contracts";
 
@@ -1382,6 +1383,46 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     );
   });
 
+  it("does not restore the old scope when a full-index start fails after changing workspace", async () => {
+    const snapshot = {
+      ...createSnapshot(),
+      scope: "changed" as const,
+      indexStatus: {
+        fullIndexAvailable: false,
+        resultCompleteness: "partial" as const,
+        impactCoverage: "possible-omissions" as const,
+        message: "局部索引"
+      }
+    };
+    const controller = createController(snapshot);
+    let resolveStart!: (value: boolean) => void;
+    controller.start = vi.fn(() => new Promise<boolean>((resolve) => { resolveStart = resolve; }));
+    analysisMock.controller = controller;
+    await act(async () => root.render(
+      <CodeAnalysisPage workspace={createWorkspaceDetails()}
+        settings={createDefaultAppSettings()} onOpenSettings={vi.fn()}
+        onReloadSettings={vi.fn(async () => undefined)} />
+    ));
+    const buildButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("建立完整索引"));
+    expect(buildButton).toBeDefined();
+    act(() => buildButton!.click());
+    const nextSettings = createDefaultAppSettings();
+    nextSettings.codeAnalysis.defaultScope = "workspace";
+    controller.snapshot = null;
+    controller.state = { state: "idle", snapshotAvailable: false, workspaceId: "workspace-b" };
+    await act(async () => root.render(
+      <CodeAnalysisPage workspace={{ ...createWorkspaceDetails(), id: "workspace-b" }}
+        settings={nextSettings} onOpenSettings={vi.fn()}
+        onReloadSettings={vi.fn(async () => undefined)} />
+    ));
+    await act(async () => resolveStart(false));
+    const workspaceScope = Array.from(container.querySelectorAll<HTMLButtonElement>(
+      ".analysis-scope-switch button"
+    )).find((button) => button.textContent === "全部代码");
+    expect(workspaceScope?.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("keeps a non-default scope selected when no cached snapshot exists", async () => {
     const controller = createController();
     controller.state = {
@@ -2475,6 +2516,83 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     ).toBeNull();
   });
 
+  it("refreshes an open node Diff when the runtime snapshot content revision changes", async () => {
+    const workspace = createWorkspaceDetailsWithAnalysisTarget();
+    let snapshots = [createRuntimeSnapshot(1)];
+    const render = () =>
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          snapshots={snapshots}
+          workspace={workspace}
+        />
+      );
+
+    await act(async () => {
+      render();
+      await flushAsyncWork();
+    });
+    act(() => {
+      container
+        .querySelector<SVGGElement>(
+          '[aria-label="function caller"]'
+        )
+        ?.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            key: "Enter"
+          })
+        );
+    });
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(
+          '[aria-controls="analysis-node-diff-drawer"]'
+        )
+      ).not.toBeNull();
+    });
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-controls="analysis-node-diff-drawer"]'
+        )
+        ?.click();
+    });
+    await vi.waitFor(() => {
+      expect(
+        window.gitnest.repository.getChanges
+      ).toHaveBeenCalledOnce();
+    });
+
+    snapshots = [{ ...snapshots[0]! }];
+    await act(async () => {
+      render();
+      await flushAsyncWork();
+    });
+    expect(
+      window.gitnest.repository.getChanges
+    ).toHaveBeenCalledOnce();
+
+    snapshots = [
+      {
+        ...snapshots[0]!,
+        contentVersion: 2,
+        refreshedAt: "2026-10-05T15:00:01.000Z"
+      }
+    ];
+    await act(async () => {
+      render();
+      await flushAsyncWork();
+    });
+    await vi.waitFor(() => {
+      expect(
+        window.gitnest.repository.getChanges
+      ).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("shows a readable source error without falling back to Diff", async () => {
     vi.mocked(
       window.gitnest.codeAnalysis.readFile
@@ -2824,6 +2942,72 @@ function createWorkspaceDetails(): WorkspaceDetailsDto {
     repositories: [],
     worktrees: [],
     updatedAt: "2026-09-17T00:00:00.000Z"
+  };
+}
+
+function createWorkspaceDetailsWithAnalysisTarget(): WorkspaceDetailsDto {
+  return {
+    ...createWorkspaceDetails(),
+    groups: [
+      {
+        id: "group",
+        name: "Group",
+        collapsed: false,
+        targets: [
+          {
+            repositoryId: "repository",
+            worktreeId: "worktree"
+          }
+        ]
+      }
+    ],
+    repositories: [
+      {
+        id: "repository",
+        name: "repository",
+        commonDir: "C:\\workspace\\repository\\.git",
+        canonicalCommonDir: "c:\\workspace\\repository\\.git",
+        primaryWorktreeId: "worktree",
+        worktreeIds: ["worktree"]
+      }
+    ],
+    worktrees: [
+      {
+        id: "worktree",
+        repositoryId: "repository",
+        name: "repository",
+        path: "C:\\workspace\\repository",
+        canonicalPath: "c:\\workspace\\repository",
+        head: "abcdef",
+        branch: "main",
+        isPrimary: true,
+        isBare: false,
+        isDetached: false,
+        isLocked: false,
+        isPrunable: false
+      }
+    ]
+  };
+}
+
+function createRuntimeSnapshot(
+  contentVersion: number
+): RepositoryStatusSnapshotDto {
+  return {
+    repositoryId: "repository",
+    worktreeId: "worktree",
+    branch: "main",
+    head: "abcdef",
+    ahead: 0,
+    behind: 0,
+    staged: 0,
+    unstaged: 1,
+    untracked: 0,
+    conflicted: 0,
+    contentVersion,
+    refreshPending: false,
+    stale: false,
+    refreshedAt: "2026-10-05T15:00:00.000Z"
   };
 }
 

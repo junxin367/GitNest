@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState
 } from "react";
 
@@ -20,14 +21,16 @@ export interface ApplicationUpdateController {
 export function useApplicationUpdate(): ApplicationUpdateController {
   const [state, setState] =
     useState<ApplicationUpdateStateDto | null>(null);
+  const revision = useRef(0);
+  const mounted = useRef(false);
 
   useEffect(() => {
-    let active = true;
-    let eventReceived = false;
+    mounted.current = true;
+    const initialRevision = ++revision.current;
     const unsubscribe =
       window.gitnest.update.onStateChanged((nextState) => {
-        eventReceived = true;
-        if (active) {
+        if (mounted.current) {
+          revision.current += 1;
           setState(nextState);
         }
       });
@@ -35,14 +38,15 @@ export function useApplicationUpdate(): ApplicationUpdateController {
     void window.gitnest.update
       .getState()
       .then((initialState) => {
-        if (active && !eventReceived) {
+        if (mounted.current && revision.current === initialRevision) {
           setState(initialState);
         }
       })
       .catch(() => undefined);
 
     return () => {
-      active = false;
+      mounted.current = false;
+      revision.current += 1;
       unsubscribe();
     };
   }, []);
@@ -51,8 +55,14 @@ export function useApplicationUpdate(): ApplicationUpdateController {
     async (
       action: () => Promise<ApplicationUpdateStateDto>
     ) => {
+      if (!mounted.current) {
+        return;
+      }
+      const requestRevision = ++revision.current;
       const nextState = await action();
-      setState(nextState);
+      if (mounted.current && revision.current === requestRevision) {
+        setState(nextState);
+      }
     },
     []
   );

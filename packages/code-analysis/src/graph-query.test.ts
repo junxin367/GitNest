@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   analyzeChangeImpact,
   collectSubgraph,
+  createCodeGraphQueryIndex,
   findRequestChains,
   listGraphDiagnostics,
   resolveRequestChain,
@@ -137,6 +138,24 @@ function snapshot(
   };
 }
 
+function deepFreeze<T extends object>(value: T): T {
+  const pending: object[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    for (const child of Object.values(current)) {
+      if (
+        child !== null &&
+        typeof child === "object" &&
+        !Object.isFrozen(child)
+      ) {
+        pending.push(child);
+      }
+    }
+    Object.freeze(current);
+  }
+  return value;
+}
+
 describe("searchGraphNodes", () => {
   it("ranks exact names first and respects filters", () => {
     const result = searchGraphNodes(snapshot(), {
@@ -175,6 +194,154 @@ describe("searchGraphNodes", () => {
     });
     expect(none.totalMatches).toBe(0);
     expect(none.nodes).toEqual([]);
+  });
+
+  it("returns the same exact top-k order as a full result, including stable ties", () => {
+    const tied = Array.from({ length: 80 }, (_value, index) =>
+      node(`node-${index % 8}`, {
+        name:
+          index % 4 === 0
+            ? "alpha"
+            : index % 4 === 1
+              ? "alphabet"
+              : index % 4 === 2
+                ? "contains alpha value"
+                : "other",
+        qualifiedName: `pkg.alpha.${index % 5}`,
+        changed: index % 3 === 0,
+        location: {
+          repositoryId: "repo-1",
+          worktreeId: "worktree-1",
+          path: `src/${index % 6}.ts`,
+          line: index % 7,
+          column: 1
+        },
+        metadata: { sourceIndex: index }
+      })
+    );
+    const base = snapshot({
+      nodes: [
+        ...tied,
+        node("stable", {
+          name: "alpha",
+          qualifiedName: "pkg.alpha.stable",
+          location: {
+            repositoryId: "repo-1",
+            worktreeId: "worktree-1",
+            path: "src/stable.ts",
+            line: 1,
+            column: 1
+          },
+          metadata: { sourceIndex: 80 }
+        }),
+        node("stable", {
+          name: "alpha",
+          qualifiedName: "pkg.alpha.stable",
+          location: {
+            repositoryId: "repo-1",
+            worktreeId: "worktree-1",
+            path: "src/stable.ts",
+            line: 1,
+            column: 1
+          },
+          metadata: { sourceIndex: 81 }
+        })
+      ],
+      edges: [],
+      requestChains: []
+    });
+    const all = searchGraphNodes(base, {
+      query: "alpha",
+      limit: 1_000
+    });
+    const limited = searchGraphNodes(base, {
+      query: "alpha",
+      limit: 17
+    });
+
+    expect(limited.nodes).toEqual(all.nodes.slice(0, 17));
+    expect(limited.totalMatches).toBe(all.totalMatches);
+    expect(limited.truncated).toBe(true);
+    expect(
+      all.nodes
+        .filter((entry) => entry.id === "stable")
+        .map((entry) => entry.metadata.sourceIndex)
+    ).toEqual([80, 81]);
+  });
+
+  it("does not reuse an index for mutable or replacement snapshots", () => {
+    const mutable = snapshot();
+    expect(() => createCodeGraphQueryIndex(mutable)).toThrow(
+      /frozen/i
+    );
+    const partiallyFrozen = snapshot();
+    partiallyFrozen.nodes.forEach((entry) =>
+      Object.freeze(entry)
+    );
+    partiallyFrozen.edges.forEach((entry) =>
+      Object.freeze(entry)
+    );
+    Object.freeze(partiallyFrozen.nodes);
+    Object.freeze(partiallyFrozen.edges);
+    Object.freeze(partiallyFrozen);
+    expect(() =>
+      createCodeGraphQueryIndex(partiallyFrozen)
+    ).toThrow(/frozen/i);
+
+    expect(searchGraphNodes(mutable, { query: "fetchUsers" }).nodes[0]?.id)
+      .toBe("client");
+    mutable.nodes[0]!.name = "renamedClient";
+    expect(searchGraphNodes(mutable, { query: "renamedClient" }).nodes[0]?.id)
+      .toBe("client");
+    expect(collectSubgraph(mutable, {
+      nodeIds: ["service"],
+      direction: "out",
+      depth: 1
+    }).nodes.map((entry) => entry.id)).toEqual(["service"]);
+    mutable.edges.push(edge("mutable-edge", "service", "unrelated"));
+    expect(collectSubgraph(mutable, {
+      nodeIds: ["service"],
+      direction: "out",
+      depth: 1
+    }).nodes.map((entry) => entry.id)).toEqual([
+      "service",
+      "unrelated"
+    ]);
+
+    const frozen = deepFreeze(snapshot());
+    const index = createCodeGraphQueryIndex(frozen);
+    expect(searchGraphNodes(
+      frozen,
+      {
+        query: "users",
+        languages: ["typescript"],
+        pathPrefix: "src/",
+        changedOnly: true,
+        limit: 2
+      },
+      index
+    )).toEqual(searchGraphNodes(frozen, {
+      query: "users",
+      languages: ["typescript"],
+      pathPrefix: "src/",
+      changedOnly: true,
+      limit: 2
+    }));
+    const replacement = deepFreeze(snapshot({
+      analysisId: frozen.analysisId,
+      nodes: [
+        node("replacement", { name: "replacementTarget" })
+      ],
+      edges: [],
+      requestChains: []
+    }));
+    expect(
+      searchGraphNodes(
+        replacement,
+        { query: "replacementTarget" },
+        index
+      ).nodes.map((entry) => entry.id)
+    ).toEqual(["replacement"]);
   });
 });
 
@@ -355,6 +522,90 @@ describe("collectSubgraph", () => {
       edgeKinds: ["calls"]
     });
     expect(callsOnly.nodes.map((entry) => entry.id)).toEqual(["client"]);
+  });
+
+  it("preserves every direction, budget, and duplicate-id result with an immutable index", () => {
+    const base = deepFreeze(snapshot({
+      nodes: [
+        node("dup", {
+          kind: "function",
+          name: "first duplicate",
+          metadata: { copy: 1 }
+        }),
+        node("a"),
+        node("dup", {
+          kind: "method",
+          name: "last duplicate",
+          metadata: { copy: 2 }
+        }),
+        node("b"),
+        node("c")
+      ],
+      edges: [
+        edge("shared", "a", "dup"),
+        edge("shared", "dup", "b"),
+        edge("tail", "b", "c"),
+        edge("back", "c", "a")
+      ],
+      requestChains: []
+    }));
+    const index = createCodeGraphQueryIndex(base);
+    const cases = [
+      {
+        nodeIds: ["a"],
+        direction: "out" as const,
+        depth: 3,
+        maxNodes: 4,
+        maxEdges: 4
+      },
+      {
+        nodeIds: ["c"],
+        direction: "in" as const,
+        depth: 3,
+        maxNodes: 3,
+        maxEdges: 2
+      },
+      {
+        nodeIds: ["dup", "missing"],
+        direction: "both" as const,
+        depth: 2,
+        nodeKinds: ["method", "function"] as const,
+        maxNodes: 2,
+        maxEdges: 1
+      }
+    ];
+
+    for (const options of cases) {
+      expect(collectSubgraph(base, options, index)).toEqual(
+        collectSubgraph(base, options)
+      );
+    }
+    expect(
+      collectSubgraph(base, cases[0]!, index).nodes
+        .filter((entry) => entry.id === "dup")
+        .map((entry) => entry.metadata.copy)
+    ).toEqual([1, 2]);
+  });
+
+  it("falls back safely when an index belongs to a different snapshot", () => {
+    const original = deepFreeze(snapshot());
+    const index = createCodeGraphQueryIndex(original);
+    const replacement = deepFreeze(snapshot({
+      analysisId: original.analysisId,
+      nodes: [node("new-a"), node("new-b")],
+      edges: [edge("new-edge", "new-a", "new-b")],
+      requestChains: []
+    }));
+
+    expect(collectSubgraph(replacement, {
+      nodeIds: ["new-a"],
+      direction: "out",
+      depth: 1
+    }, index)).toEqual(collectSubgraph(replacement, {
+      nodeIds: ["new-a"],
+      direction: "out",
+      depth: 1
+    }));
   });
 });
 

@@ -33,6 +33,7 @@ import type {
   CreateRepositoryCommitRequest,
   RepositoryBranchesDto,
   RepositoryChangesDto,
+  RepositoryChangesRequest,
   RepositoryCommandExecuteRequest,
   RepositoryCommandExecutionDto,
   RepositoryCommandPreflightDto,
@@ -272,7 +273,7 @@ export interface GitNestBridge {
   };
   repository: {
     getChanges(
-      request: RepositoryQueryRequest
+      request: RepositoryChangesRequest
     ): Promise<GitReadResult<RepositoryChangesDto>>;
     getDiff(
       request: RepositoryDiffRequest

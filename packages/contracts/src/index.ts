@@ -123,6 +123,7 @@ export type {
   CreateRepositoryCommitRequest,
   RepositoryBranchesDto,
   RepositoryChangesDto,
+  RepositoryChangesRequest,
   RepositoryCommandDto,
   RepositoryCommandExecuteRequest,
   RepositoryCommandExecutionDto,

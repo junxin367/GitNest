@@ -17,6 +17,16 @@ export function buildChangeTree(
     directory: true,
     children: []
   };
+  const childIndexes = new WeakMap<
+    ChangeTreeNode,
+    Map<
+      string,
+      {
+        directory?: ChangeTreeNode;
+        file?: ChangeTreeNode;
+      }
+    >
+  >();
 
   for (const change of changes) {
     const segments = normalizeChangePath(change.path);
@@ -27,11 +37,15 @@ export function buildChangeTree(
       const path = directory
         ? `${parent.path}/${segment}`.replace(/^\/+/, "")
         : change.path;
-      const existing = parent.children.find(
-        (node) =>
-          node.name === segment &&
-          node.directory === directory
-      );
+      let childIndex = childIndexes.get(parent);
+      if (!childIndex) {
+        childIndex = new Map();
+        childIndexes.set(parent, childIndex);
+      }
+      const indexedChildren = childIndex.get(segment);
+      const existing = directory
+        ? indexedChildren?.directory
+        : indexedChildren?.file;
       const node =
         existing ??
         ({
@@ -43,6 +57,10 @@ export function buildChangeTree(
 
       if (!existing) {
         parent.children.push(node);
+        childIndex.set(segment, {
+          ...indexedChildren,
+          [directory ? "directory" : "file"]: node
+        });
       }
 
       if (directory) {

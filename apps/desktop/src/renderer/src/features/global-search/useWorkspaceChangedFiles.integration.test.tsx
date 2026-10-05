@@ -55,6 +55,7 @@ describe("useWorkspaceChangedFiles", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -77,6 +78,62 @@ describe("useWorkspaceChangedFiles", () => {
     expect(observed[0]?.loaded).toBe(false);
     expect(observed[0]?.loading).toBe(true);
     expect(observed.every((value) => value.loading)).toBe(true);
+  });
+
+  it("does not inspect snapshots or publish another state while indexing is disabled", async () => {
+    let snapshotReads = 0;
+    const observed: WorkspaceChangedFilesIndex[] = [];
+    const snapshots = countIndexedReads(
+      [
+        createSnapshot(TARGET_A, { unstaged: 1 }),
+        createSnapshot(TARGET_B)
+      ],
+      () => snapshotReads += 1
+    );
+    const onChange = (value: WorkspaceChangedFilesIndex) => {
+      observed.push(value);
+    };
+
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled={false}
+          snapshots={snapshots}
+          onChange={onChange}
+        />
+      );
+      await flushPromises();
+    });
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled={false}
+          snapshots={countIndexedReads(
+            [
+              createSnapshot(TARGET_A, {
+                unstaged: 1,
+                refreshedAt: "2026-10-05T00:00:01.000Z",
+              }),
+              createSnapshot(TARGET_B, {
+                refreshedAt: "2026-10-05T00:00:01.000Z",
+              }),
+            ],
+            () => snapshotReads += 1
+          )}
+          onChange={onChange}
+        />
+      );
+      await flushPromises();
+    });
+
+    expect(snapshotReads).toBe(0);
+    expect(observed).toHaveLength(2);
+    expect(observed.every((value) =>
+      !value.loading &&
+      !value.loaded &&
+      value.changes.length === 0
+    )).toBe(true);
+    expect(getChanges).not.toHaveBeenCalled();
   });
 
   it("loads only repositories that may contain changes and reuses the revision cache", async () => {
@@ -105,8 +162,11 @@ describe("useWorkspaceChangedFiles", () => {
     });
 
     expect(getChanges).toHaveBeenCalledOnce();
-    expect(getChanges.mock.calls[0]?.[0].target).toEqual(
-      TARGET_A
+    expect(getChanges).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: TARGET_A,
+        includeChangeStats: false
+      })
     );
     expect(latest).toMatchObject({
       failedTargetCount: 0,
@@ -151,6 +211,126 @@ describe("useWorkspaceChangedFiles", () => {
 
     expect(getChanges).toHaveBeenCalledOnce();
     expect(latest?.changes).toHaveLength(1);
+  });
+
+  it("invalidates cached changes when a target path is replaced without a status revision change", async () => {
+    getChanges
+      .mockResolvedValueOnce({
+        ok: true,
+        value: createChanges(TARGET_A, "src/old-worktree.ts")
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: createChanges(TARGET_A, "src/replacement-worktree.ts")
+      });
+    const snapshots = [
+      createSnapshot(TARGET_A, {
+        contentVersion: 1,
+        unstaged: 1
+      }),
+      createSnapshot(TARGET_B)
+    ];
+    let workspace = WORKSPACE;
+    let latest: WorkspaceChangedFilesIndex | undefined;
+    const render = () =>
+      root.render(
+        <Harness
+          enabled
+          workspace={workspace}
+          snapshots={snapshots}
+          onChange={(value) => {
+            latest = value;
+          }}
+        />
+      );
+
+    await act(async () => {
+      render();
+      await flushPromises();
+    });
+    expect(getChanges).toHaveBeenCalledOnce();
+    expect(
+      latest?.changes[0]?.snapshot.changes[0]?.path
+    ).toBe("src/old-worktree.ts");
+
+    workspace = {
+      ...workspace,
+      worktrees: workspace.worktrees.map((worktree) =>
+        worktree.id === TARGET_A.worktreeId
+          ? {
+              ...worktree,
+              path: "C:\\workspace\\replacement-a",
+              canonicalPath: "c:\\workspace\\replacement-a"
+            }
+          : worktree
+      )
+    };
+    await act(async () => {
+      render();
+      await flushPromises();
+    });
+
+    expect(getChanges).toHaveBeenCalledTimes(2);
+    expect(
+      latest?.changes[0]?.snapshot.changes[0]?.path
+    ).toBe("src/replacement-worktree.ts");
+  });
+
+  it("refreshes a status revision that changes while indexing is disabled", async () => {
+    getChanges
+      .mockResolvedValueOnce({
+        ok: true,
+        value: createChanges(TARGET_A, "src/before-close.ts")
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: createChanges(TARGET_A, "src/after-reopen.ts")
+      });
+    let snapshots = [
+      createSnapshot(TARGET_A, {
+        contentVersion: 1,
+        unstaged: 1
+      }),
+      createSnapshot(TARGET_B)
+    ];
+    let latest: WorkspaceChangedFilesIndex | undefined;
+    const render = (enabled: boolean) =>
+      root.render(
+        <Harness
+          enabled={enabled}
+          snapshots={snapshots}
+          onChange={(value) => {
+            latest = value;
+          }}
+        />
+      );
+
+    await act(async () => {
+      render(true);
+      await flushPromises();
+    });
+    await act(async () => {
+      render(false);
+      await flushPromises();
+    });
+    snapshots = snapshots.map((snapshot, index) =>
+      index === 0
+        ? { ...snapshot, contentVersion: 2 }
+        : snapshot
+    );
+    await act(async () => {
+      render(false);
+      await flushPromises();
+    });
+    await act(async () => {
+      render(true);
+      await flushPromises();
+    });
+
+    expect(getChanges).toHaveBeenCalledTimes(2);
+    expect(
+      latest?.changes[0]?.snapshot.changes[0]?.path
+    ).toBe("src/after-reopen.ts");
   });
 
   it("indexes each snapshot once when building plans for many targets", async () => {
@@ -642,6 +822,194 @@ describe("useWorkspaceChangedFiles", () => {
     expect(observed.at(-1)?.changes[0]?.snapshot.changes[0]?.path)
       .toBe("new-workspace.ts");
   });
+
+  it("batches nearby repository completions while preserving failures and the final state", async () => {
+    vi.useFakeTimers();
+    const targetC: RepositoryTargetDto = {
+      repositoryId: "repository-c",
+      worktreeId: "worktree-c"
+    };
+    const workspace: WorkspaceDetailsDto = {
+      ...WORKSPACE,
+      groups: [
+        {
+          ...WORKSPACE.groups[0]!,
+          targets: [TARGET_A, TARGET_B, targetC]
+        }
+      ]
+    };
+    const first = deferred<Awaited<ReturnType<
+      typeof window.gitnest.repository.getChanges
+    >>>();
+    const second = deferred<Awaited<ReturnType<
+      typeof window.gitnest.repository.getChanges
+    >>>();
+    const third = deferred<Awaited<ReturnType<
+      typeof window.gitnest.repository.getChanges
+    >>>();
+    getChanges
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValueOnce(third.promise);
+    const observed: WorkspaceChangedFilesIndex[] = [];
+
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled
+          workspace={workspace}
+          snapshots={[
+            createSnapshot(TARGET_A, { unstaged: 1 }),
+            createSnapshot(TARGET_B, { unstaged: 1 }),
+            createSnapshot(targetC, { unstaged: 1 })
+          ]}
+          onChange={(value) => observed.push(value)}
+        />
+      );
+      await flushPromises();
+    });
+    await act(async () => {
+      first.resolve({
+        ok: true,
+        value: createChanges(TARGET_A, "src/first.ts")
+      });
+      second.resolve({
+        ok: false,
+        error: {
+          code: "COMMAND_FAILED",
+          message: "failed",
+          details: {}
+        }
+      });
+      await flushPromises();
+    });
+
+    expect(vi.getTimerCount()).toBe(1);
+    expect(observed.at(-1)?.changes).toHaveLength(0);
+    act(() => vi.advanceTimersByTime(16));
+    expect(observed.at(-1)).toMatchObject({
+      changes: [
+        expect.objectContaining({
+          target: TARGET_A
+        })
+      ],
+      failedTargetCount: 1,
+      loading: true
+    });
+
+    await act(async () => {
+      third.resolve({
+        ok: true,
+        value: createChanges(targetC, "src/third.ts")
+      });
+      await flushPromises();
+    });
+    expect(observed.at(-1)).toMatchObject({
+      failedTargetCount: 1,
+      loading: false
+    });
+    expect(
+      observed.at(-1)?.changes.map((change) => change.target)
+    ).toEqual([TARGET_A, targetC]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears a scheduled partial publication when the Workspace generation changes", async () => {
+    vi.useFakeTimers();
+    const first = deferred<Awaited<ReturnType<
+      typeof window.gitnest.repository.getChanges
+    >>>();
+    const oldPending = deferred<Awaited<ReturnType<
+      typeof window.gitnest.repository.getChanges
+    >>>();
+    const newPending = deferred<Awaited<ReturnType<
+      typeof window.gitnest.repository.getChanges
+    >>>();
+    getChanges
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(oldPending.promise)
+      .mockReturnValueOnce(newPending.promise);
+    const snapshots = [
+      createSnapshot(TARGET_A, { unstaged: 1 }),
+      createSnapshot(TARGET_B, { unstaged: 1 })
+    ];
+    const observed: WorkspaceChangedFilesIndex[] = [];
+    const onChange = (value: WorkspaceChangedFilesIndex) => {
+      observed.push(value);
+    };
+
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled
+          snapshots={snapshots}
+          onChange={onChange}
+        />
+      );
+      await flushPromises();
+    });
+    await act(async () => {
+      first.resolve({
+        ok: true,
+        value: createChanges(TARGET_A, "old-partial.ts")
+      });
+      await flushPromises();
+    });
+    expect(vi.getTimerCount()).toBe(1);
+
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled
+          workspace={{
+            ...WORKSPACE,
+            id: "workspace-next",
+            groups: [
+              {
+                ...WORKSPACE.groups[0]!,
+                targets: [TARGET_A]
+              }
+            ]
+          }}
+          snapshots={[snapshots[0]!]}
+          onChange={onChange}
+        />
+      );
+      await flushPromises();
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => vi.advanceTimersByTime(16));
+    expect(
+      observed
+        .slice(-2)
+        .every((value) => value.changes.length === 0)
+    ).toBe(true);
+
+    await act(async () => {
+      oldPending.resolve({
+        ok: true,
+        value: createChanges(TARGET_B, "old-late.ts")
+      });
+      await flushPromises();
+    });
+    expect(
+      observed.at(-1)?.changes.some((change) =>
+        change.snapshot.changes.some((item) =>
+          item.path.startsWith("old-")
+        )
+      )
+    ).toBe(false);
+
+    await act(async () => {
+      newPending.resolve({
+        ok: true,
+        value: createChanges(TARGET_A, "new-current.ts")
+      });
+      await flushPromises();
+    });
+    expect(observed.at(-1)?.changes[0]?.snapshot.changes[0]?.path)
+      .toBe("new-current.ts");
+  });
 });
 
 function Harness({
@@ -787,6 +1155,37 @@ function createChanges(
         }
       ]
     }
+  };
+}
+
+function countIndexedReads<Value>(
+  values: Value[],
+  onRead: () => void
+): Value[] {
+  return new Proxy(values, {
+    get(target, property, receiver) {
+      if (
+        typeof property === "string" &&
+        /^\d+$/.test(property)
+      ) {
+        onRead();
+      }
+      return Reflect.get(target, property, receiver);
+    }
+  });
+}
+
+function deferred<Value>() {
+  let resolve!: (value: Value) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<Value>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return {
+    promise,
+    resolve,
+    reject
   };
 }
 

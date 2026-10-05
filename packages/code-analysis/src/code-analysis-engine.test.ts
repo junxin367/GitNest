@@ -11,7 +11,8 @@ import { join } from "node:path";
 import {
   describe,
   expect,
-  it
+  it,
+  vi
 } from "vitest";
 
 import {
@@ -27,6 +28,29 @@ import {
 import type { LspDocumentSymbol } from "./model";
 
 describe("CodeAnalysisEngine", () => {
+  it("serializes an uncompacted result only once for the engine payload check", async () => {
+    const fixture = await createFixture();
+    const engine = new CodeAnalysisEngine();
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      const snapshot = await engine.analyze({
+        ...analysisInput(fixture, {
+          analysisId: "single-payload-check",
+          scope: "workspace",
+          changedPaths: []
+        }),
+        settings: { ...defaultSettings(), enabled: false }
+      });
+      const payloadChecks = stringify.mock.calls.filter(([value]) => value === snapshot);
+      expect(payloadChecks).toHaveLength(1);
+      expect(snapshot.nodes.length).toBeGreaterThan(0);
+    } finally {
+      stringify.mockRestore();
+      await engine.dispose();
+      await fixture.dispose();
+    }
+  });
+
   it.each(
     (["restore", "remove-untracked", "undo-rename"] as const).flatMap(
       (operation) => (["workspace", "changed"] as const).map(
@@ -198,7 +222,8 @@ describe("CodeAnalysisEngine", () => {
           worktreeId: changed.worktreeId,
           path: "client.ts",
           size: expect.any(Number),
-          modifiedAtMs: expect.any(Number)
+          modifiedAtMs: expect.any(Number),
+          fingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/)
         })
       ]);
     } finally {

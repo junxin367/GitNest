@@ -69,6 +69,7 @@ export function useCodeAnalysis(
   const [error, setError] =
     useState<GitReadErrorDto | null>(null);
   const generationRef = useRef(0);
+  const startRequestRef = useRef(0);
   const restoreRequestRef = useRef(0);
   const stateRequestRef = useRef(0);
   const stateRef = useRef<CodeAnalysisStateDto>(INITIAL_STATE);
@@ -188,8 +189,10 @@ export function useCodeAnalysis(
       const expectationKey =
         snapshotExpectationKey(nextState);
       if (nextState.workspaceId !== stateRef.current.workspaceId) {
+        startRequestRef.current += 1;
         restoreRequestRef.current += 1;
         setRestorePending(false);
+        setError(null);
       }
       stateRef.current = nextState;
       if (
@@ -354,6 +357,11 @@ export function useCodeAnalysis(
 
   const start = useCallback(
     async (scope: CodeAnalysisScopeDto) => {
+      const requestId = ++startRequestRef.current;
+      const generation = generationRef.current;
+      const isCurrent = () =>
+        requestId === startRequestRef.current &&
+        generation === generationRef.current;
       restoreRequestRef.current += 1;
       setRestorePending(false);
       setAction("starting");
@@ -363,6 +371,9 @@ export function useCodeAnalysis(
           await window.gitnest.codeAnalysis.start({
             scope
           });
+        if (!isCurrent()) {
+          return false;
+        }
         if (!result.ok) {
           setError(result.error);
           setAction(null);
@@ -370,8 +381,10 @@ export function useCodeAnalysis(
         }
         return true;
       } catch (reason) {
-        setError(unexpectedError(reason));
-        setAction(null);
+        if (isCurrent()) {
+          setError(unexpectedError(reason));
+          setAction(null);
+        }
         return false;
       }
     },

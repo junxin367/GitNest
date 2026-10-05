@@ -20,6 +20,10 @@ import {
 } from "@gitnest/contracts";
 
 import { VersionDialog } from "./VersionDialog";
+import {
+  useApplicationUpdate,
+  type ApplicationUpdateController
+} from "./useApplicationUpdate";
 
 describe("VersionDialog", () => {
   let container: HTMLDivElement;
@@ -135,6 +139,100 @@ describe("VersionDialog", () => {
       );
     });
   }
+});
+
+describe("application update state ordering", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let controller: ApplicationUpdateController;
+  let emit: (state: ApplicationUpdateStateDto) => void;
+  const getState = vi.fn();
+  const check = vi.fn();
+  const openProjectPage = vi.fn();
+
+  beforeEach(() => {
+    (globalThis as typeof globalThis & {
+      IS_REACT_ACT_ENVIRONMENT: boolean;
+    }).IS_REACT_ACT_ENVIRONMENT = true;
+    getState.mockReset().mockResolvedValue(createUpdateState());
+    check.mockReset();
+    openProjectPage.mockReset();
+    Object.defineProperty(window, "gitnest", {
+      configurable: true,
+      value: {
+        update: {
+          getState,
+          check,
+          openProjectPage,
+          onStateChanged: (listener: typeof emit) => {
+            emit = listener;
+            return () => undefined;
+          }
+        }
+      }
+    });
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  function Harness() {
+    controller = useApplicationUpdate();
+    return null;
+  }
+
+  it("preserves a newer progress event when an earlier action reply arrives", async () => {
+    let resolveAction!: (state: ApplicationUpdateStateDto) => void;
+    openProjectPage.mockReturnValue(new Promise((resolve) => {
+      resolveAction = resolve;
+    }));
+    await act(async () => root.render(<Harness />));
+    let pending!: Promise<void>;
+    act(() => { pending = controller.openProjectPage(); });
+    const downloading = {
+      ...createUpdateState(), phase: "downloading" as const, downloadedBytes: 6_000
+    };
+    act(() => emit(downloading));
+    await act(async () => {
+      resolveAction(createUpdateState());
+      await pending;
+    });
+    expect(controller.state).toEqual(downloading);
+  });
+
+  it("preserves the newer action response when requests complete out of order", async () => {
+    let resolveAction!: (state: ApplicationUpdateStateDto) => void;
+    openProjectPage.mockReturnValue(new Promise((resolve) => {
+      resolveAction = resolve;
+    }));
+    const checked = { ...createUpdateState(), latestVersion: "0.0.3" };
+    check.mockResolvedValue(checked);
+    await act(async () => root.render(<Harness />));
+    let pending!: Promise<void>;
+    act(() => { pending = controller.openProjectPage(); });
+    await act(async () => controller.check());
+    await act(async () => {
+      resolveAction(createUpdateState());
+      await pending;
+    });
+    expect(controller.state).toEqual(checked);
+  });
+
+  it("does not let the initial read replace a completed user action", async () => {
+    let resolveInitial!: (state: ApplicationUpdateStateDto) => void;
+    getState.mockReturnValue(new Promise((resolve) => { resolveInitial = resolve; }));
+    const checked = { ...createUpdateState(), latestVersion: "0.0.3" };
+    check.mockResolvedValue(checked);
+    await act(async () => root.render(<Harness />));
+    await act(async () => controller.check());
+    await act(async () => resolveInitial(createUpdateState()));
+    expect(controller.state).toEqual(checked);
+  });
 });
 
 function findButton(label: string): HTMLButtonElement {

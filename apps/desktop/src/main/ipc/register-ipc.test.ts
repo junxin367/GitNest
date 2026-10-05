@@ -54,6 +54,7 @@ import {
   validateRestoreCodeAnalysisSnapshotRequest,
   validateRepositoryCommandExecuteRequest,
   validateRepositoryCommandPreflightRequest,
+  validateRepositoryChangesRequest,
   validateRepositoryCommitDiffRequest,
   validateRepositoryDiffRequest,
   validateRepositoryDiscardRequest,
@@ -763,6 +764,48 @@ describe("repository history IPC validation", () => {
           leftRef: "refs/heads/main",
           rightRef: "refs/heads/main"
         }
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+  });
+});
+
+describe("repository changes IPC validation", () => {
+  const target = {
+    repositoryId: "repository",
+    worktreeId: "worktree"
+  };
+
+  it("preserves an explicit lightweight stats selection", () => {
+    expect(
+      validateRepositoryChangesRequest({
+        queryId: "changes_1",
+        target,
+        includeChangeStats: false
+      })
+    ).toEqual({
+      queryId: "changes_1",
+      target,
+      includeChangeStats: false
+    });
+  });
+
+  it("keeps the default implicit and rejects invalid stats selection", () => {
+    expect(
+      validateRepositoryChangesRequest({
+        queryId: "changes_2",
+        target
+      })
+    ).toEqual({
+      queryId: "changes_2",
+      target
+    });
+    expect(() =>
+      validateRepositoryChangesRequest({
+        queryId: "changes_bad_stats",
+        target,
+        includeChangeStats: "false"
       })
     ).toThrowError(
       expect.objectContaining({ code: "INVALID_REQUEST" })

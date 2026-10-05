@@ -14,6 +14,10 @@ import {
   type ExternalApplicationController
 } from "./useExternalApplications";
 import { rendererPreferenceKeys } from "../../shared/lib/renderer-preferences";
+import {
+  useExternalTerminals,
+  type ExternalTerminalController
+} from "../external-terminal/useExternalTerminals";
 
 const PROFILES: ExternalApplicationProfileDto[] = [
   {
@@ -262,6 +266,114 @@ describe("useExternalApplications interaction state", () => {
     });
     expect(openApplication).not.toHaveBeenCalled();
     expect(listApplications).not.toHaveBeenCalled();
+  });
+});
+
+describe("external terminal workspace lifecycle", () => {
+  let root: Root;
+  let container: HTMLDivElement;
+  let controller: ExternalTerminalController;
+  let openTerminal: ReturnType<typeof vi.fn>;
+  const target = { repositoryId: "shared-repository", worktreeId: "main" };
+
+  beforeEach(() => {
+    (globalThis as typeof globalThis & {
+      IS_REACT_ACT_ENVIRONMENT: boolean;
+    }).IS_REACT_ACT_ENVIRONMENT = true;
+    openTerminal = vi.fn().mockResolvedValue({
+      ok: true, value: { kind: "powershell", label: "PowerShell" }
+    });
+    vi.stubGlobal("gitnest", {
+      system: {
+        listExternalTerminals: vi.fn().mockResolvedValue({
+          ok: true, value: [{ kind: "powershell", label: "PowerShell" }]
+        }),
+        openExternalTerminal: openTerminal
+      }
+    });
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  function Harness({ workspaceId }: { workspaceId: string }) {
+    controller = useExternalTerminals(target, workspaceId);
+    return null;
+  }
+
+  async function renderWorkspace(workspaceId: string) {
+    await act(async () => root.render(React.createElement(Harness, { workspaceId })));
+  }
+
+  it.each(["success", "failure", "rejection"] as const)(
+    "ignores an old Workspace terminal %s without unlocking the new launch",
+    async (outcome) => {
+      const first = deferred<unknown>();
+      const second = deferred<unknown>();
+      openTerminal.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+      await renderWorkspace("workspace-a");
+      let oldLaunch!: Promise<boolean>;
+      act(() => { oldLaunch = controller.open("powershell"); });
+      await renderWorkspace("workspace-b");
+      expect(controller.active).toBeNull();
+      let newLaunch!: Promise<boolean>;
+      act(() => { newLaunch = controller.open("powershell"); });
+      expect(openTerminal).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        first.resolve(outcome === "success"
+          ? { ok: true, value: { kind: "powershell", label: "PowerShell" } }
+          : outcome === "failure"
+            ? { ok: false, error: { code: "COMMAND_FAILED", message: "old terminal failure" } }
+            : Promise.reject(new Error("old terminal transport failure")));
+        expect(await oldLaunch).toBe(false);
+      });
+      expect(controller.active).toBe("powershell");
+      expect(controller.error).toBeNull();
+      expect(controller.notice).toBeNull();
+      await act(async () => {
+        second.resolve({ ok: true, value: { kind: "powershell", label: "PowerShell" } });
+        expect(await newLaunch).toBe(true);
+      });
+      expect(controller.active).toBeNull();
+      expect(controller.notice).toContain("PowerShell");
+    }
+  );
+
+  it("blocks duplicate launches before rendering and permits retry after a failure", async () => {
+    const pending = deferred<unknown>();
+    openTerminal.mockReturnValueOnce(pending.promise);
+    await renderWorkspace("workspace-a");
+    let first!: Promise<boolean>;
+    let duplicate!: Promise<boolean>;
+    act(() => {
+      first = controller.open("powershell");
+      duplicate = controller.open("powershell");
+    });
+    expect(openTerminal).toHaveBeenCalledTimes(1);
+    expect(await duplicate).toBe(false);
+    await act(async () => {
+      pending.resolve({ ok: false, error: { code: "COMMAND_FAILED", message: "terminal launch failed" } });
+      expect(await first).toBe(false);
+    });
+    expect(controller.active).toBeNull();
+    expect(controller.error?.message).toBe("terminal launch failed");
+    await act(async () => { expect(await controller.open("powershell")).toBe(true); });
+    expect(openTerminal).toHaveBeenCalledTimes(2);
+    expect(controller.error).toBeNull();
+  });
+
+  it("rejects a terminal callback captured before changing workspace", async () => {
+    await renderWorkspace("workspace-a");
+    const previous = controller;
+    await renderWorkspace("workspace-b");
+    await act(async () => { expect(await previous.open("powershell")).toBe(false); });
+    expect(openTerminal).not.toHaveBeenCalled();
   });
 });
 

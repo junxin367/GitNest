@@ -35,6 +35,7 @@ export type {
   RepositoryIdentity,
   RepositoryInspection,
   RepositorySnapshot,
+  RepositoryTopology,
   Worktree
 } from "./domain/repository";
 export {
@@ -76,6 +77,7 @@ export type {
   ReadRepositorySnapshotOptions,
   ReadRepositoryDiffOptions
 } from "./ports/git-client";
+export type { GitTopologyClient } from "./ports/git-topology-client";
 export type {
   GitCommitDiffClient,
   ReadCommitDiffOptions
@@ -89,6 +91,7 @@ export type {
   CreateCommitOptions,
   GitMutationClient,
   GitWriteOptions,
+  RestoreWorktreeOptions,
   StashMutationAction
 } from "./ports/git-mutation-client";
 export type {

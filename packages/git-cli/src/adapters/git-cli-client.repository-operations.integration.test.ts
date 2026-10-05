@@ -156,6 +156,59 @@ describe("GitCliClient repository operations integration", () => {
     ).resolves.toBe("ancestor");
   });
 
+  it("keeps branch operation names stable when tags shadow local and remote refs", async () => {
+    const path = fixture.localPath;
+    await runGit(path, ["branch", "release"]);
+    await runGit(path, ["tag", "release"]);
+    await runGit(path, ["tag", "origin/main"]);
+
+    const branches = await client.readBranches(path);
+    const release = branches.find((branch) => branch.fullName === "refs/heads/release");
+    expect(release).toMatchObject({ name: "release", remote: false });
+    expect(branches.find((branch) => branch.fullName === "refs/remotes/origin/main"))
+      .toMatchObject({ name: "origin/main", remote: true });
+    expect(branches.find((branch) => branch.current)?.upstream).toBe("origin/main");
+    expect((await client.readRepositorySnapshot(path)).upstream).toBe("origin/main");
+    expect((await client.inspectRepository(path)).snapshot.upstream).toBe("origin/main");
+
+    const runtime = createCommandRuntime(fixture);
+    const service = new RepositoryCommandService(runtime, client, client);
+    const pull = await service.preflight({
+      type: "pull",
+      targets: [{ repositoryId: "repo", worktreeId: "wt" }],
+      strategy: "ff-only"
+    });
+    await service.execute(pull.command, pull.preflightId, true);
+    await runtime.runQueued();
+    const preflight = await service.preflight({
+      type: "switch-branch",
+      target: { repositoryId: "repo", worktreeId: "wt" },
+      branch: release!.name
+    });
+    await service.execute(preflight.command, preflight.preflightId, true);
+    await runtime.runQueued();
+    expect((await client.readRepositorySnapshot(path)).branch).toBe("release");
+    expect((await runGit(path, ["tag", "--list"])).stdout.trim().split(/\r?\n/))
+      .toEqual(["origin/main", "release"]);
+  }, 15_000);
+
+  it("preserves namespace-like local branch names and nested remote upstreams", async () => {
+    const path = fixture.localPath;
+    await runGit(path, ["branch", "heads/base"]);
+    await runGit(path, ["switch", "-c", "heads/topic"]);
+    await runGit(path, ["branch", "--set-upstream-to=heads/base"]);
+    expect((await client.readRepositorySnapshot(path)).upstream).toBe("heads/base");
+    expect((await client.readBranches(path)).find((branch) => branch.current))
+      .toMatchObject({ name: "heads/topic", upstream: "heads/base", remote: false });
+
+    await runGit(path, ["remote", "add", "team/origin", fixture.remotePath]);
+    await runGit(path, ["fetch", "team/origin"]);
+    await runGit(path, ["branch", "--set-upstream-to=team/origin/main"]);
+    expect((await client.readRepositorySnapshot(path)).upstream).toBe("team/origin/main");
+    expect((await client.readBranches(path)).find((branch) => branch.current))
+      .toMatchObject({ name: "heads/topic", upstream: "team/origin/main", remote: false });
+  });
+
   it.each(["fetch", "pull", "push"] as const)(
     "completes a workspace %s for linked worktrees sharing refs",
     async (type) => {

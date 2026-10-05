@@ -96,6 +96,7 @@ import {
   type RemoveWorkspaceRepositoryRequest,
   type RenameWorkspaceRequest,
   type RepositoryInspectionRequest,
+  type RepositoryChangesRequest,
   type RepositoryCommitRequest,
   type RepositoryCommandDto,
   type RepositoryCommandExecuteRequest,
@@ -844,10 +845,11 @@ export function registerIpcHandlers(
     IPC_CHANNELS.repositoryGetChanges,
     (_event, request) =>
       captureGitRead(() => {
-        const input = validateRepositoryQueryRequest(request);
+        const input = validateRepositoryChangesRequest(request);
         return services.repositoryQueries.getChanges(
           input.queryId,
-          input.target
+          input.target,
+          input.includeChangeStats
         );
       })
   );
@@ -2392,6 +2394,35 @@ function validateRepositoryQueryRequest(
   return {
     queryId: request.queryId,
     target: validateRepositoryTarget(request.target)
+  };
+}
+
+export function validateRepositoryChangesRequest(
+  request: unknown
+): RepositoryChangesRequest {
+  const base = validateRepositoryQueryRequest(request);
+  const includeChangeStats =
+    request &&
+    typeof request === "object" &&
+    "includeChangeStats" in request
+      ? request.includeChangeStats
+      : undefined;
+
+  if (
+    includeChangeStats !== undefined &&
+    typeof includeChangeStats !== "boolean"
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Repository change stats selection must be boolean when provided."
+    );
+  }
+
+  return {
+    ...base,
+    ...(includeChangeStats === undefined
+      ? {}
+      : { includeChangeStats })
   };
 }
 

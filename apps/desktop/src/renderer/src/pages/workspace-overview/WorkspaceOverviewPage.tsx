@@ -1,5 +1,10 @@
 import { Button } from "../../shared/ui/Button";
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 
 import type {
   CommitSummaryDto,
@@ -37,6 +42,38 @@ type LocalWorkspaceOperation =
 
 let workspaceOverviewHistorySequence = 0;
 
+interface WorkspaceHistoryRequest {
+  target: RepositoryTargetDto;
+  identity: string;
+  head: string | null;
+  refreshToken: string;
+}
+
+interface PendingHistoryCacheEntry {
+  status: "pending";
+  queryId: string;
+  promise: Promise<HistoryLoadResult>;
+  resolve(result: HistoryLoadResult): void;
+}
+
+interface ResolvedHistoryCacheEntry {
+  status: "resolved";
+  commit: CommitSummaryDto | undefined;
+}
+
+type HistoryCacheEntry =
+  | PendingHistoryCacheEntry
+  | ResolvedHistoryCacheEntry;
+
+type HistoryLoadResult =
+  | {
+      resolved: true;
+      commit: CommitSummaryDto | undefined;
+    }
+  | {
+      resolved: false;
+    };
+
 interface WorkspaceOverviewPageProps {
   workspace: WorkspaceDetailsDto | null;
   snapshots: RepositoryStatusSnapshotDto[];
@@ -63,6 +100,10 @@ export function WorkspaceOverviewPage({
   const [recentCommits, setRecentCommits] = useState<
     Map<string, CommitSummaryDto>
   >(() => new Map());
+  const historyCacheRef = useRef(
+    new Map<string, HistoryCacheEntry>()
+  );
+  const historyLifecycleRef = useRef(0);
   const [
     repositoryStatusCollapsed,
     setRepositoryStatusCollapsed
@@ -74,11 +115,6 @@ export function WorkspaceOverviewPage({
   const targets = useMemo(
     () => listWorkspaceTargets(workspace),
     [workspace]
-  );
-  const historyTargetsKey = JSON.stringify(targets);
-  const historyTargets = useMemo<RepositoryTargetDto[]>(
-    () => JSON.parse(historyTargetsKey),
-    [historyTargetsKey]
   );
   const scopedSnapshots = useMemo(
     () => filterSnapshotsToTargets(snapshots, targets),
@@ -100,81 +136,239 @@ export function WorkspaceOverviewPage({
         : [],
     [scopedSnapshots, targets, workspace]
   );
-  const historyRevision = useMemo(
+  const historyRequestsKey = useMemo(
     () =>
-      scopedSnapshots
-        .map(
-          (snapshot) =>
-            `${targetKey(snapshot)}:${snapshot.head}:${snapshot.contentVersion ?? ""}`
-        )
-        .sort()
-        .join("|"),
-    [scopedSnapshots]
+      JSON.stringify(
+        targets.map((target) => {
+          const snapshot = findTargetSnapshot(
+            scopedSnapshots,
+            target
+          );
+          return {
+            target,
+            identity: historyTargetIdentity(workspace, target),
+            head: snapshot ? snapshot.head : null,
+            refreshToken: snapshot
+              ? String(snapshot.contentVersion ?? "")
+              : ""
+          } satisfies WorkspaceHistoryRequest;
+        })
+      ),
+    [scopedSnapshots, targets, workspace]
+  );
+  const historyRequests = useMemo<WorkspaceHistoryRequest[]>(
+    () => JSON.parse(historyRequestsKey),
+    [historyRequestsKey]
   );
   useEffect(() => {
     let active = true;
-    const queryIds = historyTargets.map((target, index) => ({
-      queryId: `workspace-overview-history-${
-        ++workspaceOverviewHistorySequence
-      }-${index}`,
-      target
-    }));
-
-    setRecentCommits(new Map());
     const repositoryBridge = window.gitnest?.repository;
-    if (!repositoryBridge || queryIds.length === 0) {
-      return () => {
-        active = false;
-      };
+    const cache = historyCacheRef.current;
+
+    for (const request of historyRequests) {
+      if (request.head === null) {
+        continue;
+      }
+      const key = historyCacheKey(request);
+      if (cache.has(key)) {
+        continue;
+      }
+      const missingSnapshotEntry = cache.get(
+        historyCacheKey({
+          ...request,
+          head: null
+        })
+      );
+      if (
+        missingSnapshotEntry?.status === "resolved" &&
+        (missingSnapshotEntry.commit?.hash ?? "") ===
+          request.head
+      ) {
+        cache.set(key, missingSnapshotEntry);
+      }
     }
 
-    const loadRecentCommits = async () => {
-      const loaded = new Map<string, CommitSummaryDto>();
+    const desiredKeys = new Set(
+      historyRequests.map(historyCacheKey)
+    );
+    for (const [key, entry] of cache) {
+      if (!desiredKeys.has(key)) {
+        cache.delete(key);
+        if (entry.status === "pending") {
+          entry.resolve({ resolved: false });
+          if (repositoryBridge) {
+            void repositoryBridge.cancelQuery({
+              queryId: entry.queryId
+            });
+          }
+        }
+      }
+    }
 
-      for (let index = 0; index < queryIds.length; index += 4) {
-        const batch = queryIds.slice(index, index + 4);
+    const loaded = new Map<string, CommitSummaryDto>();
+    const observedEntries: Array<{
+      key: string;
+      request: WorkspaceHistoryRequest;
+      entry: PendingHistoryCacheEntry;
+    }> = [];
+    const newEntries: Array<{
+      key: string;
+      request: WorkspaceHistoryRequest;
+      entry: PendingHistoryCacheEntry;
+    }> = [];
+
+    for (const request of historyRequests) {
+      const key = historyCacheKey(request);
+      let entry = cache.get(key);
+      if (!entry && repositoryBridge) {
+        entry = createPendingHistoryEntry(
+          `workspace-overview-history-${++workspaceOverviewHistorySequence}`
+        );
+        cache.set(key, entry);
+        newEntries.push({ key, request, entry });
+      }
+      if (!entry) {
+        continue;
+      }
+      if (entry.status === "resolved" && entry.commit) {
+        loaded.set(targetKey(request.target), entry.commit);
+      } else if (entry.status === "pending") {
+        observedEntries.push({ key, request, entry });
+      }
+    }
+    setRecentCommits((current) =>
+      commitMapsEqual(current, loaded) ? current : loaded
+    );
+
+    const observeEntries = async () => {
+      for (
+        let index = 0;
+        index < observedEntries.length;
+        index += 4
+      ) {
+        const batch = observedEntries.slice(index, index + 4);
         const results = await Promise.all(
-          batch.map(async ({ queryId, target }) => {
-            try {
-              const result = await repositoryBridge.getHistory({
-                queryId,
-                target,
-                limit: 1,
-                offset: 0
-              });
-              return result.ok
-                ? {
-                    key: targetKey(target),
-                    commit: result.value.page.commits[0]
-                  }
-                : null;
-            } catch {
-              return null;
-            }
-          })
+          batch.map(({ entry }) => entry.promise)
         );
 
         if (!active) {
           return;
         }
 
-        for (const result of results) {
-          if (result?.commit) {
-            loaded.set(result.key, result.commit);
+        setRecentCommits((current) => {
+          let next: Map<string, CommitSummaryDto> | undefined;
+          for (
+            let resultIndex = 0;
+            resultIndex < results.length;
+            resultIndex += 1
+          ) {
+            const result = results[resultIndex];
+            const observed = batch[resultIndex];
+            if (
+              !result?.resolved ||
+              !observed ||
+              cache.get(observed.key)?.status !== "resolved"
+            ) {
+              continue;
+            }
+            const key = targetKey(observed.request.target);
+            if (result.commit) {
+              if (
+                (next ?? current).get(key) !== result.commit
+              ) {
+                next ??= new Map(current);
+                next.set(key, result.commit);
+              }
+            } else if ((next ?? current).has(key)) {
+              next ??= new Map(current);
+              next.delete(key);
+            }
           }
-        }
-        setRecentCommits(new Map(loaded));
+          return next ?? current;
+        });
       }
     };
 
-    void loadRecentCommits();
-    return () => {
-      active = false;
-      for (const { queryId } of queryIds) {
-        void repositoryBridge.cancelQuery({ queryId });
+    const executeNewEntries = async () => {
+      if (!repositoryBridge) {
+        return;
+      }
+      for (
+        let index = 0;
+        index < newEntries.length;
+        index += 4
+      ) {
+        const batch = newEntries.slice(index, index + 4);
+        await Promise.all(
+          batch.map(async ({ key, request, entry }) => {
+            if (cache.get(key) !== entry) {
+              entry.resolve({ resolved: false });
+              return;
+            }
+            try {
+              const result = await repositoryBridge.getHistory({
+                queryId: entry.queryId,
+                target: request.target,
+                limit: 1,
+                offset: 0
+              });
+              if (cache.get(key) !== entry) {
+                entry.resolve({ resolved: false });
+                return;
+              }
+              if (!result.ok) {
+                cache.delete(key);
+                entry.resolve({ resolved: false });
+                return;
+              }
+              const resolvedEntry: ResolvedHistoryCacheEntry = {
+                status: "resolved",
+                commit: result.value.page.commits[0]
+              };
+              cache.set(key, resolvedEntry);
+              entry.resolve({
+                resolved: true,
+                commit: resolvedEntry.commit
+              });
+            } catch {
+              if (cache.get(key) === entry) {
+                cache.delete(key);
+              }
+              entry.resolve({ resolved: false });
+            }
+          })
+        );
       }
     };
-  }, [historyRevision, historyTargets, workspace?.id]);
+
+    void observeEntries();
+    void executeNewEntries();
+    return () => {
+      active = false;
+    };
+  }, [historyRequests]);
+  useEffect(() => {
+    const lifecycle = ++historyLifecycleRef.current;
+    return () => {
+      queueMicrotask(() => {
+        if (historyLifecycleRef.current !== lifecycle) {
+          return;
+        }
+        const repositoryBridge = window.gitnest?.repository;
+        for (const entry of historyCacheRef.current.values()) {
+          if (entry.status === "pending") {
+            entry.resolve({ resolved: false });
+            if (repositoryBridge) {
+              void repositoryBridge.cancelQuery({
+                queryId: entry.queryId
+              });
+            }
+          }
+        }
+        historyCacheRef.current.clear();
+      });
+    };
+  }, []);
   const recentRows = useMemo(
     () =>
       [...statusRows]
@@ -831,6 +1025,71 @@ function commitTimestamp(
 
 function targetKey(target: RepositoryTargetDto): string {
   return `${target.repositoryId}:${target.worktreeId}`;
+}
+
+function historyTargetIdentity(
+  workspace: WorkspaceDetailsDto | null,
+  target: RepositoryTargetDto
+): string {
+  const resolved = workspace
+    ? resolveWorkspaceTarget(workspace, target)
+    : {
+        repository: undefined,
+        worktree: undefined
+      };
+  return JSON.stringify([
+    workspace?.id ?? "",
+    workspace?.canonicalPath ?? workspace?.path ?? "",
+    target.repositoryId,
+    target.worktreeId,
+    resolved.repository?.canonicalCommonDir ??
+      resolved.repository?.commonDir ??
+      "",
+    resolved.worktree?.canonicalPath ??
+      resolved.worktree?.path ??
+      ""
+  ]);
+}
+
+function historyCacheKey(
+  request: Pick<
+    WorkspaceHistoryRequest,
+    "identity" | "head"
+  >
+): string {
+  return JSON.stringify([request.identity, request.head]);
+}
+
+function createPendingHistoryEntry(
+  queryId: string
+): PendingHistoryCacheEntry {
+  let resolvePromise: (
+    result: HistoryLoadResult
+  ) => void = () => undefined;
+  const promise = new Promise<HistoryLoadResult>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    status: "pending",
+    queryId,
+    promise,
+    resolve: resolvePromise
+  };
+}
+
+function commitMapsEqual(
+  left: ReadonlyMap<string, CommitSummaryDto>,
+  right: ReadonlyMap<string, CommitSummaryDto>
+): boolean {
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const [key, commit] of left) {
+    if (right.get(key) !== commit) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function compareStatusRows(

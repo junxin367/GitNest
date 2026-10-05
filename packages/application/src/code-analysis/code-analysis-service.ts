@@ -538,6 +538,26 @@ export class CodeAnalysisService {
   async getSnapshot(
     detail?: CodeAnalysisSnapshotDetail
   ): Promise<CodeAnalysisSnapshotView | null> {
+    const currentSnapshot =
+      await this.#readCurrentSnapshot();
+    if (!currentSnapshot) {
+      return null;
+    }
+    const snapshot =
+      detail === "navigation"
+        ? createNavigationSnapshot(currentSnapshot)
+        : currentSnapshot;
+    const result = structuredClone(
+      snapshot
+    ) as CodeAnalysisSnapshotView;
+    if (detail) {
+      result.detailLevel = detail;
+      result.totalNodeCount = currentSnapshot.nodes.length;
+    }
+    return result;
+  }
+
+  async #readCurrentSnapshot(): Promise<CodeAnalysisSnapshot | null> {
     const generation = this.#selectionGeneration;
     const [workspace, settings] = await Promise.all([
       this.#workspace.getCurrent(),
@@ -563,22 +583,11 @@ export class CodeAnalysisService {
     ) {
       return null;
     }
-    const snapshot =
-      detail === "navigation"
-        ? createNavigationSnapshot(this.#snapshot)
-        : this.#snapshot;
-    const result = structuredClone(
-      snapshot
-    ) as CodeAnalysisSnapshotView;
-    if (detail) {
-      result.detailLevel = detail;
-      result.totalNodeCount = this.#snapshot.nodes.length;
-    }
-    return result;
+    return this.#snapshot;
   }
 
   async readFile(nodeId: string): Promise<CodeAnalysisFile> {
-    const snapshot = await this.getSnapshot();
+    const snapshot = await this.#readCurrentSnapshot();
     if (!snapshot) {
       throw new WorkspaceError(
         "INVALID_REQUEST",

@@ -134,6 +134,12 @@ describe("useCodeNodeDiff", () => {
     await renderNode(createNode(change.path, "first", false));
 
     expect(getChanges).toHaveBeenCalledOnce();
+    expect(getChanges).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: TARGET,
+        includeChangeStats: false
+      })
+    );
     expect(getDiff).toHaveBeenCalledTimes(2);
     expect(
       getDiff.mock.calls.map(([request]) => ({
@@ -281,6 +287,104 @@ describe("useCodeNodeDiff", () => {
     expect(getDiff).not.toHaveBeenCalled();
     expect(state?.documents[0]?.diff.content).toBe(
       "shared content"
+    );
+  });
+
+  it("reloads the same node when its repository revision changes and ignores the old late diff", async () => {
+    const path = "src/refreshed.ts";
+    const change = {
+      path,
+      indexStatus: ".",
+      worktreeStatus: "M",
+      kind: "ordinary"
+    } as const;
+    const getChanges = vi.fn(async () => ({
+      ok: true as const,
+      value: createChanges([change])
+    }));
+    let resolveFirstDiff!: (
+      result: Awaited<
+        ReturnType<GitNestBridge["repository"]["getDiff"]>
+      >
+    ) => void;
+    const getDiff = vi
+      .fn<GitNestBridge["repository"]["getDiff"]>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirstDiff = resolve;
+          })
+      )
+      .mockResolvedValueOnce({
+        ok: true,
+        value: createDiff(
+          path,
+          "unstaged",
+          "current revision content"
+        )
+      });
+    const cancelQuery = vi.fn(async () => ({
+      ok: true as const,
+      value: undefined
+    }));
+    installBridge({
+      getChanges,
+      getDiff,
+      cancelQuery
+    });
+    const node = createNode(path, "stable-node");
+
+    await act(async () => {
+      root.render(
+        <Harness
+          node={node}
+          refreshKey="revision-1"
+          onState={(value) => {
+            state = value;
+          }}
+        />
+      );
+      await flushAsyncWork();
+    });
+    const firstDiffQueryId =
+      getDiff.mock.calls[0]?.[0].queryId;
+
+    await act(async () => {
+      root.render(
+        <Harness
+          node={node}
+          refreshKey="revision-2"
+          onState={(value) => {
+            state = value;
+          }}
+        />
+      );
+      await flushAsyncWork();
+    });
+
+    expect(getChanges).toHaveBeenCalledTimes(2);
+    expect(getDiff).toHaveBeenCalledTimes(2);
+    expect(cancelQuery).toHaveBeenCalledWith({
+      queryId: firstDiffQueryId
+    });
+    expect(state?.documents[0]?.diff.content).toBe(
+      "current revision content"
+    );
+
+    await act(async () => {
+      resolveFirstDiff({
+        ok: true,
+        value: createDiff(
+          path,
+          "unstaged",
+          "stale revision content"
+        )
+      });
+      await flushAsyncWork();
+    });
+
+    expect(state?.documents[0]?.diff.content).toBe(
+      "current revision content"
     );
   });
 
@@ -532,12 +636,14 @@ function SourceHarness({ node, onState }: {
 
 function Harness({
   node,
+  refreshKey,
   onState
 }: {
   node: CodeGraphNodeDto | null;
+  refreshKey?: string;
   onState(state: CodeNodeDiffState): void;
 }) {
-  onState(useCodeNodeDiff(node));
+  onState(useCodeNodeDiff(node, refreshKey));
   return null;
 }
 

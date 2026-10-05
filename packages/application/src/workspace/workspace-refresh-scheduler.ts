@@ -84,6 +84,7 @@ interface ScheduledRefresh {
   lastReason: BackgroundRefreshReason;
   forceContentVersion: boolean;
   dueAt: number;
+  latestDueAt: number;
 }
 
 interface DiagnosticCounters {
@@ -269,7 +270,10 @@ export class WorkspaceRefreshScheduler {
       existing.lastReason = reason;
       existing.forceContentVersion ||= forceContentVersion;
       existing.dueAt = onlyWatcherSignals
-        ? Math.max(existing.dueAt, dueAt)
+        ? Math.min(
+            existing.latestDueAt,
+            Math.max(existing.dueAt, dueAt)
+          )
         : Math.min(existing.dueAt, dueAt);
       return;
     }
@@ -282,7 +286,21 @@ export class WorkspaceRefreshScheduler {
       reasons: new Set([reason]),
       lastReason: reason,
       forceContentVersion,
-      dueAt
+      dueAt,
+      // Preserve trailing debounce for short bursts, but do not let a
+      // continuously written file postpone its first refresh indefinitely.
+      latestDueAt: Math.max(
+        dueAt,
+        Date.now() + Math.max(
+          0,
+          this.#priorityOf(target) === "selected"
+            ? this.#options.selectedDebounceMs
+            : this.#options.backgroundDebounceMs,
+          this.#priorityOf(target) === "selected"
+            ? this.#options.selectedMinIntervalMs
+            : this.#options.backgroundMinIntervalMs
+        )
+      )
     });
   }
 
@@ -466,7 +484,8 @@ export class WorkspaceRefreshScheduler {
         reasons: new Set(["polling"]),
         lastReason: "polling",
         forceContentVersion: true,
-        dueAt: now
+        dueAt: now,
+        latestDueAt: now
       });
       this.#pollDueAt.set(
         key,

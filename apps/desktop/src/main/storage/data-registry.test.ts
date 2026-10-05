@@ -173,6 +173,133 @@ describe("ApplicationUpdateService", () => {
     service.dispose();
   });
 
+  it.each([
+    ["checking", "project"],
+    ["checking", "release"],
+    ["downloading", "project"],
+    ["downloading", "release"]
+  ] as const)(
+    "keeps the active %s operation visible when opening the %s page fails",
+    async (phase, page) => {
+      const root = await createTemporaryDirectory();
+      const installer = Buffer.from("verified update fixture");
+      const manifest = createUpdateManifest();
+      manifest.asset.sizeBytes = installer.byteLength;
+      manifest.asset.sha256 = createHash("sha256")
+        .update(installer)
+        .digest("hex");
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const launchInstaller = vi.fn(async () => undefined);
+      const requestQuit = vi.fn();
+      const service = new ApplicationUpdateService({
+        currentVersion: "1.0.0",
+        distribution: "installed",
+        platform: "win32",
+        architecture: "x64",
+        stateFilePath: join(root, "updates", "state.json"),
+        downloadDirectory: join(root, "updates", "downloads"),
+        fetch: vi.fn<typeof fetch>(async (input) => {
+          const isManifest = String(input).endsWith("latest.json");
+          if (isManifest === (phase === "checking")) {
+            markStarted();
+            await gate;
+          }
+          return isManifest
+            ? new Response(JSON.stringify(manifest))
+            : new Response(installer);
+        }),
+        launchInstaller,
+        openExternal: vi.fn(async () => {
+          throw new Error("No browser is available");
+        }),
+        requestQuit
+      });
+      if (phase === "downloading") {
+        await service.check("manual");
+      }
+      const operation = phase === "checking"
+        ? service.check("manual")
+        : service.downloadAndInstall();
+      try {
+        await started;
+        expect(await service.getState()).toMatchObject({ phase });
+        const failedNavigation = page === "project"
+          ? service.openProjectPage()
+          : service.openReleasePage();
+        await expect(failedNavigation).resolves.toMatchObject({
+          phase,
+          errorCode: page === "project"
+            ? "UPDATE_OPEN_PROJECT_FAILED"
+            : "UPDATE_OPEN_RELEASE_FAILED"
+        });
+        expect(launchInstaller).not.toHaveBeenCalled();
+        release();
+        await expect(operation).resolves.toMatchObject({
+          phase: phase === "checking" ? "available" : "launching",
+          errorCode: null,
+          ...(phase === "downloading"
+            ? { downloadedBytes: installer.byteLength }
+            : {})
+        });
+        expect(launchInstaller).toHaveBeenCalledTimes(
+          phase === "downloading" ? 1 : 0
+        );
+        expect(requestQuit).toHaveBeenCalledTimes(
+          phase === "downloading" ? 1 : 0
+        );
+      } finally {
+        release();
+        await operation;
+        service.dispose();
+      }
+    }
+  );
+
+  it.each(["project", "release"] as const)(
+    "reports an idle %s page failure without starting an update",
+    async (page) => {
+      const root = await createTemporaryDirectory();
+      const fetchUpdate = vi.fn<typeof fetch>();
+      const launchInstaller = vi.fn(async () => undefined);
+      const service = new ApplicationUpdateService({
+        currentVersion: "1.0.0",
+        distribution: "installed",
+        platform: "win32",
+        architecture: "x64",
+        stateFilePath: join(root, "updates", "state.json"),
+        downloadDirectory: join(root, "updates", "downloads"),
+        fetch: fetchUpdate,
+        launchInstaller,
+        openExternal: vi.fn(async () => {
+          throw new Error("No browser is available");
+        }),
+        requestQuit: vi.fn()
+      });
+      try {
+        await expect(page === "project"
+          ? service.openProjectPage()
+          : service.openReleasePage()
+        ).resolves.toMatchObject({
+          phase: "error",
+          errorCode: page === "project"
+            ? "UPDATE_OPEN_PROJECT_FAILED"
+            : "UPDATE_OPEN_RELEASE_FAILED"
+        });
+        expect(fetchUpdate).not.toHaveBeenCalled();
+        expect(launchInstaller).not.toHaveBeenCalled();
+      } finally {
+        service.dispose();
+      }
+    }
+  );
+
   it("persists a once-per-version startup reminder", async () => {
     const root = await createTemporaryDirectory();
     const manifest = createUpdateManifest();

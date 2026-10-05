@@ -25,7 +25,8 @@ export interface ExternalTerminalController {
 }
 
 export function useExternalTerminals(
-  target: RepositoryTargetDto | undefined
+  target: RepositoryTargetDto | undefined,
+  workspaceId?: string
 ): ExternalTerminalController {
   const stableTarget = useMemo(
     () =>
@@ -37,9 +38,12 @@ export function useExternalTerminals(
         : undefined,
     [target?.repositoryId, target?.worktreeId]
   );
-  const targetKey = stableTarget
-    ? `${stableTarget.repositoryId}:${stableTarget.worktreeId}`
-    : "";
+  const scope = useMemo(
+    () => ({ target: stableTarget, workspaceId }),
+    [stableTarget, workspaceId]
+  );
+  const currentScopeRef = useRef<typeof scope | null>(scope);
+  currentScopeRef.current = scope;
   const [profiles, setProfiles] = useState<
     ExternalTerminalProfileDto[]
   >([]);
@@ -50,8 +54,12 @@ export function useExternalTerminals(
     useState<GitReadErrorDto | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const generation = useRef(0);
+  const inFlight = useRef(false);
 
   const reload = useCallback(async () => {
+    if (currentScopeRef.current !== scope) {
+      return;
+    }
     const requestGeneration = generation.current;
     setLoading(true);
     try {
@@ -77,26 +85,35 @@ export function useExternalTerminals(
         setLoading(false);
       }
     }
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
+    currentScopeRef.current = scope;
     generation.current += 1;
+    inFlight.current = false;
     setActive(null);
     setError(null);
     setNotice(null);
     void reload();
     return () => {
       generation.current += 1;
+      if (currentScopeRef.current === scope) {
+        currentScopeRef.current = null;
+      }
     };
-  }, [reload, targetKey]);
+  }, [reload, scope]);
 
   const open = useCallback(
     async (kind: ExternalTerminalKindDto) => {
-      if (!stableTarget || active) {
+      if (!stableTarget || inFlight.current || currentScopeRef.current !== scope) {
         return false;
       }
 
       const requestGeneration = generation.current;
+      const isCurrent = () =>
+        requestGeneration === generation.current &&
+        currentScopeRef.current === scope;
+      inFlight.current = true;
       setActive(kind);
       setError(null);
       setNotice(null);
@@ -106,7 +123,7 @@ export function useExternalTerminals(
             target: stableTarget,
             kind
           });
-        if (requestGeneration !== generation.current) {
+        if (!isCurrent()) {
           return false;
         }
         if (!result.ok) {
@@ -116,23 +133,27 @@ export function useExternalTerminals(
         setNotice(`${result.value.label} 已在当前 Worktree 打开。`);
         return true;
       } catch (reason) {
-        if (requestGeneration === generation.current) {
+        if (isCurrent()) {
           setError(unexpectedTerminalError(reason));
         }
         return false;
       } finally {
-        if (requestGeneration === generation.current) {
+        if (isCurrent()) {
+          inFlight.current = false;
           setActive(null);
         }
       }
     },
-    [active, stableTarget]
+    [scope, stableTarget]
   );
 
   const clearFeedback = useCallback(() => {
+    if (currentScopeRef.current !== scope) {
+      return;
+    }
     setError(null);
     setNotice(null);
-  }, []);
+  }, [scope]);
 
   return {
     profiles,

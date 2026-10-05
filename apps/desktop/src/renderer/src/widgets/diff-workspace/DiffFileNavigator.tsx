@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -43,6 +44,11 @@ interface DiffFileSection {
 interface DiffFileSectionStats {
   additions: number;
   deletions: number;
+}
+
+interface DiffFileSectionTree {
+  filesByPath: ReadonlyMap<string, DiffViewerFile>;
+  nodes: readonly ChangeTreeNode[];
 }
 
 type DiffFileSectionCollapseState = Record<
@@ -233,10 +239,13 @@ export function DiffFileNavigator({
         .filter((section) => section.files.length > 0),
     [filteredFiles]
   );
-  const selectedFile =
-    filteredFiles.find(
-      (file) => file.key === selectedFileKey
-    ) ?? filteredFiles[0];
+  const selectedFile = useMemo(
+    () =>
+      filteredFiles.find(
+        (file) => file.key === selectedFileKey
+      ) ?? filteredFiles[0],
+    [filteredFiles, selectedFileKey]
+  );
   const selectedPath = selectedFile?.path;
   const selectedMode = selectedFile?.mode;
   const directoryKeys = useMemo(
@@ -254,6 +263,39 @@ export function DiffFileNavigator({
       ].sort(),
     [sections]
   );
+  const sectionTrees = useMemo<
+    ReadonlyMap<DiffViewerMode, DiffFileSectionTree>
+  >(() => {
+    if (viewMode !== "tree") {
+      return new Map();
+    }
+
+    return new Map(
+      sections.map((section) => {
+        const filesByPath = new Map<
+          string,
+          DiffViewerFile
+        >();
+        for (const file of section.files) {
+          if (!filesByPath.has(file.path)) {
+            filesByPath.set(file.path, file);
+          }
+        }
+
+        return [
+          section.mode,
+          {
+            filesByPath,
+            nodes: compactChangeTreeNodes(
+              buildChangeTree(
+                section.files.map((file) => file.change)
+              )
+            )
+          }
+        ] as const;
+      })
+    );
+  }, [sections, viewMode]);
   const canToggleDirectories =
     viewMode === "tree" && directoryKeys.length > 0;
   const hasExpandedDirectories = directoryKeys.some(
@@ -526,7 +568,7 @@ export function DiffFileNavigator({
     setPendingSelectionReveal(null);
   }, [pendingSelectionReveal]);
 
-  const renderFileRow = (
+  const renderFileRow = useCallback((
     file: DiffViewerFile,
     depth = 0
   ): ReactNode => {
@@ -628,17 +670,27 @@ export function DiffFileNavigator({
         </div>
       </div>
     );
-  };
-  const renderTreeNodes = (
+  }, [
+    selectedFile?.key,
+    mutationBusy,
+    onSelectedFileChange,
+    onFileContextMenu,
+    onStageFile,
+    onUnstageFile,
+    onDiscardFile,
+    canStageFile,
+    canUnstageFile,
+    canDiscardFile
+  ]);
+  const renderTreeNodes = useCallback(function renderNodes(
     nodes: readonly ChangeTreeNode[],
     section: DiffFileSection,
+    filesByPath: ReadonlyMap<string, DiffViewerFile>,
     depth = 0
-  ): ReactNode[] =>
-    nodes.flatMap((node) => {
+  ): ReactNode[] {
+    return nodes.flatMap((node) => {
       if (!node.directory && node.change) {
-        const file = section.files.find(
-          (candidate) => candidate.path === node.change?.path
-        );
+        const file = filesByPath.get(node.change.path);
         return file ? [renderFileRow(file, depth)] : [];
       }
       const key = `${section.mode}:${node.path}`;
@@ -680,29 +732,45 @@ export function DiffFileNavigator({
         </Button>,
         ...(collapsed
           ? []
-          : renderTreeNodes(
+          : renderNodes(
               node.children,
               section,
+              filesByPath,
               depth + 1
             ))
       ];
     });
+  }, [collapsedDirectories, renderFileRow]);
 
-  const renderSectionRows = (
+  const renderSectionRows = useCallback((
     section: DiffFileSection
-  ): ReactNode =>
-    viewMode === "tree"
-      ? renderTreeNodes(
-          compactChangeTreeNodes(
-            buildChangeTree(
-              section.files.map((file) => file.change)
-            )
-          ),
-          section
-        )
-      : section.files.map((file) => renderFileRow(file));
+  ): ReactNode => {
+    if (viewMode !== "tree") {
+      return section.files.map((file) => renderFileRow(file));
+    }
 
-  const renderSectionActions = (
+    const tree = sectionTrees.get(section.mode);
+    return tree
+      ? renderTreeNodes(
+          tree.nodes,
+          section,
+          tree.filesByPath
+        )
+      : [];
+  }, [viewMode, sectionTrees, renderTreeNodes, renderFileRow]);
+  const sectionRows = useMemo(
+    () => new Map(
+      sections.map((section) => [
+        section.mode,
+        changesError || collapsedSections[section.mode]
+          ? null
+          : renderSectionRows(section)
+      ])
+    ),
+    [sections, changesError, collapsedSections, renderSectionRows]
+  );
+
+  const renderSectionActions = useCallback((
     section: DiffFileSection
   ): ReactNode => {
     const stagedSection = section.mode === "staged";
@@ -772,7 +840,24 @@ export function DiffFileNavigator({
         ) : null}
       </div>
     );
-  };
+  }, [
+    mutationBusy,
+    onStageFiles,
+    onUnstageFiles,
+    onDiscardFiles,
+    canStageFile,
+    canUnstageFile,
+    canDiscardFile
+  ]);
+  const sectionActionsByMode = useMemo(
+    () => new Map(
+      sections.map((section) => [
+        section.mode,
+        renderSectionActions(section)
+      ])
+    ),
+    [sections, renderSectionActions]
+  );
 
   return (
     <>
@@ -909,7 +994,7 @@ export function DiffFileNavigator({
           sections.map((section) => {
             const collapsed = collapsedSections[section.mode];
             const bodyId = `diff-workspace-section-${section.mode}`;
-            const sectionActions = renderSectionActions(section);
+            const sectionActions = sectionActionsByMode.get(section.mode);
             return (
               <section
                 className={`diff-workspace-file-section${
@@ -961,7 +1046,7 @@ export function DiffFileNavigator({
                 </div>
                 {collapsed ? null : (
                   <div id={bodyId}>
-                    {renderSectionRows(section)}
+                    {sectionRows.get(section.mode)}
                   </div>
                 )}
               </section>

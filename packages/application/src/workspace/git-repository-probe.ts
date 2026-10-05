@@ -1,13 +1,13 @@
-import type { GitClient } from "@gitnest/git-core";
+import type { GitTopologyClient } from "@gitnest/git-core";
 import type {
   RepositoryProbe,
   RepositoryProbeResult
 } from "@gitnest/workspace-core";
 
 export class GitRepositoryProbe implements RepositoryProbe {
-  readonly #gitClient: GitClient;
+  readonly #gitClient: GitTopologyClient;
 
-  constructor(gitClient: GitClient) {
+  constructor(gitClient: GitTopologyClient) {
     this.#gitClient = gitClient;
   }
 
@@ -15,8 +15,7 @@ export class GitRepositoryProbe implements RepositoryProbe {
     path: string,
     signal?: AbortSignal
   ): Promise<RepositoryProbeResult> {
-    const inspection = await this.#gitClient.inspectRepository(path, {
-      historyLimit: 1,
+    const inspection = await this.#gitClient.readRepositoryTopology(path, {
       ...(signal ? { signal } : {})
     });
 
@@ -25,8 +24,8 @@ export class GitRepositoryProbe implements RepositoryProbe {
       gitDir: inspection.identity.gitDir,
       commonDir: inspection.identity.commonDir,
       head: inspection.identity.head,
-      ...(inspection.snapshot.branch
-        ? { branch: inspection.snapshot.branch }
+      ...(inspection.branch
+        ? { branch: inspection.branch }
         : {}),
       worktrees: inspection.worktrees.map((worktree) => ({
         path: worktree.path,

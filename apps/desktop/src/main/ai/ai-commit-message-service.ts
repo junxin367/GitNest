@@ -168,18 +168,13 @@ export class AiCommitMessageService {
       );
     }
 
-    const diffs = await mapWithConcurrency(
+    const assembled = await assembleCommitDiff(
       commitScope,
-      DIFF_CONCURRENCY,
       ({ change, mode }) =>
         this.#git.readRepositoryDiff(worktree.path, {
           path: change.path,
           mode
         })
-    );
-    const assembled = assembleCommitDiff(
-      commitScope,
-      diffs
     );
     const branch = snapshot.branch ?? "detached HEAD";
     const scopeLabel =
@@ -307,51 +302,76 @@ function resolveConfiguration(
   };
 }
 
-function assembleCommitDiff(
+async function assembleCommitDiff(
   entries: readonly CommitScopeEntry[],
-  diffs: readonly RepositoryDiff[]
-): {
+  readDiff: (
+    entry: CommitScopeEntry
+  ) => Promise<RepositoryDiff>
+): Promise<{
   content: string;
   truncated: boolean;
-} {
+}> {
   const sections: string[] = [];
   let remaining = MAX_AGGREGATE_DIFF_CHARACTERS;
   let truncated = false;
 
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
-    const path = entry?.change.path ?? "";
-    const scopeLabel = entry?.mode.toUpperCase() ?? "CHANGE";
-    const diff = diffs[index];
-    const body = diff?.binary
-      ? "[Binary changed file]"
-      : (diff?.content ?? "[Diff unavailable]");
-    const section = [
-      `--- ${scopeLabel} FILE: ${path} ---`,
-      body,
-      diff?.truncated ? "[Per-file Diff truncated]" : ""
-    ]
-      .filter(Boolean)
-      .join("\n");
+  for (
+    let batchStart = 0;
+    batchStart < entries.length;
+    batchStart += DIFF_CONCURRENCY
+  ) {
+    const batch = entries.slice(
+      batchStart,
+      batchStart + DIFF_CONCURRENCY
+    );
+    const diffs = await mapWithConcurrency(
+      batch,
+      DIFF_CONCURRENCY,
+      readDiff
+    );
+    for (let offset = 0; offset < batch.length; offset += 1) {
+      const entry = batch[offset];
+      const path = entry?.change.path ?? "";
+      const scopeLabel = entry?.mode.toUpperCase() ?? "CHANGE";
+      const diff = diffs[offset];
+      const body = diff?.binary
+        ? "[Binary changed file]"
+        : (diff?.content ?? "[Diff unavailable]");
+      const section = [
+        `--- ${scopeLabel} FILE: ${path} ---`,
+        body,
+        diff?.truncated ? "[Per-file Diff truncated]" : ""
+      ]
+        .filter(Boolean)
+        .join("\n");
 
-    if (section.length <= remaining) {
-      sections.push(section);
-      remaining -= section.length;
-      truncated ||= Boolean(diff?.truncated);
-      continue;
-    }
+      const separatorLength = sections.length > 0 ? 2 : 0;
+      if (section.length + separatorLength <= remaining) {
+        sections.push(section);
+        remaining -= section.length + separatorLength;
+        truncated ||= Boolean(diff?.truncated);
+        continue;
+      }
 
-    if (remaining > 0) {
-      sections.push(
-        `${section.slice(0, remaining)}\n[Aggregate Diff truncated]`
-      );
-    } else {
-      sections.push(
-        `--- ${scopeLabel} FILE: ${path} ---\n[Omitted because aggregate Diff limit was reached]`
-      );
+      if (remaining > separatorLength) {
+        sections.push(
+          section.slice(0, remaining - separatorLength)
+        );
+      }
+      return {
+        content: `${sections.join("\n\n")}\n[Aggregate Diff truncated]`,
+        truncated: true
+      };
     }
-    remaining = 0;
-    truncated = true;
+    if (
+      remaining === 0 &&
+      batchStart + batch.length < entries.length
+    ) {
+      return {
+        content: `${sections.join("\n\n")}\n[Aggregate Diff truncated]`,
+        truncated: true
+      };
+    }
   }
 
   return {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { GitClient } from "@gitnest/git-core";
+import type { GitTopologyClient } from "@gitnest/git-core";
 import {
   WORKSPACE_CATALOG_SCHEMA_VERSION,
   WorkspaceError,
@@ -39,7 +39,7 @@ export interface WorkspaceCollectionServiceOptions {
 }
 
 export class WorkspaceCollectionService {
-  readonly #gitClient: GitClient;
+  readonly #gitClient: GitTopologyClient;
   readonly #fileSystem: WorkspaceFileSystem;
   readonly #store: WorkspaceCollectionStore;
   readonly #clock: () => string;
@@ -50,7 +50,7 @@ export class WorkspaceCollectionService {
   #queue: Promise<void> = Promise.resolve();
 
   constructor(
-    gitClient: GitClient,
+    gitClient: GitTopologyClient,
     fileSystem: WorkspaceFileSystem,
     store: WorkspaceCollectionStore,
     options: WorkspaceCollectionServiceOptions = {}
@@ -279,13 +279,7 @@ export class WorkspaceCollectionService {
   }
 
   rescan(signal?: AbortSignal): Promise<Workspace> {
-    return this.#runExclusive(async () => {
-      const workspace = await (
-        await this.#getActiveService()
-      ).rescan(signal);
-      await this.#syncSummary(workspace);
-      return workspace;
-    });
+    return this.#rescanActiveWorkspace(signal);
   }
 
   addDirectory(
@@ -373,6 +367,36 @@ export class WorkspaceCollectionService {
       this.#activeService = this.#createService(workspace.id);
     }
     return this.#activeService;
+  }
+
+  async #rescanActiveWorkspace(
+    signal?: AbortSignal
+  ): Promise<Workspace> {
+    const active = await this.#runExclusive(async () => {
+      const catalog = await this.#loadCatalog();
+      return {
+        workspaceId: catalog.activeWorkspaceId,
+        service: await this.#getActiveService()
+      };
+    });
+
+    return active.service.rescan(signal, (commit) =>
+      this.#runExclusive(async () => {
+        // Hold the collection queue only for identity validation and persistence.
+        // A scan from an older service must not update a switched or deleted Workspace.
+        const catalog = await this.#loadCatalog();
+        if (
+          catalog.activeWorkspaceId !== active.workspaceId ||
+          this.#activeService !== active.service
+        ) {
+          return (await this.#getActiveService()).getCurrent();
+        }
+
+        const workspace = await commit();
+        await this.#syncSummary(workspace);
+        return workspace;
+      })
+    );
   }
 
   #createService(workspaceId: string): WorkspaceService {

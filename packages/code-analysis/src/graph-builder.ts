@@ -47,6 +47,35 @@ interface HttpEndpointIndex {
   orderById: Map<string, number>;
 }
 
+interface DeclarationSymbolEntry {
+  line: number;
+  node: CodeGraphNode;
+  order: number;
+}
+
+interface DeclarationSymbolBucket {
+  entries: DeclarationSymbolEntry[];
+  byLine: Map<number, CodeGraphNode>;
+  sorted?: DeclarationSymbolEntry[];
+}
+
+function lowerBoundDeclarationLine(
+  entries: readonly DeclarationSymbolEntry[],
+  line: number
+): number {
+  let low = 0;
+  let high = entries.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if ((entries[middle]?.line ?? Number.POSITIVE_INFINITY) < line) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return low;
+}
+
 export function buildCodeGraph(input: {
   files: ParsedSourceFile[];
   scope: CodeAnalysisScope;
@@ -79,6 +108,10 @@ export function buildCodeGraph(input: {
   const symbolsByLocation = new Map<
     string,
     Array<{ line: number; node: CodeGraphNode }>
+  >();
+  const declarationSymbolsByFile = new Map<
+    string,
+    Map<string, DeclarationSymbolBucket>
   >();
   const fileNodesByPath = new Map<string, CodeGraphNode>();
   const deferredRequestEdges: Array<
@@ -305,6 +338,31 @@ export function buildCodeGraph(input: {
       parsed.file.canonicalPath,
       byLocation
     );
+    const byQualifiedName =
+      declarationSymbolsByFile.get(parsed.file.canonicalPath) ??
+      new Map<string, DeclarationSymbolBucket>();
+    const declarationBucket =
+      byQualifiedName.get(symbolNode.qualifiedName) ?? {
+        entries: [],
+        byLine: new Map<number, CodeGraphNode>()
+      };
+    declarationBucket.entries.push({
+      line: symbol.line,
+      node: symbolNode,
+      order: declarationBucket.entries.length
+    });
+    if (!declarationBucket.byLine.has(symbol.line)) {
+      declarationBucket.byLine.set(symbol.line, symbolNode);
+    }
+    delete declarationBucket.sorted;
+    byQualifiedName.set(
+      symbolNode.qualifiedName,
+      declarationBucket
+    );
+    declarationSymbolsByFile.set(
+      parsed.file.canonicalPath,
+      byQualifiedName
+    );
     return symbolNode;
   };
   const findSymbolNodeForDeclaration = (
@@ -312,34 +370,44 @@ export function buildCodeGraph(input: {
     qualifiedName: string,
     line: number
   ): CodeGraphNode | undefined => {
-    let closest:
-      | {
-          distance: number;
-          line: number;
-          node: CodeGraphNode;
-        }
-      | undefined;
-    for (const candidate of
-      symbolsByLocation.get(parsed.file.canonicalPath) ?? []) {
-      if (candidate.node.qualifiedName !== qualifiedName) {
-        continue;
+    const bucket = declarationSymbolsByFile
+      .get(parsed.file.canonicalPath)
+      ?.get(qualifiedName);
+    const exact = bucket?.byLine.get(line);
+    if (exact) {
+      return exact;
+    }
+    if (bucket && bucket.entries.length > 0) {
+      const sorted =
+        bucket.sorted ??
+        [...bucket.entries].sort(
+          (left, right) =>
+            left.line - right.line ||
+            left.order - right.order
+        );
+      bucket.sorted = sorted;
+      const insertionIndex = lowerBoundDeclarationLine(
+        sorted,
+        line
+      );
+      const upper = sorted[insertionIndex];
+      const previous = sorted[insertionIndex - 1];
+      const lower = previous
+        ? sorted[
+            lowerBoundDeclarationLine(sorted, previous.line)
+          ]
+        : undefined;
+      if (!lower) {
+        return upper?.node;
       }
-      const distance = Math.abs(candidate.line - line);
-      if (
-        !closest ||
-        distance < closest.distance ||
-        (distance === closest.distance &&
-          candidate.line < closest.line)
-      ) {
-        closest = {
-          distance,
-          line: candidate.line,
-          node: candidate.node
-        };
+      if (!upper) {
+        return lower.node;
       }
+      return line - lower.line <= upper.line - line
+        ? lower.node
+        : upper.node;
     }
     return (
-      closest?.node ??
       [...(
         symbolNodesByFile.get(
           parsed.file.canonicalPath
@@ -354,44 +422,61 @@ export function buildCodeGraph(input: {
     qualifiedName: string,
     line: number
   ): CodeGraphNode | undefined => {
-    const candidates = (
-      symbolsByLocation.get(parsed.file.canonicalPath) ?? []
-    )
-      .map(({ line: declarationLine, node }) => ({
-        declarationLine,
-        endLine:
-          typeof node.metadata.endLine === "number"
-            ? node.metadata.endLine
-            : declarationLine,
-        node
-      }))
-      .filter(
-        (candidate) =>
-          candidate.node.qualifiedName === qualifiedName
-      );
-    return (
-      candidates
-        .filter(
-          (candidate) =>
-            line >= candidate.declarationLine &&
-            line <= candidate.endLine
-        )
-        .sort(
-          (left, right) =>
-            left.endLine -
-              left.declarationLine -
-              (right.endLine -
-                right.declarationLine) ||
-            right.declarationLine -
-              left.declarationLine
-        )[0]?.node ??
-      candidates.sort(
-        (left, right) =>
-          Math.abs(left.declarationLine - line) -
-            Math.abs(right.declarationLine - line) ||
-          left.declarationLine - right.declarationLine
-      )[0]?.node
-    );
+    const entries = declarationSymbolsByFile
+      .get(parsed.file.canonicalPath)
+      ?.get(qualifiedName)?.entries;
+    if (!entries || entries.length === 0) {
+      return undefined;
+    }
+    let containing:
+      | {
+          span: number;
+          line: number;
+          node: CodeGraphNode;
+        }
+      | undefined;
+    let nearest:
+      | {
+          distance: number;
+          line: number;
+          node: CodeGraphNode;
+        }
+      | undefined;
+    for (const entry of entries) {
+      const endLine =
+        typeof entry.node.metadata.endLine === "number"
+          ? entry.node.metadata.endLine
+          : entry.line;
+      if (line >= entry.line && line <= endLine) {
+        const span = endLine - entry.line;
+        if (
+          !containing ||
+          span < containing.span ||
+          (span === containing.span &&
+            entry.line > containing.line)
+        ) {
+          containing = {
+            span,
+            line: entry.line,
+            node: entry.node
+          };
+        }
+      }
+      const distance = Math.abs(entry.line - line);
+      if (
+        !nearest ||
+        distance < nearest.distance ||
+        (distance === nearest.distance &&
+          entry.line < nearest.line)
+      ) {
+        nearest = {
+          distance,
+          line: entry.line,
+          node: entry.node
+        };
+      }
+    }
+    return containing?.node ?? nearest?.node;
   };
 
   // Reserve graph capacity for remote-call anchors across the

@@ -20,10 +20,8 @@ import type {
 } from "@gitnest/contracts";
 
 import {
-  findTargetSnapshot,
   getSnapshotChangeCount,
-  repositoryTargetSelected,
-  resolveWorkspaceTarget
+  repositoryTargetSelected
 } from "../../entities/workspace/model";
 import type { AppView } from "../../app/navigation";
 import { useExternalApplications } from "../../features/external-application/useExternalApplications";
@@ -249,11 +247,19 @@ export function WorkspaceSidebar({
           getRendererPreferenceStorage(),
           workspaceId
         );
+  const targetLookup = useMemo(
+    () => createWorkspaceTargetLookup(workspace, snapshots),
+    [
+      snapshots,
+      workspace?.repositories,
+      workspace?.worktrees
+    ]
+  );
   const visibleGroups = useMemo(
     () =>
       getVisibleGroups(
         workspace,
-        snapshots,
+        targetLookup,
         normalizedQuery,
         groupNameOverrides,
         showChangedRepositoriesOnly
@@ -262,7 +268,7 @@ export function WorkspaceSidebar({
       groupNameOverrides,
       normalizedQuery,
       showChangedRepositoriesOnly,
-      snapshots,
+      targetLookup,
       workspace
     ]
   );
@@ -284,7 +290,10 @@ export function WorkspaceSidebar({
       : undefined;
   const contextRepository =
     contextMenu?.kind === "repository" && workspace
-      ? resolveWorkspaceTarget(workspace, contextMenu.target)
+      ? resolveWorkspaceTargetFromLookup(
+          targetLookup,
+          contextMenu.target
+        )
       : null;
   const contextMenuTargetExists =
     contextMenu?.kind === "workspace"
@@ -308,7 +317,10 @@ export function WorkspaceSidebar({
       contextRepositoryCanonicalPath.toLocaleLowerCase();
   const removeTargetDetails =
     removeTarget && workspace
-      ? resolveWorkspaceTarget(workspace, removeTarget)
+      ? resolveWorkspaceTargetFromLookup(
+          targetLookup,
+          removeTarget
+        )
       : null;
   const removeTargetName =
     removeTargetDetails?.repository?.name ??
@@ -774,12 +786,17 @@ export function WorkspaceSidebar({
     if (!workspace) {
       return null;
     }
-    const resolved = resolveWorkspaceTarget(workspace, target);
+    const resolved = resolveWorkspaceTargetFromLookup(
+      targetLookup,
+      target
+    );
     const name =
       resolved.worktree?.name ??
       resolved.repository?.name ??
       "未知仓库";
-    const snapshot = findTargetSnapshot(snapshots, target);
+    const snapshot = targetLookup.snapshotsByTarget.get(
+      workspaceTargetKey(target)
+    );
     const selected =
       activeView === "repository" &&
       repositoryTargetSelected(
@@ -1679,7 +1696,7 @@ function snapshotStatus(
 
 function getVisibleGroups(
   workspace: WorkspaceDetailsDto | null,
-  snapshots: RepositoryStatusSnapshotDto[],
+  targetLookup: WorkspaceTargetLookup,
   query: string,
   groupNameOverrides: Record<string, string> = {},
   showChangedRepositoriesOnly = false
@@ -1700,14 +1717,14 @@ function getVisibleGroups(
       const targets = group.targets.filter((target) => {
         if (
           showChangedRepositoriesOnly &&
-          !targetHasLocalChanges(snapshots, target)
+          !targetHasLocalChanges(targetLookup, target)
         ) {
           return false;
         }
         return (
           groupMatches ||
           workspaceTargetMatchesQuery(
-            workspace,
+            targetLookup,
             target,
             query
           )
@@ -1756,14 +1773,17 @@ function orderGroups(
 }
 
 function workspaceTargetMatchesQuery(
-  workspace: WorkspaceDetailsDto,
+  targetLookup: WorkspaceTargetLookup,
   target: RepositoryTargetDto,
   query: string
 ): boolean {
   if (!query) {
     return true;
   }
-  const resolved = resolveWorkspaceTarget(workspace, target);
+  const resolved = resolveWorkspaceTargetFromLookup(
+    targetLookup,
+    target
+  );
   return [
     resolved.repository?.name,
     resolved.repository?.commonDir,
@@ -1778,14 +1798,80 @@ function workspaceTargetMatchesQuery(
 }
 
 function targetHasLocalChanges(
-  snapshots: RepositoryStatusSnapshotDto[],
+  targetLookup: WorkspaceTargetLookup,
   target: RepositoryTargetDto
 ): boolean {
-  const snapshot = findTargetSnapshot(snapshots, target);
+  const snapshot = targetLookup.snapshotsByTarget.get(
+    workspaceTargetKey(target)
+  );
   return (
     Boolean(snapshot?.conflicted) ||
     getSnapshotChangeCount(snapshot) > 0
   );
+}
+
+type WorkspaceRepository =
+  WorkspaceDetailsDto["repositories"][number];
+type WorkspaceWorktree =
+  WorkspaceDetailsDto["worktrees"][number];
+
+interface WorkspaceTargetLookup {
+  repositoriesById: ReadonlyMap<string, WorkspaceRepository>;
+  worktreesById: ReadonlyMap<string, WorkspaceWorktree>;
+  snapshotsByTarget: ReadonlyMap<
+    string,
+    RepositoryStatusSnapshotDto
+  >;
+}
+
+function createWorkspaceTargetLookup(
+  workspace: WorkspaceDetailsDto | null,
+  snapshots: readonly RepositoryStatusSnapshotDto[]
+): WorkspaceTargetLookup {
+  return {
+    repositoriesById: indexFirstByKey(
+      workspace?.repositories ?? [],
+      (repository) => repository.id
+    ),
+    worktreesById: indexFirstByKey(
+      workspace?.worktrees ?? [],
+      (worktree) => worktree.id
+    ),
+    snapshotsByTarget: indexFirstByKey(
+      snapshots,
+      workspaceTargetKey
+    )
+  };
+}
+
+function resolveWorkspaceTargetFromLookup(
+  lookup: WorkspaceTargetLookup,
+  target: RepositoryTargetDto
+) {
+  return {
+    repository: lookup.repositoriesById.get(target.repositoryId),
+    worktree: lookup.worktreesById.get(target.worktreeId)
+  };
+}
+
+function workspaceTargetKey(
+  target: RepositoryTargetDto
+): string {
+  return `${target.repositoryId}\u0000${target.worktreeId}`;
+}
+
+function indexFirstByKey<Value>(
+  values: readonly Value[],
+  getKey: (value: Value) => string
+): Map<string, Value> {
+  const indexed = new Map<string, Value>();
+  for (const value of values) {
+    const key = getKey(value);
+    if (!indexed.has(key)) {
+      indexed.set(key, value);
+    }
+  }
+  return indexed;
 }
 
 function getGroupDisplayName(

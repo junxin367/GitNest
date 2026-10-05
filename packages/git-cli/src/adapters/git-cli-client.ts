@@ -1,6 +1,7 @@
 import {
   lstat,
   open,
+  readdir,
   readFile,
   realpath,
   stat
@@ -27,6 +28,7 @@ import {
   parseWorktrees,
   reconcileStatOnlyUnstagedChanges,
   type GitClient,
+  type GitTopologyClient,
   type GitCommitDiffClient,
   type GitEnvironment,
   type GitMutationClient,
@@ -36,6 +38,7 @@ import {
   type GitReadOptions,
   type GitReadPriority,
   type GitWriteOptions,
+  type RestoreWorktreeOptions,
   type FetchRemoteOptions,
   type GitPullStrategy,
   type PushBranchOptions,
@@ -64,6 +67,7 @@ import {
   type RepositoryMediaKind,
   type RepositoryMediaPreview,
   type RepositorySnapshot,
+  type RepositoryTopology,
   type StashDiff,
   type StashFiles,
   type StashMutationAction,
@@ -234,6 +238,7 @@ export interface GitRemoteConnectionTestInput {
 
 export class GitCliClient
   implements
+    GitTopologyClient,
     GitClient,
     GitCommitDiffClient,
     GitStashClient,
@@ -599,18 +604,17 @@ export class GitCliClient
     };
 
     try {
-      const [metadataResult, numstatResult] = await Promise.all([
-        runProcess({
-          ...commandOptions,
-          args: commitMetadataArguments(normalizedHash)
-        }),
-        runProcess({
-          ...commandOptions,
-          args: commitNumstatArguments(normalizedHash)
-        })
-      ]);
+      const metadataResult = await runProcess({
+        ...commandOptions,
+        args: commitMetadataArguments(normalizedHash)
+      });
+      const metadata = parseCommitMetadata(metadataResult.stdout);
+      const numstatResult = await runProcess({
+        ...commandOptions,
+        args: commitNumstatArguments(metadata.hash, metadata.parentHashes[0])
+      });
       return {
-        ...parseCommitMetadata(metadataResult.stdout),
+        ...metadata,
         ...parseCommitNumstat(numstatResult.stdout)
       };
     } catch (error) {
@@ -2042,7 +2046,7 @@ export class GitCliClient
   async restoreWorktreePaths(
     path: string,
     paths: readonly string[],
-    options: GitWriteOptions = {}
+    options: RestoreWorktreeOptions = {}
   ): Promise<void> {
     const worktreePath = await validateDirectoryPath(path);
     const relativePaths = validateRelativePathspecs(paths);
@@ -2051,6 +2055,40 @@ export class GitCliClient
     );
 
     try {
+      const indexResult = await runProcess({
+        executable: executablePath,
+        cwd: worktreePath,
+        args: [
+          "--literal-pathspecs",
+          "ls-files",
+          "--stage",
+          "-z",
+          "--",
+          ...relativePaths
+        ],
+        signal: options.signal,
+        timeoutMs: options.timeoutMs
+      });
+      const restoredFilePaths = new Set<string>();
+      for (const record of indexResult.stdout.split("\0").filter(Boolean)) {
+        const separator = record.indexOf("\t");
+        const metadata = record.slice(0, separator);
+        const indexPath = record.slice(separator + 1);
+        if (separator < 0 || !/^[0-7]{6} [0-9a-f]+ [0-3]$/.test(metadata) || !indexPath) {
+          throw new GitError("INVALID_GIT_OUTPUT", "Git index entries contain a malformed record.");
+        }
+        // Default restore does not recurse into gitlinks. Directory pathspecs
+        // instead select their indexed files, whose replacements need checking.
+        if (!metadata.startsWith("160000 ")) {
+          restoredFilePaths.add(indexPath);
+        }
+      }
+      await assertRestorePathScope(
+        worktreePath,
+        [...restoredFilePaths],
+        options.confirmedUntrackedPaths ?? [],
+        options.signal
+      );
       await runProcess({
         executable: executablePath,
         cwd: worktreePath,
@@ -2294,6 +2332,51 @@ export class GitCliClient
       return parseCreatedCommit(result.stdout);
     } catch {
       return { subject: message.subject };
+    }
+  }
+
+  async readRepositoryTopology(
+    path: string,
+    options: GitReadOptions = {}
+  ): Promise<RepositoryTopology> {
+    const worktreePath = await validateDirectoryPath(path);
+    const executable = await this.#getExecutablePath(options.signal);
+    const commandOptions = {
+      executable,
+      cwd: worktreePath,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs
+    };
+
+    try {
+      const [identity, worktreeResult] = await Promise.all([
+        readRepositoryIdentity(commandOptions),
+        runProcess({ ...commandOptions, args: WORKTREE_ARGUMENTS })
+      ]);
+      const worktrees = parseWorktrees(worktreeResult.stdout).map(
+        (worktree) => ({
+          ...worktree,
+          path: normalizeAbsoluteGitPath(worktree.path)
+        })
+      );
+      // Worktree porcelain exposes the full local branch ref even when tags
+      // shadow it, and also describes unborn and detached worktrees.
+      const current = worktrees.find(
+        (worktree) => relative(identity.worktreePath, worktree.path) === ""
+      );
+      if (!current) {
+        throw new GitError(
+          "INVALID_GIT_OUTPUT",
+          "The current Worktree is missing from the repository topology."
+        );
+      }
+      return {
+        identity,
+        ...(current.branch ? { branch: current.branch } : {}),
+        worktrees
+      };
+    } catch (error) {
+      throw mapRepositoryError(error, worktreePath);
     }
   }
 
@@ -2692,11 +2775,87 @@ function isMissingFilesystemPath(error: unknown): boolean {
   return error.code === "ENOENT" || error.code === "ENOTDIR";
 }
 
+async function assertRestorePathScope(
+  worktreePath: string,
+  paths: readonly string[],
+  confirmedUntrackedPaths: readonly string[],
+  signal?: AbortSignal
+): Promise<void> {
+  const confirmed = new Set(confirmedUntrackedPaths.map((path) =>
+    normalizeMutationPath(validateRelativePathspec(path))
+  ));
+  const assertConfirmed = (path: string) => {
+    if (!confirmed.has(path)) {
+      throw new GitError(
+        "INVALID_REQUEST",
+        "还原所选路径会覆盖未确认删除的文件，请一并选择受影响的未跟踪文件，或先将它们移出后重试。",
+        { unconfirmedPath: path }
+      );
+    }
+  };
+  const directories = new Set<string>();
+  for (const path of paths) {
+    const segments = normalizeMutationPath(path).split("/");
+    for (let index = 0; index < segments.length; index += 1) {
+      assertReadNotCancelled(signal);
+      const prefix = segments.slice(0, index + 1).join("/");
+      let info;
+      try {
+        info = await lstat(resolve(worktreePath, prefix));
+      } catch (error) {
+        if (isMissingFilesystemPath(error)) break;
+        throw error;
+      }
+      if (index < segments.length - 1 && !info.isDirectory()) {
+        assertConfirmed(prefix);
+        break;
+      }
+      if (index === segments.length - 1 && info.isDirectory()) {
+        directories.add(prefix);
+      }
+    }
+  }
+  // Git restore can replace an entire directory with an index file, including
+  // ignored contents. Inspect the filesystem rather than only status output.
+  for (const directory of directories) {
+    assertReadNotCancelled(signal);
+    const entries = await readdir(resolve(worktreePath, directory), {
+      withFileTypes: true
+    });
+    for (const entry of entries) {
+      const path = `${directory}/${entry.name}`;
+      if (entry.isDirectory()) {
+        directories.add(path);
+      } else {
+        assertConfirmed(path);
+      }
+    }
+  }
+}
+
 async function reconcileRepositorySnapshot(
   snapshot: RepositorySnapshot,
   options: CommandOptions,
   includeChangeStats: boolean
 ): Promise<RepositorySnapshot> {
+  if (snapshot.branch && snapshot.upstream) {
+    // Porcelain shortens upstream refs for display; colliding tags can add
+    // namespace prefixes and break commands that expect remote/branch.
+    const upstreamResult = await runProcess({
+      ...options,
+      args: [
+        "for-each-ref",
+        "--format=%(upstream:lstrip=2)",
+        `refs/heads/${snapshot.branch}`
+      ]
+    });
+    const upstream = trimSingleLine(upstreamResult.stdout);
+    const { upstream: _displayUpstream, ...withoutUpstream } = snapshot;
+    snapshot = {
+      ...withoutUpstream,
+      ...(upstream ? { upstream } : {})
+    };
+  }
   const hasOrdinaryWorktreeModification =
     snapshot.changes.some(
       (change) =>

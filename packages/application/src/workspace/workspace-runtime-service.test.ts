@@ -34,6 +34,223 @@ import {
 import { WorkspaceRefreshScheduler } from "./workspace-refresh-scheduler";
 
 describe("WorkspaceRuntimeService", () => {
+  it("discards queued snapshot publications and late reads after switching workspaces", async () => {
+    vi.useFakeTimers();
+    const first = createWorkspace(3);
+    const second = { ...createWorkspace(1), id: "workspace-second" };
+    let releaseSecond!: () => void;
+    let releaseLast!: () => void;
+    const middle = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const last = new Promise<void>((resolve) => { releaseLast = resolve; });
+    const runtime = new WorkspaceRuntimeService(
+      new SwitchingConfiguration([first, second]),
+      new TrackingGitClient(async (index) => {
+        if (index === 1) {
+          await middle;
+        }
+        if (index === 2) {
+          await last;
+        }
+      }),
+      new MemorySnapshotStore(),
+      new FakeWatcher(),
+      { autoRefresh: false, selectedTargetPollingIntervalMs: 0 }
+    );
+    const states: WorkspaceRuntimeState[] = [];
+    const unsubscribe = runtime.subscribe((state) => { states.push(state); });
+    try {
+      await runtime.getState();
+      await runtime.requestWorkspaceRefresh("startup");
+      await vi.advanceTimersByTimeAsync(26);
+      releaseSecond();
+      await vi.advanceTimersByTimeAsync(25);
+
+      await runtime.switchWorkspace(second.id);
+      states.length = 0;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(states).toEqual([]);
+      releaseLast();
+      await vi.advanceTimersByTimeAsync(25);
+      expect(states).toEqual([]);
+      expect((await runtime.getState()).workspace.id).toBe(second.id);
+    } finally {
+      releaseSecond();
+      releaseLast();
+      await vi.advanceTimersByTimeAsync(25);
+      unsubscribe();
+      await runtime.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes completed startup snapshots while an unrelated repository is still reading", async () => {
+    vi.useFakeTimers();
+    let releaseLast!: () => void;
+    const last = new Promise<void>((resolve) => { releaseLast = resolve; });
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(createWorkspace(2)),
+      new TrackingGitClient(async (index) => {
+        if (index === 1) {
+          await last;
+        }
+      }),
+      new MemorySnapshotStore(),
+      new FakeWatcher(),
+      { autoRefresh: false, selectedTargetPollingIntervalMs: 0 }
+    );
+    let latest: WorkspaceRuntimeState | undefined;
+    const unsubscribe = runtime.subscribe((state) => { latest = state; });
+    try {
+      await runtime.getState();
+      await runtime.requestWorkspaceRefresh("startup");
+      await vi.advanceTimersByTimeAsync(26);
+      expect(latest?.snapshots.filter((snapshot) => !snapshot.refreshPending)).toHaveLength(1);
+      expect(latest?.operations).toEqual([]);
+
+      releaseLast();
+      await vi.advanceTimersByTimeAsync(25);
+      expect(latest?.snapshots.filter((snapshot) => !snapshot.refreshPending)).toHaveLength(2);
+    } finally {
+      releaseLast();
+      await vi.advanceTimersByTimeAsync(25);
+      unsubscribe();
+      await runtime.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([[false, false], [true, false], [false, true]])(
+    "publishes a coalesced completion within the progress window while another repository is blocked (failure=%s, clockRollback=%s)",
+    async (failSecond, clockRollback) => {
+      vi.useFakeTimers();
+      let releaseSecond!: () => void;
+      let releaseLast!: () => void;
+      const second = new Promise<void>((resolve) => { releaseSecond = resolve; });
+      const last = new Promise<void>((resolve) => { releaseLast = resolve; });
+      const git = new TrackingGitClient(async (index) => {
+        if (index === 1) {
+          await second;
+          if (failSecond) {
+            throw new Error("Second repository failed.");
+          }
+        }
+        if (index === 2) {
+          await last;
+        }
+      });
+      const runtime = new WorkspaceRuntimeService(
+        new FakeConfiguration(createWorkspace(3)),
+        git,
+        new MemorySnapshotStore(),
+        new FakeWatcher(),
+        { autoRefresh: false, selectedTargetPollingIntervalMs: 0 }
+      );
+      let latest: WorkspaceRuntimeState | undefined;
+      const unsubscribe = runtime.subscribe((state) => { latest = state; });
+      try {
+        await runtime.getState();
+        await runtime.requestWorkspaceRefresh("manual");
+        await vi.advanceTimersByTimeAsync(25);
+        expect(latest?.operations[0]?.succeeded).toBe(1);
+
+        if (clockRollback) {
+          vi.setSystemTime(Date.now() - 60_000);
+        }
+        releaseSecond();
+        await vi.advanceTimersByTimeAsync(25);
+        expect(latest?.snapshots.filter((snapshot) => !snapshot.refreshPending)).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(clockRollback ? 99 : 74);
+        expect(latest?.operations[0]?.succeeded).toBe(1);
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(latest?.operations[0]).toMatchObject({
+          state: "running",
+          succeeded: failSecond ? 1 : 2,
+          failed: failSecond ? 1 : 0
+        });
+        expect(latest?.snapshots.filter((snapshot) => !snapshot.refreshPending)).toHaveLength(2);
+        expect(git.active).toBe(1);
+
+        releaseLast();
+        await vi.advanceTimersByTimeAsync(25);
+        expect(latest?.operations[0]).toMatchObject({
+          state: failSecond ? "failed" : "succeeded",
+          progress: 1,
+          succeeded: failSecond ? 2 : 3,
+          failed: failSecond ? 1 : 0
+        });
+        const finished = latest;
+        await vi.advanceTimersByTimeAsync(100);
+        expect(latest).toBe(finished);
+      } finally {
+        releaseSecond();
+        releaseLast();
+        await vi.advanceTimersByTimeAsync(25);
+        unsubscribe();
+        await runtime.dispose();
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it.each([[false, false], [true, false], [false, true]])(
+    "publishes exact progress counts while coalescing bursts (failure=%s, periodic=%s)",
+    async (failOne, periodic) => {
+      const workspace = createWorkspace(12);
+      const runtime = new WorkspaceRuntimeService(
+        new FakeConfiguration(workspace),
+        new TrackingGitClient(async (index) => {
+          if (failOne && index === 3) {
+            throw new Error("One repository is unavailable.");
+          }
+        }),
+        new MemorySnapshotStore(),
+        new FakeWatcher(),
+        { autoRefresh: false, selectedTargetPollingIntervalMs: 0 }
+      );
+      const progressCounts = new Set<number>();
+      let elapsed = 100_000;
+      const unsubscribe = runtime.subscribe((state) => {
+        const scan = state.operations.find((operation) =>
+          operation.kind === "scan" &&
+          operation.message.startsWith("正在刷新仓库状态：")
+        );
+        if (scan) {
+          progressCounts.add(scan.succeeded + scan.failed);
+          if (periodic) {
+            elapsed += 100;
+          }
+        }
+      });
+      // Keep all completions in one progress window without timing assertions.
+      const now = vi.spyOn(Date, "now").mockImplementation(() => elapsed);
+      try {
+        await runtime.getState();
+        const finished = waitForEmittedState(runtime, (state) =>
+          state.operations.some((operation) =>
+            operation.kind === "scan" &&
+            operation.state === (failOne ? "failed" : "succeeded")
+          )
+        );
+        await runtime.requestWorkspaceRefresh("manual");
+        const state = await finished;
+        expect([...progressCounts]).toEqual(
+          periodic ? Array.from({ length: 12 }, (_, index) => index + 1) : [1, 12]
+        );
+        expect(state.snapshots).toHaveLength(12);
+        expect(state.operations[0]).toMatchObject({
+          progress: 1,
+          succeeded: failOne ? 11 : 12,
+          failed: failOne ? 1 : 0
+        });
+      } finally {
+        now.mockRestore();
+        unsubscribe();
+        await runtime.dispose();
+      }
+    }
+  );
+
   it.each([
     ["stage", "write-first"],
     ["fetch", "write-first"],
@@ -537,6 +754,116 @@ describe("WorkspaceRuntimeService", () => {
     expect(configuration.rescanAborted).toBe(true);
   });
 
+  it("does not let an older background rescan publication roll back a newer selection", async () => {
+    const workspace = createWorkspace(2);
+    const configuration =
+      new DeferredSummaryConfiguration(workspace);
+    const runtime = new WorkspaceRuntimeService(
+      configuration,
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      new FakeWatcher(),
+      {
+        autoRefresh: false,
+        selectedTargetPollingIntervalMs: 0
+      }
+    );
+    const target = listWorkspaceTargets(workspace)[1]!;
+    let summaryGate: DeferredGate | undefined;
+
+    try {
+      await runtime.getState();
+      summaryGate = configuration.deferNextSummary();
+      const refresh =
+        await runtime.requestWorkspaceRefresh("manual");
+      await summaryGate.started;
+      const selected = await resolveWithin(
+        runtime.selectTarget(target),
+        500
+      );
+      expect(selected.selectedTarget).toEqual(target);
+
+      summaryGate.release();
+      const completed = await waitForState(
+        runtime,
+        (state) =>
+          state.operations.some(
+            (operation) =>
+              operation.id === refresh.operationId &&
+              operation.state === "succeeded"
+          )
+      );
+      expect(completed.workspace.selectedTarget).toEqual(target);
+      expect(
+        completed.workspaces.find(
+          (candidate) => candidate.id === workspace.id
+        )?.updatedAt
+      ).toBe(completed.workspace.updatedAt);
+    } finally {
+      summaryGate?.release();
+      await runtime.dispose();
+    }
+  });
+
+  it("does not let a delayed selection publication overwrite newer rescan topology", async () => {
+    const workspace = createWorkspace(2);
+    const target = listWorkspaceTargets(workspace)[1]!;
+    const rescanned = createWorkspace(3);
+    rescanned.selectedTarget = target;
+    rescanned.updatedAt = "2026-09-04T11:05:00.000Z";
+    const configuration =
+      new DeferredSummaryConfiguration(workspace);
+    const runtime = new WorkspaceRuntimeService(
+      configuration,
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      new FakeWatcher(),
+      {
+        autoRefresh: false,
+        selectedTargetPollingIntervalMs: 0
+      }
+    );
+    let rescanGate: DeferredGate | undefined;
+    let summaryGate: DeferredGate | undefined;
+
+    try {
+      await runtime.getState();
+      rescanGate = configuration.deferNextRescan();
+      await runtime.requestWorkspaceRefresh("manual");
+      await resolveWithin(rescanGate.started, 500);
+      summaryGate = configuration.deferNextSummary();
+      const selecting = runtime.selectTarget(target);
+      await resolveWithin(summaryGate.started, 500);
+      configuration.nextRescanWorkspace = rescanned;
+      const topologyPublished = waitForEmittedState(
+        runtime,
+        (state) => state.workspace.worktrees.length === 3
+      );
+      rescanGate.release();
+      await resolveWithin(
+        topologyPublished,
+        1_000
+      );
+
+      summaryGate.release();
+      const selected = await selecting;
+      expect(selected.worktrees).toHaveLength(3);
+      expect(selected.selectedTarget).toEqual(target);
+      const settled = await runtime.getState();
+      expect(settled.workspace.worktrees).toHaveLength(3);
+      expect(settled.workspace.selectedTarget).toEqual(target);
+      expect(
+        settled.workspaces.find(
+          (candidate) => candidate.id === workspace.id
+        )?.updatedAt
+      ).toBe(rescanned.updatedAt);
+    } finally {
+      rescanGate?.release();
+      summaryGate?.release();
+      await runtime.dispose();
+    }
+  });
+
   it("retains document and cache cleanup warnings in the resulting runtime state", async () => {
     const workspace = createWorkspace(1);
     const configuration: WorkspaceConfigurationService =
@@ -816,6 +1143,35 @@ describe("WorkspaceRuntimeService", () => {
     await runtime.dispose();
   });
 
+  it.each([
+    ["C:\\Repo", "c:/repo/child", ["C:\\Repo"]],
+    ["C:\\repo", "C:\\repository", ["C:\\repo", "C:\\repository"]],
+    ["\\\\server\\share\\repo", "//SERVER/share/repo/child", ["\\\\server\\share\\repo"]],
+    ["C:\\", "C:\\repo", ["C:\\"]]
+  ] as const)("keeps watcher path containment for %s and %s", async (parent, child, expected) => {
+    const workspace = createWorkspace(2);
+    [parent, child].forEach((path, index) => {
+      workspace.worktrees[index]!.path = path;
+      workspace.worktrees[index]!.gitDir = `${path}\\.git`;
+      workspace.repositories[index]!.commonDir = `${path}\\.git`;
+    });
+    const watcher = new FakeWatcher();
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      watcher,
+      { autoRefresh: false, selectedTargetPollingIntervalMs: 0 }
+    );
+    try {
+      await runtime.rescan();
+      await waitForState(runtime, (state) => state.monitor.mode === "watching");
+      expect(watcher.registrations.map(({ path }) => path)).toEqual(expected);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("builds watcher registrations without repeatedly scanning workspace records", async () => {
     const workspace = createWorkspace(96);
     const firstRepository = workspace.repositories[0];
@@ -852,6 +1208,7 @@ describe("WorkspaceRuntimeService", () => {
       "find"
     );
     const worktreeFind = vi.spyOn(workspace.worktrees, "find");
+    const normalizedPaths = vi.spyOn(String.prototype, "toLocaleLowerCase");
     const configuration: WorkspaceConfigurationService = {
       getCurrent: async () => workspace,
       rescan: async () => workspace,
@@ -863,12 +1220,14 @@ describe("WorkspaceRuntimeService", () => {
       | ((observation: {
           repositoryFindCalls: number;
           worktreeFindCalls: number;
+          normalizedPaths: number;
           paths: string[];
         }) => void)
       | undefined;
     const registrationsObserved = new Promise<{
       repositoryFindCalls: number;
       worktreeFindCalls: number;
+      normalizedPaths: number;
       paths: string[];
     }>((resolve) => {
       observeRegistrations = resolve;
@@ -878,6 +1237,7 @@ describe("WorkspaceRuntimeService", () => {
         observeRegistrations?.({
           repositoryFindCalls: repositoryFind.mock.calls.length,
           worktreeFindCalls: worktreeFind.mock.calls.length,
+          normalizedPaths: normalizedPaths.mock.calls.length,
           paths: registrations.map(({ path }) => path)
         });
         return { close: () => undefined };
@@ -899,11 +1259,13 @@ describe("WorkspaceRuntimeService", () => {
       await runtime.getState();
       repositoryFind.mockClear();
       worktreeFind.mockClear();
+      normalizedPaths.mockClear();
       await runtime.rescan();
       const observation = await registrationsObserved;
 
       expect(observation.repositoryFindCalls).toBe(0);
       expect(observation.worktreeFindCalls).toBe(0);
+      expect(observation.normalizedPaths).toBeLessThan(96 * 20);
       expect(observation.paths).toEqual(
         expect.arrayContaining([
           "C:\\metadata\\repository-first",
@@ -921,6 +1283,7 @@ describe("WorkspaceRuntimeService", () => {
         ])
       );
     } finally {
+      normalizedPaths.mockRestore();
       await runtime.dispose();
     }
   });
@@ -1527,6 +1890,60 @@ describe("WorkspaceRuntimeService", () => {
       "repository-0"
     );
     await runtime.dispose();
+  });
+
+  it("bounds watcher debounce during continuous writes without bypassing minimum refresh intervals", async () => {
+    vi.useFakeTimers();
+    const workspace = createWorkspace(2);
+    const targets = listWorkspaceTargets(workspace);
+    const startedAt = Date.now();
+    const calls: Array<{ at: number; worktreeId: string; forceContentVersion: boolean }> = [];
+    const scheduler = new WorkspaceRefreshScheduler({
+      selectedDebounceMs: 40,
+      backgroundDebounceMs: 200,
+      selectedMinIntervalMs: 100,
+      backgroundMinIntervalMs: 500,
+      heartbeatIntervalMs: 0,
+      selectedPollingIntervalMs: 0,
+      backgroundPollingIntervalMs: 0,
+      clock: () => "2026-10-05T12:00:00.000Z",
+      isStale: () => false,
+      execute: async (requests) => {
+        calls.push(...requests.map((request) => ({
+          at: Date.now() - startedAt,
+          worktreeId: request.target.worktreeId,
+          forceContentVersion: request.forceContentVersion
+        })));
+        return {
+          requested: requests.length,
+          succeeded: requests.length,
+          failed: 0,
+          changed: requests.length,
+          failures: []
+        };
+      }
+    });
+    scheduler.updateWorkspace(workspace);
+    scheduler.activateWatching();
+    try {
+      scheduler.request(targets, "watcher", true);
+      for (let elapsed = 10; elapsed <= 600; elapsed += 10) {
+        await vi.advanceTimersByTimeAsync(10);
+        scheduler.request(targets, "watcher", true);
+      }
+      const selectedCalls = calls.filter((call) => call.worktreeId === targets[0]?.worktreeId);
+      const backgroundCalls = calls.filter((call) => call.worktreeId === targets[1]?.worktreeId);
+      expect(selectedCalls.map((call) => call.at)).toEqual([100, 200, 300, 400, 500, 600]);
+      expect(backgroundCalls.map((call) => call.at)).toEqual([500]);
+      expect(calls.every((call) => call.forceContentVersion)).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(400);
+      expect(calls.filter((call) => call.worktreeId === targets[0]?.worktreeId).at(-1)?.at).toBe(700);
+      expect(calls.filter((call) => call.worktreeId === targets[1]?.worktreeId).at(-1)?.at).toBe(1000);
+    } finally {
+      scheduler.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("polls selected and background targets on separate distributed schedules", async () => {
@@ -2753,6 +3170,79 @@ class FailingOnceConfiguration extends FakeConfiguration {
   }
 }
 
+class DeferredSummaryConfiguration extends FakeConfiguration {
+  #nextRescanGate: DeferredGate | undefined;
+  #nextSummaryGate: DeferredGate | undefined;
+
+  deferNextRescan(): DeferredGate {
+    if (this.#nextRescanGate) {
+      throw new Error("A Workspace rescan is already deferred.");
+    }
+    const gate = new DeferredGate();
+    this.#nextRescanGate = gate;
+    return gate;
+  }
+
+  deferNextSummary(): DeferredGate {
+    if (this.#nextSummaryGate) {
+      throw new Error("A Workspace summary read is already deferred.");
+    }
+    const gate = new DeferredGate();
+    this.#nextSummaryGate = gate;
+    return gate;
+  }
+
+  override async rescan(): Promise<Workspace> {
+    const gate = this.#nextRescanGate;
+    if (gate) {
+      this.#nextRescanGate = undefined;
+      await gate.wait();
+    }
+    return super.rescan();
+  }
+
+  async listWorkspaces() {
+    const gate = this.#nextSummaryGate;
+    if (gate) {
+      this.#nextSummaryGate = undefined;
+      await gate.wait();
+    }
+    const workspace = await this.getCurrent();
+    return [
+      {
+        id: workspace.id,
+        name: workspace.name,
+        updatedAt: workspace.updatedAt
+      }
+    ];
+  }
+}
+
+class DeferredGate {
+  readonly started: Promise<void>;
+  readonly #released: Promise<void>;
+  #markStarted!: () => void;
+  #release!: () => void;
+
+  constructor() {
+    this.started = new Promise<void>((resolve) => {
+      this.#markStarted = resolve;
+    });
+    this.#released = new Promise<void>((resolve) => {
+      this.#release = resolve;
+    });
+  }
+
+  release(): void {
+    this.#release();
+  }
+
+  async wait(): Promise<void> {
+    this.#markStarted();
+    await this.#released;
+  }
+}
+
 class SwitchingConfiguration
   implements WorkspaceConfigurationService
 {
@@ -3357,6 +3847,25 @@ async function waitForState(
     const timeout = setTimeout(() => {
       unsubscribe();
       reject(new Error("Timed out waiting for runtime state."));
+    }, 3_000);
+    const unsubscribe = runtime.subscribe((state) => {
+      if (predicate(state)) {
+        clearTimeout(timeout);
+        unsubscribe();
+        resolve(state);
+      }
+    });
+  });
+}
+
+function waitForEmittedState(
+  runtime: WorkspaceRuntimeService,
+  predicate: (state: WorkspaceRuntimeState) => boolean
+): Promise<WorkspaceRuntimeState> {
+  return new Promise<WorkspaceRuntimeState>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      unsubscribe();
+      reject(new Error("Timed out waiting for emitted runtime state."));
     }, 3_000);
     const unsubscribe = runtime.subscribe((state) => {
       if (predicate(state)) {

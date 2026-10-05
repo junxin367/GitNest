@@ -40,6 +40,7 @@ import type {
   CreateRepositoryCommitRequest,
   RepositoryBranchesDto,
   RepositoryChangesDto,
+  RepositoryChangesRequest,
   RepositoryCommandExecuteRequest,
   RepositoryCommandExecutionDto,
   RepositoryCommandPreflightDto,
@@ -293,7 +294,7 @@ export interface IpcContractMap {
     WorkspaceResult<WorkspaceRefreshAcceptedDto>
   >;
   [IPC_CHANNELS.repositoryGetChanges]: IpcContract<
-    [request: RepositoryQueryRequest],
+    [request: RepositoryChangesRequest],
     GitReadResult<RepositoryChangesDto>
   >;
   [IPC_CHANNELS.repositoryGetDiff]: IpcContract<

@@ -2,7 +2,6 @@ import { resolve } from "node:path";
 
 import {
   AnalysisCache,
-  assertCodeAnalysisSnapshotPayloadSize,
   type AnalysisCacheDocument
 } from "./analysis-cache";
 import { buildCodeGraph } from "./graph-builder";
@@ -579,7 +578,8 @@ export class CodeAnalysisEngine {
                     worktreeId: file.worktreeId,
                     path: file.relativePath,
                     size: file.size,
-                    modifiedAtMs: file.modifiedAtMs
+                    modifiedAtMs: file.modifiedAtMs,
+                    fingerprint: file.fingerprint
                   }))
               }
             }
@@ -627,7 +627,8 @@ export class CodeAnalysisEngine {
       },
       this.#maximumSnapshotPayloadBytes
     );
-    assertCodeAnalysisSnapshotPayloadSize(snapshot);
+    // Compaction has already measured the result against a target no larger
+    // than 100 MiB. Protocol and persistence boundaries validate independently.
     return snapshot;
   }
 

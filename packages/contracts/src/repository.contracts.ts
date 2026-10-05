@@ -12,6 +12,11 @@ export interface RepositoryQueryRequest {
   target: RepositoryTargetDto;
 }
 
+export interface RepositoryChangesRequest
+  extends RepositoryQueryRequest {
+  includeChangeStats?: boolean;
+}
+
 export interface RepositoryDiffRequest
   extends RepositoryQueryRequest {
   path: string;

@@ -50,6 +50,129 @@ describe("normalizeAiEndpoint", () => {
 });
 
 describe("AiCommitMessageService", () => {
+  it.each([false, true])(
+    "preserves every diff across batches below the budget (per-file truncation: %s)",
+    async (perFileTruncated) => {
+      const changes = Array.from({ length: 9 }, (_, index) => ({
+        path: `src/file-${index}.ts`,
+        indexStatus: "M",
+        worktreeStatus: ".",
+        kind: "ordinary" as const
+      }));
+      const readRepositoryDiff = vi.fn<GitClient["readRepositoryDiff"]>(
+        async (_path, options) => ({
+          path: options.path,
+          mode: options.mode,
+          content: `content:${options.path}`,
+          binary: false,
+          truncated: perFileTruncated && options.path === changes[4]?.path,
+          additions: 1,
+          deletions: 0
+        })
+      );
+      let prompt = "";
+      const service = createService({
+        snapshot: { ...baseSnapshot(), staged: changes.length, changes },
+        readRepositoryDiff,
+        fetchImpl: async (_input, init) => {
+          prompt = JSON.parse(String(init?.body)).messages[1].content;
+          return completionResponse("fix: update repository");
+        }
+      });
+
+      const result = await service.generateCommitMessage(target);
+
+      expect(readRepositoryDiff).toHaveBeenCalledTimes(9);
+      for (const change of changes) {
+        expect(prompt).toContain(`content:${change.path}`);
+      }
+      expect(prompt.includes("[Per-file Diff truncated]")).toBe(perFileTruncated);
+      expect(prompt).not.toContain("[Aggregate Diff truncated]");
+      expect(result.truncated).toBe(perFileTruncated);
+    }
+  );
+
+  it("accounts for headings and separators when a later batch fills the budget", async () => {
+    const changes = Array.from({ length: 12 }, (_, index) => ({
+      path: `src/file-${index}.ts`,
+      indexStatus: "M",
+      worktreeStatus: ".",
+      kind: "ordinary" as const
+    }));
+    const readRepositoryDiff = vi.fn<GitClient["readRepositoryDiff"]>(
+      async (_path, options) => ({
+        path: options.path,
+        mode: options.mode,
+        content: "x".repeat(20_000),
+        binary: false,
+        truncated: false,
+        additions: 1,
+        deletions: 0
+      })
+    );
+    let prompt = "";
+    const service = createService({
+      snapshot: { ...baseSnapshot(), staged: changes.length, changes },
+      readRepositoryDiff,
+      fetchImpl: async (_input, init) => {
+        prompt = JSON.parse(String(init?.body)).messages[1].content;
+        return completionResponse("fix: update repository");
+      }
+    });
+
+    expect((await service.generateCommitMessage(target)).truncated).toBe(true);
+
+    expect(readRepositoryDiff).toHaveBeenCalledTimes(8);
+    const diff = prompt.slice(prompt.indexOf("--- STAGED FILE:"));
+    expect(diff).toHaveLength(120_000 + "\n[Aggregate Diff truncated]".length);
+    expect(diff).toContain("src/file-5.ts");
+    expect(diff).not.toContain("src/file-6.ts");
+  });
+
+  it("bounds diff reads and the request after exhausting the aggregate budget", async () => {
+    const changes = Array.from({ length: 1_000 }, (_, index) => ({
+      path: `src/${"nested/".repeat(20)}file-${index}.ts`,
+      indexStatus: "M",
+      worktreeStatus: ".",
+      kind: "ordinary" as const
+    }));
+    const readRepositoryDiff = vi.fn<GitClient["readRepositoryDiff"]>(
+      async (_path, options) => ({
+        path: options.path,
+        mode: options.mode,
+        content: "x".repeat(130_000),
+        binary: false,
+        truncated: false,
+        additions: 1,
+        deletions: 0
+      })
+    );
+    let prompt = "";
+    const service = createService({
+      snapshot: {
+        ...baseSnapshot(),
+        staged: changes.length,
+        changes
+      },
+      readRepositoryDiff,
+      fetchImpl: async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        prompt = body.messages[1].content;
+        return completionResponse("fix: update repository");
+      }
+    });
+
+    const result = await service.generateCommitMessage(target);
+
+    expect(prompt.length).toBeLessThan(121_000);
+    expect(prompt).toContain("[Aggregate Diff truncated]");
+    expect(readRepositoryDiff.mock.calls.length).toBeLessThanOrEqual(4);
+    expect(result).toMatchObject({
+      truncated: true,
+      stagedFiles: changes.length
+    });
+  });
+
   it.each(["declared-size", "http-status", "read-error"] as const)(
     "releases failed AI responses (%s)",
     async (failure) => {

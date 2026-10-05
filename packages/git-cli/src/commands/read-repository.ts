@@ -41,7 +41,7 @@ export const STAGED_DIFF_STAT_ARGUMENTS = [
 
 export const BRANCH_ARGUMENTS = [
   "for-each-ref",
-  "--format=%(refname)%1f%(refname:short)%1f%(objectname)%1f%(upstream:short)%1f%(HEAD)%1f%(worktreepath)%1f%(authordate:iso-strict)%1f%(symref)%1e",
+  "--format=%(refname)%1f%(refname:lstrip=2)%1f%(objectname)%1f%(upstream:lstrip=2)%1f%(HEAD)%1f%(worktreepath)%1f%(authordate:iso-strict)%1f%(symref)%1e",
   "refs/heads",
   "refs/remotes"
 ] as const;
@@ -192,7 +192,8 @@ export function commitMetadataArguments(
 }
 
 export function commitNumstatArguments(
-  commitHash: string
+  commitHash: string,
+  firstParentHash?: string
 ): string[] {
   return [
     "diff-tree",
@@ -202,6 +203,7 @@ export function commitNumstatArguments(
     "--numstat",
     "-r",
     "-z",
+    ...(firstParentHash ? [firstParentHash] : []),
     commitHash
   ];
 }

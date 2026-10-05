@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
-import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { lstat, open, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import {
+  createCodeGraphQueryIndex,
   loadSnapshotFromDirectory,
   codeAnalysisSnapshotConfigurationKey,
   codeAnalysisWorktreeStatusFingerprint,
@@ -14,7 +16,8 @@ import {
   type LoadedAnalysisSnapshot,
   type CodeAnalysisScope,
   type CodeAnalysisSettings,
-  type CodeAnalysisSnapshot
+  type CodeAnalysisSnapshot,
+  type CodeGraphQueryIndex
 } from "@gitnest/code-analysis";
 import {
   parseCommitNumstat,
@@ -35,6 +38,7 @@ export const FRESHNESS_ROOT_BUDGET = 200;
 export const FRESHNESS_ROOT_TIMEOUT_MS = 5_000;
 export const DEFAULT_MCP_MAX_STALE_AGE_DAYS = 7;
 const MAX_SETTINGS_BYTES = 4 * 1_024 * 1_024;
+const FRESHNESS_HASH_CHUNK_BYTES = 64 * 1_024;
 
 export type AnalysisFreshness = "fresh" | "stale" | "unknown";
 
@@ -96,6 +100,8 @@ export interface AnalysisTarget {
   scope: CodeAnalysisScope;
   /** Shared read-only snapshot; nested objects are frozen before publication. */
   snapshot: CodeAnalysisSnapshot;
+  /** Reusable indexes bound to this exact frozen snapshot object. */
+  graphIndex?: CodeGraphQueryIndex;
 }
 
 export interface ProjectAnalysisMatch {
@@ -173,6 +179,10 @@ export class GitNestDataAccess {
   readonly #paths: GitNestDataPaths;
   readonly #skipFreshness: boolean;
   readonly #snapshots = new Map<string, CachedSnapshot>();
+  readonly #graphIndexes = new WeakMap<
+    CodeAnalysisSnapshot,
+    CodeGraphQueryIndex
+  >();
 
   constructor(options: DataAccessOptions) {
     this.#paths = resolveDataPaths(options.dataDirectory);
@@ -469,12 +479,17 @@ export class GitNestDataAccess {
         if (!snapshot) {
           continue;
         }
+        const graphIndexForSnapshot = () =>
+          this.#graphIndexFor(snapshot);
         targets.push({
           workspaceId: candidate.workspace.id,
           workspaceName: candidate.workspace.name,
           selected: candidate.selected,
           scope,
-          snapshot
+          snapshot,
+          get graphIndex() {
+            return graphIndexForSnapshot();
+          }
         });
       }
     }
@@ -487,6 +502,19 @@ export class GitNestDataAccess {
     }
     return targets;
   }
+
+  #graphIndexFor(
+    snapshot: CodeAnalysisSnapshot
+  ): CodeGraphQueryIndex {
+    const cached = this.#graphIndexes.get(snapshot);
+    if (cached) {
+      return cached;
+    }
+    const index = createCodeGraphQueryIndex(snapshot);
+    this.#graphIndexes.set(snapshot, index);
+    return index;
+  }
+
   /**
    * Loads a snapshot, reusing the parsed result while the file on
    * disk is unchanged. The signature includes file identity, size,
@@ -735,6 +763,19 @@ export class GitNestDataAccess {
         ) {
           return "stale";
         }
+        if (!file.fingerprint) {
+          freshness = "unknown";
+          continue;
+        }
+        const currentFingerprint =
+          await fingerprintFreshnessFile(
+            absolute,
+            current.size,
+            current.mtimeMs
+          );
+        if (currentFingerprint !== file.fingerprint) {
+          return "stale";
+        }
       } catch (error) {
         if (isMissingFile(error)) {
           return "stale";
@@ -744,6 +785,61 @@ export class GitNestDataAccess {
     }
     return freshness;
   }
+}
+
+async function fingerprintFreshnessFile(
+  filePath: string,
+  expectedSize: number,
+  expectedModifiedAtMs: number
+): Promise<string> {
+  const handle = await open(filePath, "r");
+  const hash = createHash("sha256");
+  const chunk = Buffer.allocUnsafe(
+    FRESHNESS_HASH_CHUNK_BYTES
+  );
+  try {
+    const before = await handle.stat();
+    if (
+      !before.isFile() ||
+      before.size !== expectedSize ||
+      Math.trunc(before.mtimeMs) !==
+        Math.trunc(expectedModifiedAtMs)
+    ) {
+      throw new Error(
+        "Source file changed before its freshness fingerprint was calculated."
+      );
+    }
+    let remainingBytes = expectedSize;
+    while (remainingBytes > 0) {
+      const { bytesRead } = await handle.read(
+        chunk,
+        0,
+        Math.min(chunk.length, remainingBytes),
+        null
+      );
+      if (bytesRead === 0) {
+        throw new Error(
+          "Source file ended before its freshness fingerprint was calculated."
+        );
+      }
+      hash.update(chunk.subarray(0, bytesRead));
+      remainingBytes -= bytesRead;
+    }
+    const after = await handle.stat();
+    if (
+      after.size !== before.size ||
+      Math.trunc(after.mtimeMs) !==
+        Math.trunc(before.mtimeMs) ||
+      after.ctimeMs !== before.ctimeMs
+    ) {
+      throw new Error(
+        "Source file changed while its freshness fingerprint was calculated."
+      );
+    }
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+  return `sha256:${hash.digest("hex")}`;
 }
 
 function freezeSnapshot(

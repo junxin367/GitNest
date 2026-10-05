@@ -3,6 +3,7 @@ import {
   symlink,
   writeFile
 } from "node:fs/promises";
+import * as fileSystemPromises from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -10,18 +11,24 @@ import {
   beforeEach,
   describe,
   expect,
-  it
+  it,
+  vi
 } from "vitest";
 
 import {
   createTemporaryDirectoryFixture,
   type TemporaryDirectoryFixture
 } from "@gitnest/testkit";
+import { WorkspaceScanner } from "@gitnest/workspace-core";
 
 import {
   NodeWorkspaceFileSystem,
   NodeWorktreePathPolicy
 } from "./filesystem.adapter";
+
+vi.mock("node:fs/promises", async (importOriginal) => ({
+  ...await importOriginal<typeof import("node:fs/promises")>()
+}));
 
 describe("NodeWorktreePathPolicy", () => {
   let fixture: TemporaryDirectoryFixture;
@@ -33,8 +40,72 @@ describe("NodeWorktreePathPolicy", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fixture.dispose();
   });
+
+  it.each(["inside", "outside"])(
+    "ignores file symlinks to targets %s the workspace",
+    async (location) => {
+      const root = join(fixture.path, "workspace");
+      await mkdir(root);
+      const sourceFile = join(
+        location === "inside" ? root : fixture.path,
+        "shared.txt"
+      );
+      await writeFile(sourceFile, "shared file\n", "utf8");
+      const link = join(root, "linked-file.txt");
+      const originalReadDirectory = fileSystemPromises.readdir;
+      const originalRealpath = fileSystemPromises.realpath;
+      const originalStat = fileSystemPromises.stat;
+      // Windows file symlinks require privileges unavailable to the
+      // test runner. Supply only the link's filesystem observations.
+      vi.spyOn(fileSystemPromises, "readdir").mockImplementation(
+        (async (path: Parameters<typeof fileSystemPromises.readdir>[0]) => {
+          if (path === link) {
+            throw Object.assign(new Error("not a directory"), {
+              code: "ENOTDIR"
+            });
+          }
+          const entries = await originalReadDirectory(path, {
+            withFileTypes: true
+          });
+          return path === root
+            ? [...entries, {
+                name: "linked-file.txt",
+                isSymbolicLink: () => true,
+                isDirectory: () => false,
+                isFile: () => false
+              }]
+            : entries;
+        }) as unknown as typeof fileSystemPromises.readdir
+      );
+      vi.spyOn(fileSystemPromises, "realpath").mockImplementation(
+        ((path) => originalRealpath(
+          path === link ? sourceFile : path
+        )) as typeof fileSystemPromises.realpath
+      );
+      vi.spyOn(fileSystemPromises, "stat").mockImplementation(
+        ((path) => originalStat(
+          path === link ? sourceFile : path
+        )) as typeof fileSystemPromises.stat
+      );
+      const fileSystem = new NodeWorkspaceFileSystem();
+      const scanner = new WorkspaceScanner(fileSystem, {
+        inspectRepository: async () => {
+          throw new Error("No Git marker exists in this fixture.");
+        }
+      });
+
+      const result = await scanner.scanRoot({
+        ...fileSystem.normalizePath(root),
+        excludes: []
+      });
+
+      expect(result.issues).toEqual([]);
+      expect(result.repositories).toEqual([]);
+    }
+  );
 
   it("accepts dot-prefixed descendants while rejecting parent and sibling paths", async () => {
     const policy = new NodeWorktreePathPolicy();

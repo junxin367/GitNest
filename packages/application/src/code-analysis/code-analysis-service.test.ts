@@ -869,6 +869,126 @@ describe("CodeAnalysisService node source", () => {
     await service.dispose();
   });
 
+  it("reads node source without cloning the complete snapshot", async () => {
+    const rootPath = await createTemporaryWorktree();
+    const sourcePath = join(rootPath, "source.ts");
+    await writeFile(
+      sourcePath,
+      "export function target() { return 1; }\n",
+      "utf8"
+    );
+    const workspace = createWorkspaceAt(rootPath);
+    const snapshot = createSnapshotWithNode(rootPath, {
+      path: "source.ts",
+      line: 1,
+      endLine: 1
+    });
+    const service = new CodeAnalysisService(
+      { getCurrent: async () => workspace },
+      createGitClient(),
+      {
+        cacheDirectory: "C:\\cache",
+        lspDataDirectory: "C:\\lsp",
+        settingsProvider: async () => createSettings(),
+        snapshotStore: {
+          load: vi.fn(async () => snapshot),
+          save: vi.fn(async () => undefined)
+        },
+        runner: createEngine()
+      }
+    );
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      await expect(
+        service.readFile("function_source")
+      ).resolves.toMatchObject({
+        nodeId: "function_source",
+        content: "export function target() { return 1; }\n"
+      });
+      expect(
+        clone.mock.calls.filter(([value]) => value === snapshot)
+      ).toHaveLength(0);
+    } finally {
+      clone.mockRestore();
+      await service.dispose();
+    }
+  });
+
+  it("keeps public snapshots isolated from external mutation", async () => {
+    const rootPath = await createTemporaryWorktree();
+    const workspace = createWorkspaceAt(rootPath);
+    const snapshot = createSnapshotWithNode(rootPath, {
+      path: "source.ts",
+      line: 1,
+      endLine: 1
+    });
+    const service = createService(
+      workspace,
+      createSnapshotStore(snapshot),
+      createEngine()
+    );
+
+    const first = await service.getSnapshot();
+    const firstNode = first?.nodes[0];
+    const firstRoot = first?.roots[0];
+    if (!firstNode || !firstRoot) {
+      throw new Error("Snapshot fixture is incomplete.");
+    }
+    firstNode.name = "mutated";
+    firstRoot.path = "C:\\mutated";
+
+    await expect(service.getSnapshot()).resolves.toMatchObject({
+      roots: [{ path: rootPath }],
+      nodes: [{ name: "source" }]
+    });
+    await service.dispose();
+  });
+
+  it("does not read a node from the previous Workspace selection", async () => {
+    const firstRoot = await createTemporaryWorktree();
+    const secondRoot = await createTemporaryWorktree();
+    await writeFile(
+      join(firstRoot, "source.ts"),
+      "export function target() { return 1; }\n",
+      "utf8"
+    );
+    let workspace = createWorkspaceAt(firstRoot);
+    const snapshot = createSnapshotWithNode(firstRoot, {
+      path: "source.ts",
+      line: 1,
+      endLine: 1
+    });
+    const store = createSnapshotStore(snapshot);
+    const service = new CodeAnalysisService(
+      {
+        getCurrent: async () => structuredClone(workspace)
+      },
+      createGitClient(),
+      {
+        cacheDirectory: "C:\\cache",
+        lspDataDirectory: "C:\\lsp",
+        settingsProvider: async () => createSettings(),
+        snapshotStore: store,
+        runner: createEngine()
+      }
+    );
+    await expect(
+      service.readFile("function_source")
+    ).resolves.toMatchObject({
+      nodeId: "function_source"
+    });
+
+    workspace = createWorkspaceAt(secondRoot);
+
+    await expect(
+      service.readFile("function_source")
+    ).rejects.toMatchObject({
+      code: "INVALID_REQUEST"
+    });
+    expect(store.load).toHaveBeenCalledTimes(2);
+    await service.dispose();
+  });
+
   it("rejects a snapshot path that resolves outside the analyzed Worktree", async () => {
     const parentPath = await createTemporaryWorktree();
     const rootPath = join(parentPath, "repository");

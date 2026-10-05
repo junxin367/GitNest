@@ -39,7 +39,7 @@ const TARGET: RepositoryTarget = {
 const WORKTREE_PATH = "C:\\workspace\\repository";
 
 describe("RepositoryQueryService", () => {
-  it("requests per-file stats for the repository changes query", async () => {
+  it("requests per-file stats by default for repository changes", async () => {
     const gitClient = new FakeGitClient();
     const service = createService(gitClient);
 
@@ -49,6 +49,25 @@ describe("RepositoryQueryService", () => {
       {
         repositoryPath: WORKTREE_PATH,
         includeChangeStats: true,
+        signal: expect.any(AbortSignal)
+      }
+    ]);
+  });
+
+  it("can skip per-file stats for lightweight repository changes", async () => {
+    const gitClient = new FakeGitClient();
+    const service = createService(gitClient);
+
+    await service.getChanges(
+      "changes_without_stats",
+      TARGET,
+      false
+    );
+
+    expect(gitClient.snapshotCalls).toEqual([
+      {
+        repositoryPath: WORKTREE_PATH,
+        includeChangeStats: false,
         signal: expect.any(AbortSignal)
       }
     ]);

@@ -3,6 +3,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  unlink,
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -87,6 +88,7 @@ describe("McpRegistrationService", () => {
             'const { join } = require("node:path");',
             "const args = process.argv.slice(2);",
             'const statePath = join(__dirname, "registered");',
+            'const keepRegistrationPath = join(__dirname, "keep-registration");',
             'const logPath = join(__dirname, "args.json");',
             'if (args[0] !== "mcp") process.exit(2);',
             'if (args[1] === "add") {',
@@ -95,6 +97,7 @@ describe("McpRegistrationService", () => {
             "  process.exit(0);",
             "}",
             'if (args[1] === "get") {',
+            '  if (existsSync(join(__dirname, "fail-get"))) process.exit(3);',
             "  if (existsSync(statePath)) {",
             `    process.stdout.write("${MCP_REGISTRATION_NAME}\\n");`,
             "    process.exit(0);",
@@ -102,7 +105,8 @@ describe("McpRegistrationService", () => {
             "  process.exit(1);",
             "}",
             'if (args[1] === "remove") {',
-            "  if (existsSync(statePath)) unlinkSync(statePath);",
+            '  if (existsSync(join(__dirname, "fail-remove"))) process.exit(3);',
+            "  if (existsSync(statePath) && !existsSync(keepRegistrationPath)) unlinkSync(statePath);",
             "  process.exit(0);",
             "}",
             "process.exit(2);"
@@ -146,6 +150,34 @@ describe("McpRegistrationService", () => {
           "--data-dir",
           dataDirectory
         ]);
+
+        const removed = await registration.setRegistered(false);
+        expect(removed).toMatchObject({
+          registered: false,
+          message: "已执行取消注册命令，未读取到配置。"
+        });
+
+        await writeFile(join(commandDirectory, "fail-get"), "");
+        const unreadable = await registration.setRegistered(false);
+        expect(unreadable.message).toBe(
+          "已执行取消注册命令，未读取到配置。"
+        );
+        await unlink(join(commandDirectory, "fail-get"));
+
+        await registration.setRegistered(true);
+        await writeFile(join(commandDirectory, "keep-registration"), "");
+        const unchanged = await registration.setRegistered(false);
+        expect(unchanged).toMatchObject({
+          registered: true,
+          message: "已执行取消注册命令，但仍读取到配置。"
+        });
+
+        await writeFile(join(commandDirectory, "fail-remove"), "");
+        const failed = await registration.setRegistered(false);
+        expect(failed).toMatchObject({
+          registered: true,
+          message: expect.stringMatching(/^取消注册失败：/)
+        });
       } finally {
         await rm(root, { recursive: true, force: true });
       }

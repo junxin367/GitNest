@@ -258,6 +258,198 @@ describe("GitCliClient mutation integration", () => {
     }
   });
 
+  it.each(["untracked", "ignored", "partial"] as const)(
+    "refuses to discard a tracked file deletion over unconfirmed replacement directory files (%s)",
+    async (scenario) => {
+    const fixture = await createMutationRepository();
+    const path = fixture.repositoryPath;
+    try {
+      await unlink(join(path, "tracked.txt"));
+      await mkdir(join(path, "tracked.txt"));
+      await writeFile(join(path, "tracked.txt", "keep.txt"), "unconfirmed work\n");
+      if (scenario === "ignored") {
+        await writeFile(join(path, ".git", "info", "exclude"), "tracked.txt/keep.txt\n");
+      }
+      const paths = ["tracked.txt", "rename me.txt"];
+      const confirmed: string[] = [];
+      await appendFile(join(path, "rename me.txt"), "keep edited\n");
+      if (scenario === "partial") {
+        await writeFile(join(path, "tracked.txt", "selected.txt"), "confirmed work\n");
+        paths.push("tracked.txt/selected.txt");
+        confirmed.push("tracked.txt/selected.txt");
+      }
+      const service = new RepositoryMutationService({
+        async runWorktreeMutation(_target, _kind, action) {
+          return { operationId: "discard-replacement", result: await action(path) };
+        }
+      }, client, client);
+
+      const result = await service.discard(
+        { repositoryId: "repo", worktreeId: "wt" },
+        paths,
+        confirmed
+      ).then(() => ({ code: "SUCCEEDED" }), (error: unknown) => error);
+      expect.soft(result).toMatchObject({ code: "INVALID_REQUEST" });
+      expect.soft(await readFile(join(path, "tracked.txt", "keep.txt"), "utf8")
+        .catch((error: NodeJS.ErrnoException) => error.code))
+        .toBe("unconfirmed work\n");
+      expect(await readFile(join(path, "rename me.txt"), "utf8")).toContain("keep edited");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it.each(["file-to-directory", "directory-to-file"] as const)(
+    "discards a replacement when every affected untracked file was explicitly confirmed (%s)",
+    async (direction) => {
+      const fixture = await createMutationRepository();
+      const path = fixture.repositoryPath;
+      try {
+        await runGit(path, ["config", "core.autocrlf", "false"]);
+        const nested = "tracked.txt/child.txt";
+        await unlink(join(path, "tracked.txt"));
+        await mkdir(join(path, "tracked.txt"));
+        await writeFile(join(path, nested), "child content\n");
+        if (direction === "directory-to-file") {
+          await runGit(path, ["add", "-A"]);
+          await runGit(path, ["commit", "-m", "Directory fixture"]);
+          await unlink(join(path, nested));
+          await rmdir(join(path, "tracked.txt"));
+          await writeFile(join(path, "tracked.txt"), "replacement content\n");
+        }
+        const service = new RepositoryMutationService({
+          async runWorktreeMutation(_target, _kind, action) {
+            return { operationId: "discard-confirmed-replacement", result: await action(path) };
+          }
+        }, client, client);
+        await service.discard(
+          { repositoryId: "repo", worktreeId: "wt" },
+          ["tracked.txt", nested],
+          [direction === "file-to-directory" ? nested : "tracked.txt"]
+        );
+        expect(await client.readRepositorySnapshot(path))
+          .toMatchObject({ staged: 0, unstaged: 0, untracked: 0 });
+        expect(await readFile(join(path, direction === "file-to-directory" ? "tracked.txt" : nested), "utf8"))
+          .toBe(direction === "file-to-directory" ? "tracked\n" : "child content\n");
+      } finally {
+        await fixture.dispose();
+      }
+    }
+  );
+
+  it("refuses to discard a deleted child over its unconfirmed replacement parent file", async () => {
+    const fixture = await createMutationRepository();
+    const path = fixture.repositoryPath;
+    try {
+      const nested = "tracked.txt/child.txt";
+      await unlink(join(path, "tracked.txt"));
+      await mkdir(join(path, "tracked.txt"));
+      await writeFile(join(path, nested), "child\n");
+      await runGit(path, ["add", "-A"]);
+      await runGit(path, ["commit", "-m", "Directory fixture"]);
+      await unlink(join(path, nested));
+      await rmdir(join(path, "tracked.txt"));
+      await writeFile(join(path, "tracked.txt"), "unconfirmed parent\n");
+      const service = new RepositoryMutationService({
+        async runWorktreeMutation(_target, _kind, action) {
+          return { operationId: "discard-parent-replacement", result: await action(path) };
+        }
+      }, client, client);
+      const result = await service.discard(
+        { repositoryId: "repo", worktreeId: "wt" }, [nested]
+      ).then(() => ({ code: "SUCCEEDED" }), (error: unknown) => error);
+      expect.soft(result).toMatchObject({ code: "INVALID_REQUEST" });
+      expect(await readFile(join(path, "tracked.txt"), "utf8")
+        .catch((error: NodeJS.ErrnoException) => error.code))
+        .toBe("unconfirmed parent\n");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("restores tracked directory contents without removing untracked siblings", async () => {
+    const fixture = await createMutationRepository();
+    const path = fixture.repositoryPath;
+    try {
+      await runGit(path, ["config", "core.autocrlf", "false"]);
+      await mkdir(join(path, "src"));
+      await writeFile(join(path, "src", "tracked.txt"), "original\n");
+      await runGit(path, ["add", "src"]);
+      await runGit(path, ["commit", "-m", "Directory fixture"]);
+      await writeFile(join(path, "src", "tracked.txt"), "edited\n");
+      await writeFile(join(path, "src", "keep.txt"), "untracked sibling\n");
+
+      await client.restoreWorktreePaths(path, ["src"]);
+
+      expect(await readFile(join(path, "src", "tracked.txt"), "utf8")).toBe("original\n");
+      expect(await readFile(join(path, "src", "keep.txt"), "utf8")).toBe("untracked sibling\n");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("protects unconfirmed replacement contents within a selected tracked directory", async () => {
+    const fixture = await createMutationRepository();
+    const path = fixture.repositoryPath;
+    try {
+      await mkdir(join(path, "src"));
+      await writeFile(join(path, "src", "tracked.txt"), "original\n");
+      await runGit(path, ["add", "src"]);
+      await runGit(path, ["commit", "-m", "Directory fixture"]);
+      await unlink(join(path, "src", "tracked.txt"));
+      await mkdir(join(path, "src", "tracked.txt"));
+      await writeFile(join(path, "src", "tracked.txt", "keep.txt"), "unconfirmed child\n");
+
+      await expect(client.restoreWorktreePaths(path, ["src"]))
+        .rejects.toMatchObject({ code: "INVALID_REQUEST" });
+
+      expect(await readFile(join(path, "src", "tracked.txt", "keep.txt"), "utf8"))
+        .toBe("unconfirmed child\n");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it.each([false, true])(
+    "discards ordinary files alongside a dirty gitlink without recursing into the gitlink (submodule.recurse=%s)",
+    async (recurse) => {
+    const fixture = await createMutationRepository();
+    const path = fixture.repositoryPath;
+    const childPath = join(path, "child");
+    try {
+      await runGit(path, ["config", "core.autocrlf", "false"]);
+      await mkdir(childPath);
+      await runGit(childPath, ["init", "--initial-branch=main"]);
+      await runGit(childPath, ["config", "user.name", "GitNest Mutation Test"]);
+      await runGit(childPath, ["config", "user.email", "mutation@example.invalid"]);
+      await writeFile(join(childPath, "inside.txt"), "original child\n");
+      await runGit(childPath, ["add", "inside.txt"]);
+      await runGit(childPath, ["commit", "-m", "Child fixture"]);
+      await runGit(path, ["config", "--file", ".gitmodules", "submodule.child.path", "child"]);
+      await runGit(path, ["config", "--file", ".gitmodules", "submodule.child.url", childPath]);
+      await runGit(path, ["config", "submodule.child.active", "true"]);
+      await runGit(path, ["config", "submodule.recurse", String(recurse)]);
+      await runGit(path, ["add", "child", ".gitmodules"]);
+      await runGit(path, ["commit", "-m", "Gitlink fixture"]);
+      await writeFile(join(path, "tracked.txt"), "changed parent\n");
+      await writeFile(join(childPath, "inside.txt"), "changed child\n");
+      const service = new RepositoryMutationService({
+        async runWorktreeMutation(_target, _kind, action) {
+          return { operationId: "discard-with-gitlink", result: await action(path) };
+        }
+      }, client, client);
+
+      await service.discard(
+        { repositoryId: "repo", worktreeId: "wt" }, ["child", "tracked.txt"]
+      );
+
+      expect(await readFile(join(path, "tracked.txt"), "utf8")).toBe("tracked\n");
+      expect(await readFile(join(childPath, "inside.txt"), "utf8")).toBe("changed child\n");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("does not stage a selected deletion when another selected path cannot be added", async () => {
     const fixture = await createMutationRepository();
     const path = fixture.repositoryPath;

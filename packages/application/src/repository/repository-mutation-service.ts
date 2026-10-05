@@ -201,7 +201,8 @@ export class RepositoryMutationService {
         if (trackedPaths.length > 0) {
           await this.#gitWriter.restoreWorktreePaths(
             worktreePath,
-            [...new Set(trackedPaths)]
+            [...new Set(trackedPaths)],
+            { confirmedUntrackedPaths: [...confirmedUntracked] }
           );
         }
         if (untrackedPaths.length > 0) {

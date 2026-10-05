@@ -78,3 +78,9 @@ export interface RepositoryInspection {
   commits: CommitSummary[];
   worktrees: Worktree[];
 }
+
+export interface RepositoryTopology {
+  identity: RepositoryIdentity;
+  branch?: string;
+  worktrees: Worktree[];
+}

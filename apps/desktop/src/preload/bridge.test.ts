@@ -221,7 +221,8 @@ describe("createGitNestBridge", () => {
       target: {
         repositoryId: "repository",
         worktreeId: "worktree"
-      }
+      },
+      includeChangeStats: false
     });
     await bridge.repository.getDiff({
       queryId: "diff",
@@ -629,7 +630,8 @@ describe("createGitNestBridge", () => {
             target: {
               repositoryId: "repository",
               worktreeId: "worktree"
-            }
+            },
+            includeChangeStats: false
           }
         ]
       },

@@ -226,7 +226,8 @@ export class ApplicationUpdateService {
       );
       return this.#fail(
         "UPDATE_OPEN_RELEASE_FAILED",
-        "无法打开 GitHub Release 页面。"
+        "无法打开 GitHub Release 页面。",
+        true
       );
     }
   }
@@ -244,7 +245,8 @@ export class ApplicationUpdateService {
       );
       return this.#fail(
         "UPDATE_OPEN_PROJECT_FAILED",
-        "无法打开 GitNest 项目页面。"
+        "无法打开 GitNest 项目页面。",
+        true
       );
     }
   }
@@ -777,11 +779,19 @@ export class ApplicationUpdateService {
 
   #fail(
     code: string,
-    message: string
+    message: string,
+    preserveActiveOperation = false
   ): ApplicationUpdateStateDto {
+    const operationActive =
+      preserveActiveOperation &&
+      Boolean(this.#checkTask || this.#downloadTask);
+    // Opening a browser is independent of the check/download task.
+    // Keep its failure visible without hiding the still-running update.
     this.#setState({
-      phase: "error",
-      promptPending: false,
+      phase: operationActive ? this.#state.phase : "error",
+      promptPending: operationActive
+        ? this.#state.promptPending
+        : false,
       errorCode: code,
       errorMessage: message
     });

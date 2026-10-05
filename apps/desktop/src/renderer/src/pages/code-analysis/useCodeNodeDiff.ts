@@ -32,10 +32,11 @@ const DEFAULT_CONTEXT_LINES = 3;
 let querySequence = 0;
 
 export function useCodeNodeDiff(
-  node: CodeGraphNodeDto | null
+  node: CodeGraphNodeDto | null,
+  refreshKey = ""
 ): CodeNodeDiffState {
   const [state, setScopedState] = useState({
-    fileKey: "",
+    scopeKey: "",
     value: EMPTY_STATE
   });
   const activeQueriesRef = useRef(new Set<string>());
@@ -47,10 +48,13 @@ export function useCodeNodeDiff(
     repositoryId && worktreeId && path
       ? `${repositoryId}\0${worktreeId}\0${path}`
       : "";
+  const scopeKey = fileKey
+    ? JSON.stringify([fileKey, refreshKey])
+    : "";
 
   useEffect(() => {
     const setState = (value: CodeNodeDiffState) =>
-      setScopedState({ fileKey, value });
+      setScopedState({ scopeKey, value });
     const generation = ++generationRef.current;
     cancelQueries(activeQueriesRef.current);
 
@@ -93,7 +97,8 @@ export function useCodeNodeDiff(
         changesResult =
           await window.gitnest.repository.getChanges({
             queryId: changesQueryId,
-            target
+            target,
+            includeChangeStats: false
           });
       } catch (reason) {
         finishQuery(changesQueryId);
@@ -204,9 +209,9 @@ export function useCodeNodeDiff(
       }
       cancelQueries(activeQueriesRef.current);
     };
-  }, [fileKey]);
+  }, [scopeKey]);
 
-  return state.fileKey === fileKey
+  return state.scopeKey === scopeKey
     ? state.value
     : { ...EMPTY_STATE, loading: Boolean(fileKey) };
 }

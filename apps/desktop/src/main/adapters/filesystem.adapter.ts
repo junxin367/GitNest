@@ -1,7 +1,8 @@
 import {
   lstat,
   readdir,
-  realpath
+  realpath,
+  stat
 } from "node:fs/promises";
 import {
   basename,
@@ -89,17 +90,35 @@ export class NodeWorkspaceFileSystem
     path: string
   ): Promise<WorkspaceDirectoryEntry[]> {
     const entries = await readdir(path, { withFileTypes: true });
-    return entries.map((entry) => ({
-      name: entry.name,
-      path: join(path, entry.name),
-      kind: entry.isSymbolicLink()
-        ? "symbolic-link"
-        : entry.isDirectory()
-          ? "directory"
-          : entry.isFile()
-            ? "file"
-            : "other"
-    }));
+    return Promise.all(
+      entries.map(async (entry) => {
+        const entryPath = join(path, entry.name);
+        let kind: WorkspaceDirectoryEntry["kind"] =
+          entry.isSymbolicLink()
+            ? "symbolic-link"
+            : entry.isDirectory()
+              ? "directory"
+              : entry.isFile()
+                ? "file"
+                : "other";
+        if (kind === "symbolic-link") {
+          try {
+            const target = await stat(entryPath);
+            if (!target.isDirectory()) {
+              kind = target.isFile() ? "file" : "other";
+            }
+          } catch {
+            // Keep unresolved links visible to the scanner so their
+            // access failures still produce a local scan issue.
+          }
+        }
+        return {
+          name: entry.name,
+          path: entryPath,
+          kind
+        };
+      })
+    );
   }
 }
 

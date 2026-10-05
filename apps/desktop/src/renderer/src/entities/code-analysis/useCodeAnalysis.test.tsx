@@ -747,6 +747,78 @@ describe("useCodeAnalysis snapshot synchronization", () => {
     expect(await restoring).toBeNull();
   });
 
+  it.each(["failure", "rejection"] as const)(
+    "ignores a stale start %s after switching workspaces and starting again",
+    async (outcome) => {
+      const pending = deferred<Awaited<ReturnType<GitNestBridge["codeAnalysis"]["start"]>>>();
+      const next = deferred<Awaited<ReturnType<GitNestBridge["codeAnalysis"]["start"]>>>();
+      let listener: ((state: CodeAnalysisStateDto) => void) | undefined;
+      installBridge({
+        getState: vi.fn(async () => ({
+          ok: true as const,
+          value: { state: "idle" as const, snapshotAvailable: false, workspaceId: "workspace-a" }
+        })),
+        getSnapshot: vi.fn(),
+        onStateChanged: vi.fn((nextListener) => { listener = nextListener; return vi.fn(); })
+      });
+      window.gitnest.codeAnalysis.start = vi.fn()
+        .mockImplementationOnce(() => pending.promise.then((result) => {
+          if (outcome === "rejection") throw new Error("old start transport failure");
+          return result;
+        }))
+        .mockReturnValueOnce(next.promise);
+      await act(async () => root.render(
+        <Harness onChange={(value) => (controller = value)} />
+      ));
+      let firstStart!: Promise<boolean>;
+      let secondStart!: Promise<boolean>;
+      act(() => { firstStart = controller!.start("workspace"); });
+      act(() => listener?.({
+        state: "idle", snapshotAvailable: false, workspaceId: "workspace-b"
+      }));
+      act(() => { secondStart = controller!.start("changed"); });
+      await act(async () => {
+        pending.resolve({
+          ok: false,
+          error: { code: "COMMAND_FAILED", message: "old workspace start failed", details: {} }
+        });
+        await firstStart;
+      });
+      expect(controller?.state.workspaceId).toBe("workspace-b");
+      expect(controller?.error).toBeNull();
+      expect(controller?.action).toBe("starting");
+      await act(async () => {
+        next.resolve({
+          ok: false,
+          error: { code: "COMMAND_FAILED", message: "current start failed", details: {} }
+        });
+        await secondStart;
+      });
+      expect(controller?.error?.message).toBe("current start failed");
+      expect(controller?.action).toBeNull();
+    }
+  );
+
+  it("clears the previous workspace start error when another workspace becomes idle", async () => {
+    let listener: ((state: CodeAnalysisStateDto) => void) | undefined;
+    installBridge({
+      getState: vi.fn(async () => ({
+        ok: true as const,
+        value: { state: "idle" as const, snapshotAvailable: false, workspaceId: "workspace-a" }
+      })),
+      getSnapshot: vi.fn(),
+      onStateChanged: vi.fn((nextListener) => { listener = nextListener; return vi.fn(); })
+    });
+    window.gitnest.codeAnalysis.start = vi.fn().mockResolvedValue({
+      ok: false, error: { code: "COMMAND_FAILED", message: "workspace A failed", details: {} }
+    });
+    await act(async () => root.render(<Harness onChange={(value) => (controller = value)} />));
+    await act(async () => { await controller!.start("changed"); });
+    expect(controller?.error?.message).toBe("workspace A failed");
+    act(() => listener?.({ state: "idle", snapshotAvailable: false, workspaceId: "workspace-b" }));
+    expect(controller?.error).toBeNull();
+  });
+
   it("ends a superseded restore when reload fails and ignores the restore response", async () => {
     const pending = deferred<Awaited<ReturnType<GitNestBridge["codeAnalysis"]["restoreSnapshot"]>>>();
     installBridge({

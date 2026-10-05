@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   mkdtemp,
   mkdir,
@@ -860,9 +861,42 @@ describe("MCP tool behaviour", () => {
     expect(Object.isFrozen(first.snapshot.sourceState!.worktreeStatuses)).toBe(true);
     const second = await access.pickTarget({ scope: "workspace" });
     expect(second.snapshot).toBe(first.snapshot);
+    expect(second.graphIndex).toBe(first.graphIndex);
     expect(second.snapshot.nodes[0]!.name).toBe("fetchGroups");
     expect(second.snapshot.edges).toHaveLength(2);
     expect(clone).not.toHaveBeenCalled();
+  });
+
+  it("invalidates the graph index when the snapshot changes under the same analysis id", async () => {
+    await writeSnapshot(snapshot());
+    const access = new GitNestDataAccess({
+      dataDirectory: root,
+      skipFreshness: true
+    });
+    const first = await access.pickTarget({ scope: "workspace" });
+
+    const replacement = snapshot(3);
+    replacement.nodes[0]!.name = "replacementClientWithLongerName";
+    replacement.nodes[0]!.qualifiedName =
+      "replacementClientWithLongerName";
+    await writeSnapshot(replacement);
+
+    const second = await access.pickTarget({ scope: "workspace" });
+    expect(second.snapshot.analysisId).toBe(first.snapshot.analysisId);
+    expect(second.snapshot).not.toBe(first.snapshot);
+    expect(second.graphIndex).not.toBe(first.graphIndex);
+
+    const { callTool } = createServer();
+    const result = await callTool("get_call_chain", {
+      query: "replacementClientWithLongerName"
+    });
+    expect(result.isError).toBe(false);
+    expect(result.payload.totalMatches).toBe(1);
+    expect(
+      (result.payload.nodes as Array<{ name: string }>).map(
+        (entry) => entry.name
+      )
+    ).toContain("replacementClientWithLongerName");
   });
 
   it("recovers from partial snapshot writes and cached misses without repairing disk", async () => {
@@ -1244,7 +1278,9 @@ describe("MCP tool behaviour", () => {
     ).stdout.trim();
     await writeWorkspaceFiles(head);
     const sourcePath = join(repositoryPath, "src", "Demo.java");
-    await writeFile(sourcePath, "class Demo { void before() {} }");
+    const analyzedContent =
+      "class Demo { void before() {} }";
+    await writeFile(sourcePath, analyzedContent);
     const before = await stat(sourcePath);
     const change = {
       path: "src/Demo.java",
@@ -1273,7 +1309,10 @@ describe("MCP tool behaviour", () => {
         worktreeId: WORKTREE_ID,
         path: "src/Demo.java",
         size: before.size,
-        modifiedAtMs: before.mtimeMs
+        modifiedAtMs: before.mtimeMs,
+        fingerprint: `sha256:${createHash("sha256")
+          .update(analyzedContent)
+          .digest("hex")}`
       }]
     };
     await writeSnapshot(analyzed);
@@ -1348,6 +1387,81 @@ describe("MCP tool behaviour", () => {
       ],
       { cwd: repositoryPath }
     );
+    expect(await access.freshnessFor(target)).toBe("stale");
+  });
+
+  it("detects an equal-size rewrite of an already dirty source file with preserved mtime", async () => {
+    const head = await initializeGitRepository();
+    const sourcePath = join(repositoryPath, "src", "Demo.java");
+    const analyzedContent =
+      "class Demo { void before() {} }";
+    const changedContent =
+      "class Demo { void after_() {} }";
+    expect(Buffer.byteLength(changedContent)).toBe(
+      Buffer.byteLength(analyzedContent)
+    );
+    await writeFile(sourcePath, analyzedContent);
+    const fixedTime = new Date("2026-10-03T12:00:00.000Z");
+    await utimes(sourcePath, fixedTime, fixedTime);
+    const before = await stat(sourcePath);
+    const change = {
+      path: "src/Demo.java",
+      indexStatus: ".",
+      worktreeStatus: "M",
+      kind: "ordinary"
+    };
+    const analyzed = snapshot();
+    analyzed.roots[0]!.revision = head;
+    analyzed.sourceState = {
+      worktreeStatuses: [{
+        repositoryId: REPOSITORY_ID,
+        worktreeId: WORKTREE_ID,
+        fingerprint: codeAnalysisWorktreeStatusFingerprint([
+          change
+        ])
+      }],
+      changedSourceFiles: [{
+        repositoryId: REPOSITORY_ID,
+        worktreeId: WORKTREE_ID,
+        path: "src/Demo.java",
+        size: before.size,
+        modifiedAtMs: before.mtimeMs,
+        fingerprint: `sha256:${createHash("sha256")
+          .update(analyzedContent)
+          .digest("hex")}`
+      }]
+    };
+    const changedSource =
+      analyzed.sourceState.changedSourceFiles[0]!;
+    const analyzedFingerprint = changedSource.fingerprint!;
+    delete changedSource.fingerprint;
+    await writeSnapshot(analyzed);
+    const access = new GitNestDataAccess({
+      dataDirectory: root
+    });
+    const legacyTarget = await access.pickTarget({
+      scope: "workspace"
+    });
+    expect(
+      await access.freshnessFor(legacyTarget)
+    ).toBe("unknown");
+
+    changedSource.fingerprint = analyzedFingerprint;
+    await writeSnapshot(analyzed);
+    const target = await access.pickTarget({
+      scope: "workspace"
+    });
+    expect(target.snapshot).not.toBe(legacyTarget.snapshot);
+    expect(await access.freshnessFor(target)).toBe("fresh");
+
+    await writeFile(sourcePath, changedContent);
+    await utimes(sourcePath, fixedTime, fixedTime);
+    const after = await stat(sourcePath);
+    expect([after.size, after.mtimeMs]).toEqual([
+      before.size,
+      before.mtimeMs
+    ]);
+
     expect(await access.freshnessFor(target)).toBe("stale");
   });
 

@@ -13,6 +13,7 @@ import {
 
 import type {
   RepositoryStatusSnapshotDto,
+  RepositoryTargetDto,
   WorkspaceDetailsDto
 } from "@gitnest/contracts";
 
@@ -167,7 +168,7 @@ describe("Workspace overview interactions", () => {
     expect(recentBody?.hasAttribute("hidden")).toBe(true);
   });
 
-  it("reuses history across cloned state events and refreshes changed query inputs", async () => {
+  it("reuses history by target identity and HEAD while refreshing only changed targets", async () => {
     const getHistory = vi.fn(async () => ({
       ok: true,
       value: { page: { commits: [] } }
@@ -213,13 +214,28 @@ describe("Workspace overview interactions", () => {
       index === 0 ? { ...snapshot, head: "new-head" } : snapshot
     );
     await act(async () => render());
-    expect(getHistory).toHaveBeenCalledTimes(4);
+    expect(getHistory).toHaveBeenCalledTimes(3);
 
     snapshots = snapshots.map((snapshot, index) =>
       index === 0 ? { ...snapshot, contentVersion: 2 } : snapshot
     );
     await act(async () => render());
-    expect(getHistory).toHaveBeenCalledTimes(6);
+    expect(getHistory).toHaveBeenCalledTimes(3);
+
+    workspace = {
+      ...workspace,
+      worktrees: workspace.worktrees.map((worktree, index) =>
+        index === 0
+          ? {
+              ...worktree,
+              path: "C:\\replacement-a",
+              canonicalPath: "c:\\replacement-a"
+            }
+          : worktree
+      )
+    };
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(4);
 
     workspace = {
       ...workspace,
@@ -229,11 +245,520 @@ describe("Workspace overview interactions", () => {
       }))
     };
     await act(async () => render());
-    expect(getHistory).toHaveBeenCalledTimes(7);
+    expect(getHistory).toHaveBeenCalledTimes(4);
+
+    workspace = {
+      ...workspace,
+      groups: createWorktreeWorkspace().groups
+    };
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(5);
 
     workspace = { ...workspace, id: "another-workspace" };
     await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(7);
+  });
+
+  it("reuses in-flight history requests across the app StrictMode effect replay", async () => {
+    const getHistory = vi.fn(async () => ({
+      ok: true,
+      value: { page: { commits: [] } }
+    }));
+    vi.stubGlobal("gitnest", {
+      repository: {
+        getHistory,
+        cancelQuery: vi.fn(async () => ({ ok: true }))
+      }
+    });
+
+    await act(async () =>
+      root.render(
+        <React.StrictMode>
+          <WorkspaceOverviewPage
+            busy={false}
+            error={null}
+            notice={null}
+            onClearFeedback={() => undefined}
+            onCreateWorkspace={async () => false}
+            onSelectTarget={() => undefined}
+            operation={null}
+            snapshots={[
+              createSnapshot("repository-a", "worktree-a"),
+              createSnapshot("repository-b", "worktree-b")
+            ]}
+            workspace={createWorktreeWorkspace()}
+          />
+        </React.StrictMode>
+      )
+    );
+
+    expect(getHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not start queued obsolete history requests after a Workspace switch", async () => {
+    const pending: Array<{
+      target: RepositoryTargetDto;
+      resolve(result: HistoryReadResult): void;
+    }> = [];
+    const getHistory = vi.fn<
+      typeof window.gitnest.repository.getHistory
+    >(
+      ({ target }) =>
+        new Promise<HistoryReadResult>((resolve) => {
+          pending.push({ target, resolve });
+        })
+    );
+    const cancelQuery = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal("gitnest", {
+      repository: { getHistory, cancelQuery }
+    });
+    let workspace = createWorkspaceWithTargetCount(6);
+    const snapshots = listWorkspaceTargets(workspace).map(
+      (target) =>
+        createSnapshot(
+          target.repositoryId,
+          target.worktreeId
+        )
+    );
+    const render = () =>
+      root.render(
+        <WorkspaceOverviewPage
+          busy={false}
+          error={null}
+          notice={null}
+          onClearFeedback={() => undefined}
+          onCreateWorkspace={async () => false}
+          onSelectTarget={() => undefined}
+          operation={null}
+          snapshots={snapshots}
+          workspace={workspace}
+        />
+      );
+
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(4);
+
+    workspace = { ...workspace, id: "replacement-workspace" };
+    await act(async () => render());
     expect(getHistory).toHaveBeenCalledTimes(8);
+    expect(cancelQuery).toHaveBeenCalledTimes(6);
+
+    await act(async () => {
+      for (const request of pending.slice(0, 4)) {
+        request.resolve(emptyHistoryResult(request.target));
+      }
+      await flushMicrotasks();
+    });
+
+    expect(getHistory).toHaveBeenCalledTimes(8);
+  });
+
+  it("does not start queued history requests after the page unmounts", async () => {
+    const pending: Array<{
+      target: RepositoryTargetDto;
+      resolve(result: HistoryReadResult): void;
+    }> = [];
+    const getHistory = vi.fn<
+      typeof window.gitnest.repository.getHistory
+    >(
+      ({ target }) =>
+        new Promise<HistoryReadResult>((resolve) => {
+          pending.push({ target, resolve });
+        })
+    );
+    const cancelQuery = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal("gitnest", {
+      repository: { getHistory, cancelQuery }
+    });
+    const workspace = createWorkspaceWithTargetCount(6);
+
+    await act(async () =>
+      root.render(
+        <WorkspaceOverviewPage
+          busy={false}
+          error={null}
+          notice={null}
+          onClearFeedback={() => undefined}
+          onCreateWorkspace={async () => false}
+          onSelectTarget={() => undefined}
+          operation={null}
+          snapshots={listWorkspaceTargets(workspace).map(
+            (target) =>
+              createSnapshot(
+                target.repositoryId,
+                target.worktreeId
+              )
+          )}
+          workspace={workspace}
+        />
+      )
+    );
+    expect(getHistory).toHaveBeenCalledTimes(4);
+
+    await act(async () => {
+      root.render(null);
+      await flushMicrotasks();
+    });
+    expect(cancelQuery).toHaveBeenCalledTimes(6);
+
+    await act(async () => {
+      for (const request of pending) {
+        request.resolve(emptyHistoryResult(request.target));
+      }
+      await flushMicrotasks();
+    });
+    expect(getHistory).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not publish cached recent commits again for a same-HEAD content refresh", async () => {
+    const getHistory = vi.fn<
+      typeof window.gitnest.repository.getHistory
+    >(async ({ target }) => ({
+      ok: true,
+      value: {
+        target,
+        page: {
+          commits: [
+            {
+              hash: `${target.repositoryId}-head`,
+              shortHash: target.repositoryId.slice(-7),
+              subject: `${target.repositoryId} commit`,
+              authorName: "June",
+              authorEmail: "june@example.com",
+              authoredAt: "2026-10-05T00:00:00.000Z",
+              parentHashes: []
+            }
+          ]
+        }
+      }
+    }));
+    vi.stubGlobal("gitnest", {
+      repository: {
+        getHistory,
+        cancelQuery: vi.fn(async () => ({ ok: true }))
+      }
+    });
+    const workspace = createWorktreeWorkspace();
+    let snapshots = [
+      createSnapshot("repository-a", "worktree-a", {
+        contentVersion: 1
+      }),
+      createSnapshot("repository-b", "worktree-b", {
+        contentVersion: 1
+      })
+    ];
+    const onRender = vi.fn<React.ProfilerOnRenderCallback>();
+    const render = () =>
+      root.render(
+        <React.Profiler id="overview" onRender={onRender}>
+          <WorkspaceOverviewPage
+            busy={false}
+            error={null}
+            notice={null}
+            onClearFeedback={() => undefined}
+            onCreateWorkspace={async () => false}
+            onSelectTarget={() => undefined}
+            operation={null}
+            snapshots={snapshots}
+            workspace={workspace}
+          />
+        </React.Profiler>
+      );
+
+    await act(async () => render());
+    const commitsBeforeRefresh = onRender.mock.calls.length;
+
+    snapshots = snapshots.map((snapshot, index) =>
+      index === 0 ? { ...snapshot, contentVersion: 2 } : snapshot
+    );
+    await act(async () => render());
+
+    expect(getHistory).toHaveBeenCalledTimes(2);
+    expect(
+      onRender.mock.calls.length - commitsBeforeRefresh
+    ).toBe(1);
+  });
+
+  it("retries a failed target on the next content refresh without reloading successful targets", async () => {
+    let repositoryAFailures = 0;
+    const getHistory = vi.fn(
+      async ({
+        target
+      }: {
+        target: { repositoryId: string };
+      }) => {
+        if (
+          target.repositoryId === "repository-a" &&
+          repositoryAFailures++ === 0
+        ) {
+          return {
+            ok: false as const,
+            error: {
+              code: "COMMAND_FAILED",
+              message: "History unavailable",
+              details: {}
+            }
+          };
+        }
+        return {
+          ok: true as const,
+          value: { page: { commits: [] } }
+        };
+      }
+    );
+    vi.stubGlobal("gitnest", {
+      repository: {
+        getHistory,
+        cancelQuery: vi.fn(async () => ({ ok: true }))
+      }
+    });
+    const workspace = createWorktreeWorkspace();
+    let snapshots = [
+      createSnapshot("repository-a", "worktree-a", {
+        contentVersion: 1
+      }),
+      createSnapshot("repository-b", "worktree-b", {
+        contentVersion: 1
+      })
+    ];
+    const render = () =>
+      root.render(
+        <WorkspaceOverviewPage
+          busy={false}
+          error={null}
+          notice={null}
+          onClearFeedback={() => undefined}
+          onCreateWorkspace={async () => false}
+          onSelectTarget={() => undefined}
+          operation={null}
+          snapshots={snapshots}
+          workspace={workspace}
+        />
+      );
+
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(2);
+
+    snapshots = snapshots.map((snapshot, index) =>
+      index === 0 ? { ...snapshot, contentVersion: 2 } : snapshot
+    );
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(3);
+    expect(
+      getHistory.mock.calls.filter(
+        ([request]) =>
+          request.target.repositoryId === "repository-b"
+      )
+    ).toHaveLength(1);
+
+    snapshots = snapshots.map((snapshot, index) =>
+      index === 0 ? { ...snapshot, contentVersion: 3 } : snapshot
+    );
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(3);
+  });
+
+  it("reuses history loaded before the first snapshot when its HEAD matches", async () => {
+    const head = "a".repeat(40);
+    const getHistory = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        page: {
+          commits: [
+            {
+              hash: head,
+              shortHash: "aaaaaaa",
+              subject: "Loaded before snapshot",
+              authorName: "June",
+              authorEmail: "june@example.com",
+              authoredAt: "2026-10-05T00:00:00.000Z",
+              parentHashes: []
+            }
+          ]
+        }
+      }
+    }));
+    vi.stubGlobal("gitnest", {
+      repository: {
+        getHistory,
+        cancelQuery: vi.fn(async () => ({ ok: true }))
+      }
+    });
+    const workspace = {
+      ...createWorktreeWorkspace(),
+      groups: [
+        {
+          ...createWorktreeWorkspace().groups[0]!,
+          targets: [
+            {
+              repositoryId: "repository-a",
+              worktreeId: "worktree-a"
+            }
+          ]
+        }
+      ]
+    };
+    let snapshots: RepositoryStatusSnapshotDto[] = [];
+    const render = () =>
+      root.render(
+        <WorkspaceOverviewPage
+          busy={false}
+          error={null}
+          notice={null}
+          onClearFeedback={() => undefined}
+          onCreateWorkspace={async () => false}
+          onSelectTarget={() => undefined}
+          operation={null}
+          snapshots={snapshots}
+          workspace={workspace}
+        />
+      );
+
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledOnce();
+
+    snapshots = [
+      createSnapshot("repository-a", "worktree-a", {
+        head,
+        contentVersion: 1
+      })
+    ];
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain(
+      "Loaded before snapshot"
+    );
+
+    snapshots = [
+      createSnapshot("repository-a", "worktree-a", {
+        head: "b".repeat(40),
+        contentVersion: 2
+      })
+    ];
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels replaced history requests and ignores their late responses", async () => {
+    type HistoryResult = Awaited<
+      ReturnType<
+        typeof window.gitnest.repository.getHistory
+      >
+    >;
+    const resolvers: Array<
+      (result: HistoryResult) => void
+    > = [];
+    const getHistory = vi.fn<
+      typeof window.gitnest.repository.getHistory
+    >(
+      () =>
+        new Promise<HistoryResult>((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+    const cancelQuery = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal("gitnest", {
+      repository: { getHistory, cancelQuery }
+    });
+    let workspace = {
+      ...createWorktreeWorkspace(),
+      groups: [
+        {
+          ...createWorktreeWorkspace().groups[0]!,
+          targets: [
+            {
+              repositoryId: "repository-a",
+              worktreeId: "worktree-a"
+            }
+          ]
+        }
+      ]
+    };
+    const render = () =>
+      root.render(
+        <WorkspaceOverviewPage
+          busy={false}
+          error={null}
+          notice={null}
+          onClearFeedback={() => undefined}
+          onCreateWorkspace={async () => false}
+          onSelectTarget={() => undefined}
+          operation={null}
+          snapshots={[
+            createSnapshot("repository-a", "worktree-a")
+          ]}
+          workspace={workspace}
+        />
+      );
+
+    await act(async () => render());
+    const oldQueryId =
+      getHistory.mock.calls[0]?.[0].queryId;
+    workspace = { ...workspace, id: "replacement-workspace" };
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(2);
+    expect(cancelQuery).toHaveBeenCalledWith({
+      queryId: oldQueryId
+    });
+
+    await act(async () => {
+      resolvers[1]?.({
+        ok: true,
+        value: {
+          target: {
+            repositoryId: "repository-a",
+            worktreeId: "worktree-a"
+          },
+          page: {
+            commits: [
+              {
+                hash: "new-head",
+                shortHash: "newhead",
+                subject: "Current workspace commit",
+                authorName: "June",
+                authorEmail: "june@example.com",
+                authoredAt: "2026-10-05T00:00:00.000Z",
+                parentHashes: []
+              }
+            ]
+          }
+        }
+      });
+    });
+    expect(container.textContent).toContain(
+      "Current workspace commit"
+    );
+
+    await act(async () => {
+      resolvers[0]?.({
+        ok: true,
+        value: {
+          target: {
+            repositoryId: "repository-a",
+            worktreeId: "worktree-a"
+          },
+          page: {
+            commits: [
+              {
+                hash: "old-head",
+                shortHash: "oldhead",
+                subject: "Stale workspace commit",
+                authorName: "June",
+                authorEmail: "june@example.com",
+                authoredAt: "2026-10-04T00:00:00.000Z",
+                parentHashes: []
+              }
+            ]
+          }
+        }
+      });
+    });
+    expect(container.textContent).toContain(
+      "Current workspace commit"
+    );
+    expect(container.textContent).not.toContain(
+      "Stale workspace commit"
+    );
   });
 
   it("uses shared layout skeletons while Workspace data is initially loading", () => {
@@ -948,6 +1473,31 @@ const workspacePruneCommands: WorkspaceWorktreeCommandController = {
   clearFeedback: vi.fn()
 };
 
+type HistoryReadResult = Awaited<
+  ReturnType<
+    typeof window.gitnest.repository.getHistory
+  >
+>;
+
+function emptyHistoryResult(
+  target: RepositoryTargetDto
+): HistoryReadResult {
+  return {
+    ok: true,
+    value: {
+      target,
+      page: {
+        commits: []
+      }
+    }
+  };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 function createWorkspace(): WorkspaceDetailsDto {
   return {
     schemaVersion: 2,
@@ -978,6 +1528,50 @@ function createWorkspace(): WorkspaceDetailsDto {
     repositories: [],
     worktrees: [],
     updatedAt: "2026-09-11T00:00:00.000Z"
+  };
+}
+
+function createWorkspaceWithTargetCount(
+  count: number
+): WorkspaceDetailsDto {
+  const base = createWorkspace();
+  const targets = Array.from({ length: count }, (_, index) => {
+    const suffix = String(index + 1);
+    return {
+      repositoryId: `repository-${suffix}`,
+      worktreeId: `worktree-${suffix}`
+    };
+  });
+  return {
+    ...base,
+    groups: [
+      {
+        ...base.groups[0]!,
+        targets
+      }
+    ],
+    repositories: targets.map((target, index) => ({
+      id: target.repositoryId,
+      name: `Repository ${index + 1}`,
+      commonDir: `C:\\repository-${index + 1}\\.git`,
+      canonicalCommonDir: `c:\\repository-${index + 1}\\.git`,
+      primaryWorktreeId: target.worktreeId,
+      worktreeIds: [target.worktreeId]
+    })),
+    worktrees: targets.map((target, index) => ({
+      id: target.worktreeId,
+      repositoryId: target.repositoryId,
+      name: `Repository ${index + 1}`,
+      path: `C:\\repository-${index + 1}`,
+      canonicalPath: `c:\\repository-${index + 1}`,
+      head: `${index + 1}`.repeat(40).slice(0, 40),
+      branch: "main",
+      isPrimary: true,
+      isBare: false,
+      isDetached: false,
+      isLocked: false,
+      isPrunable: false
+    }))
   };
 }
 

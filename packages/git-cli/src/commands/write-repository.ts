@@ -45,6 +45,7 @@ export function restoreWorktreeArguments(
     "--literal-pathspecs",
     "restore",
     "--worktree",
+    "--no-recurse-submodules",
     "--",
     ...paths
   ];

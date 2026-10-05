@@ -74,6 +74,7 @@ describe("repository write commands", () => {
       "--literal-pathspecs",
       "restore",
       "--worktree",
+      "--no-recurse-submodules",
       "--",
       "src/入口.ts"
     ]);

@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import React, { act } from "react";
+import React, { act, forwardRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
   afterEach,
@@ -14,6 +14,52 @@ import {
 import type { DiffViewerFile } from "../../shared/model/diffViewModel";
 import { DiffFileNavigator } from "./DiffFileNavigator";
 import { repositoryDiffWorkspaceConfiguration } from "./diffWorkspaceConfiguration";
+
+const changeTreeCalls = vi.hoisted(() => ({
+  build: vi.fn(),
+  compact: vi.fn(),
+  fileButton: vi.fn()
+}));
+
+vi.mock("../../shared/ui/Button", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../shared/ui/Button")>();
+  return {
+    ...actual,
+    Button: forwardRef<HTMLButtonElement, React.ComponentProps<typeof actual.Button>>(
+      (props, ref) => {
+        if (props.className === "diff-workspace-file-select") {
+          changeTreeCalls.fileButton();
+        }
+        return <actual.Button {...props} ref={ref} />;
+      }
+    )
+  };
+});
+
+vi.mock("../../shared/model/changeTree", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../shared/model/changeTree")
+    >();
+  return {
+    ...actual,
+    buildChangeTree: (
+      ...args: Parameters<typeof actual.buildChangeTree>
+    ) => {
+      changeTreeCalls.build();
+      return actual.buildChangeTree(...args);
+    },
+    compactChangeTreeNodes: (
+      ...args: Parameters<
+        typeof actual.compactChangeTreeNodes
+      >
+    ) => {
+      changeTreeCalls.compact();
+      return actual.compactChangeTreeNodes(...args);
+    }
+  };
+});
 
 describe("DiffFileNavigator selection reveal", () => {
   let container: HTMLDivElement;
@@ -33,6 +79,9 @@ describe("DiffFileNavigator selection reveal", () => {
         IS_REACT_ACT_ENVIRONMENT: boolean;
       }
     ).IS_REACT_ACT_ENVIRONMENT = true;
+    changeTreeCalls.build.mockClear();
+    changeTreeCalls.compact.mockClear();
+    changeTreeCalls.fileButton.mockClear();
     scrollIntoView = vi.fn();
     Object.defineProperty(
       HTMLElement.prototype,
@@ -50,6 +99,7 @@ describe("DiffFileNavigator selection reveal", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -220,6 +270,251 @@ describe("DiffFileNavigator selection reveal", () => {
     expect(sectionStats(container, "未暂存")).toBe("+1-0");
     expect(sectionStats(container, "未跟踪")).toBeNull();
   });
+
+  it("indexes files by path and does not rescan stable files when the menu changes", () => {
+    const files = Array.from(
+      { length: 100 },
+      (_, index) =>
+        file(`unstaged\u0001src/file-${index}.ts`, `src/file-${index}.ts`)
+    );
+    const originalFind = Array.prototype.find;
+    const sectionFinds = vi
+      .spyOn(Array.prototype, "find")
+      .mockImplementation(function (
+        this: unknown[],
+        ...args: Parameters<typeof originalFind>
+      ) {
+        return originalFind.apply(this, args);
+      });
+
+    act(() => {
+      root.render(
+        <DiffFileNavigator
+          configuration={
+            repositoryDiffWorkspaceConfiguration.navigation
+          }
+          fileView="tree"
+          files={files}
+          onSelectedFileChange={vi.fn()}
+          selectedFileKey={files[0]!.key}
+          treePreference={{
+            initiallyCollapsed: false,
+            scopeKey: "path-index"
+          }}
+        />
+      );
+    });
+
+    const matchingFileArrayFinds = () =>
+      sectionFinds.mock.instances.filter(
+        (instance) =>
+          Array.isArray(instance) &&
+          instance.length === files.length &&
+          instance.every(
+            (candidate) =>
+              typeof candidate === "object" &&
+              candidate !== null &&
+              "key" in candidate &&
+              "mode" in candidate &&
+              "path" in candidate
+          )
+      );
+    expect(new Set(matchingFileArrayFinds()).size).toBe(1);
+    const initialFindCount = matchingFileArrayFinds().length;
+    const viewMenu = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="打开变更文件视图菜单"]'
+    );
+    act(() => viewMenu?.click());
+    act(() => viewMenu?.click());
+    expect(matchingFileArrayFinds()).toHaveLength(
+      initialFindCount
+    );
+  });
+
+  it("keeps the first section file when duplicate paths share one tree leaf", () => {
+    const first = file(
+      "unstaged\u0001src/duplicate.ts:first",
+      "src/duplicate.ts"
+    );
+    const duplicate = {
+      ...file(
+        "unstaged\u0001src/duplicate.ts:second",
+        "src/duplicate.ts"
+      ),
+      status: "D"
+    };
+
+    act(() => {
+      root.render(
+        <DiffFileNavigator
+          configuration={
+            repositoryDiffWorkspaceConfiguration.navigation
+          }
+          fileView="tree"
+          files={[first, duplicate]}
+          onSelectedFileChange={vi.fn()}
+          selectedFileKey={first.key}
+        />
+      );
+    });
+
+    expect(
+      container.querySelector(
+        `[data-diff-file-key="${first.key}"]`
+      )
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        `[data-diff-file-key="${duplicate.key}"]`
+      )
+    ).toBeNull();
+  });
+
+  it.each(["list", "tree"] as const)(
+    "does not rerender %s file rows or recheck action eligibility when toggling the menu",
+    (fileView) => {
+      const files = Array.from({ length: 100 }, (_, index) =>
+        file(`unstaged\u0001src/file-${index}.ts`, `src/file-${index}.ts`)
+      );
+      const canStageFile = vi.fn(() => true);
+      const onStageFile = vi.fn();
+      act(() => root.render(
+        <DiffFileNavigator
+          configuration={repositoryDiffWorkspaceConfiguration.navigation}
+          fileView={fileView}
+          files={files}
+          selectedFileKey={files[0]!.key}
+          onSelectedFileChange={vi.fn()}
+          onStageFile={onStageFile}
+          canStageFile={canStageFile}
+          treePreference={{ initiallyCollapsed: false, scopeKey: `render-cache-${fileView}` }}
+        />
+      ));
+      expect(changeTreeCalls.fileButton).toHaveBeenCalled();
+      changeTreeCalls.fileButton.mockClear();
+      canStageFile.mockClear();
+      const menu = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="打开变更文件视图菜单"]'
+      );
+      act(() => menu!.click());
+      act(() => menu!.click());
+      expect(changeTreeCalls.fileButton).not.toHaveBeenCalled();
+      expect(canStageFile).not.toHaveBeenCalled();
+    }
+  );
+
+  it("refreshes cached rows and mutation handlers when selection, permissions, busy state or files change", () => {
+    let files = [...FILES];
+    let selectedFileKey = files[0]!.key;
+    let mutationBusy = false;
+    let canStageFile = () => true;
+    let onStageFile = vi.fn();
+    const onSelectedFileChange = vi.fn();
+    const render = () => root.render(
+      <DiffFileNavigator
+        configuration={repositoryDiffWorkspaceConfiguration.navigation}
+        fileView="tree"
+        files={files}
+        selectedFileKey={selectedFileKey}
+        onSelectedFileChange={onSelectedFileChange}
+        onStageFile={onStageFile}
+        canStageFile={canStageFile}
+        mutationBusy={mutationBusy}
+      />
+    );
+    const stageButton = () => container.querySelector<HTMLButtonElement>(
+      `button[aria-label="暂存 ${files[0]!.path}"]`
+    )!;
+    act(render);
+    selectedFileKey = files[1]!.key;
+    act(render);
+    expect(container.querySelector('.diff-workspace-file.selected')?.getAttribute("data-diff-file-key"))
+      .toBe(selectedFileKey);
+    mutationBusy = true;
+    act(render);
+    expect(stageButton().disabled).toBe(true);
+    mutationBusy = false;
+    canStageFile = () => false;
+    act(render);
+    expect(stageButton().disabled).toBe(true);
+    canStageFile = () => true;
+    const oldHandler = onStageFile;
+    onStageFile = vi.fn();
+    files = files.map(item => ({ ...item, additions: 8, deletions: 3 }));
+    act(render);
+    expect(container.querySelector('[aria-label="新增 8 行，删除 3 行"]')).not.toBeNull();
+    act(() => stageButton().click());
+    expect(oldHandler).not.toHaveBeenCalled();
+    expect(onStageFile).toHaveBeenCalledWith(files[0]);
+    const directory = container.querySelector<HTMLButtonElement>('.diff-workspace-tree-directory')!;
+    act(() => directory.click());
+    expect(container.querySelectorAll('[data-diff-file-key]')).toHaveLength(0);
+    act(() => directory.click());
+    expect(container.querySelectorAll('[data-diff-file-key]')).toHaveLength(2);
+  });
+
+  it("reuses derived trees for menu state and rebuilds for files, filters, and tree view changes", () => {
+    const onSelectedFileChange = vi.fn();
+    let files = FILES;
+    let fileView: "list" | "tree" = "tree";
+    const render = () =>
+      root.render(
+        <DiffFileNavigator
+          configuration={
+            repositoryDiffWorkspaceConfiguration.navigation
+          }
+          fileView={fileView}
+          files={files}
+          onSelectedFileChange={onSelectedFileChange}
+          selectedFileKey={files[0]!.key}
+          treePreference={{
+            initiallyCollapsed: false,
+            scopeKey: "tree-cache"
+          }}
+        />
+      );
+
+    act(render);
+    expect(changeTreeCalls.build).toHaveBeenCalledTimes(1);
+    expect(changeTreeCalls.compact).toHaveBeenCalledTimes(1);
+
+    const viewMenu = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="打开变更文件视图菜单"]'
+    );
+    act(() => viewMenu?.click());
+    act(() => viewMenu?.click());
+    act(render);
+    expect(changeTreeCalls.build).toHaveBeenCalledTimes(1);
+    expect(changeTreeCalls.compact).toHaveBeenCalledTimes(1);
+
+    files = [
+      ...FILES,
+      file(
+        "unstaged\u0001src/new-file.ts",
+        "src/new-file.ts"
+      )
+    ];
+    act(render);
+    expect(changeTreeCalls.build).toHaveBeenCalledTimes(2);
+    expect(changeTreeCalls.compact).toHaveBeenCalledTimes(2);
+
+    const filter = container.querySelector<HTMLInputElement>(
+      'input[aria-label="筛选变更文件"]'
+    );
+    act(() => setInputValue(filter, "nested"));
+    expect(changeTreeCalls.build).toHaveBeenCalledTimes(3);
+    expect(changeTreeCalls.compact).toHaveBeenCalledTimes(3);
+
+    fileView = "list";
+    act(render);
+    expect(changeTreeCalls.build).toHaveBeenCalledTimes(3);
+    expect(changeTreeCalls.compact).toHaveBeenCalledTimes(3);
+
+    fileView = "tree";
+    act(render);
+    expect(changeTreeCalls.build).toHaveBeenCalledTimes(4);
+    expect(changeTreeCalls.compact).toHaveBeenCalledTimes(4);
+  });
 });
 
 const FILES: DiffViewerFile[] = [
@@ -370,4 +665,23 @@ function setInputValue(
       bubbles: true
     })
   );
+}
+
+function file(
+  key: string,
+  path: string
+): DiffViewerFile {
+  return {
+    key,
+    path,
+    mode: "unstaged",
+    status: "M",
+    kind: "ordinary",
+    change: {
+      path,
+      indexStatus: ".",
+      worktreeStatus: "M",
+      kind: "ordinary"
+    }
+  };
 }
