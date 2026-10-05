@@ -20,7 +20,8 @@ import {
 import type {
   CodeAnalysisSnapshotDto,
   CodeGraphEdgeDto,
-  CodeGraphNodeDto
+  CodeGraphNodeDto,
+  CodeRequestChainDto
 } from "@gitnest/contracts";
 
 import {
@@ -29,6 +30,167 @@ import {
 } from "./CodeRelationGraph";
 
 describe("buildRelationGraphLayout", () => {
+  it.each(["calls", "contains"] as const)(
+    "limits a 150000-node %s neighborhood without overflowing the argument stack",
+    (kind) => {
+      const nodes = Array.from({ length: 150_000 }, (_, index) =>
+        node(`node-${index}`, `node${index}`)
+      );
+      if (kind === "contains") {
+        nodes[0]!.kind = "class";
+      }
+      const edges = nodes.slice(1).map((member) =>
+        edge(member.id, nodes[0]!.id, member.id, kind)
+      );
+
+      const layout = buildRelationGraphLayout(
+        createSnapshot(nodes, edges),
+        null,
+        nodes[0]!.id
+      );
+
+      expect(layout.nodes).toHaveLength(160);
+      expect(layout.edges).toHaveLength(159);
+      expect(layout.positionById.has(nodes[0]!.id)).toBe(true);
+      expect(layout.truncated).toBe(true);
+      expect(Number.isFinite(layout.width)).toBe(true);
+      expect(Number.isFinite(layout.height)).toBe(true);
+    }
+  );
+
+  it("uses refreshed nodes and edges after warming a snapshot", () => {
+    const snapshot = createSnapshot(
+      [node("owner", "owner", "class"), node("a", "a")],
+      [edge("owner-a", "owner", "a", "contains")]
+    );
+    expect(
+      buildRelationGraphLayout(snapshot, null, "owner").edges
+    ).toHaveLength(1);
+
+    const refreshed = createSnapshot(
+      [node("owner", "owner", "class"), node("b", "b")],
+      [edge("owner-b", "owner", "b", "contains")]
+    );
+    expect(
+      buildRelationGraphLayout(refreshed, null, "owner")
+        .edges.map((value) => value.id)
+    ).toEqual(["owner-b"]);
+
+    snapshot.nodes = [
+      node("owner", "owner", "file"),
+      node("a", "a")
+    ];
+    expect(
+      buildRelationGraphLayout(snapshot, null, "owner").edges
+    ).toEqual([]);
+    snapshot.edges = [
+      edge("owner-a-call", "owner", "a", "calls")
+    ];
+    expect(
+      buildRelationGraphLayout(snapshot, null, "owner")
+        .edges.map((value) => value.id)
+    ).toEqual(["owner-a-call"]);
+  });
+
+  it("keeps chain filters isolated from cached full-graph neighborhoods", () => {
+    const snapshot = createSnapshot(
+      [node("a", "a"), node("b", "b"), node("c", "c")],
+      [
+        edge("a-b-call", "a", "b", "calls"),
+        edge("a-b-ref", "a", "b", "references"),
+        edge("b-c", "b", "c", "calls")
+      ]
+    );
+    const full = buildRelationGraphLayout(snapshot, null, "a");
+    const chain: CodeRequestChainDto = {
+      id: "chain",
+      profileId: "http",
+      transport: "http",
+      operationKey: "GET /chain",
+      method: "GET",
+      route: "/chain",
+      title: "chain",
+      clientNodeId: "a",
+      endpointNodeId: "b",
+      nodeIds: ["a", "b"],
+      edgeIds: ["a-b-ref"],
+      changed: false,
+      ambiguous: false,
+      confidence: "exact"
+    };
+    expect(
+      buildRelationGraphLayout(snapshot, chain, "a")
+        .edges.map((value) => value.id)
+    ).toEqual(["a-b-ref"]);
+    expect(
+      buildRelationGraphLayout(
+        snapshot,
+        { ...chain, edgeIds: [] },
+        "b"
+      ).edges.map((value) => value.id)
+    ).toEqual(["a-b-call", "a-b-ref"]);
+    expect(buildRelationGraphLayout(snapshot, null, "a"))
+      .toEqual(full);
+  });
+
+  it("preserves node priority and source edge order at both display limits", () => {
+    const members = Array.from({ length: 200 }, (_, index) =>
+      node(
+        `member-${String(index).padStart(3, "0")}`,
+        `member${index}`
+      )
+    );
+    const edges = [...members].reverse().flatMap((member) =>
+      [0, 1, 2].map((index) =>
+        edge(
+          `edge-${member.id}-${index}`,
+          "root",
+          member.id,
+          "calls"
+        )
+      )
+    );
+    const snapshot = createSnapshot(
+      [node("root", "root"), ...members],
+      edges
+    );
+    buildRelationGraphLayout(snapshot, null, "member-199");
+    const layout = buildRelationGraphLayout(
+      snapshot,
+      null,
+      "root"
+    );
+    const visible = new Set([
+      "root",
+      ...members.slice(0, 159).map((member) => member.id)
+    ]);
+    expect(
+      new Set(layout.nodes.map(({ node: value }) => value.id))
+    ).toEqual(visible);
+    expect(layout.edges).toEqual(
+      edges.filter((value) => visible.has(value.to)).slice(0, 320)
+    );
+    expect(layout.truncated).toBe(true);
+  });
+
+  it("keeps the four-level depth boundary across focus changes", () => {
+    const nodes = Array.from({ length: 8 }, (_, index) =>
+      node(`n${index}`, `n${index}`)
+    );
+    const snapshot = createSnapshot(
+      nodes,
+      nodes.slice(1).map((value, index) =>
+        edge(`edge${index}`, `n${index}`, value.id, "calls")
+      )
+    );
+    buildRelationGraphLayout(snapshot, null, "n7");
+    const layout = buildRelationGraphLayout(snapshot, null, "n0");
+    expect([...layout.positionById.keys()]).toEqual(
+      ["n0", "n1", "n2", "n3", "n4"]
+    );
+    expect(layout.positionById.get("n4")?.level).toBe(4);
+  });
+
   it("places callers left, callees right, and ignores file containment edges", () => {
     const snapshot = createSnapshot(
       [

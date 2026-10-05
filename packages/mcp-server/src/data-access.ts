@@ -94,6 +94,7 @@ export interface AnalysisTarget {
   workspaceName: string;
   selected: boolean;
   scope: CodeAnalysisScope;
+  /** Shared read-only snapshot; nested objects are frozen before publication. */
   snapshot: CodeAnalysisSnapshot;
 }
 
@@ -488,9 +489,9 @@ export class GitNestDataAccess {
   }
   /**
    * Loads a snapshot, reusing the parsed result while the file on
-   * disk is unchanged. The signature is `mtime + size`, so a new
-   * analysis written by GitNest (including the CA-5 auto-refresh)
-   * invalidates the entry instead of serving a stale parse.
+   * disk is unchanged. The signature includes file identity, size,
+   * and change timestamps so an atomic replacement or an in-place
+   * rewrite with a preserved modified time invalidates the entry.
    */
   async #loadSnapshot(
     workspaceId: string,
@@ -532,7 +533,11 @@ export class GitNestDataAccess {
         break;
       }
     }
-    const snapshot = loaded ? structuredClone(loaded.snapshot) : null;
+    // The read-only loader creates this JSON tree for this call alone.
+    // Retain it directly and freeze it once: copying the whole graph adds
+    // substantial cold-query cost, while exposing a mutable cached object
+    // lets one caller silently corrupt all subsequent queries.
+    const snapshot = loaded ? freezeSnapshot(loaded.snapshot) : null;
     this.#snapshots.set(key, { signature, snapshot });
     if (this.#snapshots.size > 2) {
       const oldest = this.#snapshots.keys().next().value;
@@ -544,8 +549,10 @@ export class GitNestDataAccess {
   }
 
   /**
-   * `mtime + size` of the scoped snapshot file in both directories,
-   * so a rewrite in either place invalidates the cached parse.
+   * File identity, size, and timestamps of both scoped and legacy
+   * snapshot files in both directories, so any source accepted by
+   * the loader invalidates the cached parse when it is created,
+   * atomically replaced, or rewritten with a preserved mtime.
    */
   async #snapshotSignature(
     workspaceId: string,
@@ -556,17 +563,31 @@ export class GitNestDataAccess {
       this.#paths.snapshotDirectory,
       this.#paths.fallbackSnapshotDirectory
     ]) {
-      const filePath = join(
+      const workspaceDirectory =
         codeAnalysisWorkspaceCacheDirectory(
           directory,
           workspaceId
-        ),
-        `snapshot-${scope}.json`
-      );
-      const info = await stat(filePath).catch(() => null);
-      parts.push(
-        info ? `${info.mtimeMs}:${info.size}` : "missing"
-      );
+        );
+      for (const fileName of [
+        `snapshot-${scope}.json`,
+        "snapshot.json"
+      ]) {
+        const info = await stat(
+          join(workspaceDirectory, fileName)
+        ).catch(() => null);
+        parts.push(
+          info
+            ? [
+                info.dev,
+                info.ino,
+                info.size,
+                info.mtimeMs,
+                info.ctimeMs,
+                info.birthtimeMs
+              ].join(":")
+            : "missing"
+        );
+      }
     }
     return parts.join("|");
   }
@@ -606,9 +627,10 @@ export class GitNestDataAccess {
       nodeCount: target.snapshot.nodes.length,
       edgeCount: target.snapshot.edges.length,
       requestChainCount: target.snapshot.requestChains.length,
-      changedNodeCount: target.snapshot.nodes.filter(
-        (node) => node.changed
-      ).length,
+      changedNodeCount: target.snapshot.nodes.reduce(
+        (count, node) => count + Number(node.changed),
+        0
+      ),
       completeness:
         target.snapshot.indexStatus?.resultCompleteness ??
         "complete",
@@ -724,6 +746,24 @@ export class GitNestDataAccess {
   }
 }
 
+function freezeSnapshot(
+  snapshot: CodeAnalysisSnapshot
+): CodeAnalysisSnapshot {
+  // JSON.parse produces an acyclic tree. Use an explicit stack so nested
+  // metadata cannot overflow the JavaScript call stack.
+  const pending: object[] = [snapshot];
+  while (pending.length > 0) {
+    const value = pending.pop()!;
+    for (const child of Object.values(value)) {
+      if (child !== null && typeof child === "object") {
+        pending.push(child);
+      }
+    }
+    Object.freeze(value);
+  }
+  return snapshot;
+}
+
 export function analysisRoots(workspace: Workspace): AnalysisRoot[] {
   const repositories = new Map(
     workspace.repositories.map((repository) => [
@@ -804,6 +844,8 @@ async function readWorktreeStatus(
       const { stdout: diffStats } = await execFileAsync(
         "git",
         [
+          "-c",
+          "core.fsmonitor=false",
           "-c",
           "diff.autoRefreshIndex=false",
           "--literal-pathspecs",

@@ -161,7 +161,7 @@ describe("RepositoryMutationService", () => {
       git
     );
 
-    await service.discard(TARGET, ["changed.txt", "new.txt"]);
+    await service.discard(TARGET, ["changed.txt", "new.txt"], ["new.txt"]);
 
     expect(git.restoreCalls).toEqual([
       { path: WORKTREE_PATH, paths: ["changed.txt"] }
@@ -170,6 +170,33 @@ describe("RepositoryMutationService", () => {
       { path: WORKTREE_PATH, paths: ["new.txt"] }
     ]);
   });
+
+  it.each(["tracked-to-untracked", "untracked-to-tracked", "missing-confirmation"] as const)(
+    "rejects a discard whose deletion intent no longer matches: %s",
+    async (scenario) => {
+      const currentlyUntracked = scenario !== "untracked-to-tracked";
+      const git = new FakeGitMutationClient({
+        changes: [
+          { path: "safe.txt", indexStatus: ".", worktreeStatus: "M", kind: "ordinary" },
+          {
+            path: "changed.txt",
+            indexStatus: currentlyUntracked ? "?" : ".",
+            worktreeStatus: currentlyUntracked ? "?" : "M",
+            kind: currentlyUntracked ? "untracked" : "ordinary"
+          }
+        ]
+      });
+      const service = new RepositoryMutationService(new ImmediateMutationRuntime(), git, git);
+      await expect(service.discard(
+        TARGET,
+        ["safe.txt", "changed.txt"],
+        scenario === "missing-confirmation" ? undefined :
+          currentlyUntracked ? [] : ["changed.txt"]
+      )).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+      expect(git.restoreCalls).toEqual([]);
+      expect(git.removeUntrackedCalls).toEqual([]);
+    }
+  );
 
   it("creates a commit only from a conflict-free staged index", async () => {
     const git = new FakeGitMutationClient({

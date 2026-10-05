@@ -310,25 +310,24 @@ export class WorktreeCommandService {
       );
     }
 
+    // Claim the one-shot authorization before asynchronous revalidation.
+    this.#preflights.delete(stored.preflightId);
     let current: BuiltPreflight;
     try {
       current = await this.#buildPreflight(normalized);
     } catch (error) {
-      this.#preflights.delete(stored.preflightId);
       throw changedPreflightError(
         error,
         "Worktree state or path validity changed after preflight."
       );
     }
     if (current.comparisonKey !== stored.comparisonKey) {
-      this.#preflights.delete(stored.preflightId);
       throw new GitError(
         "PREFLIGHT_CHANGED",
         "Worktree state, path authorization, or command impacts changed after preflight."
       );
     }
 
-    this.#preflights.delete(stored.preflightId);
     const operationTargets = operationHistoryTargets(
       normalized,
       current.plan

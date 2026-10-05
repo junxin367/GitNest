@@ -53,6 +53,202 @@ describe("useRepositoryStashes", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["switch", "roundtrip", "unmount"] as const)(
+    "rejects stash writes and queries retained before %s",
+    async (navigation) => {
+      const stash = createStashes(TARGET_A, ["stash@{0}"]).stashes[0]!;
+      const mutateStash = vi.fn(async () => ({
+        ok: true as const,
+        value: {
+          target: TARGET_A, operationId: "obsolete-stash", action: "pop" as const,
+          stashRef: stash.ref, stashHash: stash.hash
+        }
+      }));
+      const getStashes = vi.fn(async () => ({
+        ok: true as const, value: createStashes(TARGET_A, [])
+      }));
+      const getStashFiles = vi.fn(async () => ({
+        ok: true as const, value: createFiles(TARGET_A, stash.ref)
+      }));
+      const afterMutation = vi.fn(async () => undefined);
+      installBridge({ mutateStash, getStashes, getStashFiles });
+      const renderTarget = (target: RepositoryTargetDto, scopeKey: string) => act(() => {
+        root.render(<Harness target={target} scopeKey={scopeKey} afterMutation={afterMutation}
+          onController={(value) => { controller = value; }} />);
+      });
+      renderTarget(TARGET_A, `old-stash-entry-${navigation}:a`);
+      const previous = controller!;
+      if (navigation === "unmount") {
+        act(() => { root.render(null); });
+      } else {
+        renderTarget(TARGET_B, `old-stash-entry-${navigation}:b`);
+        if (navigation === "roundtrip") {
+          renderTarget(TARGET_A, `old-stash-entry-${navigation}:a`);
+        }
+      }
+      let mutated: boolean | undefined;
+      await act(async () => {
+        mutated = await previous.mutateStash("pop", stash);
+        await previous.reload();
+        await previous.selectStash(stash.ref);
+        await previous.load();
+      });
+      expect(mutateStash).not.toHaveBeenCalled();
+      expect(getStashes).not.toHaveBeenCalled();
+      expect(getStashFiles).not.toHaveBeenCalled();
+      expect(afterMutation).not.toHaveBeenCalled();
+      expect(mutated).toBe(false);
+    }
+  );
+
+  for (const phase of ["stash-list", "workspace-refresh"] as const) {
+    for (const scopeChange of ["target", "unmount"] as const) {
+      it(`does not report stale stash success after ${scopeChange} during ${phase}`, async () => {
+        let finishRefresh!: () => void;
+        const refresh = new Promise<void>((resolve) => { finishRefresh = resolve; });
+        const stash = createStashes(TARGET_A, ["stash@{0}"]).stashes[0]!;
+        const afterMutation = vi.fn(() =>
+          phase === "workspace-refresh" ? refresh : Promise.resolve()
+        );
+        const mutateStash = vi.fn(async () => ({
+          ok: true as const,
+          value: {
+            target: TARGET_A,
+            operationId: "stash-refresh-switch",
+            action: "pop" as const,
+            stashRef: stash.ref,
+            stashHash: stash.hash
+          }
+        }));
+        installBridge({
+          mutateStash,
+          getStashes: vi.fn(async () => {
+            if (phase === "stash-list") {
+              await refresh;
+            }
+            return { ok: true as const, value: createStashes(TARGET_A, []) };
+          })
+        });
+        await act(async () => {
+          root.render(
+            <Harness
+              afterMutation={afterMutation}
+              scopeKey={`stash-refresh-${phase}-${scopeChange}:a`}
+              target={TARGET_A}
+              onController={(value) => { controller = value; }}
+            />
+          );
+        });
+        let mutation: Promise<boolean> | undefined;
+        await act(async () => {
+          mutation = controller?.mutateStash("pop", stash);
+          await flushAsyncWork();
+          expect(await controller?.mutateStash("pop", stash)).toBe(false);
+        });
+        expect(mutateStash).toHaveBeenCalledTimes(1);
+        expect(controller?.active).toBe("pop");
+        const nextAfterMutation = vi.fn(async () => undefined);
+        await act(async () => {
+          root.render(scopeChange === "unmount" ? null : (
+            <Harness
+              afterMutation={nextAfterMutation}
+              scopeKey={`stash-refresh-${phase}-${scopeChange}:b`}
+              target={TARGET_B}
+              onController={(value) => { controller = value; }}
+            />
+          ));
+        });
+        let succeeded: boolean | undefined;
+        await act(async () => {
+          finishRefresh();
+          succeeded = await mutation;
+        });
+        expect(succeeded).toBe(false);
+        expect(nextAfterMutation).not.toHaveBeenCalled();
+        if (scopeChange === "target") {
+          expect(controller?.active).toBeNull();
+          expect(controller?.notice).toBeNull();
+          expect(controller?.mutationError).toBeNull();
+        }
+      });
+    }
+  }
+
+  it("retains matching stash files while refreshing and hides them on the first new-scope render", async () => {
+    let resolveFiles!: (result: { ok: true; value: RepositoryStashFilesDto }) => void;
+    installBridge({
+      getStashes: vi.fn(async () => ({ ok: true as const, value: createStashes(TARGET_A, ["stash@{0}"]) })),
+      getStashFiles: vi.fn().mockResolvedValueOnce({ ok: true, value: createFiles(TARGET_A, "stash@{0}") })
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveFiles = resolve; }))
+    });
+    await act(async () => {
+      root.render(<Harness target={TARGET_A} scopeKey="skeleton-retain-a" onController={(value) => { controller = value; }} />);
+    });
+    await act(async () => { await controller?.load(); });
+    const files = controller?.stashFiles;
+    let refreshing: Promise<void> | undefined;
+    await act(async () => {
+      refreshing = controller?.reload();
+      await flushAsyncWork();
+    });
+    expect(controller?.loading.files).toBe(true);
+    expect(controller?.stashFiles).toEqual(files);
+    await act(async () => {
+      resolveFiles({ ok: true, value: createFiles(TARGET_A, "stash@{0}") });
+      await refreshing;
+    });
+    const renders: RepositoryStashesController[] = [];
+    act(() => {
+      root.render(<Harness target={TARGET_B} scopeKey="skeleton-retain-b" onController={(value) => { renders.push(value); }} />);
+    });
+    expect(renders[0]?.stashes).toBeNull();
+    expect(renders[0]?.stashFiles).toBeNull();
+  });
+
+  it("ignores an old selection error after a newer stash has loaded", async () => {
+    let resolvePrevious!: (result: Awaited<ReturnType<GitNestBridge["repository"]["getStashFiles"]>>) => void;
+    installBridge({
+      getStashes: vi.fn(async () => ({ ok: true as const, value: createStashes(TARGET_A, ["stash@{0}", "stash@{1}"]) })),
+      getStashFiles: vi.fn()
+        .mockResolvedValueOnce({ ok: true, value: createFiles(TARGET_A, "stash@{0}") })
+        .mockImplementationOnce(() => new Promise((resolve) => { resolvePrevious = resolve; }))
+        .mockResolvedValueOnce({ ok: true, value: createFiles(TARGET_A, "stash@{0}") })
+    });
+    await act(async () => {
+      root.render(<Harness target={TARGET_A} scopeKey="skeleton-selection-race" onController={(value) => { controller = value; }} />);
+    });
+    await act(async () => { await controller?.load(); });
+    let previousSelection: Promise<void> | undefined;
+    act(() => { previousSelection = controller?.selectStash("stash@{1}"); });
+    expect(controller?.stashFiles).toBeNull();
+    expect(controller?.loading.files).toBe(true);
+    await act(async () => { await controller?.selectStash("stash@{0}"); });
+    await act(async () => {
+      resolvePrevious({ ok: false, error: { code: "COMMAND_FAILED", message: "旧储藏读取失败", details: {} } });
+      await previousSelection;
+    });
+    expect(controller?.stashFiles?.stash.ref).toBe("stash@{0}");
+    expect(controller?.selectedStashRef).toBe("stash@{0}");
+    expect(controller?.loading.files).toBe(false);
+    expect(controller?.error).toBeNull();
+  });
+
+  it("retains loaded empty stash data after a refresh fails", async () => {
+    installBridge({
+      getStashes: vi.fn()
+        .mockResolvedValueOnce({ ok: true, value: createStashes(TARGET_A, []) })
+        .mockResolvedValueOnce({ ok: false, error: { code: "COMMAND_FAILED", message: "刷新失败", details: {} } })
+    });
+    await act(async () => {
+      root.render(<Harness target={TARGET_A} scopeKey="skeleton-empty-refresh-error" onController={(value) => { controller = value; }} />);
+    });
+    await act(async () => { await controller?.load(); });
+    await act(async () => { await controller?.reload(); });
+    expect(controller?.stashes?.stashes).toEqual([]);
+    expect(controller?.loading.stashes).toBe(false);
+    expect(controller?.error?.message).toBe("刷新失败");
+  });
+
   it("loads on demand and reads files for the selected stash", async () => {
     const getStashes = vi.fn(async () => ({
       ok: true as const,
@@ -621,6 +817,7 @@ describe("useRepositoryStashes", () => {
     });
 
     const stash = controller?.stashes?.stashes[0];
+    const loadedFiles = controller?.stashFiles;
     let succeeded = true;
     await act(async () => {
       succeeded =
@@ -641,6 +838,9 @@ describe("useRepositoryStashes", () => {
       "储藏记录仍保留"
     );
     expect(controller?.notice).toBeNull();
+    expect(controller?.stashFiles).toEqual(loadedFiles);
+    expect(controller?.loading).toEqual({ stashes: false, files: false });
+    expect(controller?.active).toBeNull();
 
     await act(async () => {
       await controller?.mutateStash("apply", stash!);

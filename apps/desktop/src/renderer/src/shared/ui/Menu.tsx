@@ -54,6 +54,7 @@ export interface MenuPlacement {
 export interface MenuPopoverProps extends MenuProps {
   anchor: HTMLElement | null;
   align?: MenuAlign;
+  autoFocus?: boolean;
   gap?: number;
   side?: MenuSide;
   viewportPadding?: number;
@@ -68,7 +69,18 @@ export const Menu = forwardRef<HTMLDivElement, MenuProps>(
       event: KeyboardEvent<HTMLDivElement>
     ) => {
       onKeyDown?.(event);
-      if (event.defaultPrevented) {
+      if (
+        event.defaultPrevented ||
+        event.nativeEvent.isComposing ||
+        event.keyCode === 229
+      ) {
+        return;
+      }
+      if (
+        (event.key === "Home" || event.key === "End") &&
+        event.target instanceof HTMLElement &&
+        (event.target.matches("input, textarea") || event.target.isContentEditable)
+      ) {
         return;
       }
 
@@ -121,6 +133,7 @@ export const MenuPopover = forwardRef<
   {
     align = "start",
     anchor,
+    autoFocus = false,
     gap = 4,
     side = "right",
     style,
@@ -130,6 +143,7 @@ export const MenuPopover = forwardRef<
   forwardedRef
 ) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const initiallyFocused = useRef(false);
   const [placement, setPlacement] =
     useState<MenuPlacement | null>(null);
   const setMenuRef = useCallback(
@@ -198,6 +212,27 @@ export const MenuPopover = forwardRef<
       );
     };
   }, [align, anchor, gap, side, viewportPadding]);
+
+  useLayoutEffect(() => {
+    if (!autoFocus || !placement || initiallyFocused.current) {
+      return;
+    }
+    // Chromium cannot focus the initially hidden positioning surface.
+    // Wait for the placement commit, and do not steal focus on repositioning.
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLButtonElement>(
+        '[role^="menuitem"]:not(:disabled)'
+      ) ?? []
+    );
+    const selected = items.find(
+      (item) => item.getAttribute("aria-checked") === "true"
+    );
+    const initialFocus = menuRef.current?.querySelector<HTMLElement>(
+      "[data-menu-initial-focus]:not(:disabled)"
+    );
+    (initialFocus ?? selected ?? items[0])?.focus();
+    initiallyFocused.current = true;
+  }, [autoFocus, placement]);
 
   return (
     <LayerPortal>

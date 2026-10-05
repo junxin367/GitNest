@@ -11,14 +11,23 @@ export function parseRepositoryDiff(
 ): RepositoryDiff {
   let additions = 0;
   let deletions = 0;
+  let inHunk = false;
 
   for (const line of output.split(/\r?\n/)) {
-    if (line.startsWith("+") && !line.startsWith("+++")) {
+    if (line.startsWith("diff --git ")) {
+      inHunk = false;
+      continue;
+    }
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) {
+      continue;
+    }
+    if (line.startsWith("+")) {
       additions += 1;
-    } else if (
-      line.startsWith("-") &&
-      !line.startsWith("---")
-    ) {
+    } else if (line.startsWith("-")) {
       deletions += 1;
     }
   }

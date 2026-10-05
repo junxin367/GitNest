@@ -48,6 +48,65 @@ describe("AnalysisSnapshotCache", () => {
     );
   });
 
+  it("rejects indexes without the current dirty-path baseline while reusing current indexes", async () => {
+    const directory = await createTemporaryDirectory();
+    const settings = createSettings();
+    const roots = createSnapshot("analysis").roots;
+    const cache = new AnalysisCache(directory, "workspace");
+    const current = await cache.load(settings, roots);
+    current.fullIndexComplete = true;
+    current.semanticIndexComplete = true;
+    await cache.save(current);
+    await expect(cache.load(settings, roots)).resolves.toEqual(current);
+
+    await cache.save({
+      ...current,
+      settingsKey: createHash("sha256")
+        .update(JSON.stringify({
+          parserVersion: 14,
+          profiles: BUILTIN_ANALYSIS_PROFILE_VERSIONS,
+          maxTotalSourceBytes: settings.maxTotalSourceBytes,
+          maxFiles: settings.maxFiles,
+          maxFileSizeBytes: settings.maxFileSizeBytes,
+          ignoreDirectories: [...settings.ignoreDirectories].sort(),
+          roots: roots.map((root) => ({
+            repositoryId: root.repositoryId,
+            worktreeId: root.worktreeId,
+            path: canonicalSnapshotPath(root.path)
+          }))
+        }))
+        .digest("hex")
+    });
+    await expect(cache.load(settings, roots)).resolves.toMatchObject({
+      fullIndexComplete: false,
+      semanticIndexComplete: false,
+      files: {}
+    });
+  });
+
+  it.each([false, true])(
+    "rejects old graph snapshots with revision-coupled key=%s",
+    async (includeRevision) => {
+      const directory = await createTemporaryDirectory();
+      const settings = createSettings();
+      const snapshot = createSnapshot("old-graph");
+      const cache = new AnalysisSnapshotCache(directory);
+      await cache.save(snapshot, settings);
+      const path = join(
+        codeAnalysisWorkspaceCacheDirectory(directory, snapshot.workspaceId),
+        "snapshot-workspace.json"
+      );
+      const document = JSON.parse(await readFile(path, "utf8"));
+      document.configurationKey = legacySnapshotConfigurationKey(
+        settings, snapshot.roots, 14, 15, includeRevision
+      );
+      await writeFile(path, JSON.stringify(document), "utf8");
+      await expect(
+        cache.load(snapshot.workspaceId, settings, snapshot.roots, "workspace")
+      ).resolves.toBeNull();
+    }
+  );
+
   it("invalidates the old entry-keyed index schema", async () => {
     const directory = await createTemporaryDirectory();
     const settings = createSettings();
@@ -152,6 +211,84 @@ describe("AnalysisSnapshotCache", () => {
         "snapshot-workspace.json"
       ])
     );
+  });
+
+  it("recovers a newer scoped snapshot when the latest pointer was not updated", async () => {
+    const directory = await createTemporaryDirectory();
+    const store = new AnalysisSnapshotCache(directory);
+    const settings = createSettings();
+    const workspaceSnapshot = createSnapshot(
+      "workspace-before-pointer-failure",
+      "workspace",
+      "2026-09-17T08:42:00.000Z"
+    );
+    const changedSnapshot = createSnapshot(
+      "changed-after-pointer-failure",
+      "changed",
+      "2026-09-17T08:43:00.000Z"
+    );
+    await store.save(workspaceSnapshot, settings);
+    await store.save(changedSnapshot, settings);
+
+    const workspaceDirectory =
+      codeAnalysisWorkspaceCacheDirectory(
+        directory,
+        workspaceSnapshot.workspaceId
+      );
+    const workspacePath = join(
+      workspaceDirectory,
+      "snapshot-workspace.json"
+    );
+    const changedPath = join(
+      workspaceDirectory,
+      "snapshot-changed.json"
+    );
+    const workspaceDocument = JSON.parse(
+      await readFile(workspacePath, "utf8")
+    ) as { savedAt: string };
+    const changedDocument = JSON.parse(
+      await readFile(changedPath, "utf8")
+    ) as { savedAt: string };
+    workspaceDocument.savedAt =
+      "2026-09-17T08:42:00.000Z";
+    changedDocument.savedAt =
+      "2026-09-17T08:43:00.000Z";
+    await writeFile(
+      workspacePath,
+      JSON.stringify(workspaceDocument),
+      "utf8"
+    );
+    await writeFile(
+      changedPath,
+      JSON.stringify(changedDocument),
+      "utf8"
+    );
+    await writeFile(
+      join(workspaceDirectory, "snapshot-latest.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        scope: "workspace",
+        savedAt: workspaceDocument.savedAt
+      }),
+      "utf8"
+    );
+
+    await expect(
+      store.load(
+        workspaceSnapshot.workspaceId,
+        settings,
+        workspaceSnapshot.roots
+      )
+    ).resolves.toEqual(changedSnapshot);
+    await expect(
+      readFile(
+        join(workspaceDirectory, "snapshot-latest.json"),
+        "utf8"
+      ).then((raw) => JSON.parse(raw))
+    ).resolves.toMatchObject({
+      scope: "changed",
+      savedAt: changedDocument.savedAt
+    });
   });
 
   it("restores a legacy snapshot and migrates it into the primary directory", async () => {
@@ -527,14 +664,17 @@ function createSettings(): CodeAnalysisSettings {
 
 function legacySnapshotConfigurationKey(
   settings: CodeAnalysisSettings,
-  roots: AnalysisRoot[]
+  roots: AnalysisRoot[],
+  parserVersion = 15,
+  graphVersion = 16,
+  includeRevision = true
 ): string {
   return createHash("sha256")
     .update(
       JSON.stringify({
         snapshotVersion: 4,
-        parserVersion: 13,
-        graphVersion: 14,
+        parserVersion,
+        graphVersion,
         profiles: BUILTIN_ANALYSIS_PROFILE_VERSIONS,
         maxTotalSourceBytes: settings.maxTotalSourceBytes,
         maxFiles: settings.maxFiles,
@@ -556,7 +696,9 @@ function legacySnapshotConfigurationKey(
             repositoryId: root.repositoryId,
             worktreeId: root.worktreeId,
             path: canonicalSnapshotPath(root.path),
-            revision: root.revision ?? ""
+            ...(includeRevision
+              ? { revision: root.revision ?? "" }
+              : {})
           }))
           .sort((left, right) =>
             `${left.repositoryId}\0${left.worktreeId}\0${left.path}`.localeCompare(

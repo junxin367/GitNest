@@ -9,6 +9,7 @@ export interface RepositoryCommitDraftController
   extends RepositoryCommitDraft {
   setMessage(message: string): void;
   setMessageForScope(scopeKey: string, message: string): void;
+  clearMessageIfUnchanged(submittedMessage: string): void;
   setPushAfterCommit(pushAfterCommit: boolean): void;
 }
 
@@ -90,11 +91,23 @@ export function useRepositoryCommitDraft(
     [scopeKey, updateDraft]
   );
 
+  const clearMessageIfUnchanged = useCallback(
+    (submittedMessage: string) => {
+      updateDraft(scopeKey, (current) =>
+        current.message === submittedMessage
+          ? { ...current, message: "" }
+          : current
+      );
+    },
+    [scopeKey, updateDraft]
+  );
+
   return {
     message: draft.message,
     pushAfterCommit: draft.pushAfterCommit,
     setMessage,
     setMessageForScope,
+    clearMessageIfUnchanged,
     setPushAfterCommit
   };
 }

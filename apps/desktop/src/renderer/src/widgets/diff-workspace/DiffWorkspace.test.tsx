@@ -286,7 +286,7 @@ describe("DiffWorkspace", () => {
     }
   });
 
-  it("uses the shared minimum duration for empty loading boundaries", () => {
+  it("reveals settled empty or error content immediately instead of holding a skeleton", () => {
     vi.useFakeTimers();
     try {
       act(() => {
@@ -302,16 +302,31 @@ describe("DiffWorkspace", () => {
         root.render(
           <SkeletonBoundaryHarness loading={false} />
         );
-        vi.advanceTimersByTime(99);
       });
       expect(
         container.querySelector('[role="status"]')
-      ).not.toBeNull();
-
-      act(() => {
-        vi.advanceTimersByTime(1);
-      });
+      ).toBeNull();
       expect(container.textContent).toBe("content");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not carry a previous page's loading timer into an idle page", () => {
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        root.render(<SkeletonBoundaryHarness loading />);
+      });
+      act(() => {
+        root.render(<SkeletonBoundaryHarness hasContent loading={false} />);
+      });
+      act(() => {
+        root.render(<SkeletonBoundaryHarness loading={false} />);
+      });
+      expect(container.querySelector('[role="status"]')).toBeNull();
+      expect(container.textContent).toBe("content");
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -982,6 +997,107 @@ describe("DiffWorkspace", () => {
     );
   });
 
+  function openFileMenu() {
+    const openFile = vi.fn().mockResolvedValue(true);
+    act(() => root.render(
+      <DiffWorkspace
+        configuration={standaloneDiffWorkspaceConfiguration}
+        externalApplications={{
+          active: null, loading: false, openFile,
+          profiles: [
+            { kind: "vscode", label: "VS Code" },
+            { kind: "cursor", label: "Cursor" }
+          ]
+        }}
+        files={files}
+        onSelectedFileChange={vi.fn()}
+        panelProps={{ content }}
+        selectedFileKey={files[1]!.key}
+      />
+    ));
+    const row = Array.from(container.querySelectorAll<HTMLDivElement>(
+      ".diff-workspace-file"
+    )).find((candidate) => candidate.textContent?.includes("Button.tsx"))!;
+    act(() => {
+      row.querySelector<HTMLButtonElement>("button")!.focus();
+      row.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true, cancelable: true, clientX: 120, clientY: 80
+      }));
+    });
+    return {
+      openFile,
+      trigger: findButton(document.body, "打开方式"),
+      submenu: () => document.querySelector<HTMLElement>(
+        '[aria-label="选择用于打开此文件的应用"]'
+      )
+    };
+  }
+
+  it("keeps the file Open In submenu available after hovering and clicking its trigger", () => {
+    const menu = openFileMenu();
+    act(() => menu.trigger.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    expect(menu.submenu()).not.toBeNull();
+
+    act(() => menu.trigger.click());
+
+    expect(menu.submenu()).not.toBeNull();
+    act(() => findButton(document.body, "Cursor").click());
+    expect(menu.openFile).toHaveBeenCalledExactlyOnceWith("cursor", "src/components/Button.tsx");
+  });
+
+  it.each(["Escape", "ArrowLeft"])(
+    "returns from the file submenu with %s and re-enters it with ArrowRight",
+    (key) => {
+      const menu = openFileMenu();
+      act(() => findButton(document.body, "VS Code").focus());
+      act(() => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", {
+        key, bubbles: true, cancelable: true
+      })));
+
+      expect(document.querySelector(".change-file-context-menu")).not.toBeNull();
+      expect(menu.submenu()).toBeNull();
+      expect(document.activeElement).toBe(menu.trigger);
+      act(() => menu.trigger.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowRight", bubbles: true, cancelable: true
+      })));
+      expect(menu.submenu()).not.toBeNull();
+      expect(document.activeElement).toBe(findButton(document.body, "VS Code"));
+      expect(menu.openFile).not.toHaveBeenCalled();
+      act(() => (document.activeElement as HTMLButtonElement).click());
+      expect(menu.openFile).toHaveBeenCalledExactlyOnceWith("vscode", "src/components/Button.tsx");
+    }
+  );
+
+  it("keeps file menus open for internal scrolling and closes them for page scrolling", () => {
+    const menu = openFileMenu();
+    act(() => menu.submenu()!.dispatchEvent(new Event("scroll")));
+    expect(menu.submenu()).not.toBeNull();
+    expect(document.querySelector(".change-file-context-menu")).not.toBeNull();
+    act(() => container.dispatchEvent(new Event("scroll")));
+    expect(document.querySelector(".change-file-context-menu")).toBeNull();
+  });
+
+  it("closes the file menu when Tab moves focus outside without stealing that focus", () => {
+    const menu = openFileMenu();
+    act(() => findButton(document.body, "VS Code").focus());
+    const destination = document.createElement("button");
+    destination.textContent = "Next control";
+    container.append(destination);
+    const tab = new KeyboardEvent("keydown", {
+      key: "Tab", bubbles: true, cancelable: true
+    });
+    act(() => {
+      document.activeElement!.dispatchEvent(tab);
+      // JSDOM does not perform the browser's native Tab focus movement.
+      destination.focus();
+    });
+    expect(tab.defaultPrevented).toBe(false);
+    expect(document.querySelector(".change-file-context-menu")).toBeNull();
+    expect(menu.submenu()).toBeNull();
+    expect(document.activeElement).toBe(destination);
+    expect(menu.openFile).not.toHaveBeenCalled();
+  });
+
   it("asks for confirmation before discarding one tracked file", async () => {
     const onDiscardFile = vi.fn().mockResolvedValue(true);
 
@@ -1133,6 +1249,86 @@ describe("DiffWorkspace", () => {
     expect(
       findButton(document.body, "确认放弃").disabled
     ).toBe(false);
+  });
+
+  it.each(["removed", "untracked", "renamed"] as const)(
+    "invalidates a discard confirmation when a refreshed target is %s",
+    (changeKind) => {
+      const onDiscardFiles = vi.fn().mockResolvedValue(true);
+      const originalFile = files[1]!;
+      const renderFiles = (nextFiles: DiffViewerFile[]) => act(() => {
+        root.render(
+          <DiffWorkspace
+            canDiscardFile={() => true}
+            configuration={repositoryDiffWorkspaceConfiguration}
+            externalApplications={externalApplications}
+            files={nextFiles}
+            onDiscardFiles={onDiscardFiles}
+            onSelectedFileChange={vi.fn()}
+            panelProps={{ content }}
+            selectedFileKey={nextFiles[0]?.key}
+          />
+        );
+      });
+      renderFiles([originalFile]);
+      act(() => {
+        container.querySelector<HTMLButtonElement>(
+          '[aria-label="放弃未暂存分组的更改"]'
+        )!.click();
+      });
+      expect(document.body.querySelector('[role="alertdialog"]')).not.toBeNull();
+      const nextFile: DiffViewerFile = changeKind === "untracked"
+        ? {
+            ...originalFile,
+            key: `untracked\u0001${originalFile.path}`,
+            mode: "untracked", kind: "untracked", status: "?",
+            change: { path: originalFile.path, kind: "untracked", indexStatus: "?", worktreeStatus: "?" }
+          }
+        : {
+            ...originalFile,
+            kind: "renamed",
+            change: { ...originalFile.change, kind: "renamed", originalPath: "src/OldButton.tsx" }
+          };
+      renderFiles(changeKind === "removed" ? [] : [nextFile]);
+      expect(document.body.querySelector('[role="alertdialog"]')).toBeNull();
+      expect(onDiscardFiles).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps the confirmed batch fixed when another changed file appears", async () => {
+    const onDiscardFiles = vi.fn().mockResolvedValue(true);
+    const renderFiles = (nextFiles: DiffViewerFile[]) => act(() => {
+      root.render(
+        <DiffWorkspace
+          canDiscardFile={() => true}
+          configuration={repositoryDiffWorkspaceConfiguration}
+          externalApplications={externalApplications}
+          files={nextFiles}
+          onDiscardFiles={onDiscardFiles}
+          onSelectedFileChange={vi.fn()}
+          panelProps={{ content }}
+          selectedFileKey={nextFiles.at(-1)?.key}
+        />
+      );
+    });
+    renderFiles([files[1]!]);
+    act(() => {
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="放弃未暂存分组的更改"]'
+      )!.click();
+    });
+    renderFiles([files[1]!, {
+      ...files[1]!,
+      path: "src/NewButton.tsx",
+      key: "unstaged\u0001src/NewButton.tsx",
+      change: { ...files[1]!.change, path: "src/NewButton.tsx" }
+    }]);
+    await act(async () => {
+      findButton(document.body, "确认放弃").click();
+      await Promise.resolve();
+    });
+    expect(onDiscardFiles).toHaveBeenCalledTimes(1);
+    expect(onDiscardFiles).toHaveBeenCalledWith([files[1]]);
   });
 
   it("maps the single commit message to Git subject and body", () => {

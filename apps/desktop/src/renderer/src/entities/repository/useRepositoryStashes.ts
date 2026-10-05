@@ -111,6 +111,11 @@ export function useRepositoryStashes(
     ? `${target.repositoryId}:${target.worktreeId}`
     : "";
   const selectionScopeKey = scopeKey ?? targetKey;
+  const dataScopeKey = JSON.stringify([targetKey, selectionScopeKey]);
+  const scope = useMemo(() => ({ dataScopeKey }), [dataScopeKey]);
+  const currentScopeRef = useRef<typeof scope | null>(scope);
+  currentScopeRef.current = scope;
+  const [loadedScopeKey, setLoadedScopeKey] = useState(dataScopeKey);
   const stableTarget = useMemo(
     () =>
       target
@@ -219,7 +224,7 @@ export function useRepositoryStashes(
 
   const selectStash = useCallback(
     async (stashRef: string) => {
-      if (!stableTarget) {
+      if (!stableTarget || currentScopeRef.current !== scope) {
         return;
       }
 
@@ -236,7 +241,14 @@ export function useRepositoryStashes(
         });
       }
       setSelectedStashRef(stashRef);
-      setStashFiles(null);
+      setStashFiles((current) =>
+        expectedHash &&
+        current?.stash.hash === expectedHash &&
+        current.target.repositoryId === stableTarget.repositoryId &&
+        current.target.worktreeId === stableTarget.worktreeId
+          ? { ...current, stash: { ...current.stash, ref: stashRef } }
+          : null
+      );
       setError(null);
 
       const queryId = createQuery("files");
@@ -302,6 +314,7 @@ export function useRepositoryStashes(
       createQuery,
       finishQuery,
       isCurrentQuery,
+      scope,
       selectionScopeKey,
       setLoadingKey,
       stableTarget
@@ -309,7 +322,7 @@ export function useRepositoryStashes(
   );
 
   const reload = useCallback(async () => {
-    if (!stableTarget) {
+    if (!stableTarget || currentScopeRef.current !== scope) {
       return;
     }
 
@@ -389,6 +402,7 @@ export function useRepositoryStashes(
     createQuery,
     finishQuery,
     isCurrentQuery,
+    scope,
     selectStash,
     selectionScopeKey,
     setLoadingKey,
@@ -396,27 +410,33 @@ export function useRepositoryStashes(
   ]);
 
   const load = useCallback(async () => {
-    if (stashesRef.current) {
+    if (currentScopeRef.current !== scope || stashesRef.current) {
       return;
     }
     await reload();
-  }, [reload]);
+  }, [reload, scope]);
 
   const clearError = useCallback(() => {
+    if (currentScopeRef.current !== scope) {
+      return;
+    }
     setError(null);
-  }, []);
+  }, [scope]);
 
   const clearMutationFeedback = useCallback(() => {
+    if (currentScopeRef.current !== scope) {
+      return;
+    }
     setMutationError(null);
     setNotice(null);
-  }, []);
+  }, [scope]);
 
   const mutateStash = useCallback(
     async (
       action: RepositoryStashMutationAction,
       stash: StashSummaryDto
     ): Promise<boolean> => {
-      if (!stableTarget || activeMutation.current) {
+      if (!stableTarget || currentScopeRef.current !== scope || activeMutation.current) {
         return false;
       }
 
@@ -458,7 +478,6 @@ export function useRepositoryStashes(
         }
         setNotice(stashMutationNotice(action, stash.ref));
         await reload();
-        return true;
       } catch (reason) {
         if (requestGeneration === generation.current) {
           setMutationError(
@@ -484,12 +503,15 @@ export function useRepositoryStashes(
           }
         }
       }
+      return requestGeneration === generation.current;
     },
-    [reload, selectionScopeKey, stableTarget]
+    [reload, scope, selectionScopeKey, stableTarget]
   );
 
   useEffect(() => {
+    currentScopeRef.current = scope;
     generation.current += 1;
+    setLoadedScopeKey(dataScopeKey);
     activeMutation.current = null;
     cancelAll();
     const restoredSelection =
@@ -507,25 +529,26 @@ export function useRepositoryStashes(
     setMutationError(null);
     setNotice(null);
     setActive(null);
-  }, [cancelAll, selectionScopeKey, targetKey]);
 
-  useEffect(
-    () => () => {
+    return () => {
       generation.current += 1;
+      if (currentScopeRef.current === scope) {
+        currentScopeRef.current = null;
+      }
       cancelAll();
-    },
-    [cancelAll]
-  );
+    };
+  }, [cancelAll, dataScopeKey, scope, selectionScopeKey, targetKey]);
 
+  const currentScope = loadedScopeKey === dataScopeKey;
   return {
-    stashes,
-    stashFiles,
-    selectedStashRef,
-    loading,
-    error,
-    mutationError,
-    notice,
-    active,
+    stashes: currentScope ? stashes : null,
+    stashFiles: currentScope ? stashFiles : null,
+    selectedStashRef: currentScope ? selectedStashRef : null,
+    loading: currentScope ? loading : EMPTY_LOADING,
+    error: currentScope ? error : null,
+    mutationError: currentScope ? mutationError : null,
+    notice: currentScope ? notice : null,
+    active: currentScope ? active : null,
     load,
     reload,
     selectStash,

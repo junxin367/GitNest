@@ -88,6 +88,7 @@ try {
   const target = await waitForPageTarget(debugPort, electron);
   cdp = await CdpClient.connect(target.webSocketDebuggerUrl);
   await cdp.send("Page.enable");
+  await cdp.waitForDocument();
   await cdp.send("Runtime.enable");
   await cdp.send("Log.enable");
   await cdp.waitFor(
@@ -106,7 +107,7 @@ try {
   await cdp.waitFor(
     "prunable Worktree card",
     `String(document.querySelector(".worktree-management")?.textContent)
-      .includes("Prunable")`
+      .includes("可清理登记")`
   );
   assert(
     await hasNoHorizontalOverflow(cdp),
@@ -120,6 +121,7 @@ try {
     )
   );
 
+  await clickButton(cdp, "新建 Worktree", ".worktree-management");
   await setInputValue(
     cdp,
     'input[aria-label="Worktree 目标绝对路径"]',
@@ -127,7 +129,7 @@ try {
   );
   await setInputValue(
     cdp,
-    ".worktree-create-fields label:nth-child(1) input",
+    "#worktree-create-branch",
     "feature/e2e-worktree"
   );
   await setWindowSize(cdp, 1100, 812);
@@ -155,7 +157,7 @@ try {
     async () => {
       const dialogText = await textOf(
         cdp,
-        ".command-dialog"
+        ".gn-dialog"
       );
       assertIncludes(dialogText, createdPath);
       assertIncludes(dialogText, "feature/e2e-worktree");
@@ -197,25 +199,14 @@ try {
   );
 
   await setWindowSize(cdp, 1440, 900);
-  await setWorktreeInput(
-    cdp,
-    createdPath,
-    "锁定原因",
-    "release validation"
-  );
-  const lockOperation = await runImmediateCommand(
-    cdp,
-    "worktree-lock",
-    () => clickWorktreeButton(cdp, createdPath, "锁定")
-  );
+  // Lock/unlock/move/repair no longer have card actions. Verify their real
+  // preload/IPC/service paths; create/remove/prune remain UI interactions.
+  const lockOperation = await runBridgeCommand(cdp, createdPath, {
+    type: "lock", reason: "release validation"
+  });
   assert(
     lockOperation.state === "succeeded",
     lockOperation.message
-  );
-  await waitForWorktreeCardText(
-    cdp,
-    createdPath,
-    "release validation"
   );
   assertWorktreeRecord(
     await readWorktreeRecords(),
@@ -225,21 +216,13 @@ try {
     "Worktree lock reason was not preserved."
   );
 
-  const unlockOperation = await runImmediateCommand(
-    cdp,
-    "worktree-unlock",
-    () =>
-      clickWorktreeButton(
-        cdp,
-        createdPath,
-        "解锁 Worktree"
-      )
-  );
+  const unlockOperation = await runBridgeCommand(cdp, createdPath, {
+    type: "unlock"
+  });
   assert(
     unlockOperation.state === "succeeded",
     unlockOperation.message
   );
-  await waitForWorktreeButton(cdp, createdPath, "锁定");
   assertWorktreeRecord(
     await readWorktreeRecords(),
     createdPath,
@@ -247,26 +230,9 @@ try {
     "Worktree remained locked after Unlock."
   );
 
-  await setWorktreeInput(
-    cdp,
-    createdPath,
-    "移动目标",
-    movedPath
-  );
-  const moveOperation = await runConfirmedCommand(
-    cdp,
-    "worktree-move",
-    () => clickWorktreeButton(cdp, createdPath, "移动"),
-    "确认并执行",
-    async () => {
-      const dialogText = await textOf(
-        cdp,
-        ".command-dialog"
-      );
-      assertIncludes(dialogText, createdPath);
-      assertIncludes(dialogText, movedPath);
-    }
-  );
+  const moveOperation = await runBridgeCommand(cdp, createdPath, {
+    type: "move", destination: movedPath
+  });
   assert(
     moveOperation.state === "succeeded",
     moveOperation.message
@@ -275,34 +241,29 @@ try {
   await assertPathExists(movedPath, true);
   await assertPathExists(createdPath, false);
 
-  const repairOperation = await runConfirmedCommand(
-    cdp,
-    "worktree-repair",
-    () =>
-      clickWorktreeButton(cdp, movedPath, "修复登记"),
-    "确认并执行",
-    async () => {
-      assertIncludes(
-        await textOf(cdp, ".command-dialog"),
-        movedPath
-      );
-    }
-  );
+  const repairOperation = await runBridgeCommand(cdp, movedPath, {
+    type: "repair"
+  });
   assert(
     repairOperation.state === "succeeded",
     repairOperation.message
   );
 
   await setWindowSize(cdp, 1100, 812);
+  await clickButton(cdp, "筛选", ".worktree-toolbar");
+  await setInputValue(cdp, 'input[aria-label="筛选 Worktree"]', movedPath);
+  await clickButton(cdp, "已登记", ".worktree-filter-bar");
+  await cdp.waitFor("clean Worktree delete action",
+    `Boolean(document.querySelector('button[aria-label="删除筛选中的 Worktree"]:not(:disabled)'))`);
   const removeOperation = await runConfirmedCommand(
     cdp,
     "worktree-remove",
-    () => clickWorktreeButton(cdp, movedPath, "移除"),
-    "确认移除 Worktree",
+    () => clickSelector(cdp, 'button[aria-label="删除筛选中的 Worktree"]'),
+    "确认删除 Worktree",
     async () => {
       const dialogText = await textOf(
         cdp,
-        ".command-dialog.danger"
+        '.gn-dialog[data-tone="danger"]'
       );
       assertIncludes(dialogText, movedPath);
       assertIncludes(dialogText, "不使用 --force");
@@ -310,7 +271,7 @@ try {
       await pressKey(cdp, "Tab");
       await assertFocusedDialogButton(
         cdp,
-        "确认移除 Worktree"
+        "确认删除 Worktree"
       );
       assert(
         await hasNoHorizontalOverflow(cdp),
@@ -338,23 +299,21 @@ try {
     "Removed Worktree remains registered."
   );
 
+  await setInputValue(cdp, 'input[aria-label="筛选 Worktree"]', "");
+  await clickButton(cdp, "可清理登记", ".worktree-filter-bar");
   const pruneOperation = await runConfirmedCommand(
     cdp,
     "worktree-prune",
     () =>
-      clickButton(
-        cdp,
-        "预检 Prune (1)",
-        ".worktree-safety-panel"
-      ),
+      clickSelector(cdp, 'button[aria-label="清除失效 Worktree 登记"]'),
     "确认并执行",
     async () => {
       const dialogText = await textOf(
         cdp,
-        ".command-dialog"
+        ".gn-dialog"
       );
       assertIncludes(dialogText, stalePath);
-      assertIncludes(dialogText, "只清理");
+      assertIncludes(dialogText, "不会递归删除仍存在的目录");
     }
   );
   assert(
@@ -384,8 +343,8 @@ try {
     "解锁 Worktree",
     "移动 Worktree",
     "修复 Worktree 登记",
-    "Prune Worktree 登记",
-    "移除 Worktree"
+    "清除失效 Worktree 登记",
+    "删除 Worktree"
   ]) {
     assertIncludes(operationText, label);
   }
@@ -447,6 +406,10 @@ try {
           repair: repairOperation.state,
           remove: removeOperation.state,
           prune: pruneOperation.state
+        },
+        interactionCoverage: {
+          ui: ["create", "remove", "prune"],
+          publicBridge: ["lock", "unlock", "move", "repair"]
         }
       },
       null,
@@ -547,17 +510,12 @@ function assertWorktreeRecord(
 }
 
 async function addWorkspacePath(client, path) {
-  await clickButton(client, "手动路径");
-  await client.waitFor(
-    "manual path form",
-    `Boolean(document.querySelector(".manual-path-form input"))`
-  );
-  await setInputValue(
-    client,
-    ".manual-path-form input",
-    path
-  );
-  await clickButton(client, "扫描并添加", ".manual-path-form");
+  // Directory picking uses a native dialog; bootstrap the fixture through
+  // the public bridge and exercise create/remove/prune actions in the UI.
+  const result = await client.evaluate(`window.gitnest.workspace.addDirectory({
+    path: ${JSON.stringify(path)}
+  })`);
+  assert(result?.ok, `Unable to add fixture: ${JSON.stringify(result)}`);
   await client.waitFor(
     "workspace repository row",
     `document.querySelectorAll(".repository-status-row").length > 1`,
@@ -601,6 +559,28 @@ async function runImmediateCommand(client, kind, trigger) {
   );
 }
 
+async function runBridgeCommand(client, path, options) {
+  return runImmediateCommand(client, `worktree-${options.type}`, async () => {
+    const result = await client.evaluate(`(async () => {
+      const state = await window.gitnest.workspace.getState();
+      if (!state.ok) return state;
+      const worktree = state.value.workspace.worktrees.find(
+        (item) => item.path === ${JSON.stringify(path)}
+      );
+      if (!worktree) throw new Error("Fixture worktree missing.");
+      const command = { ...${JSON.stringify(options)}, worktreeId: worktree.id };
+      const preflight = await window.gitnest.worktree.preflightCommand({ command });
+      if (!preflight.ok) return preflight;
+      return window.gitnest.worktree.executeCommand({
+        command: preflight.value.command,
+        preflightId: preflight.value.preflightId,
+        confirmed: preflight.value.confirmationRequired
+      });
+    })()`);
+    assert(result?.ok, `Worktree ${options.type} failed: ${JSON.stringify(result)}`);
+  });
+}
+
 async function runConfirmedCommand(
   client,
   kind,
@@ -616,11 +596,11 @@ async function runConfirmedCommand(
   await trigger();
   await client.waitFor(
     `${kind} preflight dialog`,
-    `Boolean(document.querySelector(".command-dialog"))`,
+    `Boolean(document.querySelector(".gn-dialog"))`,
     20_000
   );
   await inspectDialog();
-  await clickButton(client, confirmLabel, ".command-dialog");
+  await clickButton(client, confirmLabel, ".gn-dialog");
   return waitForNewOperation(
     client,
     kind,
@@ -669,135 +649,12 @@ async function waitForWorktreeCard(client, path) {
   );
 }
 
-async function waitForWorktreeCardText(
-  client,
-  path,
-  text
-) {
-  await client.waitFor(
-    `Worktree card ${path} text ${text}`,
-    `(() => {
-      const normalize = (value) =>
-        String(value ?? "").replace(/\\s+/g, " ").trim();
-      const card = [...document.querySelectorAll(
-        ".worktree-management-card"
-      )].find((candidate) =>
-        normalize(candidate.textContent).includes(
-          ${JSON.stringify(path)}
-        )
-      );
-      return Boolean(
-        card &&
-        normalize(card.textContent).includes(
-          ${JSON.stringify(text)}
-        )
-      );
-    })()`
-  );
-}
-
-async function waitForWorktreeButton(
-  client,
-  path,
-  label
-) {
-  await client.waitFor(
-    `${label} button for ${path}`,
-    `(() => {
-      const normalize = (value) =>
-        String(value ?? "").replace(/\\s+/g, " ").trim();
-      const card = [...document.querySelectorAll(
-        ".worktree-management-card"
-      )].find((candidate) =>
-        normalize(candidate.textContent).includes(
-          ${JSON.stringify(path)}
-        )
-      );
-      return Boolean(
-        card &&
-        [...card.querySelectorAll("button")].some(
-          (button) =>
-            !button.disabled &&
-            normalize(button.textContent) ===
-              ${JSON.stringify(label)}
-        )
-      );
-    })()`
-  );
-}
-
-async function clickWorktreeButton(
-  client,
-  path,
-  label
-) {
-  const clicked = await client.evaluate(`(() => {
-    const normalize = (value) =>
-      String(value ?? "").replace(/\\s+/g, " ").trim();
-    const card = [...document.querySelectorAll(
-      ".worktree-management-card"
-    )].find((candidate) =>
-      normalize(candidate.textContent).includes(
-        ${JSON.stringify(path)}
-      )
-    );
-    const button = card && [...card.querySelectorAll("button")]
-      .find((candidate) =>
-        normalize(candidate.textContent) ===
-          ${JSON.stringify(label)}
-      );
-    if (!button || button.disabled) return false;
-    button.click();
-    return true;
-  })()`);
-  assert(
-    clicked,
-    `Unable to click ${label} for Worktree ${path}.`
-  );
-}
-
-async function setWorktreeInput(
-  client,
-  path,
-  ariaSuffix,
-  value
-) {
-  const changed = await client.evaluate(`(() => {
-    const normalize = (candidate) =>
-      String(candidate ?? "").replace(/\\s+/g, " ").trim();
-    const card = [...document.querySelectorAll(
-      ".worktree-management-card"
-    )].find((candidate) =>
-      normalize(candidate.textContent).includes(
-        ${JSON.stringify(path)}
-      )
-    );
-    const input = card && [...card.querySelectorAll("input")]
-      .find((candidate) =>
-        String(candidate.getAttribute("aria-label") ?? "")
-          .endsWith(${JSON.stringify(ariaSuffix)})
-      );
-    if (!(input instanceof HTMLInputElement)) return false;
-    const setter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value"
-    )?.set;
-    setter?.call(input, ${JSON.stringify(value)});
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    return true;
-  })()`);
-  assert(
-    changed,
-    `Unable to set ${ariaSuffix} for Worktree ${path}.`
-  );
-}
-
 function worktreeCardExpression(path) {
   return `(() => {
     const normalize = (value) =>
       String(value ?? "").replace(/\\s+/g, " ").trim();
     return [...document.querySelectorAll(
-      ".worktree-management-card"
+      ".worktree-card"
     )].some((candidate) =>
       normalize(candidate.textContent).includes(
         ${JSON.stringify(path)}
@@ -818,10 +675,11 @@ async function clickButton(
       ${JSON.stringify(rootSelector)}
     );
     const button = root && [...root.querySelectorAll("button")]
-      .find((candidate) =>
-        normalize(candidate.textContent) ===
-          ${JSON.stringify(label)}
-      );
+      .find((candidate) => {
+        const content = candidate.cloneNode(true);
+        content.querySelectorAll(".tab-count, .worktree-filter-chip-count").forEach((badge) => badge.remove());
+        return normalize(content.textContent) === ${JSON.stringify(label)};
+      });
     if (!button || button.disabled) return false;
     button.click();
     return true;
@@ -841,7 +699,7 @@ async function assertFocusedDialogButton(
       const active = document.activeElement;
       return (
         active instanceof HTMLButtonElement &&
-        Boolean(active.closest(".command-dialog")) &&
+        Boolean(active.closest(".gn-dialog")) &&
         normalize(active.textContent) ===
           ${JSON.stringify(label)}
       );

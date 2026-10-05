@@ -152,6 +152,11 @@ export function parseDiffViewModel(
   };
 
   for (const line of lines) {
+    if (isDiffFileBoundary(line)) {
+      flushChangedBlock();
+      oldLineNumber = undefined;
+      newLineNumber = undefined;
+    }
     const hunk = parseHunkHeader(line);
     if (hunk) {
       flushChangedBlock();
@@ -194,7 +199,7 @@ export function parseDiffViewModel(
       continue;
     }
 
-    if (line.startsWith("-") && !line.startsWith("---")) {
+    if (line.startsWith("-")) {
       if (addedCells.length > 0) {
         flushChangedBlock();
       }
@@ -214,7 +219,7 @@ export function parseDiffViewModel(
       continue;
     }
 
-    if (line.startsWith("+") && !line.startsWith("+++")) {
+    if (line.startsWith("+")) {
       const cell: SplitDiffCell = {
         kind: "added",
         lineNumber: newLineNumber,
@@ -299,7 +304,14 @@ export function buildLocalizedDiffContent(
 
   const compact = parseExpandableDiffDocument(compactContent);
   const source = parseExpandableDiffDocument(sourceContent);
-  if (compact.hunks.length === 0 || source.hunks.length === 0) {
+  if (
+    compact.hunks.length === 0 ||
+    source.hunks.length === 0 ||
+    compact.fileCount > 1 ||
+    source.fileCount > 1
+  ) {
+    // Hunk identities below are local to one file. Preserve multi-file input
+    // rather than expanding a hunk using another file's matching line numbers.
     return compactContent;
   }
 
@@ -443,6 +455,98 @@ export function buildLocalizedDiffContent(
     .join("\n");
 }
 
+export function createDiffContentSnapshot(
+  content: string,
+  contextLines: number
+): { changeIdentity: string; compactContent: string } {
+  const document = parseExpandableDiffDocument(content);
+  // Context-only responses may merge hunks, so neither hunk indexes nor their
+  // headers identify a revision. Changed lines keep their coordinates instead.
+  const changes = document.hunks.flatMap((hunk) =>
+    hunk.records.flatMap((record, index) =>
+      record.kind === "added" || record.kind === "removed"
+        ? [[
+            record.kind,
+            record.oldLineNumber,
+            record.newLineNumber,
+            record.raw,
+            hunk.records[index + 1]?.kind === "meta"
+              ? hunk.records[index + 1]?.raw
+              : undefined
+          ]]
+        : []
+    )
+  );
+  const changeIdentity = JSON.stringify([
+    document.prefixLines,
+    changes
+  ]);
+  if (document.fileCount > 1 || document.hunks.length === 0) {
+    return { changeIdentity, compactContent: content };
+  }
+
+  const context = Math.max(0, Math.floor(contextLines));
+  const compactHunks = document.hunks.flatMap((hunk) => {
+    const ranges: { start: number; end: number }[] = [];
+    const records = hunk.records;
+    let index = 0;
+    while (index < records.length) {
+      if (
+        records[index]?.kind !== "added" &&
+        records[index]?.kind !== "removed"
+      ) {
+        index += 1;
+        continue;
+      }
+      let start = index;
+      // Consume the whole change block once, including no-newline markers.
+      while (
+        index + 1 < records.length &&
+        records[index + 1]?.kind !== "context"
+      ) {
+        index += 1;
+      }
+      let end = index;
+      for (
+        let count = 0;
+        count < context && records[start - 1]?.kind === "context";
+        count += 1
+      ) {
+        start -= 1;
+      }
+      let count = 0;
+      while (end + 1 < records.length) {
+        const next = records[end + 1]!;
+        if (next.kind === "meta") {
+          end += 1;
+        } else if (next.kind === "context" && count < context) {
+          end += 1;
+          count += 1;
+        } else {
+          break;
+        }
+      }
+      const previous = ranges.at(-1);
+      if (previous && start <= previous.end + 1) {
+        previous.end = Math.max(previous.end, end);
+      } else {
+        ranges.push({ start, end });
+      }
+      index += 1;
+    }
+    return ranges.map(({ start, end }) =>
+      renderExpandableHunk({
+        ...hunk,
+        records: records.slice(start, end + 1)
+      })
+    );
+  });
+  return {
+    changeIdentity,
+    compactContent: [...document.prefixLines, ...compactHunks].join("\n")
+  };
+}
+
 export function collectDiffViewerSearchHits(
   model: DiffViewModel,
   layout: DiffViewerLayout,
@@ -553,12 +657,18 @@ function headerKind(line: string): "header" | "meta" {
 
 function isBoilerplateFileHeader(line: string): boolean {
   return (
-    line.startsWith("diff --git ") ||
-    line.startsWith("diff --cc ") ||
-    line.startsWith("diff --combined ") ||
+    isDiffFileBoundary(line) ||
     line.startsWith("index ") ||
     line.startsWith("--- ") ||
     line.startsWith("+++ ")
+  );
+}
+
+function isDiffFileBoundary(line: string): boolean {
+  return (
+    line.startsWith("diff --git ") ||
+    line.startsWith("diff --cc ") ||
+    line.startsWith("diff --combined ")
   );
 }
 
@@ -613,6 +723,7 @@ interface ExpandableDiffHunk {
 interface ExpandableDiffDocument {
   prefixLines: string[];
   hunks: ExpandableDiffHunk[];
+  fileCount: number;
 }
 
 function parseExpandableDiffDocument(
@@ -628,10 +739,16 @@ function parseExpandableDiffDocument(
   let currentHunk: ExpandableDiffHunk | undefined;
   let oldLineNumber = 0;
   let newLineNumber = 0;
+  let fileCount = 0;
 
   for (const line of lines) {
+    if (isDiffFileBoundary(line)) {
+      fileCount += 1;
+      currentHunk = undefined;
+    }
     const header = parseHunkHeader(line);
     if (header) {
+      fileCount = Math.max(fileCount, 1);
       currentHunk = {
         index: hunks.length,
         oldLineNumber: header.oldLineNumber,
@@ -650,7 +767,7 @@ function parseExpandableDiffDocument(
       continue;
     }
 
-    if (line.startsWith("-") && !line.startsWith("---")) {
+    if (line.startsWith("-")) {
       currentHunk.records.push({
         kind: "removed",
         raw: line,
@@ -660,7 +777,7 @@ function parseExpandableDiffDocument(
       continue;
     }
 
-    if (line.startsWith("+") && !line.startsWith("+++")) {
+    if (line.startsWith("+")) {
       currentHunk.records.push({
         kind: "added",
         raw: line,
@@ -688,7 +805,7 @@ function parseExpandableDiffDocument(
     });
   }
 
-  return { prefixLines, hunks };
+  return { prefixLines, hunks, fileCount };
 }
 
 function expandableRecordIdentity(

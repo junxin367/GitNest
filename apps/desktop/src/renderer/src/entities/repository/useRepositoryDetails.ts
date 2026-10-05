@@ -100,6 +100,8 @@ export function useRepositoryDetails(
   const targetKey = target
     ? `${target.repositoryId}:${target.worktreeId}`
     : "";
+  const [dataTargetKey, setDataTargetKey] = useState(targetKey);
+  const [loadingTab, setLoadingTab] = useState(tab);
   const stableTarget = useMemo(
     () =>
       target
@@ -136,7 +138,9 @@ export function useRepositoryDetails(
   const [historyDetailOpen, setHistoryDetailOpen] =
     useState(false);
   const [loading, setLoading] =
-    useState<Record<LoadingKey, boolean>>(EMPTY_LOADING);
+    useState<Record<LoadingKey, boolean>>(() =>
+      initialTabLoading(Boolean(target), tab)
+    );
   const [error, setError] =
     useState<GitReadErrorDto | null>(null);
   const selectedChangeRef = useRef<
@@ -353,8 +357,7 @@ export function useRepositoryDetails(
       } finally {
         if (
           finishQuery("diff", queryId) &&
-          requestGeneration === generation.current &&
-          reportLoading
+          requestGeneration === generation.current
         ) {
           setLoadingKey("diff", false);
         }
@@ -477,6 +480,8 @@ export function useRepositoryDetails(
               });
             }
           } else {
+            cancelQuery("diff");
+            setLoadingKey("diff", false);
             const removedAfterEmptyDiffRefresh =
               previousSelection
                 ? emptyDiffRefreshesRef.current.delete(
@@ -522,6 +527,7 @@ export function useRepositoryDetails(
       }
     },
     [
+      cancelQuery,
       createQuery,
       finishQuery,
       isCurrentQuery,
@@ -567,7 +573,12 @@ export function useRepositoryDetails(
       historyDetailOpenRef.current = openHistoryDetail;
       setSelectedCommitHash(commitHash);
       setHistoryDetailOpen(openHistoryDetail);
-      setCommit(null);
+      setCommit((current) =>
+        current?.commit.hash === commitHash &&
+        repositoryTargetsMatch(current.target, stableTarget)
+          ? current
+          : null
+      );
       setLoadingKey("commit", true);
       setError(null);
 
@@ -879,6 +890,7 @@ export function useRepositoryDetails(
   useEffect(() => {
     generation.current += 1;
     cancelAll();
+    setDataTargetKey(targetKey);
     selectedChangeRef.current = null;
     emptyDiffRefreshesRef.current.clear();
     setChanges(null);
@@ -901,22 +913,11 @@ export function useRepositoryDetails(
   }, [cancelAll, targetKey]);
 
   useEffect(() => {
-    if (
-      statusRevisionRef.current.targetKey !== targetKey ||
-      tab !== "changes"
-    ) {
-      statusRevisionRef.current = {
-        targetKey,
-        revision: statusRevision
-      };
-    }
-  }, [statusRevision, targetKey]);
-
-  useEffect(() => {
     const enteringHistory =
       tab === "history" &&
       previousTabRef.current !== "history";
     previousTabRef.current = tab;
+    setLoadingTab(tab);
     if (tab !== "history" || enteringHistory) {
       historyDetailOpenRef.current = false;
       setHistoryDetailOpen(false);
@@ -924,11 +925,15 @@ export function useRepositoryDetails(
     generation.current += 1;
     cancelAll();
     setLoading(EMPTY_LOADING);
+    statusRevisionRef.current = {
+      targetKey,
+      revision: statusRevision
+    };
     void reload(tab);
   }, [cancelAll, reload, tab, targetKey]);
 
   useEffect(() => {
-    if (!targetKey || tab !== "changes") {
+    if (!targetKey) {
       return;
     }
 
@@ -944,7 +949,7 @@ export function useRepositoryDetails(
       targetKey,
       revision: statusRevision
     };
-    void reload("changes", { preserveSelection: true });
+    void reload(tab, { preserveSelection: true });
   }, [reload, statusRevision, tab, targetKey]);
 
   useEffect(() => {
@@ -988,20 +993,24 @@ export function useRepositoryDetails(
     [cancelAll]
   );
 
+  const currentTarget = dataTargetKey === targetKey;
+  const currentLoadingScope = currentTarget && loadingTab === tab;
   return {
-    changes,
-    diff,
-    diffNotice,
-    history,
-    historyScope,
-    commit,
-    branches,
-    selectedChange,
-    changeSelectionRequestId,
-    selectedCommitHash,
-    historyDetailOpen,
-    loading,
-    error,
+    changes: currentTarget ? changes : null,
+    diff: currentTarget ? diff : null,
+    diffNotice: currentTarget ? diffNotice : null,
+    history: currentTarget ? history : null,
+    historyScope: currentTarget ? historyScope : null,
+    commit: currentTarget ? commit : null,
+    branches: currentTarget ? branches : null,
+    selectedChange: currentTarget ? selectedChange : null,
+    changeSelectionRequestId: currentTarget ? changeSelectionRequestId : null,
+    selectedCommitHash: currentTarget ? selectedCommitHash : null,
+    historyDetailOpen: currentTarget && historyDetailOpen,
+    loading: currentLoadingScope
+      ? loading
+      : initialTabLoading(Boolean(target), tab),
+    error: currentLoadingScope ? error : null,
     selectChange,
     selectCommit,
     selectHistoryScope,
@@ -1009,6 +1018,18 @@ export function useRepositoryDetails(
     reload,
     invalidate,
     clearError
+  };
+}
+
+function initialTabLoading(
+  hasTarget: boolean,
+  tab: RepositoryTab
+): Record<LoadingKey, boolean> {
+  return {
+    ...EMPTY_LOADING,
+    changes: hasTarget && tab === "changes",
+    history: hasTarget && (tab === "overview" || tab === "history"),
+    branches: hasTarget && (tab === "branches" || tab === "history")
   };
 }
 

@@ -5,11 +5,12 @@ import type {
 } from "../domain/repository-queries";
 import { GitError } from "../errors/git-errors";
 
-const RECORD_SEPARATOR = "\x1e";
-const FIELD_SEPARATOR = "\x1f";
+const FIELD_SEPARATOR = "\0";
+const COMMIT_FIELD_COUNT = 8;
+const COMPARED_COMMIT_FIELD_COUNT = 9;
 
 export function parseCommitHistory(output: string): CommitSummary[] {
-  return parseRecords(output).map((fields) =>
+  return parseRecords(output, COMMIT_FIELD_COUNT).map((fields) =>
     parseCommitFields(fields)
   );
 }
@@ -17,7 +18,10 @@ export function parseCommitHistory(output: string): CommitSummary[] {
 export function parseComparedCommitHistory(
   output: string
 ): CommitHistoryEntry[] {
-  return parseRecords(output).map((fields) => {
+  return parseRecords(
+    output,
+    COMPARED_COMMIT_FIELD_COUNT
+  ).map((fields) => {
     const [marker = "", ...commitFields] = fields;
     return {
       ...parseCommitFields(commitFields),
@@ -26,14 +30,36 @@ export function parseComparedCommitHistory(
   });
 }
 
-function parseRecords(output: string): string[][] {
-  return output
-    .split(RECORD_SEPARATOR)
-    .map((record) =>
-      record.replace(/^[\r\n]+|[\r\n]+$/g, "")
-    )
-    .filter(Boolean)
-    .map((record) => record.split(FIELD_SEPARATOR));
+function parseRecords(
+  output: string,
+  fieldCount: number
+): string[][] {
+  const fields = output.split(FIELD_SEPARATOR);
+  const records: string[][] = [];
+
+  for (let index = 0; index < fields.length; index += fieldCount) {
+    const record = fields.slice(index, index + fieldCount);
+    const firstField = record[0]?.replace(/^[\r\n]+/, "") ?? "";
+
+    if (
+      record.length === 1 &&
+      !firstField &&
+      /^[\r\n]*$/.test(record[0] ?? "")
+    ) {
+      break;
+    }
+    if (record.length !== fieldCount || !firstField) {
+      throw new GitError(
+        "INVALID_GIT_OUTPUT",
+        "A commit record does not contain all required fields."
+      );
+    }
+
+    record[0] = firstField;
+    records.push(record);
+  }
+
+  return records;
 }
 
 function parseCommitFields(fields: string[]): CommitSummary {
@@ -64,7 +90,7 @@ function parseCommitFields(fields: string[]): CommitSummary {
     subject,
     parentHashes: parents ? parents.split(" ") : [],
     refs: decorations
-      .split(",")
+      .split(", ")
       .map((value) => value.trim())
       .filter(Boolean)
   };

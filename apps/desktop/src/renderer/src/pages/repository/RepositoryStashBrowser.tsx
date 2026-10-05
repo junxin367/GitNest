@@ -90,7 +90,12 @@ export function RepositoryStashBrowser({
 
   useEffect(() => {
     setFilter("");
-  }, [selectedStashRef]);
+  }, [
+    selectedStashRef,
+    selectedStash?.hash,
+    stashes?.target.repositoryId,
+    stashes?.target.worktreeId
+  ]);
 
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
@@ -110,7 +115,8 @@ export function RepositoryStashBrowser({
         createRepositoryStashContextMenuState(
           stash,
           event.clientX,
-          event.clientY
+          event.clientY,
+          event.currentTarget
         )
       );
     },
@@ -152,6 +158,18 @@ export function RepositoryStashBrowser({
               variant="icon"
             />
           </header>
+          {error && stashes && (!selectedStash || selectedFiles) ? (
+            <div className="repository-stash-refresh-error" role="alert">
+              <Icon name="warning" size={15} />
+              <span>
+                <strong>储藏刷新失败</strong>
+                <span>{error.message}</span>
+              </span>
+              <Button onClick={onReload} size="small" type="button">
+                重试
+              </Button>
+            </div>
+          ) : null}
           <div className="repository-stash-list-body">
             {loading.stashes && !stashes ? (
               <RepositoryStashListSkeleton />
@@ -318,7 +336,7 @@ export function RepositoryStashBrowser({
                 )}
               </div>
             </>
-          ) : loading.stashes ? (
+          ) : loading.stashes && !stashes ? (
             <RepositoryStashDetailSkeleton />
           ) : (
             <DiffViewerState

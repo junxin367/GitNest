@@ -110,6 +110,22 @@ export class CdpClient {
     return response.result.value;
   }
 
+  async waitForDocument(timeoutMs = 15_000) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const { frameTree } = await this.send("Page.getFrameTree");
+      const frame = frameTree?.frame;
+      // Runtime.enable can create a context in the initial empty document,
+      // before Electron has supplied the navigation's sandbox preload data.
+      // Inspect navigation state without evaluating JavaScript in that document.
+      if (frame?.loaderId && frame.url && frame.url !== "about:blank") {
+        return;
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+    }
+    throw new Error("Timed out waiting for a committed renderer document.");
+  }
+
   async waitFor(label, expression, timeoutMs = 15_000) {
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {

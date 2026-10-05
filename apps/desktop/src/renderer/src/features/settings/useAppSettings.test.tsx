@@ -48,6 +48,58 @@ describe("useAppSettings concurrent activity", () => {
     vi.restoreAllMocks();
   });
 
+  it("does not mark default settings as loaded after the first read fails", async () => {
+    installBridge({
+      get: vi.fn().mockResolvedValue({
+        ok: false,
+        error: {
+          code: "COMMAND_FAILED",
+          message: "settings unavailable",
+          details: {}
+        }
+      })
+    });
+    await mountHarness();
+
+    expect(controller?.loading).toBe(false);
+    expect(controller?.loaded).toBe(false);
+    expect(controller?.error?.message).toBe("settings unavailable");
+  });
+
+  it("keeps the first-read retry loading until real settings arrive", async () => {
+    const retry = deferred<Awaited<ReturnType<GitNestBridge["settings"]["get"]>>>();
+    const settings = {
+      ...createDefaultAppSettings(),
+      appearance: { theme: "light" as const }
+    };
+    installBridge({
+      get: vi.fn<GitNestBridge["settings"]["get"]>()
+        .mockResolvedValueOnce({
+          ok: false,
+          error: { code: "COMMAND_FAILED", message: "temporarily unavailable", details: {} }
+        })
+        .mockImplementationOnce(() => retry.promise)
+    });
+    await mountHarness();
+    expect(controller?.loaded).toBe(false);
+    expect(controller?.loading).toBe(false);
+    let reloading!: Promise<void>;
+    await act(async () => {
+      reloading = controller!.reload();
+      await Promise.resolve();
+    });
+    expect(controller?.loading).toBe(true);
+    expect(controller?.loaded).toBe(false);
+    expect(controller?.error).toBeNull();
+    await act(async () => {
+      retry.resolve({ ok: true, value: { settings, storageState: "persisted" } });
+      await reloading;
+    });
+    expect(controller?.loaded).toBe(true);
+    expect(controller?.loading).toBe(false);
+    expect(controller?.settings.appearance.theme).toBe("light");
+  });
+
   it("releases saving after reload invalidates an update response", async () => {
     const pendingUpdate = deferred<
       Awaited<
@@ -119,6 +171,43 @@ describe("useAppSettings concurrent activity", () => {
     });
 
     expect(controller?.clearingKey).toBe(false);
+  });
+
+  it("preserves loaded settings when a reload fails", async () => {
+    const loadedSettings = {
+      ...createDefaultAppSettings(),
+      appearance: { theme: "light" as const }
+    };
+    const get = vi
+      .fn<GitNestBridge["settings"]["get"]>()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          settings: loadedSettings,
+          storageState: "persisted"
+        }
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: "COMMAND_FAILED",
+          message: "settings unavailable",
+          details: {}
+        }
+      });
+    installBridge({ get });
+    await mountHarness();
+
+    expect(controller?.settings).toEqual(loadedSettings);
+
+    await act(async () => {
+      await controller!.reload();
+    });
+
+    expect(controller?.settings).toEqual(loadedSettings);
+    expect(controller?.error?.message).toBe(
+      "settings unavailable"
+    );
   });
 
   it("applies a settings event and ignores an older reload response", async () => {

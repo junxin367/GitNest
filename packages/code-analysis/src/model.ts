@@ -354,6 +354,8 @@ export interface CodeAnalysisSnapshot {
   generatedAt: string;
   roots: AnalysisRoot[];
   sourceState?: {
+    /** Git change baseline, including deleted paths absent from the inventory. */
+    changedPaths?: ChangedAnalysisPath[];
     worktreeStatuses: Array<{
       repositoryId: string;
       worktreeId: string;

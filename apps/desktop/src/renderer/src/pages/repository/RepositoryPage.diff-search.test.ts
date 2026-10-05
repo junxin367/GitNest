@@ -201,35 +201,31 @@ describe("repository changes loading presentation", () => {
     expect(
       shouldShowRepositoryChangesSkeleton({
         hasCurrentChanges: false,
-        hasError: false,
-        scopeChanged: false
+        loading: true
       })
     ).toBe(true);
   });
 
-  it("shows the skeleton immediately when switching repositories", () => {
+  it("keeps current data visible while reloading", () => {
     expect(
       shouldShowRepositoryChangesSkeleton({
         hasCurrentChanges: true,
-        hasError: false,
-        scopeChanged: true
+        loading: true
       })
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("reveals inputs only after current data or an error is ready", () => {
+  it("does not retain the skeleton after loading stops", () => {
     expect(
       shouldShowRepositoryChangesSkeleton({
         hasCurrentChanges: true,
-        hasError: false,
-        scopeChanged: false
+        loading: false
       })
     ).toBe(false);
     expect(
       shouldShowRepositoryChangesSkeleton({
         hasCurrentChanges: false,
-        hasError: true,
-        scopeChanged: false
+        loading: false
       })
     ).toBe(false);
   });

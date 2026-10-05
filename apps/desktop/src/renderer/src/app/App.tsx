@@ -18,6 +18,7 @@ import type {
 
 import {
   repositoryTabForTargetSwitch,
+  shouldOpenGlobalSearch,
   type AppView,
   type RepositoryTab,
   type WorkspaceTab
@@ -46,7 +47,7 @@ import {
   useWorkspaceWorktreeCommands
 } from "../features/worktree-command/useWorkspaceWorktreeCommands";
 import {
-  chunkRepositoryTargets,
+  requestRepositoryFetchBatches,
   resolveDefaultTerminalProfile,
   resolveStartupNavigation
 } from "../features/settings/settingsRuntime";
@@ -56,7 +57,8 @@ import type {
 } from "../pages/settings/ApplicationSettingsPage";
 import { WorkspaceCollectionPage } from "../pages/workspace-overview/WorkspaceCollectionPage";
 import { WorkspaceOverviewPage } from "../pages/workspace-overview/WorkspaceOverviewPage";
-import { Skeleton } from "../shared/ui/Skeleton";
+import { Skeleton, SkeletonSurface } from "../shared/ui/Skeleton";
+import { DiffWorkspaceSkeleton } from "../widgets/diff-workspace/DiffWorkspace";
 import { ActivityRail } from "../widgets/activity-rail/ActivityRail";
 import { AppTitlebar } from "../widgets/app-titlebar/AppTitlebar";
 import { DetailInspector } from "../widgets/detail-inspector/DetailInspector";
@@ -134,17 +136,21 @@ export function App() {
     workspace.workspace?.selectedTarget
   );
   const externalApplications = useExternalApplications(
-    view === "workspace"
+    view === "repository" &&
+      workspace.workspace?.selectedTarget
       ? {
-          scope: "workspace"
+          scope: "repository",
+          target: workspace.workspace.selectedTarget
         }
-      : view === "repository" &&
-          workspace.workspace?.selectedTarget
-        ? {
-            scope: "repository",
-            target: workspace.workspace.selectedTarget
-          }
-        : undefined
+      : undefined,
+    workspace.workspace?.id
+  );
+  const workspaceApplications = useExternalApplications(
+    workspace.workspace &&
+      (view === "workspace" || view === "repository")
+      ? { scope: "workspace" }
+      : undefined,
+    workspace.workspace?.id
   );
   const runtimeRefreshing = workspace.operations.some(
     (operation) =>
@@ -306,14 +312,8 @@ export function App() {
   ]);
 
   const fetchTargets = useCallback(
-    async (targets: RepositoryTargetDto[]) => {
-      for (const batch of chunkRepositoryTargets(targets)) {
-        await repositoryCommands.request({
-          type: "fetch",
-          targets: batch
-        });
-      }
-    },
+    (targets: RepositoryTargetDto[]) =>
+      requestRepositoryFetchBatches(targets, repositoryCommands.request),
     [repositoryCommands.request]
   );
 
@@ -349,8 +349,10 @@ export function App() {
       event: KeyboardEvent
     ) => {
       if (
-        (event.ctrlKey || event.metaKey) &&
-        event.key.toLowerCase() === "k" &&
+        shouldOpenGlobalSearch(
+          event,
+          document.documentElement.dataset.modalOpen === "true"
+        ) &&
         !repositoryCommands.preflight
       ) {
         event.preventDefault();
@@ -570,10 +572,12 @@ export function App() {
         <WorkspaceSidebar
           activeView={view}
           busy={workspace.busy}
+          error={workspace.error}
           sidebarHidden={directoryPanelHidden}
           snapshots={workspace.snapshots}
           workspaces={workspace.workspaces}
           onCreateWorkspace={workspace.createWorkspace}
+          onClearFeedback={workspace.clearFeedback}
           onSwitchWorkspace={workspace.switchWorkspace}
           onDeleteWorkspace={workspace.deleteWorkspace}
           onAddDirectory={workspace.chooseDirectory}
@@ -605,8 +609,9 @@ export function App() {
               snapshots={workspace.snapshots}
               view={view}
               workspace={workspace.workspace}
-              externalApplications={externalApplications}
+              externalApplications={workspaceApplications}
               commandActive={repositoryCommands.active}
+              commandFeedback={repositoryCommands}
               commandCompletionVersion={
                 repositoryCommands.completionVersion
               }
@@ -700,11 +705,24 @@ export function App() {
               id="main-content"
               tabIndex={-1}
             >
-              <Suspense fallback={<AppPageLoadingFallback />}>
+              <Suspense fallback={
+                <AppPageLoadingFallback
+                  view={view}
+                  repositoryTab={repositoryTab}
+                  workspaceTab={workspaceTab}
+                  commitPanelHeight={appSettings.settings.diff.commitPanelHeight}
+                />
+              }>
                 {workspace.operation === "switching" &&
+                workspace.workspace?.id !== workspace.switchingWorkspaceId &&
                 (view === "workspace" ||
                   view === "repository") ? (
-                  <AppPageLoadingFallback />
+                  <AppPageLoadingFallback
+                    view={view}
+                    repositoryTab={repositoryTab}
+                    workspaceTab={workspaceTab}
+                    commitPanelHeight={appSettings.settings.diff.commitPanelHeight}
+                  />
                 ) : view === "workspace" &&
                 workspaceTab === "overview" ? (
                   <WorkspaceOverviewPage
@@ -824,6 +842,7 @@ export function App() {
       {globalSearchOpen && (
         <GlobalSearchDialog
           changes={workspaceChangedFiles.changes}
+          changesLoaded={workspaceChangedFiles.loaded}
           changesLoading={workspaceChangedFiles.loading}
           failedChangeTargetCount={
             workspaceChangedFiles.failedTargetCount
@@ -898,36 +917,121 @@ export function App() {
   );
 }
 
-function AppPageLoadingFallback() {
+export function AppPageLoadingFallback({
+  view = "workspace",
+  repositoryTab = "overview",
+  workspaceTab = "overview",
+  commitPanelHeight
+}: {
+  view?: AppView;
+  repositoryTab?: RepositoryTab;
+  workspaceTab?: WorkspaceTab;
+  commitPanelHeight?: number;
+}) {
+  if (view === "repository" && repositoryTab === "changes") {
+    return (
+      <div className="changes-page">
+        <DiffWorkspaceSkeleton
+          className="changes-layout"
+          commitPanelHeight={commitPanelHeight}
+          showCommit
+        />
+      </div>
+    );
+  }
+  const overview =
+    (view === "workspace" && workspaceTab === "overview") ||
+    (view === "repository" && repositoryTab === "overview");
+  const layout = view === "settings" || view === "analysis"
+    ? view
+    : overview ? "overview" : "list";
+  const label = {
+    workspace: workspaceTab === "overview"
+      ? "正在读取 Workspace 概览" : "正在读取 Workspace",
+    repository: repositoryTab === "history"
+      ? "正在读取提交历史" : repositoryTab === "branches"
+        ? "正在读取分支" : repositoryTab === "worktrees"
+          ? "正在读取 Worktree" : "正在读取仓库概览",
+    analysis: "正在读取代码分析",
+    operations: "正在读取操作中心",
+    settings: "正在读取应用设置"
+  }[view];
   return (
-    <div
-      aria-busy="true"
-      aria-label="正在加载页面"
+    <SkeletonSurface
+      label={label}
       className="page-scroll gn-page-skeleton"
-      role="status"
+      data-layout={layout}
     >
       <div className="gn-skeleton-heading">
         <Skeleton height={12} variant="text" width="18%" />
         <Skeleton height={28} width="38%" />
         <Skeleton height={10} variant="text" width="62%" />
       </div>
-      <div className="gn-skeleton-panel">
-        <div className="gn-skeleton-panel-header">
-          <Skeleton height={14} width="32%" />
-          <Skeleton height={10} variant="text" width="20%" />
-        </div>
-        <div className="gn-skeleton-list">
-          {Array.from({ length: 5 }, (_, index) => (
-            <div className="gn-skeleton-row" key={index}>
-              <div className="gn-skeleton-row-copy">
-                <Skeleton height={11} />
-                <Skeleton height={9} variant="text" />
-              </div>
-              <Skeleton height={18} width="100%" />
+      {overview && (
+        <div className="gn-skeleton-metric-grid" aria-hidden="true">
+          {Array.from({ length: 4 }, (_, index) => (
+            <div className="gn-skeleton-card" key={index}>
+              <Skeleton height={10} width="48%" />
+              <Skeleton height={24} width="32%" />
+              <Skeleton height={9} width="72%" />
             </div>
           ))}
         </div>
-      </div>
+      )}
+      {layout === "settings" || layout === "analysis" ? (
+        <div className={`app-skeleton-columns is-${layout}`} aria-hidden="true">
+          <div className="gn-skeleton-panel">
+            <AppLoadingRows count={5} />
+          </div>
+          {layout === "settings" ? (
+            <div className="app-skeleton-settings-panels">
+              {Array.from({ length: 3 }, (_, index) => (
+                <div className="gn-skeleton-panel" key={index}>
+                  <div className="gn-skeleton-panel-header">
+                    <Skeleton height={12} width="40%" />
+                  </div>
+                  <AppLoadingRows count={3} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="gn-skeleton-panel app-skeleton-analysis-panel">
+              <div className="gn-skeleton-panel-header">
+                <Skeleton height={12} width="38%" />
+              </div>
+              <div className="app-skeleton-graph">
+                {Array.from({ length: 6 }, (_, index) => (
+                  <Skeleton height={48} width="100%" key={index} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="gn-skeleton-panel" aria-hidden="true">
+          <div className="gn-skeleton-panel-header">
+            <Skeleton height={14} width="32%" />
+            <Skeleton height={10} variant="text" width="20%" />
+          </div>
+          <AppLoadingRows count={5} />
+        </div>
+      )}
+    </SkeletonSurface>
+  );
+}
+
+function AppLoadingRows({ count }: { count: number }) {
+  return (
+    <div className="gn-skeleton-list">
+      {Array.from({ length: count }, (_, index) => (
+        <div className="gn-skeleton-row" key={index}>
+          <div className="gn-skeleton-row-copy">
+            <Skeleton height={11} />
+            <Skeleton height={9} variant="text" />
+          </div>
+          <Skeleton height={18} width="100%" />
+        </div>
+      ))}
     </div>
   );
 }

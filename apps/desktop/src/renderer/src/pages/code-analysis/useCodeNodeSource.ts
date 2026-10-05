@@ -24,11 +24,24 @@ const EMPTY_STATE: CodeNodeSourceState = {
 export function useCodeNodeSource(
   node: CodeGraphNodeDto | null
 ): CodeNodeSourceState {
-  const [state, setState] =
-    useState<CodeNodeSourceState>(EMPTY_STATE);
+  const [state, setScopedState] = useState({
+    nodeKey: "",
+    value: EMPTY_STATE
+  });
   const nodeId = node?.id ?? "";
+  const nodeKey = node
+    ? JSON.stringify([
+        node.id,
+        node.location.repositoryId,
+        node.location.worktreeId,
+        node.location.path,
+        node.location.line
+      ])
+    : "";
 
   useEffect(() => {
+    const setState = (value: CodeNodeSourceState) =>
+      setScopedState({ nodeKey, value });
     if (!nodeId) {
       setState(EMPTY_STATE);
       return;
@@ -82,7 +95,9 @@ export function useCodeNodeSource(
     return () => {
       disposed = true;
     };
-  }, [nodeId]);
+  }, [nodeId, nodeKey]);
 
-  return state;
+  return state.nodeKey === nodeKey
+    ? state.value
+    : { ...EMPTY_STATE, loading: Boolean(nodeId) };
 }

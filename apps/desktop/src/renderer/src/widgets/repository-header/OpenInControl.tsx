@@ -75,9 +75,16 @@ export function OpenInControl({
       }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
+        return;
+      }
+      if (event.key === "Escape" || event.key === "Tab") {
+        if (event.key === "Escape") {
+          event.preventDefault();
+        }
         close();
+        // Tab continues from the trigger in the toolbar's normal tab order.
+        triggerRef.current?.focus({ preventScroll: true });
       }
     };
 
@@ -86,9 +93,6 @@ export function OpenInControl({
     window.addEventListener("blur", close);
     window.addEventListener("resize", close);
     window.addEventListener("scroll", handleScroll, true);
-    menuRef.current
-      ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
-      ?.focus();
 
     return () => {
       document.removeEventListener(
@@ -102,6 +106,19 @@ export function OpenInControl({
     };
   }, [menuOpen]);
 
+  const openMenu = () => {
+    if (menuOpen) {
+      menuRef.current
+        ?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')
+        ?.focus({ preventScroll: true });
+      return;
+    }
+    setMenuOpen(true);
+    if (!applications.loading) {
+      void applications.reload();
+    }
+  };
+
   const menu =
     menuOpen
       ? (
@@ -109,6 +126,7 @@ export function OpenInControl({
           align="end"
           anchor={triggerRef.current}
           aria-label={`选择用于打开${contextLabel}的应用`}
+          autoFocus
           className="open-in-menu"
           ref={menuRef}
           side="bottom"
@@ -162,7 +180,6 @@ export function OpenInControl({
           aria-label="选择打开方式"
           className="open-in-menu-trigger"
           disabled={
-            applications.loading ||
             applications.active !== null ||
             applications.profiles.length === 0
           }
@@ -171,8 +188,17 @@ export function OpenInControl({
               setMenuOpen(false);
               return;
             }
-            setMenuOpen(true);
-            void applications.reload();
+            openMenu();
+          }}
+          onKeyDown={(event) => {
+            if (
+              event.key === "ArrowDown" &&
+              !event.nativeEvent.isComposing &&
+              event.keyCode !== 229
+            ) {
+              event.preventDefault();
+              openMenu();
+            }
           }}
           ref={triggerRef}
           title="选择另一个本地应用"

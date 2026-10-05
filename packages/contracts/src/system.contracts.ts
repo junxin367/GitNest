@@ -56,6 +56,7 @@ import type {
   RepositoryStashesRequest,
   RepositoryPathsMutationDto,
   RepositoryPathsMutationRequest,
+  RepositoryDiscardRequest,
   RepositoryQueryRequest
 } from "./repository.contracts";
 import type {
@@ -307,7 +308,7 @@ export interface GitNestBridge {
       request: RepositoryPathsMutationRequest
     ): Promise<GitReadResult<RepositoryPathsMutationDto>>;
     discard(
-      request: RepositoryPathsMutationRequest
+      request: RepositoryDiscardRequest
     ): Promise<GitReadResult<RepositoryPathsMutationDto>>;
     mutateStash(
       request: RepositoryStashMutationRequest

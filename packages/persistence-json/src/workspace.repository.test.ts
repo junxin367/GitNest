@@ -2,11 +2,18 @@ import {
   mkdir,
   readFile,
   readdir,
+  rename,
   writeFile
 } from "node:fs/promises";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  vi
+} from "vitest";
 
 import {
   WORKSPACE_CATALOG_SCHEMA_VERSION,
@@ -720,11 +727,20 @@ describe("JsonWorkspaceStore", () => {
         refreshedAt: "2026-09-04T11:59:00.000Z"
       }
     ];
+    const expectedSnapshots = structuredClone(snapshots);
+    const clone = vi.spyOn(globalThis, "structuredClone");
 
-    await store.save("workspace", snapshots);
+    try {
+      const saving = store.save("workspace", snapshots);
+      expect(clone).not.toHaveBeenCalled();
+      snapshots[0]!.head = "mutated-after-save-call";
+      await saving;
+    } finally {
+      clone.mockRestore();
+    }
 
     await expect(store.load("workspace")).resolves.toEqual(
-      snapshots
+      expectedSnapshots
     );
     await expect(store.load("other-workspace")).rejects.toMatchObject({
       code: "INVALID_PERSISTED_DATA"
@@ -821,7 +837,113 @@ describe("JsonWorkspaceStore", () => {
     expect(persisted.schemaVersion).toBe(1);
     expect(persisted.unknownLegacyField).toBeUndefined();
   });
+
+  it.each([
+    ["pending cache", true, false],
+    ["pending empty cache", true, true],
+    ["primary empty cache", false, true]
+  ] as const)(
+    "prefers scoped %s over legacy snapshots",
+    async (_label, pendingOnly, empty) => {
+      temporary = await createTemporaryDirectoryFixture("snapshot-scoped-recovery");
+      const directoryPath = join(temporary.path, "items");
+      const legacyFilePath = join(temporary.path, "legacy.json");
+      const scopedPath = join(directoryPath, "default.snapshots.json");
+      const legacy = [createRecoverySnapshot("legacy")];
+      const current = empty ? [] : [createRecoverySnapshot("current")];
+      await new JsonRepositorySnapshotStore(legacyFilePath).save("default", legacy);
+      await new JsonRepositorySnapshotStore(scopedPath).save("default", current);
+      const pendingPath = join(directoryPath, ".default.snapshots.json.pending.tmp");
+      if (pendingOnly) {
+        await rename(scopedPath, pendingPath);
+      }
+      const store = new JsonWorkspaceSnapshotCollectionStore({ directoryPath, legacyFilePath });
+
+      await expect(store.load("default")).resolves.toEqual(current);
+      await expect(store.load("default")).resolves.toEqual(current);
+      expect(JSON.parse(await readFile(scopedPath, "utf8")).snapshots).toEqual(current);
+      if (pendingOnly) {
+        await expect(readFile(pendingPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect(JSON.parse(await readFile(legacyFilePath, "utf8")).snapshots).toEqual(legacy);
+    }
+  );
+
+  it.each([false, true])(
+    "migrates legacy snapshots once and preserves an emptied scoped cache (pending=%s)",
+    async (pendingOnly) => {
+      temporary = await createTemporaryDirectoryFixture("snapshot-legacy-recovery");
+      const directoryPath = join(temporary.path, "items");
+      const legacyFilePath = join(temporary.path, "legacy.json");
+      const snapshots = [createRecoverySnapshot("legacy")];
+      await new JsonRepositorySnapshotStore(legacyFilePath).save("default", snapshots);
+      if (pendingOnly) {
+        await rename(legacyFilePath, join(temporary.path, ".legacy.json.pending.tmp"));
+      }
+      const store = new JsonWorkspaceSnapshotCollectionStore({ directoryPath, legacyFilePath });
+
+      await expect(store.load("default")).resolves.toEqual(snapshots);
+      await store.save("default", []);
+      await expect(
+        new JsonWorkspaceSnapshotCollectionStore({ directoryPath, legacyFilePath }).load("default")
+      ).resolves.toEqual([]);
+    }
+  );
+
+  it.each([false, true])(
+    "preserves corrupt scoped snapshots and refuses writes instead of using legacy (pending=%s)",
+    async (pendingOnly) => {
+      temporary = await createTemporaryDirectoryFixture("snapshot-collection-invalid");
+      const directoryPath = join(temporary.path, "items");
+      const legacyFilePath = join(temporary.path, "legacy.json");
+      await new JsonRepositorySnapshotStore(legacyFilePath).save(
+        "default", [createRecoverySnapshot("legacy")]
+      );
+      await mkdir(directoryPath, { recursive: true });
+      const corruptPath = join(
+        directoryPath,
+        pendingOnly ? ".default.snapshots.json.pending.tmp" : "default.snapshots.json"
+      );
+      await writeFile(corruptPath, "{malformed", "utf8");
+      const store = new JsonWorkspaceSnapshotCollectionStore({ directoryPath, legacyFilePath });
+
+      await expect(store.load("default")).rejects.toMatchObject({ code: "INVALID_PERSISTED_DATA" });
+      await expect(store.save("default", [])).rejects.toMatchObject({
+        code: pendingOnly ? "INVALID_PERSISTED_DATA" : "PERSISTENCE_FAILED"
+      });
+      await expect(readFile(corruptPath, "utf8")).resolves.toBe("{malformed");
+    }
+  );
+
+  it("keeps absent scoped and legacy snapshot stores absent", async () => {
+    temporary = await createTemporaryDirectoryFixture("snapshot-collection-missing");
+    const directoryPath = join(temporary.path, "items");
+    const legacyFilePath = join(temporary.path, "legacy.json");
+    const store = new JsonWorkspaceSnapshotCollectionStore({ directoryPath, legacyFilePath });
+
+    await expect(store.load("default")).resolves.toEqual([]);
+    await expect(readFile(join(directoryPath, "default.snapshots.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(legacyFilePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });
+
+function createRecoverySnapshot(head: string) {
+  return {
+    repositoryId: "repository",
+    worktreeId: "worktree",
+    head,
+    ahead: 0,
+    behind: 0,
+    staged: 0,
+    unstaged: 0,
+    untracked: 0,
+    conflicted: 0,
+    refreshPending: false,
+    stale: false,
+    refreshedAt: "2026-09-20T11:59:00.000Z"
+  };
+}
 
 interface MutableLegacyWorkspaceEntry
   extends Record<string, unknown> {

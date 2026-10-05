@@ -414,7 +414,15 @@ export class AccountService {
     const verifiedAt = this.#now();
     await this.#mutate(async () => {
       const latest = await this.#load();
-      requireAccount(latest, account.id);
+      const current = requireAccount(latest, account.id);
+      if (
+        current.credentialRef !== account.credentialRef ||
+        current.host !== account.host ||
+        current.authType !== account.authType ||
+        current.username !== account.username
+      ) {
+        return;
+      }
       await this.#store.save({
         ...latest,
         profiles: latest.profiles.map((candidate) =>
@@ -679,8 +687,9 @@ function normalizeRepositoryUrl(
     !parsed.pathname ||
     parsed.pathname === "/" ||
     parsed.hash ||
+    parsed.password ||
     (account.authType === "https-token" &&
-      (parsed.username || parsed.password))
+      parsed.username)
   ) {
     throw invalidRepositoryUrl();
   }
@@ -690,7 +699,7 @@ function normalizeRepositoryUrl(
 function invalidRepositoryUrl(): GitError {
   return new GitError(
     "INVALID_REQUEST",
-    "The repository URL must match the account host and authentication protocol without embedded HTTPS credentials."
+    "The repository URL must match the account host and authentication protocol without embedded passwords or HTTPS credentials."
   );
 }
 

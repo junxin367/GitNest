@@ -6,8 +6,108 @@ import {
   type CodeAnalysisSnapshot,
   type CodeGraphNode
 } from "./index";
+import { buildCodeGraph } from "./graph-builder";
+import { parseSourceFile } from "./source-parser";
+import type { AnalysisSourceFile } from "./model";
 
 describe("createChangedAnalysisSnapshot", () => {
+  it("keeps a truncated incremental graph partial", () => {
+    const previous = createWorkspaceSnapshot();
+    previous.indexStatus = {
+      fullIndexAvailable: true,
+      resultCompleteness: "complete",
+      impactCoverage: "confirmed",
+      message: "Complete"
+    };
+    const refreshed = createWorkspaceSnapshot();
+    refreshed.stats.truncated = true;
+    refreshed.indexStatus = {
+      fullIndexAvailable: true,
+      resultCompleteness: "partial",
+      impactCoverage: "possible-omissions",
+      message: "Graph truncated"
+    };
+
+    const merged = mergeIncrementalWorkspaceSnapshot(
+      previous, refreshed, []
+    );
+
+    expect(merged.indexStatus).toEqual(refreshed.indexStatus);
+    expect(merged.stats.truncated).toBe(true);
+  });
+
+  it("keeps refreshed builtin resolution authoritative while preserving unchanged LSP edges", () => {
+    const file = (path: string): AnalysisSourceFile => ({
+      absolutePath: `C:\\workspace\\${path}`,
+      canonicalPath: `c:\\workspace\\${path}`,
+      relativePath: path,
+      rootPath: "C:\\workspace",
+      repositoryId: "repository",
+      worktreeId: "worktree",
+      language: "typescript",
+      size: 100,
+      modifiedAtMs: 1,
+      fingerprint: path,
+      changed: false
+    });
+    const caller = parseSourceFile(
+      file("caller.ts"),
+      "export function caller() { return target(); }"
+    );
+    const first = parseSourceFile(
+      file("first.ts"),
+      "export function target() { return 1; }"
+    );
+    const second = parseSourceFile(
+      { ...file("second.ts"), changed: true },
+      "export function target() { return 2; }"
+    );
+    const previous = {
+      ...createWorkspaceSnapshot(),
+      ...buildCodeGraph({
+        files: [caller, first], scope: "workspace", graphDepth: 3
+      })
+    };
+    const refreshed = {
+      ...createWorkspaceSnapshot(),
+      ...buildCodeGraph({
+        files: [caller, first, second],
+        scope: "workspace",
+        graphDepth: 3
+      })
+    };
+    const oldCall = previous.edges.find(
+      (edge) => edge.kind === "calls"
+    )!;
+    expect(oldCall).toBeDefined();
+    expect(refreshed.edges.some((edge) => edge.kind === "calls"))
+      .toBe(false);
+    previous.edges.push({
+      ...oldCall,
+      id: "retained-semantic-reference",
+      kind: "references",
+      source: "lsp",
+      confidence: "exact"
+    });
+    const merged = mergeIncrementalWorkspaceSnapshot(
+      previous,
+      refreshed,
+      [{
+        repositoryId: "repository",
+        worktreeId: "worktree",
+        path: "second.ts"
+      }]
+    );
+    expect(merged.edges.some((edge) => edge.kind === "calls"))
+      .toBe(false);
+    expect(merged.edges).toContainEqual(
+      expect.objectContaining({
+        id: "retained-semantic-reference",
+        source: "lsp"
+      })
+    );
+  });
+
   it("keeps changed nodes, changed-chain members, and adjacent relationships", () => {
     const snapshot = createWorkspaceSnapshot();
 

@@ -199,13 +199,16 @@ export class CodeAnalysisService {
   }
 
   async getState(): Promise<CodeAnalysisState> {
+    const generation = this.#selectionGeneration;
     const [workspace, settings] = await Promise.all([
       this.#workspace.getCurrent(),
       this.#settingsProvider()
     ]);
     await this.#ensureSnapshotHydrated(
       workspace,
-      settings
+      settings,
+      undefined,
+      generation
     );
     return cloneState(this.#state);
   }
@@ -237,20 +240,27 @@ export class CodeAnalysisService {
     }
     await this.#settingsValidator?.(settings);
     this.#assertNotDisposed();
+    const generation = this.#selectionGeneration;
     const workspace = await this.#workspace.getCurrent();
     this.#assertNotDisposed();
     const context = resolveAnalysisContext(workspace);
-    await this.#ensureSnapshotHydrated(
+    const currentSelection = await this.#ensureSnapshotHydrated(
       workspace,
       settings,
-      context
+      context,
+      generation
     );
     this.#assertNotDisposed();
     const selectionKey = analysisSelectionKey(
       workspace,
       context
     );
-
+    if (!currentSelection || selectionKey !== this.#selectionKey) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The Workspace changed while preparing code analysis. Run analysis again."
+      );
+    }
     this.#background?.controller.abort(
       new AnalysisCancelledError(
         "A manual code analysis replaced the background refresh."
@@ -329,23 +339,30 @@ export class CodeAnalysisService {
     }
     await this.#settingsValidator?.(settings);
     this.#assertNotDisposed();
+    const generation = this.#selectionGeneration;
     const workspace = await this.#workspace.getCurrent();
     this.#assertNotDisposed();
     const context = resolveAnalysisContext(workspace);
-    await this.#ensureSnapshotHydrated(
+    const currentSelection = await this.#ensureSnapshotHydrated(
       workspace,
       settings,
-      context
+      context,
+      generation
     );
     this.#assertNotDisposed();
-    if (this.#active || this.#background || signal?.aborted) {
-      return null;
-    }
-
     const selectionKey = analysisSelectionKey(
       workspace,
       context
     );
+    if (
+      !currentSelection ||
+      selectionKey !== this.#selectionKey ||
+      this.#active ||
+      this.#background ||
+      signal?.aborted
+    ) {
+      return null;
+    }
     const analysisId = this.#idFactory();
     const controller = new AbortController();
     const abort = () =>
@@ -404,6 +421,7 @@ export class CodeAnalysisService {
     }
     const restoreGeneration =
       ++this.#scopeRestoreGeneration;
+    const selectionGeneration = this.#selectionGeneration;
     const [workspace, settings] = await Promise.all([
       this.#workspace.getCurrent(),
       this.#settingsProvider()
@@ -416,13 +434,20 @@ export class CodeAnalysisService {
       return false;
     }
     const context = resolveAnalysisContext(workspace);
-    await this.#ensureSnapshotHydrated(
+    const currentSelection = await this.#ensureSnapshotHydrated(
       workspace,
       settings,
-      context
+      context,
+      selectionGeneration
     );
     this.#assertNotDisposed();
+    const selectionKey = analysisSelectionKey(
+      workspace,
+      context
+    );
     if (
+      !currentSelection ||
+      selectionKey !== this.#selectionKey ||
       restoreGeneration !==
       this.#scopeRestoreGeneration
     ) {
@@ -435,10 +460,6 @@ export class CodeAnalysisService {
       );
     }
 
-    const selectionKey = analysisSelectionKey(
-      workspace,
-      context
-    );
     const configurationKey =
       codeAnalysisSnapshotConfigurationKey(
         settings,
@@ -517,17 +538,19 @@ export class CodeAnalysisService {
   async getSnapshot(
     detail?: CodeAnalysisSnapshotDetail
   ): Promise<CodeAnalysisSnapshotView | null> {
+    const generation = this.#selectionGeneration;
     const [workspace, settings] = await Promise.all([
       this.#workspace.getCurrent(),
       this.#settingsProvider()
     ]);
     const context = tryResolveAnalysisContext(workspace);
-    await this.#ensureSnapshotHydrated(
+    const currentSelection = await this.#ensureSnapshotHydrated(
       workspace,
       settings,
-      context
+      context,
+      generation
     );
-    if (!this.#snapshot) {
+    if (!currentSelection || !this.#snapshot) {
       return null;
     }
     if (
@@ -666,14 +689,21 @@ export class CodeAnalysisService {
   handleWorkspaceChanged(workspace: Workspace): void {
     const context = tryResolveAnalysisContext(workspace);
     this.#acceptWorkspaceSelection(workspace, context);
+    const generation = this.#selectionGeneration;
     void this.#settingsProvider()
-      .then((settings) =>
-        this.#ensureSnapshotHydrated(
+      .then((settings) => {
+        if (
+          this.#disposed ||
+          generation !== this.#selectionGeneration
+        ) {
+          return;
+        }
+        return this.#ensureSnapshotHydrated(
           workspace,
           settings,
           context
-        )
-      )
+        );
+      })
       .catch(() => undefined);
   }
 
@@ -741,21 +771,27 @@ export class CodeAnalysisService {
   async #ensureSnapshotHydrated(
     workspace: Workspace,
     settings: CodeAnalysisSettings,
-    providedContext?: AnalysisContext | null
-  ): Promise<void> {
+    providedContext?: AnalysisContext | null,
+    expectedGeneration = this.#selectionGeneration
+  ): Promise<boolean> {
     const context =
       providedContext === undefined
         ? tryResolveAnalysisContext(workspace)
         : providedContext;
-    this.#acceptWorkspaceSelection(workspace, context);
-    if (!context || this.#disposed) {
-      return;
+    const selectionKey = context
+      ? analysisSelectionKey(workspace, context)
+      : `${workspace.id}\0unavailable`;
+    if (
+      this.#disposed ||
+      (expectedGeneration !== this.#selectionGeneration &&
+        selectionKey !== this.#selectionKey)
+    ) {
+      return false;
     }
-
-    const selectionKey = analysisSelectionKey(
-      workspace,
-      context
-    );
+    this.#acceptWorkspaceSelection(workspace, context);
+    if (!context) {
+      return true;
+    }
     const configurationKey =
       codeAnalysisSnapshotConfigurationKey(
         settings,
@@ -775,14 +811,14 @@ export class CodeAnalysisService {
       )
     ) {
       this.#hydratedCacheKey = cacheKey;
-      return;
+      return true;
     }
 
     if (
       this.#active?.selectionKey === selectionKey ||
       this.#hydratedCacheKey === cacheKey
     ) {
-      return;
+      return true;
     }
 
     if (this.#snapshot) {
@@ -794,20 +830,22 @@ export class CodeAnalysisService {
 
     if (this.#restore?.cacheKey === cacheKey) {
       await this.#restore.task;
-      return;
+      return !this.#disposed && selectionKey === this.#selectionKey;
     }
 
     const generation = this.#selectionGeneration;
     const task = (async () => {
       let snapshot: CodeAnalysisSnapshot | null = null;
+      let cacheReadCompleted = false;
       try {
         snapshot = await this.#snapshotStore.load(
           workspace.id,
           settings,
           context.roots
         );
+        cacheReadCompleted = true;
       } catch {
-        // A missing or invalid cache is equivalent to no prior analysis.
+        // A later request may retry a transient cache read failure.
       }
 
       if (
@@ -818,6 +856,9 @@ export class CodeAnalysisService {
         return;
       }
 
+      if (!cacheReadCompleted) {
+        return;
+      }
       this.#hydratedCacheKey = cacheKey;
       if (
         !snapshot ||
@@ -853,6 +894,7 @@ export class CodeAnalysisService {
         this.#restore = undefined;
       }
     }
+    return !this.#disposed && selectionKey === this.#selectionKey;
   }
 
   #setIdleState(

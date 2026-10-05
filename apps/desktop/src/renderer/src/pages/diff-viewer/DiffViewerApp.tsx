@@ -23,6 +23,7 @@ import {
 import { getSnapshotContentRevision } from "../../entities/workspace/model";
 import { useExternalApplications } from "../../features/external-application/useExternalApplications";
 import { useAppSettings } from "../../features/settings/useAppSettings";
+import { resolveRepositoryFileBrowsing } from "../../features/settings/settingsRuntime";
 import { useWindowMaximized } from "../../shared/lib/useWindowMaximized";
 import {
   buildDiffViewerFiles,
@@ -66,6 +67,9 @@ function DiffViewer({
   request: OpenDiffViewerRequest;
 }) {
   const appSettings = useAppSettings();
+  const fileBrowsing = resolveRepositoryFileBrowsing(
+    appSettings.settings, request.target.repositoryId
+  );
   const { isMaximized, toggleMaximize } =
     useWindowMaximized();
   const externalApplications = useExternalApplications({
@@ -143,6 +147,15 @@ function DiffViewer({
   const selectedFile =
     files.find((file) => file.key === selectedKey) ??
     files[0];
+  const selectedDiffRequestKey = selectedFile
+    ? [request.target.repositoryId, request.target.worktreeId, selectedFile.key].join("\u0001")
+    : null;
+  const selectedDiff =
+    selectedFile && diff?.path === selectedFile.path && diff.mode === selectedFile.mode
+      ? diff
+      : null;
+  const selectedDiffLoading = Boolean(selectedFile) &&
+    (diffLoading || diffRequestKeyRef.current !== selectedDiffRequestKey);
   const workspaceFiles = useMemo(
     () =>
       files.map((file) =>
@@ -166,7 +179,7 @@ function DiffViewer({
   );
   const showChangesSkeleton = useSkeletonVisibility(
     changesLoading,
-    changesLoaded
+    changesLoaded || selectedDiff !== null
   );
 
   useEffect(() => {
@@ -192,7 +205,6 @@ function DiffViewer({
   useEffect(() => {
     if (targetMissing) {
       setChangesLoading(false);
-      setChangesLoaded(true);
       return;
     }
 
@@ -223,6 +235,7 @@ function DiffViewer({
         const nextFiles = buildDiffViewerFiles(
           result.value.snapshot.changes
         );
+        setChangesLoaded(true);
         setBranch(result.value.snapshot.branch);
         setFiles(nextFiles);
         if (nextFiles.length === 0) {
@@ -250,7 +263,6 @@ function DiffViewer({
           !targetMissingRef.current &&
           requestGeneration === requestGenerationRef.current
         ) {
-          setChangesLoaded(true);
           setChangesLoading(false);
         }
       });
@@ -283,7 +295,7 @@ function DiffViewer({
       setBranch(undefined);
       setDiff(null);
       setChangesLoading(false);
-      setChangesLoaded(true);
+      setChangesLoaded(false);
       setDiffLoading(false);
       setChangesError(null);
       setDiffError(null);
@@ -320,6 +332,9 @@ function DiffViewer({
         if (!snapshot) {
           clearMissingTarget();
           return;
+        }
+        if (targetMissingRef.current) {
+          setChangesLoading(true);
         }
         targetMissingRef.current = false;
         setTargetMissing(false);
@@ -470,14 +485,14 @@ function DiffViewer({
         message: "当前工作区没有可查看的本地变更。",
         title: "工作区干净"
       }
-      : diffLoading && !diff
+      : selectedDiffLoading && !selectedDiff
         ? {
             busy: true,
             icon: "refresh",
             message: "正在读取所选文件内容。",
             title: "读取 Diff…"
           }
-        : diffError
+        : diffError && !selectedDiff
           ? {
               icon: "warning",
               message: diffError.message,
@@ -485,7 +500,7 @@ function DiffViewer({
             }
           : undefined;
   const changesMessage =
-    changesError && files.length <= 1
+    changesError && !changesLoaded
       ? {
           icon: "warning" as const,
           message: changesError.message,
@@ -567,6 +582,7 @@ function DiffViewer({
         <DiffWorkspaceSkeleton
           className="diff-viewer-workspace"
           label="正在读取工作区变更"
+          layout={appSettings.settings.diff.layout}
         />
       ) : (
         <DiffWorkspace
@@ -582,7 +598,7 @@ function DiffViewer({
         className="diff-viewer-workspace"
         configuration={standaloneDiffWorkspaceConfiguration}
         externalApplications={externalApplications}
-        fileView={appSettings.settings.diff.fileView}
+        fileView={fileBrowsing.fileView}
         files={workspaceFiles}
         mutationBusy={mutations.active !== null}
         onRefresh={() =>
@@ -590,7 +606,12 @@ function DiffViewer({
         }
         onFileViewChange={(fileView) =>
           void appSettings.update(
-            { diff: { fileView } },
+            {
+              repositoryFileBrowsing: {
+                repositoryId: request.target.repositoryId,
+                fileView
+              }
+            },
             { silent: true }
           )
         }
@@ -623,13 +644,13 @@ function DiffViewer({
           )
         }
         panelProps={{
-          additions: diff?.additions,
-          binary: diff?.binary,
-          content: diff?.content,
+          additions: selectedDiff?.additions,
+          binary: selectedDiff?.binary,
+          content: selectedDiff?.content,
           contextLines: diffContextLines,
-          contextLoading: diffLoading,
-          deletions: diff?.deletions,
-          media: diff?.media,
+          contextLoading: selectedDiffLoading,
+          deletions: selectedDiff?.deletions,
+          media: selectedDiff?.media,
           onContextRequest: requestDiffContext,
           onPathCopyStatusChange: setPathCopyStatus,
           onLayoutPreferenceChange: (layout) =>
@@ -645,18 +666,18 @@ function DiffViewer({
           preferredLayout: appSettings.settings.diff.layout,
           preferredWrap: appSettings.settings.diff.wrap,
           state: panelState,
-          truncated: diff?.truncated
+          truncated: selectedDiff?.truncated
         }}
         selectedFileKey={selectedKey}
         treePreference={{
           initiallyCollapsed:
-            appSettings.settings.diff
-              .treeDirectoriesCollapsed,
+            fileBrowsing.treeDirectoriesCollapsed,
           scopeKey: `${request.target.repositoryId}:${request.target.worktreeId}`,
           onCollapsedPreferenceChange: (collapsed) =>
             void appSettings.update(
               {
-                diff: {
+                repositoryFileBrowsing: {
+                  repositoryId: request.target.repositoryId,
                   treeDirectoriesCollapsed: collapsed
                 }
               },
@@ -700,7 +721,7 @@ function DiffViewer({
             tone="error"
           />
         ) : null}
-        {changesError && files.length > 1 ? (
+        {changesError && changesLoaded ? (
           <Toast
             message={changesError.message}
             onClose={() => setChangesError(null)}
@@ -721,6 +742,14 @@ function DiffViewer({
             message={mutations.error.message}
             onClose={mutations.clearFeedback}
             title="Git 操作失败"
+            tone="error"
+          />
+        ) : null}
+        {diffError && selectedDiff ? (
+          <Toast
+            message={diffError.message}
+            onClose={() => setDiffError(null)}
+            title="Diff 刷新失败"
             tone="error"
           />
         ) : null}

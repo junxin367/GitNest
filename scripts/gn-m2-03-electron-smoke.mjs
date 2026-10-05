@@ -81,6 +81,7 @@ try {
   const target = await waitForPageTarget(port, electron);
   cdp = await CdpClient.connect(target.webSocketDebuggerUrl);
   await cdp.send("Page.enable");
+  await cdp.waitForDocument();
   await cdp.send("Runtime.enable");
   await cdp.send("Log.enable");
   await cdp.waitFor(

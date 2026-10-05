@@ -26,7 +26,7 @@ export function parseWorktrees(output: string): Worktree[] {
       return;
     }
 
-    if (!current.head) {
+    if (!current.head && !current.bare) {
       throw new GitError(
         "INVALID_GIT_OUTPUT",
         `Worktree ${current.path} is missing its HEAD.`
@@ -35,7 +35,7 @@ export function parseWorktrees(output: string): Worktree[] {
 
     worktrees.push({
       path: current.path,
-      head: current.head,
+      head: current.head ?? "",
       ...(current.branch ? { branch: current.branch } : {}),
       bare: current.bare,
       detached: current.detached,

@@ -193,7 +193,10 @@ function assignDiscoveriesToRoots(
         discovery.path,
         fileSystem
       );
-      if (!owner) {
+      if (
+        !owner ||
+        isExcludedFromRoot(owner, discovery.path, fileSystem)
+      ) {
         continue;
       }
       const discoveries = assigned.get(owner.canonicalPath);
@@ -214,6 +217,30 @@ function assignDiscoveriesToRoots(
       [...discoveries.values()]
     ])
   );
+}
+
+function isExcludedFromRoot(
+  root: WorkspaceRoot,
+  path: string,
+  fileSystem: WorkspaceFileSystem
+): boolean {
+  const relativePath = fileSystem
+    .relativeSegments(root.path, path)
+    .join("/")
+    .toLocaleLowerCase();
+  return root.excludes.some((value) => {
+    const excluded = value
+      .trim()
+      .split(/[\\/]+/u)
+      .filter((segment) => segment && segment !== ".")
+      .join("/")
+      .toLocaleLowerCase();
+    // The scanner skips an excluded directory before visiting its descendants.
+    return Boolean(excluded) && (
+      relativePath === excluded ||
+      relativePath.startsWith(`${excluded}/`)
+    );
+  });
 }
 
 function findOwningRoot(
@@ -269,14 +296,23 @@ function registerPreviousTopologyForRoot(
 
   for (const repository of current.repositories) {
     if (repositoryIds.has(repository.id)) {
+      const existing = repositories.get(repository.id);
       repositories.set(repository.id, {
-        ...repository,
-        worktreeIds: [...repository.worktreeIds]
+        ...(existing ?? repository),
+        worktreeIds: [
+          ...new Set([
+            ...(existing?.worktreeIds ?? []),
+            ...repository.worktreeIds
+          ])
+        ]
       });
     }
   }
   for (const worktree of current.worktrees) {
-    if (repositoryIds.has(worktree.repositoryId)) {
+    if (
+      repositoryIds.has(worktree.repositoryId) &&
+      !worktrees.has(worktree.id)
+    ) {
       worktrees.set(worktree.id, { ...worktree });
     }
   }
@@ -306,7 +342,11 @@ function preserveGroupsForRoot(
       const owner = worktree
         ? findOwningRoot(roots, worktree.path, fileSystem)
         : undefined;
-      return owner?.canonicalPath === root.canonicalPath;
+      return Boolean(
+        worktree &&
+        owner?.canonicalPath === root.canonicalPath &&
+        !isExcludedFromRoot(root, worktree.path, fileSystem)
+      );
     });
     return targets.length > 0
       ? [

@@ -31,19 +31,30 @@ interface BranchMenuState {
   branchName: string;
 }
 
-export function RepositoryBranches({
-  controller,
-  commands,
-  snapshot,
-  target,
-  worktreePath
-}: {
+interface RepositoryBranchesProps {
   controller: ReturnType<typeof useRepositoryDetails>;
   commands: RepositoryCommandController;
   snapshot: RepositoryStatusSnapshotDto | undefined;
   target: RepositoryTargetDto;
   worktreePath: string | undefined;
-}) {
+}
+
+export function RepositoryBranches(props: RepositoryBranchesProps) {
+  return (
+    <RepositoryBranchesContent
+      key={JSON.stringify([props.target.repositoryId, props.target.worktreeId])}
+      {...props}
+    />
+  );
+}
+
+function RepositoryBranchesContent({
+  controller,
+  commands,
+  snapshot,
+  target,
+  worktreePath
+}: RepositoryBranchesProps) {
   const branches = controller.branches?.branches ?? [];
   const [createFormOpen, setCreateFormOpen] = useState(false);
   const [newBranch, setNewBranch] = useState("");
@@ -53,6 +64,8 @@ export function RepositoryBranches({
   const [branchMenu, setBranchMenu] =
     useState<BranchMenuState | null>(null);
   const branchMenuRef = useRef<HTMLDivElement>(null);
+  const createDraftRevision = useRef(0);
+  const renameDraftRevision = useRef(0);
   const localCount = branches.filter(
     (branch) => !branch.remote
   ).length;
@@ -89,13 +102,9 @@ export function RepositoryBranches({
       if (event.key === "Escape") {
         event.preventDefault();
         close();
+        branchMenu.anchor.focus({ preventScroll: true });
       }
     };
-    const focusFrame = window.requestAnimationFrame(() => {
-      branchMenuRef.current
-        ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
-        ?.focus({ preventScroll: true });
-    });
 
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
@@ -103,7 +112,6 @@ export function RepositoryBranches({
     window.addEventListener("resize", close);
     window.addEventListener("scroll", handleScroll, true);
     return () => {
-      window.cancelAnimationFrame(focusFrame);
       document.removeEventListener(
         "pointerdown",
         handlePointerDown
@@ -121,6 +129,7 @@ export function RepositoryBranches({
     if (!branch || commands.busy) {
       return;
     }
+    const submittedRevision = createDraftRevision.current;
     void commands
       .request({
         type: "create-branch",
@@ -128,7 +137,7 @@ export function RepositoryBranches({
         branch
       })
       .then((accepted) => {
-        if (accepted) {
+        if (accepted && createDraftRevision.current === submittedRevision) {
           setNewBranch("");
           setCreateFormOpen(false);
         }
@@ -148,6 +157,7 @@ export function RepositoryBranches({
     ) {
       return;
     }
+    const submittedRevision = renameDraftRevision.current;
     void commands
       .request({
         type: "rename-branch",
@@ -156,7 +166,7 @@ export function RepositoryBranches({
         newName
       })
       .then((accepted) => {
-        if (accepted) {
+        if (accepted && renameDraftRevision.current === submittedRevision) {
           setRenamingBranch(null);
           setRenamedBranch("");
         }
@@ -188,7 +198,7 @@ export function RepositoryBranches({
   return (
     <SkeletonBoundary
       fallback={<RepositoryBranchesSkeleton />}
-      hasContent={branches.length > 0}
+      hasContent={Boolean(controller.branches)}
       label="正在读取分支"
       loading={controller.loading.branches}
       surfaceClassName="repository-branches-page repository-branches-skeleton"
@@ -206,7 +216,10 @@ export function RepositoryBranches({
             aria-controls="new-branch-form"
             aria-expanded={createFormOpen}
             className="branch-header-action"
-            onClick={() => setCreateFormOpen((open) => !open)}
+            onClick={() => {
+              createDraftRevision.current += 1;
+              setCreateFormOpen((open) => !open);
+            }}
             type="button"
           >
             <Icon
@@ -227,9 +240,10 @@ export function RepositoryBranches({
                   fullWidth
                   id="new-branch-name"
                   maxLength={255}
-                  onChange={(event) =>
-                    setNewBranch(event.target.value)
-                  }
+                  onChange={(event) => {
+                    createDraftRevision.current += 1;
+                    setNewBranch(event.target.value);
+                  }}
                   placeholder="例如 feature/safe-sync"
                   size="small"
                   spellCheck={false}
@@ -350,9 +364,10 @@ export function RepositoryBranches({
                       aria-label={`重命名 ${branch.name}`}
                       autoFocus
                       maxLength={255}
-                      onChange={(event) =>
-                        setRenamedBranch(event.target.value)
-                      }
+                      onChange={(event) => {
+                        renameDraftRevision.current += 1;
+                        setRenamedBranch(event.target.value);
+                      }}
                       spellCheck={false}
                       value={renamedBranch}
                     />
@@ -371,6 +386,7 @@ export function RepositoryBranches({
                       className="mini-action"
                       disabled={commands.busy}
                       onClick={() => {
+                        renameDraftRevision.current += 1;
                         setRenamingBranch(null);
                         setRenamedBranch("");
                       }}
@@ -422,8 +438,10 @@ export function RepositoryBranches({
           <MenuPopover
             align="end"
             anchor={branchMenu.anchor}
+            autoFocus
             aria-label={`${branchMenuBranch.name} 分支操作`}
             className="branch-row-floating-menu"
+            key={branchMenuBranch.fullName}
             ref={branchMenuRef}
             side="bottom"
           >
@@ -459,6 +477,7 @@ export function RepositoryBranches({
               leading={<Icon name="settings" size={14} />}
               onClick={() => {
                 setBranchMenu(null);
+                renameDraftRevision.current += 1;
                 setRenamingBranch(branchMenuBranch.name);
                 setRenamedBranch(branchMenuBranch.name);
               }}

@@ -15,6 +15,7 @@ import type {
   RepositoryStatusSnapshotDto,
   RepositoryTargetDto,
   WorkspaceDetailsDto,
+  WorkspaceErrorDto,
   WorkspaceSummaryDto
 } from "@gitnest/contracts";
 
@@ -25,9 +26,12 @@ import {
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
 import type { AppView } from "../../app/navigation";
+import { useExternalApplications } from "../../features/external-application/useExternalApplications";
+import { ApplicationIcon } from "../repository-header/OpenInControl";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
+import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import {
   Skeleton,
   SkeletonBoundary
@@ -65,6 +69,8 @@ export interface WorkspaceSidebarProps {
   workspaces: WorkspaceSummaryDto[];
   snapshots: RepositoryStatusSnapshotDto[];
   busy: boolean;
+  error?: WorkspaceErrorDto | null;
+  onClearFeedback?(): void;
   onCreateWorkspace(): Promise<boolean>;
   onSwitchWorkspace(workspaceId: string): Promise<boolean>;
   onDeleteWorkspace(workspaceId: string): Promise<boolean>;
@@ -94,17 +100,20 @@ interface VisibleGroup {
 type ContextMenuState =
   | {
       kind: "workspace";
+      anchor: HTMLButtonElement;
       x: number;
       y: number;
     }
   | {
       kind: "group";
+      anchor: HTMLButtonElement;
       groupId: string;
       x: number;
       y: number;
     }
   | {
       kind: "repository";
+      anchor: HTMLButtonElement;
       target: RepositoryTargetDto;
       targetName: string;
       x: number;
@@ -155,6 +164,8 @@ export function WorkspaceSidebar({
   workspaces,
   snapshots,
   busy,
+  error = null,
+  onClearFeedback,
   onCreateWorkspace,
   onSwitchWorkspace,
   onDeleteWorkspace,
@@ -176,6 +187,15 @@ export function WorkspaceSidebar({
   const suppressGroupClickUntil = useRef(0);
   const [contextMenu, setContextMenu] =
     useState<ContextMenuState | null>(null);
+  const repositoryApplications = useExternalApplications(
+    contextMenu?.kind === "repository"
+      ? { scope: "repository", target: contextMenu.target }
+      : undefined,
+    workspace?.id
+  );
+  const [openInMenuOpen, setOpenInMenuOpen] = useState(false);
+  const openInTriggerRef = useRef<HTMLButtonElement>(null);
+  const openInMenuRef = useRef<HTMLDivElement>(null);
   const [groupNameOverrides, setGroupNameOverrides] =
     useState<Record<string, string>>({});
   const [renameGroup, setRenameGroup] =
@@ -266,6 +286,18 @@ export function WorkspaceSidebar({
     contextMenu?.kind === "repository" && workspace
       ? resolveWorkspaceTarget(workspace, contextMenu.target)
       : null;
+  const contextMenuTargetExists =
+    contextMenu?.kind === "workspace"
+      ? Boolean(workspace)
+      : contextMenu?.kind === "group"
+        ? Boolean(contextGroup)
+        : Boolean(contextRepository?.repository && contextRepository.worktree);
+  const closeContextMenu = useCallback((restoreFocus = false) => {
+    if (restoreFocus && contextMenu?.anchor.isConnected) {
+      contextMenu.anchor.focus({ preventScroll: true });
+    }
+    setContextMenu(null);
+  }, [contextMenu]);
   const workspaceCanonicalPath = workspace?.canonicalPath;
   const contextRepositoryCanonicalPath =
     contextRepository?.worktree?.canonicalPath;
@@ -423,9 +455,23 @@ export function WorkspaceSidebar({
   }, [workspaceId]);
 
   useEffect(() => {
+    setOpenInMenuOpen(false);
+  }, [contextMenu]);
+
+  useEffect(() => {
+    if (contextMenu && !contextMenuTargetExists) {
+      setContextMenu(null);
+    }
+  }, [contextMenu, contextMenuTargetExists]);
+
+  useEffect(() => {
     if (!contextMenu) {
       return;
     }
+
+    contextMenuRef.current
+      ?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')
+      ?.focus({ preventScroll: true });
 
     const closeFromOutside = (
       event: globalThis.PointerEvent
@@ -433,7 +479,8 @@ export function WorkspaceSidebar({
       const target = event.target;
       if (
         target instanceof Node &&
-        contextMenuRef.current?.contains(target)
+        (contextMenuRef.current?.contains(target) ||
+          openInMenuRef.current?.contains(target))
       ) {
         return;
       }
@@ -442,9 +489,14 @@ export function WorkspaceSidebar({
     const closeFromKeyboard = (
       event: globalThis.KeyboardEvent
     ) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setContextMenu(null);
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
+        return;
+      }
+      if (event.key === "Escape" || event.key === "Tab") {
+        if (event.key === "Escape") {
+          event.preventDefault();
+        }
+        closeContextMenu(true);
       }
     };
 
@@ -463,7 +515,7 @@ export function WorkspaceSidebar({
         closeFromKeyboard
       );
     };
-  }, [contextMenu]);
+  }, [contextMenu, closeContextMenu]);
 
   useEffect(() => {
     if (!repositoryMenuOpen) {
@@ -529,6 +581,7 @@ export function WorkspaceSidebar({
     );
     setContextMenu({
       kind: "workspace",
+      anchor: event.currentTarget,
       ...position
     });
   };
@@ -549,10 +602,11 @@ export function WorkspaceSidebar({
       event.clientX,
       event.clientY,
       222,
-      56
+      100
     );
     setContextMenu({
       kind: "repository",
+      anchor: event.currentTarget,
       target,
       targetName,
       ...position
@@ -573,6 +627,7 @@ export function WorkspaceSidebar({
     );
     setContextMenu({
       kind: "group",
+      anchor: event.currentTarget,
       groupId: group.id,
       ...position
     });
@@ -582,7 +637,7 @@ export function WorkspaceSidebar({
     if (!contextGroup) {
       return;
     }
-    setContextMenu(null);
+    closeContextMenu(true);
     setRenameGroup({
       groupId: contextGroup.id,
       automaticName: contextGroup.name,
@@ -610,7 +665,8 @@ export function WorkspaceSidebar({
     if (!workspace) {
       return;
     }
-    setContextMenu(null);
+    onClearFeedback?.();
+    closeContextMenu(true);
     setRenameWorkspaceSubmitting(false);
     setRenameWorkspaceOpen(true);
   };
@@ -633,7 +689,8 @@ export function WorkspaceSidebar({
     if (!workspace || workspaces.length <= 1) {
       return;
     }
-    setContextMenu(null);
+    onClearFeedback?.();
+    closeContextMenu(true);
     setDeleteWorkspaceSubmitting(false);
     setDeleteWorkspaceOpen(true);
   };
@@ -659,7 +716,7 @@ export function WorkspaceSidebar({
     if (!workspaceId) {
       return;
     }
-    setContextMenu(null);
+    closeContextMenu(true);
     setTapdKeywordSubmitting(false);
     setTapdKeyword(
       readTapdKeywordPreference(
@@ -667,7 +724,7 @@ export function WorkspaceSidebar({
         workspaceId
       )
     );
-  }, [workspaceId]);
+  }, [workspaceId, closeContextMenu]);
 
   const confirmTapdKeyword = async (
     keyword: string
@@ -692,9 +749,10 @@ export function WorkspaceSidebar({
     if (contextMenu?.kind !== "repository") {
       return;
     }
+    onClearFeedback?.();
     setRemoveSubmitting(false);
     setRemoveTarget(contextMenu.target);
-    setContextMenu(null);
+    closeContextMenu(true);
   };
 
   const confirmRemoveRepository =
@@ -782,6 +840,8 @@ export function WorkspaceSidebar({
     <aside className="workspace-sidebar">
       <WorkspaceSwitcher
         busy={busy}
+        error={error}
+        onClearFeedback={onClearFeedback}
         hidden={sidebarHidden}
         workspace={workspace}
         workspaces={workspaces}
@@ -1032,9 +1092,7 @@ export function WorkspaceSidebar({
                 ) : (
                   <SidebarEmpty
                     busy={busy}
-                    hasRepositories={Boolean(
-                      workspace.repositories.length
-                    )}
+                    hasWorkspace
                     onClearQuery={() => setQuery("")}
                     query={normalizedQuery}
                   />
@@ -1045,7 +1103,7 @@ export function WorkspaceSidebar({
         ) : (
           <SidebarEmpty
             busy={busy}
-            hasRepositories={false}
+            hasWorkspace={false}
             onClearQuery={() => setQuery("")}
             query={normalizedQuery}
           />
@@ -1077,7 +1135,7 @@ export function WorkspaceSidebar({
         </Button>
       </div>
 
-      {contextMenu && (
+      {contextMenu && contextMenuTargetExists && (
         <LayerPortal>
           <Menu
             aria-label={
@@ -1117,7 +1175,7 @@ export function WorkspaceSidebar({
                   disabled={!workspace || busy}
                   leading={<Icon name="refresh" size={14} />}
                   onClick={() => {
-                    setContextMenu(null);
+                    closeContextMenu(true);
                     void onRescan();
                   }}
                 >
@@ -1151,19 +1209,100 @@ export function WorkspaceSidebar({
                 重命名分组
               </MenuItem>
             ) : (
-              <MenuItem
-                disabled={busy || contextRepositoryIsRoot}
-                leading={<Icon name="warning" size={14} />}
-                onClick={startRemoveRepository}
-                tone="danger"
-              >
-                {contextRepositoryIsRoot
-                  ? "Workspace 根仓库"
-                  : "移出 Workspace"}
-              </MenuItem>
+              <>
+                <MenuItem
+                  aria-expanded={openInMenuOpen}
+                  aria-haspopup="menu"
+                  leading={<Icon name="external" size={14} />}
+                  onClick={() => setOpenInMenuOpen((open) => !open)}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowRight") {
+                      event.preventDefault();
+                      setOpenInMenuOpen(true);
+                    }
+                  }}
+                  ref={openInTriggerRef}
+                  title="选择用于打开此仓库的应用"
+                  trailing={<Icon name="collapse" size={14} />}
+                >
+                  Open In
+                </MenuItem>
+                {openInMenuOpen && (
+                  <MenuPopover
+                    anchor={openInTriggerRef.current}
+                    aria-label="选择用于打开此仓库的应用"
+                    autoFocus={!repositoryApplications.loading}
+                    className="workspace-context-open-in-submenu"
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                      if (event.defaultPrevented || event.nativeEvent.isComposing || event.keyCode === 229) {
+                        return;
+                      }
+                      if (event.key === "Escape" || event.key === "ArrowLeft") {
+                        event.preventDefault();
+                        setOpenInMenuOpen(false);
+                        openInTriggerRef.current?.focus();
+                      } else if (event.key === "Tab") {
+                        closeContextMenu(true);
+                      }
+                    }}
+                    ref={openInMenuRef}
+                    side="right"
+                  >
+                    <MenuHeading>Open In</MenuHeading>
+                    {repositoryApplications.profiles.length > 0
+                      ? repositoryApplications.profiles.map((profile) => (
+                          <MenuItem
+                            disabled={repositoryApplications.active !== null}
+                            key={profile.kind}
+                            leading={<ApplicationIcon profile={profile} />}
+                            onClick={async () => {
+                              const opened = await repositoryApplications.open(profile.kind);
+                              if (opened) {
+                                setContextMenu((current) =>
+                                  current === contextMenu ? null : current
+                                );
+                              }
+                            }}
+                          >
+                            {profile.label}
+                          </MenuItem>
+                        ))
+                      : (
+                          <span className="workspace-context-open-in-empty">
+                            {repositoryApplications.loading
+                              ? "正在检测可用应用…"
+                              : "未检测到可用应用"}
+                          </span>
+                        )}
+                  </MenuPopover>
+                )}
+                <MenuSeparator />
+                <MenuItem
+                  disabled={busy || contextRepositoryIsRoot}
+                  leading={<Icon name="warning" size={14} />}
+                  onClick={startRemoveRepository}
+                  tone="danger"
+                >
+                  {contextRepositoryIsRoot
+                    ? "Workspace 根仓库"
+                    : "移出 Workspace"}
+                </MenuItem>
+              </>
             )}
           </Menu>
         </LayerPortal>
+      )}
+
+      {repositoryApplications.error && (
+        <ToastViewport>
+          <Toast
+            message={repositoryApplications.error.message}
+            onClose={repositoryApplications.clearError}
+            title="无法打开本地应用"
+            tone="error"
+          />
+        </ToastViewport>
       )}
 
       {renameGroup && (
@@ -1177,6 +1316,7 @@ export function WorkspaceSidebar({
       {renameWorkspaceOpen && workspace && (
         <WorkspaceRenameDialog
           busy={renameWorkspaceSubmitting || busy}
+          error={error?.message ?? null}
           initialName={workspace.name}
           {...(workspace.path ? { path: workspace.path } : {})}
           onCancel={() => setRenameWorkspaceOpen(false)}
@@ -1195,6 +1335,7 @@ export function WorkspaceSidebar({
       {deleteWorkspaceOpen && workspace && (
         <WorkspaceDeleteDialog
           busy={deleteWorkspaceSubmitting || busy}
+          error={error?.message ?? null}
           name={workspace.name}
           onCancel={() => setDeleteWorkspaceOpen(false)}
           onConfirm={confirmWorkspaceDelete}
@@ -1203,6 +1344,7 @@ export function WorkspaceSidebar({
       {removeTarget && (
         <WorkspaceRepositoryRemoveDialog
           busy={removeSubmitting || busy}
+          error={error?.message ?? null}
           name={removeTargetName}
           {...(removeTargetPath
             ? { path: removeTargetPath }
@@ -1217,6 +1359,8 @@ export function WorkspaceSidebar({
 
 interface WorkspaceSwitcherProps {
   busy: boolean;
+  error: WorkspaceErrorDto | null;
+  onClearFeedback: (() => void) | undefined;
   hidden: boolean;
   workspace: WorkspaceDetailsDto | null;
   workspaces: WorkspaceSummaryDto[];
@@ -1227,6 +1371,8 @@ interface WorkspaceSwitcherProps {
 
 const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
   busy,
+  error,
+  onClearFeedback,
   hidden,
   workspace,
   workspaces,
@@ -1391,6 +1537,7 @@ const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
               leading={<Icon name="warning" size={15} />}
               onClick={() => {
                 setOpen(false);
+                onClearFeedback?.();
                 setDialogBusy(false);
                 setDialog("delete");
               }}
@@ -1404,6 +1551,7 @@ const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
       {dialog === "delete" && workspace && (
         <WorkspaceDeleteDialog
           busy={dialogBusy || busy}
+          error={error?.message ?? null}
           name={workspace.name}
           onCancel={() => setDialog(null)}
           onConfirm={confirmDelete}
@@ -1419,6 +1567,8 @@ function workspaceSwitcherPropsEqual(
 ): boolean {
   return (
     previous.busy === next.busy &&
+    previous.error === next.error &&
+    previous.onClearFeedback === next.onClearFeedback &&
     previous.hidden === next.hidden &&
     previous.workspace?.id === next.workspace?.id &&
     previous.workspace?.name === next.workspace?.name &&
@@ -1650,19 +1800,19 @@ function getGroupDisplayName(
 
 function SidebarEmpty({
   busy,
-  hasRepositories,
+  hasWorkspace,
   query,
   onClearQuery
 }: {
   busy: boolean;
-  hasRepositories: boolean;
+  hasWorkspace: boolean;
   query: string;
   onClearQuery(): void;
 }) {
   return (
     <SkeletonBoundary
       fallback={<SidebarSkeleton />}
-      hasContent={hasRepositories}
+      hasContent={hasWorkspace}
       label="正在读取 Workspace 仓库"
       loading={busy}
       surfaceClassName="sidebar-skeleton"

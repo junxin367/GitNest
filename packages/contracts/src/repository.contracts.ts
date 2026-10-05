@@ -1,6 +1,7 @@
 import type {
   BranchDto,
   CommitSummaryDto,
+  GitReadErrorDto,
   RepositorySnapshotDto
 } from "./git.contracts";
 import type { GitPushStrategyDto } from "./settings.contracts";
@@ -75,6 +76,11 @@ export interface CancelRepositoryQueryRequest {
 export interface RepositoryPathsMutationRequest {
   target: RepositoryTargetDto;
   paths: string[];
+}
+
+export interface RepositoryDiscardRequest
+  extends RepositoryPathsMutationRequest {
+  expectedUntrackedPaths?: string[];
 }
 
 export type RepositoryStashMutationAction =
@@ -359,6 +365,7 @@ export interface RepositoryCommandExecuteRequest {
 
 export interface RepositoryCommandExecutionDto {
   operationIds: string[];
+  submissionError?: GitReadErrorDto;
 }
 
 export interface CancelRepositoryOperationRequest {

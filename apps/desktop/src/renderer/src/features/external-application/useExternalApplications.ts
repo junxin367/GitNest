@@ -29,6 +29,8 @@ const APPLICATION_PRIORITY: ExternalApplicationKindDto[] = [
   "terminal",
   "git-bash"
 ];
+const PREFERRED_APPLICATION_CHANGED =
+  "gitnest:preferred-external-application-changed";
 
 type ExternalApplicationDirectoryContext = Exclude<
   OpenExternalApplicationContextDto,
@@ -53,7 +55,8 @@ export interface ExternalApplicationController {
 }
 
 export function useExternalApplications(
-  context: ExternalApplicationDirectoryContext | undefined
+  context: ExternalApplicationDirectoryContext | undefined,
+  workspaceId?: string
 ): ExternalApplicationController {
   const repositoryId =
     context?.scope === "repository"
@@ -80,10 +83,12 @@ export function useExternalApplications(
     }
     return undefined;
   }, [context?.scope, repositoryId, worktreeId]);
-  const contextKey =
-    stableContext?.scope === "repository"
-      ? `repository:${repositoryId}:${worktreeId}`
-      : stableContext?.scope ?? "";
+  const scope = useMemo(
+    () => ({ context: stableContext, workspaceId }),
+    [stableContext, workspaceId]
+  );
+  const currentScopeRef = useRef<typeof scope | null>(scope);
+  currentScopeRef.current = scope;
   const [profiles, setProfiles] = useState<
     ExternalApplicationProfileDto[]
   >([]);
@@ -96,14 +101,49 @@ export function useExternalApplications(
   const [error, setError] =
     useState<GitReadErrorDto | null>(null);
   const generation = useRef(0);
+  const reloadSequence = useRef(0);
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    const onPreferenceChanged = (event: Event) => {
+      const kind = (event as CustomEvent<ExternalApplicationKindDto>).detail;
+      if (APPLICATION_PRIORITY.includes(kind)) {
+        setPreferredKind(kind);
+      }
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (
+        (event.key === rendererPreferenceKeys.preferredExternalApplication ||
+          event.key === null) &&
+        (!event.storageArea ||
+          event.storageArea === getRendererPreferenceStorage())
+      ) {
+        setPreferredKind(readPreferredApplication());
+      }
+    };
+    window.addEventListener(PREFERRED_APPLICATION_CHANGED, onPreferenceChanged);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(PREFERRED_APPLICATION_CHANGED, onPreferenceChanged);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
 
   const reload = useCallback(async () => {
+    if (!stableContext || currentScopeRef.current !== scope) {
+      return;
+    }
     const requestGeneration = generation.current;
+    const requestSequence = ++reloadSequence.current;
+    const isCurrent = () =>
+      requestGeneration === generation.current &&
+      currentScopeRef.current === scope &&
+      requestSequence === reloadSequence.current;
     setLoading(true);
     try {
       const result =
         await window.gitnest.system.listExternalApplications();
-      if (requestGeneration !== generation.current) {
+      if (!isCurrent()) {
         return;
       }
       if (result.ok) {
@@ -114,43 +154,50 @@ export function useExternalApplications(
         setError(result.error);
       }
     } catch (reason) {
-      if (requestGeneration === generation.current) {
+      if (isCurrent()) {
         setProfiles([]);
         setError(unexpectedExternalApplicationError(reason));
       }
     } finally {
-      if (requestGeneration === generation.current) {
+      if (isCurrent()) {
         setLoading(false);
       }
     }
-  }, []);
+  }, [scope, stableContext]);
 
   useEffect(() => {
+    currentScopeRef.current = scope;
     generation.current += 1;
+    inFlight.current = false;
     setActive(null);
     setError(null);
     if (!stableContext) {
       setProfiles([]);
       setLoading(false);
-      return () => {
-        generation.current += 1;
-      };
+    } else {
+      void reload();
     }
-    void reload();
     return () => {
       generation.current += 1;
+      if (currentScopeRef.current === scope) {
+        currentScopeRef.current = null;
+      }
     };
-  }, [contextKey, reload, stableContext]);
+  }, [scope, reload, stableContext]);
 
   const openWithContext = useCallback(
     async (
       kind: ExternalApplicationKindDto,
       requestContext: OpenExternalApplicationContextDto
     ) => {
-      if (active) {
+      if (inFlight.current || currentScopeRef.current !== scope) {
         return false;
       }
       const requestGeneration = generation.current;
+      const isCurrent = () =>
+        requestGeneration === generation.current &&
+        currentScopeRef.current === scope;
+      inFlight.current = true;
       setActive(kind);
       setError(null);
       try {
@@ -159,7 +206,7 @@ export function useExternalApplications(
             context: requestContext,
             kind
           });
-        if (requestGeneration !== generation.current) {
+        if (!isCurrent()) {
           return false;
         }
         if (!result.ok) {
@@ -170,19 +217,20 @@ export function useExternalApplications(
         persistPreferredApplication(result.value.kind);
         return true;
       } catch (reason) {
-        if (requestGeneration === generation.current) {
+        if (isCurrent()) {
           setError(
             unexpectedExternalApplicationError(reason)
           );
         }
         return false;
       } finally {
-        if (requestGeneration === generation.current) {
+        if (isCurrent()) {
+          inFlight.current = false;
           setActive(null);
         }
       }
     },
-    [active]
+    [scope]
   );
 
   const open = useCallback(
@@ -283,6 +331,9 @@ function persistPreferredApplication(
     rendererPreferenceKeys.preferredExternalApplication,
     kind
   );
+  window.dispatchEvent(new CustomEvent(PREFERRED_APPLICATION_CHANGED, {
+    detail: kind
+  }));
 }
 
 function unexpectedExternalApplicationError(

@@ -168,7 +168,8 @@ export function collectSubgraph(
   const visited = new Set<string>();
   const selectedEdges = new Map<string, CodeGraphEdge>();
   const queue: Array<{ id: string; depth: number }> = [];
-  let truncated = false;
+  let hitNodeLimit = false;
+  let hitEdgeLimit = false;
   let hitDepthLimit = false;
 
   for (const nodeId of options.nodeIds) {
@@ -181,6 +182,10 @@ export function collectSubgraph(
       continue;
     }
     if (visited.has(nodeId)) {
+      continue;
+    }
+    if (visited.size >= maxNodes) {
+      hitNodeLimit = true;
       continue;
     }
     visited.add(nodeId);
@@ -204,21 +209,23 @@ export function collectSubgraph(
       if (nodeKindFilter && !nodeKindFilter.has(neighbour.kind)) {
         continue;
       }
-      if (selectedEdges.size < maxEdges) {
-        selectedEdges.set(edge.id, edge);
-      } else {
-        truncated = true;
-      }
-      if (visited.has(neighbour.id)) {
-        continue;
-      }
-      if (current.depth >= depth) {
+      const alreadyVisited = visited.has(neighbour.id);
+      if (!alreadyVisited && current.depth >= depth) {
         hitDepthLimit = true;
-        truncated = true;
         continue;
       }
-      if (visited.size >= maxNodes) {
-        truncated = true;
+      if (!alreadyVisited && visited.size >= maxNodes) {
+        hitNodeLimit = true;
+        continue;
+      }
+      if (!selectedEdges.has(edge.id)) {
+        if (selectedEdges.size >= maxEdges) {
+          hitEdgeLimit = true;
+          continue;
+        }
+        selectedEdges.set(edge.id, edge);
+      }
+      if (alreadyVisited) {
         continue;
       }
       visited.add(neighbour.id);
@@ -227,10 +234,10 @@ export function collectSubgraph(
   }
 
   const reasons: SubgraphTruncationReason[] = [];
-  if (visited.size >= maxNodes) {
+  if (hitNodeLimit) {
     reasons.push("max-nodes");
   }
-  if (selectedEdges.size >= maxEdges && truncated) {
+  if (hitEdgeLimit) {
     reasons.push("max-edges");
   }
   if (hitDepthLimit) {
@@ -247,7 +254,7 @@ export function collectSubgraph(
   return {
     nodes,
     edges,
-    truncated: truncated || reasons.length > 0,
+    truncated: reasons.length > 0,
     truncationReasons: reasons,
     unknownNodeIds
   };
@@ -398,14 +405,25 @@ export function resolveRequestChain(
       : { candidates: byNodeId.slice(0, 20) };
   }
 
-  const filter: RequestChainFilter = {};
+  if (reference.route !== undefined) {
+    const route = normalizeText(reference.route);
+    const byRoute = snapshot.requestChains
+      .filter(
+        (chain) =>
+          normalizeText(chain.route) === route &&
+          (reference.method === undefined ||
+            chain.method === reference.method)
+      )
+      .slice(0, 20);
+    return byRoute.length === 1
+      ? { chain: byRoute[0] as CodeRequestChain, candidates: [] }
+      : { candidates: byRoute };
+  }
+
   const result = findRequestChains(snapshot, {
-    ...filter,
-    ...(reference.route !== undefined
-      ? { query: reference.route }
-      : reference.query !== undefined
-        ? { query: reference.query }
-        : {}),
+    ...(reference.query !== undefined
+      ? { query: reference.query }
+      : {}),
     ...(reference.method !== undefined
       ? { method: reference.method }
       : {}),
@@ -427,10 +445,16 @@ export function toRequestChainSteps(
   const nodeById = new Map(
     snapshot.nodes.map((node) => [node.id, node])
   );
-  const edgeById = new Map(
-    snapshot.edges.map((edge) => [edge.id, edge])
-  );
   const edgeIds = new Set(chain.edgeIds);
+  const incomingEdgeByNode = new Map<string, CodeGraphEdge>();
+  for (const edge of snapshot.edges) {
+    if (
+      edgeIds.has(edge.id) &&
+      !incomingEdgeByNode.has(edge.to)
+    ) {
+      incomingEdgeByNode.set(edge.to, edge);
+    }
+  }
   const steps: RequestChainStep[] = [];
 
   for (const nodeId of chain.nodeIds) {
@@ -438,12 +462,7 @@ export function toRequestChainSteps(
     if (!node) {
       continue;
     }
-    const incomingEdge = snapshot.edges.find(
-      (edge) =>
-        edgeIds.has(edge.id) &&
-        edge.to === nodeId &&
-        edgeById.has(edge.id)
-    );
+    const incomingEdge = incomingEdgeByNode.get(nodeId);
     steps.push({
       node,
       ...(incomingEdge ? { incomingEdge } : {}),
@@ -504,6 +523,9 @@ export function analyzeChangeImpact(
       1,
       2_000
     ),
+    ...(options.maxEdges !== undefined
+      ? { maxEdges: options.maxEdges }
+      : {}),
     ...(options.edgeKinds ? { edgeKinds: options.edgeKinds } : {})
   });
   const impactedIds = new Set(

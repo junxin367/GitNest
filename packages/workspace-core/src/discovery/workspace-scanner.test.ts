@@ -107,9 +107,213 @@ describe("WorkspaceScanner", () => {
       "C:\\basename-exclude-root\\services\\api"
     ]);
   });
+
+  it("rejects a scan cancelled while a directory read is in progress", async () => {
+    const fileSystem = new BlockingReadWindowsFileSystem();
+    const scanner = new WorkspaceScanner(
+      fileSystem,
+      new FakeRepositoryProbe()
+    );
+    const normalizedRoot = fileSystem.normalizePath(
+      "C:\\cancelled-root"
+    );
+    const controller = new AbortController();
+    const scan = scanner.scanRoot(
+      {
+        path: normalizedRoot.path,
+        canonicalPath: normalizedRoot.canonicalPath,
+        excludes: []
+      },
+      { signal: controller.signal }
+    );
+
+    await fileSystem.readStarted;
+    controller.abort();
+    fileSystem.releaseRead();
+
+    await expect(scan).rejects.toMatchObject({
+      code: "SCAN_CANCELLED"
+    });
+  });
 });
 
 describe("WorkspaceAssembler", () => {
+  it.each([
+    { excluded: "api", childFirst: false },
+    { excluded: "api", childFirst: true },
+    { excluded: " ./API\\nested// ", childFirst: false },
+    { excluded: " ./API\\nested// ", childFirst: true }
+  ])(
+    "applies owning-root exclusion $excluded to broader-root discoveries (child first: $childFirst)",
+    ({ excluded, childFirst }) => {
+      const fileSystem = new FakeWindowsFileSystem();
+      const parent = rootDefinition(fileSystem, "C:\\root");
+      const child = {
+        ...rootDefinition(fileSystem, "C:\\root\\services"),
+        excludes: [excluded]
+      };
+      const hidden = "C:\\root\\services\\api\\nested";
+      const visible = "C:\\root\\services\\api-two\\nested";
+      const scannedAt = "2026-10-04T12:00:00.000Z";
+      const parentScan: WorkspaceRootScan = {
+        root: parent,
+        repositories: [hidden, visible].map((path) =>
+          discovery(fileSystem, parent.path, path, repository(path, win32.join(path, ".git")))
+        ),
+        issues: [],
+        scannedAt
+      };
+      const childScan: WorkspaceRootScan = {
+        root: child,
+        repositories: [
+          discovery(fileSystem, child.path, visible, repository(visible, win32.join(visible, ".git")))
+        ],
+        issues: [],
+        scannedAt
+      };
+      const assembled = new WorkspaceAssembler(fileSystem).assemble({
+        current: createEmptyWorkspace(scannedAt),
+        scans: childFirst ? [childScan, parentScan] : [parentScan, childScan],
+        updatedAt: scannedAt
+      });
+      expect(assembled.worktrees.map((entry) => entry.path)).toEqual([visible]);
+      expect(assembled.groups.flatMap((group) => group.targets)).toHaveLength(1);
+    }
+  );
+
+  it("does not restore excluded topology when an unrelated scan error triggers offline preservation", () => {
+    const fileSystem = new FakeWindowsFileSystem();
+    const assembler = new WorkspaceAssembler(fileSystem);
+    const root = rootDefinition(fileSystem, "C:\\root");
+    const path = "C:\\root\\api\\repository";
+    const scannedAt = "2026-10-04T12:00:00.000Z";
+    const current = assembler.assemble({
+      current: createEmptyWorkspace(scannedAt),
+      scan: {
+        root,
+        repositories: [
+          discovery(fileSystem, root.path, path, repository(path, win32.join(path, ".git")))
+        ],
+        issues: [],
+        scannedAt
+      },
+      updatedAt: scannedAt
+    });
+    expect(current.groups.flatMap((group) => group.targets)).toHaveLength(1);
+    const excluded = assembler.assemble({
+      current,
+      scan: {
+        root: { ...root, excludes: ["./API//"] },
+        repositories: [],
+        issues: [{
+          path: "C:\\root\\denied",
+          code: "PERMISSION_DENIED",
+          message: "Access denied"
+        }],
+        scannedAt
+      },
+      updatedAt: scannedAt
+    });
+    expect(excluded.groups).toEqual([]);
+    expect(excluded.repositories).toEqual([]);
+    expect(excluded.worktrees).toEqual([]);
+    expect(excluded.selectedTarget).toBeUndefined();
+    expect(excluded.scanIssues).toHaveLength(1);
+  });
+
+  it.each([false, true])(
+    "preserves fresh topology when a shared repository has an offline root (offline first: %s)",
+    (offlineFirst) => {
+      const fileSystem = new FakeWindowsFileSystem();
+      const assembler = new WorkspaceAssembler(fileSystem);
+      const onlineRoot = rootDefinition(fileSystem, "C:\\root");
+      const offlineRoot = rootDefinition(fileSystem, "D:\\linked");
+      const commonDir = "C:\\root\\.git";
+      const oldWorktrees = [
+        worktree(onlineRoot.path, true),
+        worktree(offlineRoot.path, false),
+        worktree("D:\\unavailable-sibling", false)
+      ];
+      const timestamp = "2026-10-04T10:00:00.000Z";
+      const initialScans: WorkspaceRootScan[] = [
+        onlineRoot,
+        offlineRoot
+      ].map((root) => ({
+        root,
+        repositories: [
+          discovery(
+            fileSystem,
+            root.path,
+            root.path,
+            repository(root.path, commonDir, oldWorktrees)
+          )
+        ],
+        issues: [],
+        scannedAt: timestamp
+      }));
+      const current = assembler.assemble({
+        current: createEmptyWorkspace(timestamp),
+        scans: initialScans,
+        updatedAt: timestamp
+      });
+      const freshPrimary = {
+        ...worktree(onlineRoot.path, true),
+        head: "def456",
+        branch: "updated-main"
+      };
+      const onlineScan: WorkspaceRootScan = {
+        ...initialScans[0]!,
+        repositories: [
+          discovery(
+            fileSystem,
+            onlineRoot.path,
+            onlineRoot.path,
+            repository(onlineRoot.path, commonDir, [
+              freshPrimary,
+              worktree(offlineRoot.path, false),
+              worktree("E:\\new-linked", false)
+            ])
+          )
+        ]
+      };
+      const offlineScan: WorkspaceRootScan = {
+        ...initialScans[1]!,
+        repositories: [],
+        issues: [{
+          path: offlineRoot.path,
+          code: "DIRECTORY_UNAVAILABLE",
+          message: "offline"
+        }]
+      };
+      const assembled = assembler.assemble({
+        current,
+        scans: offlineFirst
+          ? [offlineScan, onlineScan]
+          : [onlineScan, offlineScan],
+        updatedAt: timestamp
+      });
+
+      expect(assembled.repositories).toHaveLength(1);
+      expect(assembled.worktrees).toHaveLength(4);
+      expect(assembled.repositories[0]?.worktreeIds.toSorted()).toEqual(
+        assembled.worktrees.map((entry) => entry.id).toSorted()
+      );
+      expect(
+        assembled.worktrees.find((entry) => entry.path === onlineRoot.path)
+      ).toMatchObject({
+        head: "def456",
+        branch: "updated-main"
+      });
+      expect(assembled.groups.flatMap((group) => group.targets)).toEqual(
+        expect.arrayContaining(
+          current.groups.flatMap((group) => group.targets)
+        )
+      );
+      expect(current.worktrees).toHaveLength(3);
+      expect(current.worktrees[0]?.head).toBe("abc123");
+    }
+  );
+
   it("assembles one Workspace root, groups repositories, and merges linked worktrees", () => {
     const fileSystem = new FakeWindowsFileSystem();
     const root = rootDefinition(fileSystem, "C:\\root");
@@ -347,6 +551,31 @@ class FakeWindowsFileSystem implements WorkspaceFileSystem {
       path: win32.join(path, name),
       kind
     }));
+  }
+}
+
+class BlockingReadWindowsFileSystem extends FakeWindowsFileSystem {
+  readonly readStarted: Promise<void>;
+  readonly #readGate: Promise<void>;
+  #markReadStarted!: () => void;
+  releaseRead!: () => void;
+
+  constructor() {
+    super();
+    this.readStarted = new Promise<void>((resolve) => {
+      this.#markReadStarted = resolve;
+    });
+    this.#readGate = new Promise<void>((resolve) => {
+      this.releaseRead = resolve;
+    });
+  }
+
+  override async readDirectory(
+    path: string
+  ): Promise<WorkspaceDirectoryEntry[]> {
+    this.#markReadStarted();
+    await this.#readGate;
+    return super.readDirectory(path);
   }
 }
 

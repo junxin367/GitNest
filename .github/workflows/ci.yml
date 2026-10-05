@@ -44,3 +44,16 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Electron workflow smoke
+        run: pnpm smoke:workflow
+
+      - name: Upload Electron workflow evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-workflow-${{ runner.os }}
+          path: |
+            test-results/electron-workflow-baseline.json
+            test-results/electron-workflow-diff.png
+          if-no-files-found: warn

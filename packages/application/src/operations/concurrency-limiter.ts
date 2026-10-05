@@ -16,7 +16,14 @@ export class ConcurrencyLimiter {
       const start = () => {
         this.#active += 1;
 
-        void task()
+        let result: Promise<Result>;
+        try {
+          result = task();
+        } catch (error) {
+          result = Promise.reject(error);
+        }
+
+        void result
           .then(resolve, reject)
           .finally(() => {
             this.#active -= 1;

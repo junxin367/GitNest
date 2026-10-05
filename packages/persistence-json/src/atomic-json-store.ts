@@ -22,6 +22,7 @@ export class AtomicJsonStore {
   readonly #filePath: string;
   readonly #maxBytes: number;
   #recovery: Promise<void> | undefined;
+  #writeQueue: Promise<void> = Promise.resolve();
   #writeBlockedReason: string | undefined;
 
   constructor(
@@ -84,27 +85,43 @@ export class AtomicJsonStore {
     }
   }
 
-  async write(value: unknown): Promise<void> {
+  write(value: unknown): Promise<void> {
+    let serialized: string;
+    try {
+      serialized = `${JSON.stringify(value, null, 2)}\n`;
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const serializedBytes = Buffer.byteLength(
+      serialized,
+      "utf8"
+    );
+    if (serializedBytes > this.#maxBytes) {
+      return Promise.reject(
+        new WorkspaceError(
+          "PERSISTENCE_FAILED",
+          `Refusing to save a JSON document larger than ${this.#maxBytes} bytes.`,
+          {
+            cause: `Serialized JSON requires ${serializedBytes} bytes.`
+          }
+        )
+      );
+    }
+
+    const write = this.#writeQueue.then(() =>
+      this.#write(serialized)
+    );
+    this.#writeQueue = write.catch(() => undefined);
+    return write;
+  }
+
+  async #write(serialized: string): Promise<void> {
     await this.#ensureRecovered();
     if (this.#writeBlockedReason) {
       throw new WorkspaceError(
         "PERSISTENCE_FAILED",
         "Refusing to overwrite persisted data after a recovery or migration failure.",
         { cause: this.#writeBlockedReason }
-      );
-    }
-    const serialized = `${JSON.stringify(value, null, 2)}\n`;
-    const serializedBytes = Buffer.byteLength(
-      serialized,
-      "utf8"
-    );
-    if (serializedBytes > this.#maxBytes) {
-      throw new WorkspaceError(
-        "PERSISTENCE_FAILED",
-        `Refusing to save a JSON document larger than ${this.#maxBytes} bytes.`,
-        {
-          cause: `Serialized JSON requires ${serializedBytes} bytes.`
-        }
       );
     }
     const directory = dirname(this.#filePath);
@@ -144,10 +161,17 @@ export class AtomicJsonStore {
   }
 
   async #ensureRecovered(): Promise<void> {
-    if (!this.#recovery) {
-      this.#recovery = this.#recoverInterruptedWrites();
+    const recovery =
+      this.#recovery ?? this.#recoverInterruptedWrites();
+    this.#recovery = recovery;
+    try {
+      await recovery;
+    } catch (error) {
+      if (this.#recovery === recovery) {
+        this.#recovery = undefined;
+      }
+      throw error;
     }
-    await this.#recovery;
   }
 
   async #recoverInterruptedWrites(): Promise<void> {

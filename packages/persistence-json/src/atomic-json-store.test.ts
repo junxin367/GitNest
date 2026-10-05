@@ -1,4 +1,5 @@
 import {
+  mkdir,
   mkdtemp,
   readFile,
   rm,
@@ -152,6 +153,86 @@ describe("AtomicJsonStore size limits", () => {
     );
     await expect(store.read()).resolves.toEqual({
       value: "ok"
+    });
+  });
+
+  it("persists concurrent writes in invocation order", async () => {
+    const { filePath } = await createStorePath(
+      "concurrent-write-order"
+    );
+    const store = new AtomicJsonStore(filePath, {
+      maxBytes: 16 * 1_024 * 1_024
+    });
+
+    const olderWrite = store.write({
+      revision: 1,
+      padding: "x".repeat(8 * 1_024 * 1_024)
+    });
+    const newerValue = {
+      revision: 2
+    };
+    const newerWrite = store.write(newerValue);
+    newerValue.revision = 3;
+
+    await Promise.all([olderWrite, newerWrite]);
+
+    await expect(store.read()).resolves.toEqual({
+      revision: 2
+    });
+  });
+
+  it("continues the write queue after a filesystem failure", async () => {
+    const { directory, filePath } = await createStorePath(
+      "write-failure-recovery"
+    );
+    const store = new AtomicJsonStore(filePath);
+    await expect(store.read()).resolves.toBeNull();
+
+    await rm(directory, { recursive: true, force: true });
+    await writeFile(directory, "blocks directory creation", "utf8");
+    await expect(
+      store.write({ revision: 1 })
+    ).rejects.toMatchObject({
+      code: "PERSISTENCE_FAILED"
+    });
+
+    await rm(directory, { force: true });
+    await mkdir(directory, { recursive: true });
+    await expect(
+      store.write({ revision: 2 })
+    ).resolves.toBeUndefined();
+    await expect(store.read()).resolves.toEqual({
+      revision: 2
+    });
+  });
+
+  it("retries recovery after a transient inspection failure", async () => {
+    const { directory } = await createStorePath(
+      "recovery-retry"
+    );
+    const documentDirectory = join(directory, "documents");
+    const filePath = join(
+      documentDirectory,
+      "document.json"
+    );
+    await writeFile(
+      documentDirectory,
+      "temporarily blocks directory access",
+      "utf8"
+    );
+    const store = new AtomicJsonStore(filePath);
+
+    await expect(store.read()).rejects.toMatchObject({
+      code: "PERSISTENCE_FAILED"
+    });
+
+    await rm(documentDirectory, { force: true });
+    await mkdir(documentDirectory);
+    await expect(
+      store.write({ revision: 1 })
+    ).resolves.toBeUndefined();
+    await expect(store.read()).resolves.toEqual({
+      revision: 1
     });
   });
 

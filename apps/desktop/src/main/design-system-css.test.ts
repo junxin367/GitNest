@@ -1475,9 +1475,6 @@ describe("renderer design-system guardrails", () => {
       "fallback={<CodeAnalysisSkeleton />}"
     );
     expect(codeAnalysisPageSource).toContain(
-      "hasContent={Boolean(availableSnapshot)}"
-    );
-    expect(codeAnalysisPageSource).toContain(
       'label="正在读取代码分析"'
     );
     expect(css).toMatch(

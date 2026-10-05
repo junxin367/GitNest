@@ -87,6 +87,7 @@ interface PooledSession {
   typeHierarchySupported: boolean;
   implementationSupported: boolean;
   workspaceSymbolSupported: boolean;
+  semanticCapabilityRejected: boolean;
   idleTimer?: NodeJS.Timeout;
 }
 
@@ -721,12 +722,18 @@ export class ExternalLanguageServerPool {
         const requiredSemanticCapabilityMissing =
           !hierarchy.supported ||
           !references.supported ||
-          !typeRelations.supported;
+          !typeRelations.supported ||
+          session.semanticCapabilityRejected;
+        const semanticEnrichmentIncomplete =
+          hierarchy.incomplete ||
+          references.incomplete ||
+          typeRelations.incomplete;
         const semanticCoverage =
           uncoveredDocumentCount > 0 ||
           truncatedSymbolDocuments > 0 ||
           semanticRequestBudgetExhausted ||
           semanticEnrichmentStoppedEarly ||
+          semanticEnrichmentIncomplete ||
           requiredSemanticCapabilityMissing
             ? "partial"
             : "complete";
@@ -786,6 +793,10 @@ export class ExternalLanguageServerPool {
             }${
               requiredSemanticCapabilityMissing
                 ? " Language Server 未提供全部调用、引用或类型关系能力。"
+                : ""
+            }${
+              semanticEnrichmentIncomplete
+                ? " 部分语义请求失败或引用结果达到数量上限，关系可能有遗漏。"
                 : ""
             }`,
           symbolCount,
@@ -1144,7 +1155,8 @@ export class ExternalLanguageServerPool {
       referencesSupported,
       typeHierarchySupported,
       implementationSupported,
-      workspaceSymbolSupported
+      workspaceSymbolSupported,
+      semanticCapabilityRejected: false
     };
   }
 
@@ -1551,17 +1563,20 @@ interface DocumentationEnrichmentResult
 interface CallHierarchyEnrichmentResult
   extends BaseEnrichmentResult {
   callCount: number;
+  incomplete: boolean;
 }
 
 interface ReferenceEnrichmentResult
   extends BaseEnrichmentResult {
   referenceCount: number;
+  incomplete: boolean;
 }
 
 interface TypeRelationEnrichmentResult
   extends BaseEnrichmentResult {
   relationCount: number;
   relations: LspSemanticRelation[];
+  incomplete: boolean;
 }
 
 interface WorkspaceSymbolResult {
@@ -1584,6 +1599,7 @@ function emptyDocumentationResult(): DocumentationEnrichmentResult {
 
 function emptyReferenceResult(): ReferenceEnrichmentResult {
   return {
+    incomplete: false,
     attempted: 0,
     referenceCount: 0,
     supported: false,
@@ -1684,6 +1700,7 @@ async function enrichCallHierarchy(input: {
 }): Promise<CallHierarchyEnrichmentResult> {
   let attempted = 0;
   let callCount = 0;
+  let incomplete = false;
   let consecutiveFailures = 0;
   let unsupported = false;
   let stopRequested = false;
@@ -1766,7 +1783,9 @@ async function enrichCallHierarchy(input: {
               if (input.signal?.aborted) {
                 throw error;
               }
+              incomplete = true;
               if (isMethodUnsupported(error)) {
+                input.session.semanticCapabilityRejected = true;
                 input.session.incomingCallHierarchySupported =
                   false;
               }
@@ -1778,7 +1797,9 @@ async function enrichCallHierarchy(input: {
         if (input.signal?.aborted) {
           throw error;
         }
+        incomplete = true;
         if (isMethodUnsupported(error)) {
+          input.session.semanticCapabilityRejected = true;
           unsupported = true;
           stopRequested = true;
           return;
@@ -1794,6 +1815,7 @@ async function enrichCallHierarchy(input: {
   return {
     attempted,
     callCount,
+    incomplete,
     supported: !unsupported,
     budgetExhausted:
       !unsupported &&
@@ -1815,6 +1837,7 @@ async function enrichReferences(input: {
 }): Promise<ReferenceEnrichmentResult> {
   let attempted = 0;
   let referenceCount = 0;
+  let incomplete = false;
   let consecutiveFailures = 0;
   let unsupported = false;
   let stopRequested = false;
@@ -1861,19 +1884,28 @@ async function enrichReferences(input: {
           input.timeoutMs,
           input.signal
         );
-        const references = parseReferenceLocations(
+        const parsedReferences = parseReferenceLocations(
           response,
-          input.maxReferencesPerSymbol
-        ).filter(
-          (reference) =>
-            !(
-              targetCanonicalPath &&
-              reference.sourceCanonicalPath ===
-                targetCanonicalPath &&
-              reference.line === symbol.line &&
-              reference.character === symbol.character
-            )
+          input.maxReferencesPerSymbol + 1
         );
+        if (
+          parsedReferences.length >
+          input.maxReferencesPerSymbol
+        ) {
+          incomplete = true;
+        }
+        const references = parsedReferences
+          .slice(0, input.maxReferencesPerSymbol)
+          .filter(
+            (reference) =>
+              !(
+                targetCanonicalPath &&
+                reference.sourceCanonicalPath ===
+                  targetCanonicalPath &&
+                reference.line === symbol.line &&
+                reference.character === symbol.character
+              )
+          );
         symbol.references = references;
         referenceCount += references.length;
         consecutiveFailures = 0;
@@ -1881,7 +1913,9 @@ async function enrichReferences(input: {
         if (input.signal?.aborted) {
           throw error;
         }
+        incomplete = true;
         if (isMethodUnsupported(error)) {
+          input.session.semanticCapabilityRejected = true;
           unsupported = true;
           stopRequested = true;
           return;
@@ -1897,6 +1931,7 @@ async function enrichReferences(input: {
   return {
     attempted,
     referenceCount,
+    incomplete,
     supported: !unsupported,
     budgetExhausted:
       !unsupported &&
@@ -1924,6 +1959,7 @@ async function enrichTypeRelations(input: {
   let consecutiveFailures = 0;
   let stopRequested = false;
   let stoppedEarly = false;
+  let incomplete = false;
   const workItems = roundRobinSymbolWorkItems(
     input.documents,
     (symbols) =>
@@ -1936,6 +1972,7 @@ async function enrichTypeRelations(input: {
   if (workItems.length === 0) {
     return {
       attempted: 0,
+      incomplete: false,
       relationCount: 0,
       relations: [],
       supported: true,
@@ -1946,6 +1983,7 @@ async function enrichTypeRelations(input: {
   if (!initiallySupported) {
     return {
       attempted: 0,
+      incomplete: false,
       relationCount: 0,
       relations: [],
       supported: false,
@@ -2072,7 +2110,9 @@ async function enrichTypeRelations(input: {
           if (input.signal?.aborted) {
             throw error;
           }
+          incomplete = true;
           if (isMethodUnsupported(error)) {
+            input.session.semanticCapabilityRejected = true;
             input.session.typeHierarchySupported = false;
           } else {
             symbolFailures += 1;
@@ -2126,7 +2166,9 @@ async function enrichTypeRelations(input: {
           if (input.signal?.aborted) {
             throw error;
           }
+          incomplete = true;
           if (isMethodUnsupported(error)) {
+            input.session.semanticCapabilityRejected = true;
             input.session.implementationSupported = false;
           } else {
             symbolFailures += 1;
@@ -2164,6 +2206,7 @@ async function enrichTypeRelations(input: {
   return {
     attempted,
     relationCount: relations.length,
+    incomplete,
     relations,
     supported,
     budgetExhausted:
@@ -3212,6 +3255,7 @@ export class JsonRpcClient {
       return;
     }
     const pending =
+      typeof input.method !== "string" &&
       typeof id === "number"
         ? this.#pending.get(id)
         : undefined;

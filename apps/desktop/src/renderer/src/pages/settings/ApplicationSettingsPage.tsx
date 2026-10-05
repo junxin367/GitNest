@@ -283,6 +283,7 @@ export function ApplicationSettingsPage({
     null
   );
   const aiDraftVersionRef = useRef(0);
+  const aiKeyReadGenerationRef = useRef(0);
   const analysisDraftVersionRef = useRef(0);
   const mcpDraftVersionRef = useRef(0);
   const mcpResponseLimitValid =
@@ -468,6 +469,8 @@ export function ApplicationSettingsPage({
   );
 
   useEffect(() => {
+    aiKeyReadGenerationRef.current += 1;
+    setAiKeyLoading(false);
     if (aiDraftDirtyRef.current) {
       return;
     }
@@ -481,10 +484,15 @@ export function ApplicationSettingsPage({
   }, [appSettings.settings.ai]);
 
   useEffect(() => {
+    aiKeyReadGenerationRef.current += 1;
+    setAiKeyLoading(false);
     if (section !== "ai") {
       setRevealedAiKey(null);
       setAiKeyVisible(false);
     }
+    return () => {
+      aiKeyReadGenerationRef.current += 1;
+    };
   }, [section]);
 
   useEffect(() => {
@@ -549,9 +557,13 @@ export function ApplicationSettingsPage({
   const markAiDraftDirty = () => {
     aiDraftDirtyRef.current = true;
     aiDraftVersionRef.current += 1;
+    setAiFeedback(null);
   };
 
   const toggleAiKeyVisibility = async () => {
+    const requestGeneration = ++aiKeyReadGenerationRef.current;
+    const isCurrent = () =>
+      requestGeneration === aiKeyReadGenerationRef.current;
     if (aiKeyVisible) {
       setAiKeyVisible(false);
       setRevealedAiKey(null);
@@ -572,6 +584,9 @@ export function ApplicationSettingsPage({
         await window.gitnest.settings.readAiApiKey({
           reveal: true
         });
+      if (!isCurrent()) {
+        return;
+      }
       if (!result.ok) {
         setAiFeedback({
           title: "无法显示 API Key",
@@ -592,6 +607,9 @@ export function ApplicationSettingsPage({
       setRevealedAiKey(result.value.apiKey);
       setAiKeyVisible(true);
     } catch (reason) {
+      if (!isCurrent()) {
+        return;
+      }
       setAiFeedback({
         title: "无法显示 API Key",
         message:
@@ -601,7 +619,9 @@ export function ApplicationSettingsPage({
         tone: "error"
       });
     } finally {
-      setAiKeyLoading(false);
+      if (isCurrent()) {
+        setAiKeyLoading(false);
+      }
     }
   };
 
@@ -649,6 +669,7 @@ export function ApplicationSettingsPage({
   };
 
   const testAiConnection = async () => {
+    const draftVersion = aiDraftVersionRef.current;
     const url = aiUrl.trim();
     const model = aiModel.trim();
     if (!url || !model) {
@@ -680,6 +701,9 @@ export function ApplicationSettingsPage({
           model,
           ...(aiKey.trim() ? { apiKey: aiKey } : {})
         });
+      if (draftVersion !== aiDraftVersionRef.current) {
+        return;
+      }
       if (!result.ok) {
         setAiFeedback({
           title: "AI 连接测试失败",
@@ -694,6 +718,9 @@ export function ApplicationSettingsPage({
         tone: "success"
       });
     } catch (reason) {
+      if (draftVersion !== aiDraftVersionRef.current) {
+        return;
+      }
       setAiFeedback({
         title: "AI 连接测试失败",
         message:
@@ -713,14 +740,24 @@ export function ApplicationSettingsPage({
     }
     const draftVersion =
       analysisDraftVersionRef.current;
+    const normalizedDraft = cloneCodeAnalysisSettings({
+      ...analysisDraft,
+      mcp: appSettings.settings.codeAnalysis.mcp
+    });
+    normalizedDraft.ignoreDirectories = splitLines(
+      normalizedDraft.ignoreDirectories.join("\n")
+    );
+    for (const { id } of LANGUAGE_SERVER_CONFIGURATIONS) {
+      const languageSettings = normalizedDraft[id];
+      if (languageSettings) {
+        languageSettings.args = splitLines(
+          languageSettings.args.join("\n")
+        );
+      }
+    }
     const saved = await appSettings.update(
       {
-        codeAnalysis: cloneCodeAnalysisSettings(
-          {
-            ...analysisDraft,
-            mcp: appSettings.settings.codeAnalysis.mcp
-          }
-        )
+        codeAnalysis: normalizedDraft
       },
       {
         notice:
@@ -732,6 +769,7 @@ export function ApplicationSettingsPage({
       draftVersion === analysisDraftVersionRef.current
     ) {
       analysisDraftDirtyRef.current = false;
+      setAnalysisDraft(normalizedDraft);
     }
   };
 
@@ -783,6 +821,34 @@ export function ApplicationSettingsPage({
       loading={appSettings.loading}
       surfaceClassName="page-scroll settings-page-scroll gn-page-skeleton application-settings-skeleton"
     >
+      {!appSettings.loaded ? (
+        <div className="page-scroll settings-page-scroll">
+          <section className="page-heading">
+            <div>
+              <h1>设置</h1>
+              <p>读取应用设置后即可查看和修改。</p>
+            </div>
+          </section>
+          <div className="empty-state" role="alert">
+            <span className="empty-state-icon">
+              <Icon name="warning" size={20} />
+            </span>
+            <div>
+              <strong>应用设置读取失败</strong>
+              <p>{appSettings.error?.message ?? "尚未取得应用设置，请重新读取。"}</p>
+              <Button
+                disabled={appSettings.loading}
+                onClick={() => void appSettings.reload()}
+                size="small"
+                type="button"
+                variant="primary"
+              >
+                重新读取
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
       <div
         className="page-scroll settings-page-scroll"
         onScroll={syncSettingsCardFromScroll}
@@ -1015,46 +1081,11 @@ export function ApplicationSettingsPage({
                 </SettingsCard>
 
                 <SettingsCard
-                  description="按类别查看当前文件浏览、差异与提交偏好。"
+                  description="按类别查看当前差异与提交偏好。"
                   id="settings-general-preferences"
                   title="当前偏好"
                 >
                   <div className="settings-preference-groups">
-                    <section
-                      aria-labelledby="file-browsing-preference-title"
-                      className="settings-preference-group"
-                    >
-                      <div className="settings-preference-group-header">
-                        <Icon name="folder" size={14} />
-                        <h3
-                          className="settings-preference-group-title"
-                          id="file-browsing-preference-title"
-                        >
-                          文件浏览
-                        </h3>
-                      </div>
-                      <dl className="detail-list settings-preference-list">
-                        <Detail
-                          label="变更文件视图"
-                          value={
-                            appSettings.settings.diff
-                              .fileView === "tree"
-                              ? "树形"
-                              : "列表"
-                          }
-                        />
-                        <Detail
-                          label="树形目录"
-                          value={
-                            appSettings.settings.diff
-                              .treeDirectoriesCollapsed
-                              ? "默认收起"
-                              : "默认展开"
-                          }
-                        />
-                      </dl>
-                    </section>
-
                     <section
                       aria-labelledby="diff-preference-title"
                       className="settings-preference-group"
@@ -1773,9 +1804,8 @@ export function ApplicationSettingsPage({
                     onChange={(event) =>
                       updateAnalysisDraft((current) => ({
                         ...current,
-                        ignoreDirectories: splitLines(
-                          event.target.value
-                        )
+                        ignoreDirectories:
+                          event.target.value.split(/\r?\n/)
                       }))
                     }
                     rows={7}
@@ -1939,6 +1969,7 @@ export function ApplicationSettingsPage({
       </div>
 
       </div>
+      )}
     </SkeletonBoundary>
   );
 }
@@ -2141,7 +2172,7 @@ function LanguageServerSettingsPanel({
             onChange={(event) =>
               onChange(selectedLanguage, {
                 ...languageSettings,
-                args: splitLines(event.target.value)
+                args: event.target.value.split(/\r?\n/)
               })
             }
             placeholder={
@@ -2552,6 +2583,7 @@ function McpRegistrationPanel() {
   const [status, setStatus] = useState<McpRegistrationStatusDto | null>(
     null
   );
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{
     title: string;
@@ -2560,16 +2592,18 @@ function McpRegistrationPanel() {
   } | null>(null);
 
   const load = useCallback(async () => {
-    const bridge = window.gitnest?.codeAnalysis;
-    if (!bridge || typeof bridge.getMcpRegistration !== "function") {
-      setFeedback({
-        title: "无法读取 MCP 注册状态",
-        message: "当前环境无法读取 MCP 注册状态。",
-        tone: "error"
-      });
-      return;
-    }
+    setLoading(true);
+    setFeedback(null);
     try {
+      const bridge = window.gitnest?.codeAnalysis;
+      if (!bridge || typeof bridge.getMcpRegistration !== "function") {
+        setFeedback({
+          title: "无法读取 MCP 注册状态",
+          message: "当前环境无法读取 MCP 注册状态。",
+          tone: "error"
+        });
+        return;
+      }
       const result = await bridge.getMcpRegistration();
       if (result.ok) {
         setStatus(result.value);
@@ -2599,6 +2633,8 @@ function McpRegistrationPanel() {
             : "无法读取 MCP 注册状态。",
         tone: "error"
       });
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -2652,9 +2688,9 @@ function McpRegistrationPanel() {
 
   const registrationBadge =
     status === null
-      ? feedback
-        ? "状态不可用"
-        : "正在读取"
+      ? loading
+        ? "正在读取"
+        : "状态不可用"
       : status.registered
         ? "已注册"
         : status.serverAvailable && status.codexAvailable
@@ -2664,9 +2700,9 @@ function McpRegistrationPanel() {
     status?.registered
       ? "green"
       : status === null
-        ? feedback
-          ? "red"
-          : "neutral"
+        ? loading
+          ? "neutral"
+          : "red"
         : status.serverAvailable && status.codexAvailable
           ? "neutral"
           : "red";
@@ -2704,6 +2740,17 @@ function McpRegistrationPanel() {
             </div>
           ) : null}
           <div className="mcp-registration-actions">
+            {status === null && (
+              <Button
+                disabled={loading || busy}
+                onClick={() => void load()}
+                size="small"
+                type="button"
+              >
+                <Icon name="refresh" />
+                {loading ? "正在读取…" : "重新读取"}
+              </Button>
+            )}
             <Button
               disabled={
                 busy ||

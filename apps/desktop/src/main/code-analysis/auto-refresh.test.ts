@@ -104,6 +104,84 @@ describe("CodeAnalysisAutoRefreshScheduler", () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps configuration reads and refreshes in a single flight", async () => {
+    vi.useFakeTimers();
+    let enable: ((enabled: boolean) => void) | undefined;
+    let finishRun: (() => void) | undefined;
+    const enabled = vi.fn(
+      () => new Promise<boolean>((resolve) => {
+        enable = resolve;
+      })
+    );
+    const run = vi.fn(
+      () => new Promise<void>((resolve) => {
+        finishRun = resolve;
+      })
+    );
+    const scheduler = new CodeAnalysisAutoRefreshScheduler({
+      debounceMs: 10,
+      enabled,
+      run
+    });
+    try {
+      scheduler.request();
+      await vi.advanceTimersByTimeAsync(10);
+      scheduler.request();
+      scheduler.request();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(enabled).toHaveBeenCalledTimes(1);
+
+      enable?.(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run).toHaveBeenCalledTimes(1);
+      finishRun?.();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(enabled).toHaveBeenCalledTimes(2);
+      enable?.(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run).toHaveBeenCalledTimes(2);
+    } finally {
+      scheduler.dispose();
+      enable?.(false);
+      finishRun?.();
+      vi.useRealTimers();
+    }
+  });
+
+  it("invalidates pending configuration and preserves a new request after cancellation", async () => {
+    vi.useFakeTimers();
+    let enable: ((enabled: boolean) => void) | undefined;
+    const enabled = vi.fn(
+      () => new Promise<boolean>((resolve) => {
+        enable = resolve;
+      })
+    );
+    const run = vi.fn(async () => undefined);
+    const scheduler = new CodeAnalysisAutoRefreshScheduler({
+      debounceMs: 10,
+      enabled,
+      run
+    });
+    try {
+      scheduler.request();
+      await vi.advanceTimersByTimeAsync(10);
+      scheduler.cancel();
+      scheduler.request();
+      enable?.(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(enabled).toHaveBeenCalledTimes(2);
+      enable?.(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run).toHaveBeenCalledOnce();
+    } finally {
+      scheduler.dispose();
+      enable?.(false);
+      vi.useRealTimers();
+    }
+  });
+
   it("applies a new debounce window from settings", async () => {
     const { scheduler, run } = createScheduler({ debounceMs: 5_000 });
     scheduler.setDebounceMs(10);
@@ -159,6 +237,53 @@ describe("CodeAnalysisAutoRefreshScheduler", () => {
 });
 
 describe("CodeAnalysisPeriodicRefreshScheduler", () => {
+  it.each(["dispose", "reset"] as const)(
+    "ignores pending configuration after %s",
+    async (action) => {
+      vi.useFakeTimers();
+      let now = 0;
+      let configure:
+        | ((value: { enabled: boolean; intervalMs: number }) => void)
+        | undefined;
+      const configuration = vi.fn(
+        () => new Promise<{ enabled: boolean; intervalMs: number }>(
+          (resolve) => {
+            configure = resolve;
+          }
+        )
+      );
+      const run = vi.fn(async () => undefined);
+      const scheduler = new CodeAnalysisPeriodicRefreshScheduler({
+        checkIntervalMs: 5,
+        clock: () => now,
+        configuration,
+        run
+      });
+      try {
+        scheduler.start();
+        now = 100;
+        await vi.advanceTimersByTimeAsync(5);
+        expect(configuration).toHaveBeenCalledOnce();
+        scheduler[action]();
+        now = 200;
+        configure?.({ enabled: true, intervalMs: 100 });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(run).not.toHaveBeenCalled();
+        if (action === "reset") {
+          await vi.advanceTimersByTimeAsync(5);
+          expect(configuration).toHaveBeenCalledTimes(2);
+          configure?.({ enabled: true, intervalMs: 100 });
+          await vi.advanceTimersByTimeAsync(0);
+          expect(run).toHaveBeenCalledOnce();
+        }
+      } finally {
+        scheduler.dispose();
+        configure?.({ enabled: false, intervalMs: 100 });
+        vi.useRealTimers();
+      }
+    }
+  );
+
   it("runs only after the configured interval is due", async () => {
     let now = 0;
     const run = vi.fn(async () => undefined);

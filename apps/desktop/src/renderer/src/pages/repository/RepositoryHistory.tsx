@@ -88,13 +88,14 @@ export function RepositoryHistory({
   );
   const [filterOpen, setFilterOpen] = useState(false);
   const [filterQuery, setFilterQuery] = useState("");
+  const filterTriggerRef = useRef<HTMLButtonElement>(null);
   const [commitDetailView, setCommitDetailView] =
     useState<RepositoryCommitDetailView>("details");
   const scopeKey = historyScopeKey(controller.historyScope);
   useEffect(() => {
     setFilterOpen(false);
     setFilterQuery("");
-  }, [scopeKey]);
+  }, [repositoryKey, scopeKey]);
   useEffect(() => {
     setCommitDetailView("details");
   }, [
@@ -131,7 +132,7 @@ export function RepositoryHistory({
   return (
     <SkeletonBoundary
       fallback={<RepositoryHistorySkeleton />}
-      hasContent={false}
+      hasContent={Boolean(history)}
       label="正在读取提交历史"
       loading={loadingRegion === "page"}
       surfaceAs="section"
@@ -175,12 +176,17 @@ export function RepositoryHistory({
                     autoFocus
                     className="history-filter-input"
                     onKeyDown={(event) => {
-                      if (event.key !== "Escape") {
+                      if (
+                        event.key !== "Escape" ||
+                        event.nativeEvent.isComposing ||
+                        event.keyCode === 229
+                      ) {
                         return;
                       }
                       event.preventDefault();
                       setFilterOpen(false);
                       setFilterQuery("");
+                      filterTriggerRef.current?.focus();
                     }}
                     onChange={(event) =>
                       setFilterQuery(event.target.value)
@@ -191,10 +197,12 @@ export function RepositoryHistory({
                 )}
                 <Button
                   aria-expanded={filterOpen}
+                  ref={filterTriggerRef}
                   className="panel-header-action"
-                  onClick={() =>
-                    setFilterOpen((open) => !open)
-                  }
+                  onClick={() => {
+                    setFilterQuery("");
+                    setFilterOpen((open) => !open);
+                  }}
                   size="small"
                   type="button"
                 >
@@ -206,7 +214,7 @@ export function RepositoryHistory({
           </header>
           <SkeletonBoundary
             fallback={<RepositoryHistoryRowsSkeleton />}
-            hasContent={false}
+            hasContent={Boolean(history)}
             label="正在切换提交历史"
             loading={loadingRegion === "content"}
             surfaceClassName="history-content-region repository-history-content-skeleton"

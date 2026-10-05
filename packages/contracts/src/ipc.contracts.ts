@@ -63,6 +63,7 @@ import type {
   RepositoryStashesRequest,
   RepositoryPathsMutationDto,
   RepositoryPathsMutationRequest,
+  RepositoryDiscardRequest,
   RepositoryQueryRequest
 } from "./repository.contracts";
 import type {
@@ -340,7 +341,7 @@ export interface IpcContractMap {
     GitReadResult<RepositoryPathsMutationDto>
   >;
   [IPC_CHANNELS.repositoryDiscard]: IpcContract<
-    [request: RepositoryPathsMutationRequest],
+    [request: RepositoryDiscardRequest],
     GitReadResult<RepositoryPathsMutationDto>
   >;
   [IPC_CHANNELS.repositoryMutateStash]: IpcContract<

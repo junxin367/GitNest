@@ -69,16 +69,25 @@ export function useRepositoryMutations(
   const targetKey = stableTarget
     ? `${stableTarget.repositoryId}:${stableTarget.worktreeId}`
     : "";
+  const scope = useMemo(() => ({ targetKey }), [targetKey]);
+  const currentScopeRef = useRef<typeof scope | null>(scope);
+  currentScopeRef.current = scope;
 
   useEffect(() => {
+    currentScopeRef.current = scope;
     generation.current += 1;
+    inFlight.current = false;
+    setActive(null);
     setError(null);
     setNotice(null);
 
     return () => {
       generation.current += 1;
+      if (currentScopeRef.current === scope) {
+        currentScopeRef.current = null;
+      }
     };
-  }, [targetKey]);
+  }, [scope]);
 
   const runMutation = useCallback(
     async <Result extends { operationId: string }>(
@@ -88,7 +97,7 @@ export function useRepositoryMutations(
       ) => Promise<GitReadResult<Result>>,
       successMessage: (result: Result) => string
     ): Promise<boolean> => {
-      if (!stableTarget || inFlight.current) {
+      if (!stableTarget || currentScopeRef.current !== scope || inFlight.current) {
         return false;
       }
 
@@ -115,20 +124,32 @@ export function useRepositoryMutations(
           return false;
         }
 
-        setNotice(successMessage(result.value));
-        await hooks.afterMutation();
-        return true;
+        const completedNotice = successMessage(result.value);
+        setNotice(completedNotice);
+        try {
+          await hooks.afterMutation();
+        } catch {
+          // A failed read cannot undo a completed write or make it safe to retry.
+          if (requestGeneration === generation.current) {
+            setNotice(
+              `${completedNotice} 状态刷新失败，请重新读取仓库状态。`
+            );
+          }
+        }
+        return requestGeneration === generation.current;
       } catch (reason) {
         if (requestGeneration === generation.current) {
           setError(unexpectedMutationError(reason));
         }
         return false;
       } finally {
-        inFlight.current = false;
-        setActive(null);
+        if (requestGeneration === generation.current) {
+          inFlight.current = false;
+          setActive(null);
+        }
       }
     },
-    [hooks, stableTarget]
+    [hooks, scope, stableTarget]
   );
 
   const stageChange = useCallback(
@@ -138,7 +159,7 @@ export function useRepositoryMutations(
         (mutationTarget) =>
           window.gitnest.repository.stage({
             target: mutationTarget,
-            paths: mutationPathsForChange(change)
+            paths: mutationPathsForChange(change, "stage")
           }),
         () => "所选文件已暂存。"
       ),
@@ -152,7 +173,7 @@ export function useRepositoryMutations(
         (mutationTarget) =>
           window.gitnest.repository.unstage({
             target: mutationTarget,
-            paths: mutationPathsForChange(change)
+            paths: mutationPathsForChange(change, "unstage")
           }),
         () => "所选文件已取消暂存。"
       ),
@@ -166,7 +187,10 @@ export function useRepositoryMutations(
         (mutationTarget) =>
           window.gitnest.repository.discard({
             target: mutationTarget,
-            paths: mutationPathsForChange(change)
+            paths: mutationPathsForChange(change, "discard"),
+            expectedUntrackedPaths: change.kind === "untracked"
+              ? mutationPathsForChange(change, "discard")
+              : []
           }),
         () => "所选文件的更改已放弃。"
       ),
@@ -180,7 +204,7 @@ export function useRepositoryMutations(
         (mutationTarget) =>
           window.gitnest.repository.stage({
             target: mutationTarget,
-            paths: mutationPathsForChanges(changes)
+            paths: mutationPathsForChanges(changes, "stage")
           }),
         () => `${changes.length} 个文件已暂存。`
       ),
@@ -194,7 +218,7 @@ export function useRepositoryMutations(
         (mutationTarget) =>
           window.gitnest.repository.unstage({
             target: mutationTarget,
-            paths: mutationPathsForChanges(changes)
+            paths: mutationPathsForChanges(changes, "unstage")
           }),
         () => `${changes.length} 个文件已取消暂存。`
       ),
@@ -208,7 +232,11 @@ export function useRepositoryMutations(
         (mutationTarget) =>
           window.gitnest.repository.discard({
             target: mutationTarget,
-            paths: mutationPathsForChanges(changes)
+            paths: mutationPathsForChanges(changes, "discard"),
+            expectedUntrackedPaths: mutationPathsForChanges(
+              changes.filter((change) => change.kind === "untracked"),
+              "discard"
+            )
           }),
         () => `${changes.length} 个文件的更改已放弃。`
       ),
@@ -234,9 +262,12 @@ export function useRepositoryMutations(
   );
 
   const clearFeedback = useCallback(() => {
+    if (currentScopeRef.current !== scope) {
+      return;
+    }
     setError(null);
     setNotice(null);
-  }, []);
+  }, [scope]);
 
   return {
     active,
@@ -254,19 +285,31 @@ export function useRepositoryMutations(
 }
 
 export function mutationPathsForChange(
-  change: ChangedPathDto
+  change: ChangedPathDto,
+  operation: Exclude<RepositoryMutationKind, "commit">
 ): string[] {
+  // Once a rename is staged, the index contains only the new path.
+  // Only unstaging must also restore the original path from HEAD.
+  const includeOriginal =
+    operation === "unstage" || change.indexStatus !== "R";
   return [
     change.path,
-    ...(change.originalPath ? [change.originalPath] : [])
+    ...(includeOriginal && change.originalPath
+      ? [change.originalPath]
+      : [])
   ];
 }
 
 export function mutationPathsForChanges(
-  changes: readonly ChangedPathDto[]
+  changes: readonly ChangedPathDto[],
+  operation: Exclude<RepositoryMutationKind, "commit">
 ): string[] {
   return [
-    ...new Set(changes.flatMap(mutationPathsForChange))
+    ...new Set(
+      changes.flatMap((change) =>
+        mutationPathsForChange(change, operation)
+      )
+    )
   ];
 }
 

@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import {
   appendFile,
+  readFile,
+  unlink,
   writeFile
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -19,6 +21,11 @@ import {
 } from "@gitnest/testkit";
 
 import { GitCliClient } from "./git-cli-client";
+import {
+  RepositoryCommandService,
+  type RepositoryCommandRuntime
+} from "../../../application/src/repository/repository-command-service";
+import type { Workspace } from "@gitnest/workspace-core";
 
 describe("GitCliClient repository operations integration", () => {
   let fixture: GitRemoteFixture;
@@ -31,6 +38,61 @@ describe("GitCliClient repository operations integration", () => {
   afterEach(async () => {
     await fixture.dispose();
   });
+
+  it("reads effective fetch and all push URLs with Git URL rewriting", async () => {
+    const path = fixture.localPath;
+    await runGit(path, ["config", "url.https://fetch.example.test/.insteadOf", "fixture:"]);
+    await runGit(path, ["config", "url.https://push.example.test/.pushInsteadOf", "fixture:"]);
+    await runGit(path, ["remote", "set-url", "origin", "fixture:repository.git"]);
+    await expect(client.readRemoteUrls(path, "origin", "fetch")).resolves.toEqual([
+      "https://fetch.example.test/repository.git"
+    ]);
+    await expect(client.readRemoteUrls(path, "origin", "push")).resolves.toEqual([
+      "https://push.example.test/repository.git"
+    ]);
+    await runGit(path, ["config", "--add", "remote.origin.pushurl", "fixture:first.git"]);
+    await runGit(path, ["config", "--add", "remote.origin.pushurl", "fixture:second.git"]);
+    await expect(client.readRemoteUrls(path, "origin", "push")).resolves.toEqual([
+      "https://fetch.example.test/first.git",
+      "https://fetch.example.test/second.git"
+    ]);
+  });
+
+  it.each(["before-confirm", "while-queued"] as const)(
+    "does not push to a replacement remote with identical history (%s)",
+    async (phase) => {
+      const otherRemote = join(fixture.containerPath, "other.git");
+      await runGit(fixture.containerPath, [
+        "clone", "--bare", fixture.remotePath, otherRemote
+      ]);
+      const oldHead = await client.resolveRevision(fixture.localPath, "HEAD");
+      await commitChange(fixture.localPath, "new.txt", "new\n", "Local change");
+      const runtime = createCommandRuntime(fixture);
+      const service = new RepositoryCommandService(runtime, client, client);
+      const preflight = await service.preflight({
+        type: "push",
+        targets: [{ repositoryId: "repo", worktreeId: "wt" }]
+      });
+      if (phase === "while-queued") {
+        await service.execute(preflight.command, preflight.preflightId, true);
+        await runGit(fixture.localPath, [
+          "remote", "set-url", "--push", "origin", otherRemote
+        ]);
+        await expect(runtime.runQueued()).rejects.toMatchObject({
+          code: "PREFLIGHT_CHANGED"
+        });
+      } else {
+        await runGit(fixture.localPath, [
+          "remote", "set-url", "origin", otherRemote
+        ]);
+        await expect(
+          service.execute(preflight.command, preflight.preflightId, true)
+        ).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
+      }
+      expect((await runGit(fixture.remotePath, ["rev-parse", "main"])).stdout.trim()).toBe(oldHead);
+      expect((await runGit(otherRemote, ["rev-parse", "main"])).stdout.trim()).toBe(oldHead);
+    }
+  );
 
   it("reads remotes, advertised branches, revisions, and ancestry", async () => {
     const remotes = await client.readRemotes(
@@ -94,6 +156,72 @@ describe("GitCliClient repository operations integration", () => {
     ).resolves.toBe("ancestor");
   });
 
+  it.each(["fetch", "pull", "push"] as const)(
+    "completes a workspace %s for linked worktrees sharing refs",
+    async (type) => {
+      const linkedPath = join(fixture.containerPath, "linked");
+      await runGit(fixture.localPath, ["branch", "feature"]);
+      await runGit(fixture.localPath, ["push", "--set-upstream", "origin", "feature"]);
+      await runGit(fixture.localPath, ["worktree", "add", linkedPath, "feature"]);
+      let mainHead: string;
+      let featureHead: string;
+      if (type === "push") {
+        mainHead = await commitChange(fixture.localPath, "main.txt", "main update\n", "Main update");
+        featureHead = await commitChange(linkedPath, "feature.txt", "feature update\n", "Feature update");
+      } else {
+        mainHead = await commitChange(fixture.peerPath, "main.txt", "main update\n", "Main update");
+        await runGit(fixture.peerPath, ["push", "origin", "main"]);
+        await runGit(fixture.peerPath, ["fetch", "origin", "feature"]);
+        await runGit(fixture.peerPath, ["switch", "--track", "origin/feature"]);
+        featureHead = await commitChange(fixture.peerPath, "feature.txt", "feature update\n", "Feature update");
+        await runGit(fixture.peerPath, ["push", "origin", "feature"]);
+      }
+      if (type === "fetch") {
+        await runGit(fixture.localPath, ["update-ref", "refs/remotes/origin/stale", "HEAD"]);
+      }
+      const runtime = createCommandRuntime(fixture);
+      const workspace = await runtime.getCurrent();
+      const linkedTarget = { repositoryId: "repo", worktreeId: "wt-linked" };
+      workspace.groups[0]!.targets.push(linkedTarget);
+      workspace.repositories[0]!.worktreeIds.push(linkedTarget.worktreeId);
+      workspace.worktrees.push({
+        ...workspace.worktrees[0]!,
+        id: linkedTarget.worktreeId,
+        path: linkedPath,
+        canonicalPath: linkedPath,
+        branch: "feature",
+        isPrimary: false,
+        gitDir: join(fixture.localPath, ".git", "worktrees", "linked")
+      });
+      const service = new RepositoryCommandService(runtime, client, client);
+      const targets = workspace.groups[0]!.targets;
+      const preflight = await service.preflight(
+        type === "pull"
+          ? { type, targets, strategy: "ff-only" }
+          : type === "fetch"
+            ? { type, targets, prune: true }
+            : { type, targets }
+      );
+      if (type === "pull") {
+        const localHead = await client.resolveRevision(linkedPath, "HEAD");
+        expect(await client.compareAncestry(linkedPath, localHead, featureHead)).toBe("unknown");
+      }
+      const accepted = await service.execute(preflight.command, preflight.preflightId, true);
+      expect(accepted.operationIds).toHaveLength(2);
+      await runtime.runQueued();
+      const refPath = type === "push" ? fixture.remotePath : fixture.localPath;
+      const prefix = type === "fetch" ? "refs/remotes/origin/" : "refs/heads/";
+      expect((await runGit(refPath, ["rev-parse", `${prefix}main`])).stdout.trim()).toBe(mainHead);
+      expect((await runGit(refPath, ["rev-parse", `${prefix}feature`])).stdout.trim()).toBe(featureHead);
+      if (type === "fetch") {
+        expect((await client.readBranches(fixture.localPath)).some((branch) =>
+          branch.fullName === "refs/remotes/origin/stale"
+        )).toBe(false);
+      }
+    },
+    30_000
+  );
+
   it("acquires and disposes a token-free environment lease for remote commands", async () => {
     const contexts: unknown[] = [];
     let disposals = 0;
@@ -127,6 +255,30 @@ describe("GitCliClient repository operations integration", () => {
       "lease-only"
     );
     expect(disposals).toBe(1);
+  });
+
+  it("does not replace a successful remote command with a synchronous lease disposal failure", async () => {
+    const authenticatedClient = new GitCliClient({
+      remoteEnvironmentProvider: async () => ({
+        environment: {},
+        dispose: (): Promise<void> => {
+          throw new Error("synchronous disposal failure");
+        }
+      })
+    });
+
+    await expect(
+      authenticatedClient.readRemoteBranches(
+        fixture.localPath,
+        "origin"
+      )
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "main"
+        })
+      ])
+    );
   });
 
   it("fetches and performs only a fast-forward pull", async () => {
@@ -317,6 +469,65 @@ describe("GitCliClient repository operations integration", () => {
     ).toBe(false);
   }, 15_000);
 
+  it("reports the selected branch after a post-checkout hook fails and recovers after fixing the hook", async () => {
+    const path = fixture.localPath;
+    const head = await client.resolveRevision(path, "HEAD");
+    await client.createBranch(path, "feature/hook-failure", head);
+    await runGit(path, ["config", "core.hooksPath", join(path, ".git", "hooks")]);
+    const hookPath = join(path, ".git", "hooks", "post-checkout");
+    await writeFile(hookPath, "#!/bin/sh\nexit 1\n", {
+      encoding: "utf8", mode: 0o755
+    });
+
+    const failure = await client.switchBranch(path, "feature/hook-failure")
+      .then(() => undefined, (error: unknown) => error);
+
+    expect(await client.readRepositorySnapshot(path)).toMatchObject({
+      branch: "feature/hook-failure", head
+    });
+    expect(failure).toMatchObject({
+      code: "COMMAND_FAILED",
+      message: expect.stringContaining("不要直接重复切换"),
+      details: {
+        branchOutcome: "selected",
+        branch: "feature/hook-failure",
+        head
+      }
+    });
+    await unlink(hookPath);
+    await client.switchBranch(path, "main");
+    await client.switchBranch(path, "feature/hook-failure");
+    expect((await client.readRepositorySnapshot(path)).branch)
+      .toBe("feature/hook-failure");
+  });
+
+  it("preserves local edits when checkout is refused and permits retry after resolving them", async () => {
+    const path = fixture.localPath;
+    const original = await readFile(join(path, "README.md"), "utf8");
+    const head = await client.resolveRevision(path, "HEAD");
+    await client.createBranch(path, "feature/changed-file", head);
+    await client.switchBranch(path, "feature/changed-file");
+    await commitChange(path, "README.md", "feature content\n", "Feature fixture");
+    await client.switchBranch(path, "main");
+    const localEdits = `${original}local edits\n`;
+    await writeFile(join(path, "README.md"), localEdits);
+
+    const failure = await client.switchBranch(path, "feature/changed-file")
+      .then(() => undefined, (error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: "COMMAND_FAILED" });
+    expect(failure).not.toMatchObject({
+      details: { branchOutcome: "selected" }
+    });
+    expect((await client.readRepositorySnapshot(path)).branch).toBe("main");
+    expect(await readFile(join(path, "README.md"), "utf8")).toBe(localEdits);
+
+    await client.restoreWorktreePaths(path, ["README.md"]);
+    await client.switchBranch(path, "feature/changed-file");
+    expect((await client.readRepositorySnapshot(path)).branch)
+      .toBe("feature/changed-file");
+  });
+
   it("cancels a long push hook and terminates its process tree", async () => {
     await commitChange(
       fixture.localPath,
@@ -329,6 +540,23 @@ describe("GitCliClient repository operations integration", () => {
       "core.hooksPath",
       ".git/hooks"
     ]);
+    const readyPath = join(fixture.localPath, ".git", "hooks", "cancel-ready.json");
+    const releasePath = join(fixture.localPath, ".git", "hooks", "cancel-release");
+    const completedPath = join(fixture.localPath, ".git", "hooks", "cancel-completed");
+    await writeFile(
+      join(fixture.localPath, ".git", "hooks", "cancel-gate.cjs"),
+      [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(`${readyPath}.tmp`)}, JSON.stringify({ pid: process.pid }));`,
+        `fs.renameSync(${JSON.stringify(`${readyPath}.tmp`)}, ${JSON.stringify(readyPath)});`,
+        "const gate = setInterval(() => {",
+        `  if (!fs.existsSync(${JSON.stringify(releasePath)})) return;`,
+        `  fs.writeFileSync(${JSON.stringify(completedPath)}, String(Date.now()));`,
+        "  clearInterval(gate);",
+        "}, 10);",
+        ""
+      ].join("\n")
+    );
     await writeFile(
       join(
         fixture.localPath,
@@ -338,7 +566,7 @@ describe("GitCliClient repository operations integration", () => {
       ),
       [
         "#!/bin/sh",
-        "sleep 10",
+        `"${process.execPath.replace(/\\/g, "/")}" .git/hooks/cancel-gate.cjs`,
         ""
       ].join("\n"),
       { encoding: "utf8", mode: 0o755 }
@@ -350,11 +578,27 @@ describe("GitCliClient repository operations integration", () => {
       remoteBranch: "main",
       signal: controller.signal
     });
-    setTimeout(() => controller.abort(), 250);
-
-    await expect(push).rejects.toMatchObject({
-      code: "COMMAND_CANCELLED"
-    });
+    const settled = push.then(
+      () => ({ code: "SUCCEEDED" }),
+      (error: { code: string }) => error
+    );
+    let cancelDeadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const hook = JSON.parse(await waitForFile(readyPath)) as { pid: number };
+      controller.abort();
+      expect(await Promise.race([
+        settled,
+        new Promise((resolve) => {
+          cancelDeadline = setTimeout(() => resolve({ code: "CANCEL_DID_NOT_SETTLE" }), 5_000);
+        })
+      ])).toMatchObject({ code: "COMMAND_CANCELLED" });
+      expect(() => process.kill(hook.pid, 0)).toThrow(/ESRCH/);
+      await expect(readFile(completedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      clearTimeout(cancelDeadline);
+      await writeFile(releasePath, "release for cleanup");
+      await settled;
+    }
     const remoteHead = (
       await client.readRemoteBranches(
         fixture.localPath,
@@ -368,6 +612,71 @@ describe("GitCliClient repository operations integration", () => {
     expect(remoteHead).toBe(peerHead);
   }, 15_000);
 });
+
+async function waitForFile(path: string): Promise<string> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      return await readFile(path, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Hook did not become ready: ${path}`);
+}
+
+function createCommandRuntime(
+  fixture: GitRemoteFixture
+): RepositoryCommandRuntime & { runQueued(): Promise<void> } {
+  const path = fixture.localPath;
+  const target = { repositoryId: "repo", worktreeId: "wt" };
+  const workspace: Workspace = {
+    schemaVersion: 2,
+    id: "workspace",
+    name: "fixture",
+    path: fixture.containerPath,
+    canonicalPath: fixture.containerPath,
+    excludes: [],
+    groups: [{ id: "group", name: "group", targets: [target], collapsed: false }],
+    scanIssues: [],
+    lastScannedAt: "",
+    updatedAt: "",
+    selectedTarget: target,
+    repositories: [{
+      id: "repo", name: "repo",
+      commonDir: join(path, ".git"),
+      canonicalCommonDir: join(path, ".git"),
+      primaryWorktreeId: "wt",
+      worktreeIds: ["wt"]
+    }],
+    worktrees: [{
+      id: "wt", repositoryId: "repo", name: "local",
+      path, canonicalPath: path, gitDir: join(path, ".git"),
+      head: "", branch: "main",
+      isPrimary: true, isBare: false, isDetached: false,
+      isLocked: false, isPrunable: false
+    }]
+  };
+  const queued: Array<() => Promise<void>> = [];
+  return {
+    async getCurrent() { return workspace; },
+    async queueRepositoryOperation(target, _kind, action) {
+      const worktree = workspace.worktrees.find((item) => item.id === target.worktreeId)!;
+      queued.push(() => action(worktree.path, new AbortController().signal));
+      return { operationId: `remote-fixture-${queued.length}` };
+    },
+    async cancelOperation() {},
+    async runQueued() {
+      if (queued.length === 0) {
+        throw new Error("No queued repository operation.");
+      }
+      for (const action of queued) {
+        await action();
+      }
+    }
+  };
+}
 
 async function commitChange(
   path: string,

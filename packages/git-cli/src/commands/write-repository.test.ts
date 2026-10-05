@@ -25,6 +25,13 @@ describe("repository write commands", () => {
       "-leading.txt",
       "src/入口.ts"
     ]);
+    expect(stageArguments(["deleted.txt"], true)).toEqual([
+      "--literal-pathspecs",
+      "add",
+      "--update",
+      "--",
+      "deleted.txt"
+    ]);
   });
 
   it("uses restore for normal repositories and cached rm for unborn repositories", () => {
@@ -39,6 +46,7 @@ describe("repository write commands", () => {
       "--literal-pathspecs",
       "rm",
       "--cached",
+      "--force",
       "--ignore-unmatch",
       "--",
       "file.txt"

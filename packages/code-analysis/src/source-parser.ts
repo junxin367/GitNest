@@ -554,14 +554,12 @@ function parseJava(
       start,
       annotationSpans
     );
-    if (!annotationBlock) {
-      continue;
-    }
+    const symbolStart = annotationBlock?.start ?? start;
     const line = lineForOffset(
       lineStarts,
-      annotationBlock.start
+      symbolStart
     );
-    const annotations = annotationBlock.text;
+    const annotations = annotationBlock?.text ?? "";
     const end = start + match[0].length - 1;
     symbols.push({
       name,
@@ -571,7 +569,7 @@ function parseJava(
       endLine: lineForOffset(lineStarts, end),
       parentQualifiedName: owner.qualifiedName,
       signature: javaMethodSignature(name, match[0]),
-      ...documentationField(content, annotationBlock.start),
+      ...documentationField(content, symbolStart),
       calls: [],
       source: "builtin"
     });
@@ -585,6 +583,17 @@ function parseJava(
         symbolQualifiedName: qualifiedName
       })
     );
+
+    for (const endpoint of extractSpringEndpoints(
+      annotations,
+      annotationRoutes(owner.annotations)
+    )) {
+      serverEndpoints.push({
+        ...endpoint,
+        line,
+        symbolQualifiedName: qualifiedName
+      });
+    }
   }
 
   const functionalRoutePattern =

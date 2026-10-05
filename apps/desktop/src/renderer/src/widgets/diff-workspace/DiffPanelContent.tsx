@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -13,6 +14,7 @@ import type { RepositoryMediaPreviewDto } from "@gitnest/contracts";
 import {
   parseDiffViewModel,
   type DiffSearchHit,
+  type DiffViewerLayout,
   type SplitDiffCell
 } from "../../shared/model/diffViewModel";
 import { Icon } from "../../shared/ui/Icon";
@@ -47,11 +49,8 @@ export function DiffMediaPreview({
   scopeKey: string;
 }) {
   const objectUrl = useMediaObjectUrl(media);
-  const [decodeFailed, setDecodeFailed] = useState(false);
-
-  useEffect(() => {
-    setDecodeFailed(false);
-  }, [media, scopeKey]);
+  const previewKey = objectUrl.url ? `${scopeKey}\0${objectUrl.url}` : null;
+  const [decodeFailedKey, setDecodeFailedKey] = useState<string | null>(null);
 
   if (media.status === "unavailable") {
     if (media.reason === "too-large") {
@@ -81,7 +80,7 @@ export function DiffMediaPreview({
     );
   }
 
-  if (objectUrl.failed || decodeFailed) {
+  if (objectUrl.failed || (previewKey !== null && decodeFailedKey === previewKey)) {
     return (
       <DiffViewerState
         icon="warning"
@@ -103,20 +102,21 @@ export function DiffMediaPreview({
   const label = path ?? "所选文件";
   return (
     <div
+      key={previewKey}
       className={`diff-viewer-media ${media.kind}`}
       data-media-kind={media.kind}
     >
       {media.kind === "image" ? (
         <img
           alt={`${label} 图片预览`}
-          onError={() => setDecodeFailed(true)}
+          onError={() => setDecodeFailedKey(previewKey)}
           src={objectUrl.url}
         />
       ) : media.kind === "video" ? (
         <video
           aria-label={`${label} 视频预览`}
           controls
-          onError={() => setDecodeFailed(true)}
+          onError={() => setDecodeFailedKey(previewKey)}
           preload="metadata"
           src={objectUrl.url}
         />
@@ -124,7 +124,7 @@ export function DiffMediaPreview({
         <audio
           aria-label={`${label} 音频预览`}
           controls
-          onError={() => setDecodeFailed(true)}
+          onError={() => setDecodeFailedKey(previewKey)}
           preload="metadata"
           src={objectUrl.url}
         />
@@ -214,28 +214,34 @@ export function DiffViewerState({
   );
 }
 
-export function DiffContentSkeleton() {
+export function DiffContentSkeleton({
+  layout = "unified"
+}: { layout?: DiffViewerLayout }) {
   return (
-    <div aria-hidden="true" className="diff-content-skeleton">
-      <div className="diff-workspace-skeleton-hunk">
-        <Skeleton className="diff-workspace-skeleton-hunk-title" />
-      </div>
-      <div className="diff-workspace-skeleton-code">
-        {DIFF_CONTENT_SKELETON_ROWS.map((width, index) => (
-          <div
-            className={`diff-workspace-skeleton-code-row is-${width}`}
-            key={`code-${index + 1}`}
-          >
-            <Skeleton className="diff-workspace-skeleton-line-number" />
-            <Skeleton className="diff-workspace-skeleton-code-line" />
+    <div aria-hidden="true" className="diff-content-skeleton" data-layout={layout}>
+      {Array.from({ length: layout === "split" ? 2 : 1 }, (_, pane) => (
+        <div className="diff-content-skeleton-pane" key={pane}>
+          <div className="diff-workspace-skeleton-hunk">
+            <Skeleton className="diff-workspace-skeleton-hunk-title" />
           </div>
-        ))}
-      </div>
+          <div className="diff-workspace-skeleton-code">
+            {DIFF_CONTENT_SKELETON_ROWS.map((width, index) => (
+              <div
+                className={`diff-workspace-skeleton-code-row is-${width}`}
+                key={`code-${index + 1}`}
+              >
+                <Skeleton className="diff-workspace-skeleton-line-number" />
+                <Skeleton className="diff-workspace-skeleton-code-line" />
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
 
-export function SplitDiff({
+export const SplitDiff = memo(function SplitDiff({
   rows,
   hits,
   activeSearchHit,
@@ -437,7 +443,7 @@ export function SplitDiff({
       )}
     </div>
   );
-}
+});
 
 function SplitPane({
   rows,
@@ -603,7 +609,7 @@ function SplitCell({
   );
 }
 
-export function UnifiedDiff({
+export const UnifiedDiff = memo(function UnifiedDiff({
   lines,
   hits,
   activeSearchHit,
@@ -707,7 +713,7 @@ export function UnifiedDiff({
       })}
     </div>
   );
-}
+});
 
 function DiffHunkContextTrigger({
   hunkContextStates,

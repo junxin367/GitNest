@@ -21,6 +21,7 @@ import {
 } from "../../entities/workspace/model";
 import { useRepositoryBranchOptions } from "../../entities/repository/useRepositoryBranchOptions";
 import type { ExternalApplicationController } from "../../features/external-application/useExternalApplications";
+import type { RepositoryCommandController } from "../../features/repository-command/useRepositoryCommands";
 import { Icon, type IconName } from "../../shared/ui/Icon";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import { BranchSwitchDialog } from "./BranchSwitchDialog";
@@ -37,6 +38,7 @@ interface RepositoryHeaderProps {
   externalApplications: ExternalApplicationController;
   commandActive: RepositoryCommandDto["type"] | null;
   commandCompletionVersion: number;
+  commandFeedback?: Pick<RepositoryCommandController, "error" | "notice" | "clearFeedback">;
   commandLocked: boolean;
   workspaceCommandBusy: boolean;
   onRefresh(): void;
@@ -90,6 +92,7 @@ export function RepositoryHeader({
   externalApplications,
   commandActive,
   commandCompletionVersion,
+  commandFeedback,
   commandLocked,
   workspaceCommandBusy,
   onRefresh,
@@ -268,11 +271,7 @@ export function RepositoryHeader({
               Boolean(workspace?.selectedTarget))) && (
             <OpenInControl
               applications={externalApplications}
-              scope={
-                view === "workspace"
-                  ? "workspace"
-                  : "repository"
-              }
+                scope="workspace"
             />
           )}
 
@@ -544,6 +543,7 @@ export function RepositoryHeader({
         view === "repository" &&
         workspace?.selectedTarget && (
           <BranchSwitchDialog
+            hasLoaded={branchOptions.hasLoaded}
             branches={localBranches}
             currentBranch={currentBranch}
             errorMessage={
@@ -564,6 +564,18 @@ export function RepositoryHeader({
             }}
           />
         )}
+      {view === "workspace" && (commandFeedback?.error || commandFeedback?.notice) && (
+        <ToastViewport>
+          <Toast
+            closeLabel="关闭仓库操作提示"
+            icon={commandFeedback.error ? "warning" : "check"}
+            message={commandFeedback.error?.message ?? commandFeedback.notice ?? ""}
+            onClose={commandFeedback.clearFeedback}
+            title={commandFeedback.error ? "仓库操作未完成" : "仓库操作"}
+            tone={commandFeedback.error ? "error" : "success"}
+          />
+        </ToastViewport>
+      )}
       {externalApplications.error && (
         <ToastViewport>
           <Toast

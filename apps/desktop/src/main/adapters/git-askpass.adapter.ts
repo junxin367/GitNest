@@ -69,14 +69,10 @@ export class WindowsGitAskPassBroker
         "AskPass requires bounded account credentials."
       );
     }
-    if (input.signal?.aborted) {
-      throw new GitError(
-        "COMMAND_CANCELLED",
-        "Authentication was cancelled before it started."
-      );
-    }
+    assertAuthenticationNotCancelled(input.signal);
 
     const askPassPath = await this.#ensureHelper();
+    assertAuthenticationNotCancelled(input.signal);
     const nonce = this.#nonceFactory();
     if (
       !nonce ||
@@ -102,6 +98,11 @@ export class WindowsGitAskPassBroker
       );
     });
     await listenLoopback(server);
+    if (input.signal?.aborted) {
+      secret = "";
+      await closeServer(server);
+      assertAuthenticationNotCancelled(input.signal);
+    }
     const address = server.address();
     if (!address || typeof address === "string") {
       await closeServer(server);
@@ -141,8 +142,22 @@ export class WindowsGitAskPassBroker
   #ensureHelper(): Promise<string> {
     this.#helperPromise ??= writeAskPassHelpers(
       this.#runtimeDirectory
-    );
+    ).catch((error) => {
+      this.#helperPromise = undefined;
+      throw error;
+    });
     return this.#helperPromise;
+  }
+}
+
+function assertAuthenticationNotCancelled(
+  signal?: AbortSignal
+): void {
+  if (signal?.aborted) {
+    throw new GitError(
+      "COMMAND_CANCELLED",
+      "Authentication was cancelled before it started."
+    );
   }
 }
 

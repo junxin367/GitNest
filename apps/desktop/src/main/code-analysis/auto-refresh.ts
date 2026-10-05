@@ -88,7 +88,7 @@ export class CodeAnalysisAutoRefreshScheduler {
     this.#activeController?.abort();
   }
 
-  /** True while a refresh is executing (not merely debouncing). */
+  /** True while checking configuration or executing a refresh. */
   get running(): boolean {
     return this.#running;
   }
@@ -103,26 +103,29 @@ export class CodeAnalysisAutoRefreshScheduler {
       return;
     }
     const generation = this.#generation;
-    let enabled = false;
-    try {
-      enabled = await this.#options.enabled();
-    } catch {
-      enabled = false;
-    }
-    if (!enabled || this.#disposed || generation !== this.#generation) {
-      return;
-    }
     this.#running = true;
-    const controller = new AbortController();
-    this.#activeController = controller;
     try {
-      await this.#options.run(controller.signal);
-    } catch (error) {
-      this.#options.onError?.(error);
-    } finally {
-      if (this.#activeController === controller) {
-        this.#activeController = undefined;
+      let enabled = false;
+      try {
+        enabled = await this.#options.enabled();
+      } catch {
+        enabled = false;
       }
+      if (!enabled || this.#disposed || generation !== this.#generation) {
+        return;
+      }
+      const controller = new AbortController();
+      this.#activeController = controller;
+      try {
+        await this.#options.run(controller.signal);
+      } catch (error) {
+        this.#options.onError?.(error);
+      } finally {
+        if (this.#activeController === controller) {
+          this.#activeController = undefined;
+        }
+      }
+    } finally {
       this.#running = false;
       if (this.#pending) {
         this.#pending = false;
@@ -146,6 +149,7 @@ export class CodeAnalysisPeriodicRefreshScheduler {
   #lastRunAt: number;
   #running = false;
   #disposed = false;
+  #generation = 0;
 
   constructor(options: PeriodicRefreshSchedulerOptions) {
     this.#options = options;
@@ -163,6 +167,7 @@ export class CodeAnalysisPeriodicRefreshScheduler {
   }
 
   reset(): void {
+    this.#generation += 1;
     this.#lastRunAt = this.#clock();
     this.#activeController?.abort();
   }
@@ -191,6 +196,7 @@ export class CodeAnalysisPeriodicRefreshScheduler {
   }
 
   async #tick(): Promise<void> {
+    const generation = this.#generation;
     try {
       if (this.#disposed || this.#running) {
         return;
@@ -203,6 +209,8 @@ export class CodeAnalysisPeriodicRefreshScheduler {
         return;
       }
       if (
+        this.#disposed ||
+        generation !== this.#generation ||
         !configuration.enabled ||
         !Number.isFinite(configuration.intervalMs) ||
         configuration.intervalMs <= 0 ||

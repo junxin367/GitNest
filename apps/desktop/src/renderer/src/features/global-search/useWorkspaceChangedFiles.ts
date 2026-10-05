@@ -14,7 +14,6 @@ import type {
 
 import { repositoryTargetsMatch } from "../../entities/repository/changeSelection";
 import {
-  findTargetSnapshot,
   getSnapshotContentRevision,
   getSnapshotChangeCount,
   listWorkspaceTargets
@@ -35,6 +34,7 @@ interface TargetLoadPlan {
 export interface WorkspaceChangedFilesIndex {
   changes: RepositoryChangesDto[];
   failedTargetCount: number;
+  loaded: boolean;
   loading: boolean;
 }
 
@@ -50,6 +50,7 @@ export function useWorkspaceChangedFiles(
       scopeKey: "",
       changes: [],
       failedTargetCount: 0,
+      loaded: false,
       loading: false
     });
   const cacheRef = useRef(
@@ -65,8 +66,30 @@ export function useWorkspaceChangedFiles(
       return [];
     }
 
+    const snapshotsByRepository = new Map<
+      string,
+      Map<string, RepositoryStatusSnapshotDto>
+    >();
+    for (const snapshot of snapshots) {
+      let snapshotsByWorktree = snapshotsByRepository.get(
+        snapshot.repositoryId
+      );
+      if (!snapshotsByWorktree) {
+        snapshotsByWorktree = new Map();
+        snapshotsByRepository.set(
+          snapshot.repositoryId,
+          snapshotsByWorktree
+        );
+      }
+      if (!snapshotsByWorktree.has(snapshot.worktreeId)) {
+        snapshotsByWorktree.set(snapshot.worktreeId, snapshot);
+      }
+    }
+
     return listWorkspaceTargets(workspace).map((target) => {
-      const snapshot = findTargetSnapshot(snapshots, target);
+      const snapshot = snapshotsByRepository
+        .get(target.repositoryId)
+        ?.get(target.worktreeId);
       const freshAndClean = Boolean(
         snapshot &&
           !snapshot.error &&
@@ -93,7 +116,7 @@ export function useWorkspaceChangedFiles(
         .join("\u0001"),
     [plans]
   );
-  const scopeKey = JSON.stringify([workspace?.id ?? "", planSignature]);
+  const scopeKey = JSON.stringify([workspace?.id ?? "", planSignature, enabled]);
 
   useEffect(() => {
     const generation = ++generationRef.current;
@@ -120,9 +143,10 @@ export function useWorkspaceChangedFiles(
       if (plan.skipRead) {
         return false;
       }
+      const cached = cacheRef.current.get(plan.key);
       return (
-        cacheRef.current.get(plan.key)?.revision !==
-        plan.revision
+        cached?.revision !== plan.revision ||
+        cached.value === null
       );
     });
     const publish = (
@@ -139,12 +163,12 @@ export function useWorkspaceChangedFiles(
         scopeKey,
         changes: plans.flatMap((plan) => {
           const cached = cacheRef.current.get(plan.key);
-          return cached?.revision === plan.revision &&
-            cached.value
+          return cached?.value
             ? [cached.value]
             : [];
         }),
         failedTargetCount,
+        loaded: plans.every((plan) => cacheRef.current.has(plan.key)),
         loading
       });
     };
@@ -244,8 +268,15 @@ export function useWorkspaceChangedFiles(
   return state.scopeKey === scopeKey
     ? state
     : {
-        changes: [],
+        changes: cacheWorkspaceIdRef.current === (workspace?.id ?? "")
+          ? plans.flatMap((plan) => {
+              const cached = cacheRef.current.get(plan.key);
+              return !plan.skipRead && cached?.value ? [cached.value] : [];
+            })
+          : [],
         failedTargetCount: 0,
+        loaded: cacheWorkspaceIdRef.current === (workspace?.id ?? "") &&
+          plans.every((plan) => plan.skipRead || cacheRef.current.has(plan.key)),
         loading: enabled && Boolean(workspace)
       };
 }

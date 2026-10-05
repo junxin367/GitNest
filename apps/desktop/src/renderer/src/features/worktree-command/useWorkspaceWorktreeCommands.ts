@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState
 } from "react";
@@ -42,12 +43,27 @@ export function useWorkspaceWorktreeCommands(
   onSettled?: () => void | Promise<unknown>,
   repositoryId?: string
 ): WorkspaceWorktreeCommandController {
+  const scope = useMemo(
+    () => ({ scopeKey, repositoryId }),
+    [scopeKey, repositoryId]
+  );
+  const currentScopeRef = useRef<typeof scope | null>(scope);
+  currentScopeRef.current = scope;
   const [active, setActive] = useState<
     WorkspaceWorktreeBatchCommand["type"] | null
   >(null);
-  const [preflights, setPreflights] = useState<
+  const [preflights, setPreflightsState] = useState<
     WorktreeCommandPreflightDto[]
   >([]);
+  const preflightsRef =
+    useRef<WorktreeCommandPreflightDto[]>([]);
+  const setPreflights = useCallback(
+    (value: WorktreeCommandPreflightDto[]) => {
+      preflightsRef.current = value;
+      setPreflightsState(value);
+    },
+    []
+  );
   const [error, setError] = useState<GitReadErrorDto | null>(
     null
   );
@@ -57,6 +73,7 @@ export function useWorkspaceWorktreeCommands(
   const [settling, setSettling] = useState(false);
   const generation = useRef(0);
   const inFlight = useRef(false);
+  const acceptedOperationIds = useRef(new Set<string>());
   const completedOperations = useRef(
     new Map<string, WorkspaceOperationDto>()
   );
@@ -72,10 +89,14 @@ export function useWorkspaceWorktreeCommands(
       operationMatchesRepository(operation, repositoryId)
   );
   const trackedBusy = trackedOperationIds.length > 0;
+  const busyRef = useRef(false);
+  busyRef.current = operationBusy || completionPending || settling;
 
   useEffect(() => {
+    currentScopeRef.current = scope;
     generation.current += 1;
     inFlight.current = false;
+    acceptedOperationIds.current.clear();
     completedOperations.current.clear();
     setActive(null);
     setPreflights([]);
@@ -84,7 +105,13 @@ export function useWorkspaceWorktreeCommands(
     setTrackedOperationIds([]);
     setSettling(false);
     pendingSubmissionError.current = null;
-  }, [scopeKey]);
+    return () => {
+      generation.current += 1;
+      if (currentScopeRef.current === scope) {
+        currentScopeRef.current = null;
+      }
+    };
+  }, [scope, setPreflights]);
 
   useEffect(() => {
     if (trackedOperationIds.length === 0) {
@@ -98,7 +125,9 @@ export function useWorkspaceWorktreeCommands(
         .map((operation) => [operation.id, operation])
     );
     const completedIds = trackedOperationIds.filter(
-      (operationId) => terminalById.has(operationId)
+      (operationId) =>
+        acceptedOperationIds.current.has(operationId) &&
+        terminalById.has(operationId)
     );
     if (completedIds.length === 0) {
       return;
@@ -114,6 +143,9 @@ export function useWorkspaceWorktreeCommands(
       }
     }
     const completedIdSet = new Set(completedIds);
+    for (const id of completedIdSet) {
+      acceptedOperationIds.current.delete(id);
+    }
     setTrackedOperationIds((current) =>
       current.filter(
         (operationId) => !completedIdSet.has(operationId)
@@ -165,12 +197,11 @@ export function useWorkspaceWorktreeCommands(
       if (
         inFlight.current ||
         !scopeKey ||
+        currentScopeRef.current !== scope ||
         uniqueCommands.length === 0 ||
-        preflights.length > 0 ||
-        trackedOperationIds.length > 0 ||
-        completionPending ||
-        operationBusy ||
-        settling
+        preflightsRef.current.length > 0 ||
+        acceptedOperationIds.current.size > 0 ||
+        busyRef.current
       ) {
         return false;
       }
@@ -244,18 +275,16 @@ export function useWorkspaceWorktreeCommands(
         }
       }
     },
-    [
-      operationBusy,
-      completionPending,
-      preflights.length,
-      scopeKey,
-      settling,
-      trackedOperationIds.length
-    ]
+    [scope, scopeKey, setPreflights]
   );
 
   const confirm = useCallback(async (): Promise<boolean> => {
-    if (preflights.length === 0 || inFlight.current) {
+    if (
+      preflights.length === 0 ||
+      preflightsRef.current !== preflights ||
+      currentScopeRef.current !== scope ||
+      inFlight.current
+    ) {
       return false;
     }
 
@@ -264,6 +293,7 @@ export function useWorkspaceWorktreeCommands(
     const commandType = batchCommandType(candidates);
     let acceptedCount = 0;
     inFlight.current = true;
+    preflightsRef.current = [];
     setActive(commandType);
     setError(null);
     setNotice(null);
@@ -297,6 +327,9 @@ export function useWorkspaceWorktreeCommands(
           return false;
         }
         acceptedCount += 1;
+        acceptedOperationIds.current.add(
+          result.value.operationId
+        );
         setTrackedOperationIds((current) => [
           ...new Set([...current, result.value.operationId])
         ]);
@@ -328,18 +361,21 @@ export function useWorkspaceWorktreeCommands(
         setActive(null);
       }
     }
-  }, [preflights]);
+  }, [preflights, scope, setPreflights]);
 
   const dismissPreflight = useCallback(() => {
-    if (!inFlight.current) {
+    if (!inFlight.current && currentScopeRef.current === scope) {
       setPreflights([]);
     }
-  }, []);
+  }, [scope, setPreflights]);
 
   const clearFeedback = useCallback(() => {
+    if (currentScopeRef.current !== scope) {
+      return;
+    }
     setError(null);
     setNotice(null);
-  }, []);
+  }, [scope]);
 
   return {
     active,

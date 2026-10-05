@@ -16,6 +16,7 @@ import { join } from "node:path";
 
 import {
   AnalysisSnapshotCache,
+  CodeAnalysisEngine,
   type CodeAnalysisInput,
   type CodeAnalysisSettings,
   type CodeAnalysisSnapshot,
@@ -45,6 +46,111 @@ afterEach(async () => {
 });
 
 describe("CodeAnalysisService snapshot persistence", () => {
+  it.each(["workspace", "changed"] as const)(
+    "removes vanished dirty files from persisted graphs while retaining the %s foreground",
+    async (foregroundScope) => {
+      const directory = await createTemporaryWorktree();
+      const root = join(directory, "repo");
+      await mkdir(root);
+      const pending = join(root, "pending.ts");
+      await writeFile(
+        pending,
+        "export function pendingCaller() { return pendingTarget(); }\n" +
+          "export function pendingTarget() { return 1; }\n"
+      );
+      const workspace = createWorkspaceAt(root);
+      const settings = createSettings();
+      const cacheDirectory = join(directory, "cache");
+      const store = new AnalysisSnapshotCache(cacheDirectory);
+      const git = createGitClient();
+      const cleanStatus = await git.readRepositorySnapshot(root);
+      let dirty = true;
+      vi.mocked(git.readRepositorySnapshot).mockImplementation(async () => ({
+        ...cleanStatus,
+        untracked: dirty ? 1 : 0,
+        changes: dirty ? [{
+          path: "pending.ts", indexStatus: "?", worktreeStatus: "?",
+          kind: "untracked" as const
+        }] : []
+      }));
+      let nextId = 0;
+      const service = new CodeAnalysisService(
+        { getCurrent: async () => structuredClone(workspace) },
+        git,
+        {
+          cacheDirectory,
+          lspDataDirectory: join(directory, "lsp"),
+          settingsProvider: async () => settings,
+          snapshotStore: store,
+          runner: new CodeAnalysisEngine(),
+          idFactory: () => `refresh-${++nextId}`
+        }
+      );
+      try {
+        const ready = waitForState(service, state => state.state === "ready");
+        await service.start("workspace");
+        await ready;
+        if (foregroundScope === "changed") {
+          const readyChanged = waitForState(
+            service,
+            state => state.state === "ready" && state.scope === "changed"
+          );
+          await service.start("changed");
+          await readyChanged;
+        }
+        const before = await service.getSnapshot();
+        expect(before?.nodes.some(node => node.name === "pendingCaller")).toBe(true);
+        expect(before?.edges.some(edge => edge.kind === "calls")).toBe(true);
+        await rm(pending);
+        dirty = false;
+        await expect(service.refresh("changed")).resolves.toMatchObject({
+          workspaceSnapshotUpdated: true,
+          changedSnapshotUpdated: true
+        });
+        const foreground = await service.getSnapshot();
+        expect(foreground?.scope).toBe(foregroundScope);
+        expect(foreground?.nodes).toEqual([]);
+        expect(foreground?.edges).toEqual([]);
+        for (const scope of ["workspace", "changed"] as const) {
+          const persisted = await store.load(
+            workspace.id, settings, before!.roots, scope
+          );
+          expect(persisted?.nodes).toEqual([]);
+          expect(persisted?.edges).toEqual([]);
+          expect(persisted?.stats.analyzedFiles).toBe(0);
+          expect(persisted?.sourceState?.changedPaths).toEqual([]);
+        }
+      } finally {
+        await service.dispose();
+      }
+    }
+  );
+
+  it("retries snapshot hydration after a transient cache read failure", async () => {
+    const snapshot = createSnapshot("restored");
+    const store = createSnapshotStore(null);
+    store.load
+      .mockRejectedValueOnce(new Error("Cache is temporarily unavailable."))
+      .mockResolvedValueOnce(structuredClone(snapshot));
+    const service = createService(
+      createWorkspace(),
+      store,
+      createEngine()
+    );
+
+    await expect(service.getState()).resolves.toMatchObject({
+      state: "idle",
+      snapshotAvailable: false
+    });
+    await expect(service.getState()).resolves.toMatchObject({
+      state: "ready",
+      snapshotAvailable: true,
+      analysisId: "restored"
+    });
+    expect(store.load).toHaveBeenCalledTimes(2);
+    await service.dispose();
+  });
+
   it("restores a compatible snapshot before the renderer reads state", async () => {
     const workspace = createWorkspace();
     const snapshot = createSnapshot("persisted");
@@ -794,6 +900,166 @@ describe("CodeAnalysisService node source", () => {
 });
 
 describe("CodeAnalysisService lifecycle", () => {
+  it.each(["getState", "getSnapshot", "restoreSnapshot"] as const)(
+    "does not let a delayed %s settings read restore the previous Workspace",
+    async (method) => {
+      let workspace = createWorkspace("worktree-a");
+      const oldSettings = deferred<CodeAnalysisSettings>();
+      const provider = vi.fn()
+        .mockImplementationOnce(() => oldSettings.promise)
+        .mockImplementation(async () => createSettings());
+      const store = createSnapshotStore(null);
+      const service = new CodeAnalysisService(
+        { getCurrent: async () => structuredClone(workspace) },
+        createGitClient(),
+        {
+          cacheDirectory: "C:\\cache",
+          lspDataDirectory: "C:\\lsp",
+          settingsProvider: provider,
+          snapshotStore: store,
+          runner: createEngine()
+        }
+      );
+      try {
+        const previousRead = method === "restoreSnapshot"
+          ? service.restoreSnapshot("workspace")
+          : service[method]();
+        workspace = createWorkspace("worktree-b");
+        service.handleWorkspaceChanged(workspace);
+        await service.getState();
+        store.load.mockClear();
+        oldSettings.resolve(createSettings());
+        await previousRead;
+
+        expect(store.load).not.toHaveBeenCalled();
+      } finally {
+        await service.dispose();
+      }
+    }
+  );
+
+  it("shares hydration between concurrent reads of the same Workspace", async () => {
+    const snapshot = createSnapshot("persisted");
+    const pending = deferred<CodeAnalysisSnapshot | null>();
+    const loadStarted = deferred<boolean>();
+    const store = createSnapshotStore(null);
+    store.load.mockImplementation(async () => {
+      loadStarted.resolve(true);
+      return pending.promise;
+    });
+    const service = createService(
+      createWorkspace(),
+      store,
+      createEngine()
+    );
+    try {
+      const state = service.getState();
+      const currentSnapshot = service.getSnapshot();
+      await loadStarted.promise;
+      pending.resolve(snapshot);
+
+      await expect(state).resolves.toMatchObject({
+        state: "ready",
+        analysisId: "persisted"
+      });
+      await expect(currentSnapshot).resolves.toEqual(snapshot);
+      expect(store.load).toHaveBeenCalledTimes(1);
+    } finally {
+      pending.resolve(null);
+      await service.dispose();
+    }
+  });
+
+  it.each(["start", "refresh"] as const)(
+    "does not run %s for an old Workspace after delayed hydration",
+    async (method) => {
+      let workspace = createWorkspace("worktree-a");
+      const loadStarted = deferred<boolean>();
+      const oldSnapshot = deferred<CodeAnalysisSnapshot | null>();
+      const store = createSnapshotStore(null);
+      store.load.mockImplementation(async (_id, _settings, roots) => {
+        if (roots[0]?.worktreeId === "worktree-a") {
+          loadStarted.resolve(true);
+          return oldSnapshot.promise;
+        }
+        return null;
+      });
+      const engine = createEngine();
+      const service = new CodeAnalysisService(
+        { getCurrent: async () => structuredClone(workspace) },
+        createGitClient(),
+        {
+          cacheDirectory: "C:\\cache",
+          lspDataDirectory: "C:\\lsp",
+          settingsProvider: async () => createSettings(),
+          snapshotStore: store,
+          runner: engine
+        }
+      );
+      try {
+        const previousRun = service[method]("workspace").catch((error: unknown) => error);
+        await loadStarted.promise;
+        workspace = createWorkspace("worktree-b");
+        service.handleWorkspaceChanged(workspace);
+        await service.getState();
+        oldSnapshot.resolve(null);
+        await previousRun;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        expect(engine.analyze).not.toHaveBeenCalled();
+      } finally {
+        oldSnapshot.resolve(null);
+        await service.dispose();
+      }
+    }
+  );
+
+  it("ignores old Workspace settings callbacks without cancelling the current analysis", async () => {
+    let workspace = createWorkspace("worktree-a");
+    const oldSettings = deferred<CodeAnalysisSettings>();
+    const started = deferred<CodeAnalysisInput>();
+    const completion = deferred<CodeAnalysisSnapshot>();
+    const provider = vi.fn()
+      .mockImplementationOnce(() => oldSettings.promise)
+      .mockImplementation(async () => createSettings());
+    const service = new CodeAnalysisService(
+      { getCurrent: async () => structuredClone(workspace) },
+      createGitClient(),
+      {
+        cacheDirectory: "C:\\cache",
+        lspDataDirectory: "C:\\lsp",
+        settingsProvider: provider,
+        snapshotStore: createSnapshotStore(null),
+        runner: createEngine(async (input) => {
+          started.resolve(input);
+          return completion.promise;
+        }),
+        idFactory: () => "analysis-b"
+      }
+    );
+    let latest: CodeAnalysisState | undefined;
+    const unsubscribe = service.subscribe((state) => { latest = state; });
+    try {
+      service.handleWorkspaceChanged(workspace);
+      workspace = createWorkspace("worktree-b");
+      service.handleWorkspaceChanged(workspace);
+      await service.start("workspace");
+      const input = await started.promise;
+      oldSettings.resolve(createSettings());
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(input.signal?.aborted).toBe(false);
+      expect(latest).toMatchObject({
+        state: "running",
+        analysisId: "analysis-b"
+      });
+    } finally {
+      completion.resolve(createSnapshot("analysis-b", "worktree-b"));
+      unsubscribe();
+      await service.dispose();
+    }
+  });
+
   it("publishes the execution start time while analysis is running", async () => {
     const completion = deferred<CodeAnalysisSnapshot>();
     const service = new CodeAnalysisService(

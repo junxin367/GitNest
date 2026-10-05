@@ -35,6 +35,7 @@ export interface WorkspaceController {
   notice: string | null;
   cleanupWarning: string | null;
   operation: WorkspaceOperation;
+  switchingWorkspaceId: string | null;
   busy: boolean;
   createWorkspace(): Promise<boolean>;
   switchWorkspace(workspaceId: string): Promise<boolean>;
@@ -64,6 +65,8 @@ export function useWorkspace(): WorkspaceController {
   const [notice, setNotice] = useState<string | null>(null);
   const [operation, setOperation] =
     useState<WorkspaceOperation>("loading");
+  const [switchingWorkspaceId, setSwitchingWorkspaceId] =
+    useState<string | null>(null);
   const targetSelectionSequenceRef = useRef(0);
   const pendingTargetSelectionsRef = useRef(new Set<number>());
   const workspaceTransitionSequenceRef = useRef(0);
@@ -136,12 +139,13 @@ export function useWorkspace(): WorkspaceController {
     });
   }, []);
 
-  const beginWorkspaceTransition = useCallback(() => {
+  const beginWorkspaceTransition = useCallback((workspaceId: string | null = null) => {
     const transitionId = ++workspaceTransitionSequenceRef.current;
     workspaceRequestSequenceRef.current += 1;
     workspaceTransitionPendingRef.current = true;
     targetSelectionSequenceRef.current += 1;
     pendingTargetSelectionsRef.current.clear();
+    setSwitchingWorkspaceId(workspaceId);
     setOperation("switching");
     setError(null);
     setNotice(null);
@@ -290,7 +294,7 @@ export function useWorkspace(): WorkspaceController {
       ) {
         return true;
       }
-      const transitionId = beginWorkspaceTransition();
+      const transitionId = beginWorkspaceTransition(workspaceId);
       try {
         const result = await window.gitnest.workspace.switch({
           workspaceId
@@ -312,6 +316,7 @@ export function useWorkspace(): WorkspaceController {
       } finally {
         if (transitionId === workspaceTransitionSequenceRef.current) {
           workspaceTransitionPendingRef.current = false;
+          setSwitchingWorkspaceId(null);
           setOperation(null);
         }
       }
@@ -682,6 +687,7 @@ export function useWorkspace(): WorkspaceController {
       notice,
       cleanupWarning: runtimeState?.cleanupWarning ?? null,
       operation,
+      switchingWorkspaceId,
       busy: operation !== null,
       createWorkspace,
       switchWorkspace,
@@ -706,6 +712,7 @@ export function useWorkspace(): WorkspaceController {
       error,
       notice,
       operation,
+      switchingWorkspaceId,
       createWorkspace,
       switchWorkspace,
       renameWorkspace,

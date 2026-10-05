@@ -41,6 +41,7 @@ interface GlobalSearchDialogProps {
   snapshots: RepositoryStatusSnapshotDto[];
   changes: RepositoryChangesDto[];
   changesLoading: boolean;
+  changesLoaded?: boolean;
   failedChangeTargetCount: number;
   onClose(): void;
   onOpenChange(location: RepositoryChangeLocation): void;
@@ -108,6 +109,7 @@ export function GlobalSearchDialog({
   snapshots,
   changes,
   changesLoading,
+  changesLoaded = false,
   failedChangeTargetCount,
   onClose,
   onOpenChange,
@@ -122,6 +124,7 @@ export function GlobalSearchDialog({
     string | null
   >(null);
   const dialogRef = useRef<HTMLElement>(null);
+  const ignoreBackdropClick = useRef(false);
   useModalFocusTrap(dialogRef);
 
   const repositoryResults = useMemo<
@@ -294,25 +297,25 @@ export function GlobalSearchDialog({
     return commands;
   }, [repositoryResults.length, workspace?.selectedTarget]);
 
-  const normalizedQuery = query.trim().toLowerCase();
+  const normalizedQuery = normalizeSearchText(query);
   const matchingChangeResults = useMemo(
     () =>
       normalizedQuery
-        ? changeResults
-            .filter((result) =>
-              matchesSearch(result, normalizedQuery)
-            )
-            .slice(0, 20)
+        ? takeMatchingResults(
+            changeResults,
+            normalizedQuery,
+            20
+          )
         : [],
     [changeResults, normalizedQuery]
   );
   const matchingRepositoryResults = useMemo(
     () =>
-      repositoryResults
-        .filter((result) =>
-          matchesSearch(result, normalizedQuery)
-        )
-        .slice(0, 12),
+      takeMatchingResults(
+        repositoryResults,
+        normalizedQuery,
+        12
+      ),
     [normalizedQuery, repositoryResults]
   );
   const matchingCommandResults = useMemo(
@@ -348,6 +351,12 @@ export function GlobalSearchDialog({
         : results[0]?.id ?? null
     );
   }, [results]);
+
+  useEffect(() => {
+    dialogRef.current
+      ?.querySelector<HTMLElement>(`#${getResultElementId(selectedIndex)}`)
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [results, selectedIndex]);
 
   const activate = (result: SearchResult | undefined) => {
     if (!result) {
@@ -387,6 +396,12 @@ export function GlobalSearchDialog({
   const handleKeyDown = (
     event: ReactKeyboardEvent<HTMLElement>
   ) => {
+    if (
+      event.nativeEvent.isComposing ||
+      event.nativeEvent.keyCode === 229
+    ) {
+      return;
+    }
     if (event.key === "Escape") {
       event.preventDefault();
       onClose();
@@ -429,8 +444,22 @@ export function GlobalSearchDialog({
     <LayerPortal>
       <div
         className="global-search-backdrop"
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget) {
+        onPointerDownCapture={(event) => {
+          ignoreBackdropClick.current =
+            event.target !== event.currentTarget;
+        }}
+        onPointerUpCapture={(event) => {
+          if (event.target !== event.currentTarget) {
+            ignoreBackdropClick.current = true;
+          }
+        }}
+        onPointerCancel={() => {
+          ignoreBackdropClick.current = false;
+        }}
+        onClick={(event) => {
+          const ignoreClick = ignoreBackdropClick.current;
+          ignoreBackdropClick.current = false;
+          if (event.target === event.currentTarget && !ignoreClick) {
             onClose();
           }
         }}
@@ -484,7 +513,7 @@ export function GlobalSearchDialog({
         >
           <SkeletonBoundary
             fallback={<GlobalSearchResultsSkeleton />}
-            hasContent={results.length > 0}
+            hasContent={changesLoaded || results.length > 0}
             label="正在读取有变更仓库的文件"
             loading={Boolean(
               normalizedQuery && changesLoading
@@ -547,7 +576,7 @@ export function GlobalSearchDialog({
               ))
             )}
             {normalizedQuery &&
-              results.length > 0 &&
+              (changesLoaded || results.length > 0) &&
               (changesLoading ||
                 failedChangeTargetCount > 0) && (
                 <div
@@ -614,10 +643,31 @@ function matchesSearch(
       ? `${result.originalPath ?? ""} ${result.mode}`
       : ""
   ]
-    .join(" ")
-    .toLowerCase();
+    .join(" ");
 
-  return searchable.includes(query);
+  return normalizeSearchText(searchable).includes(query);
+}
+
+function takeMatchingResults<T extends SearchResult>(
+  candidates: readonly T[],
+  query: string,
+  limit: number
+): T[] {
+  const results: T[] = [];
+  for (const candidate of candidates) {
+    if (!matchesSearch(candidate, query)) {
+      continue;
+    }
+    results.push(candidate);
+    if (results.length === limit) {
+      break;
+    }
+  }
+  return results;
+}
+
+function normalizeSearchText(value: string): string {
+  return value.trim().toLowerCase().replaceAll("\\", "/");
 }
 
 function resultGroupLabel(result: SearchResult): string {

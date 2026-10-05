@@ -49,6 +49,21 @@ const THIRD_LINKED_PATH = "C:\\workspace\\linked-three";
 const LOCAL_HEAD = "a".repeat(40);
 
 describe("WorktreeCommandService", () => {
+  it("consumes a confirmed preflight once when execution requests overlap", async () => {
+    const fixture = createFixture();
+    const preflight = await fixture.service.preflight({
+      type: "lock", worktreeId: LINKED_TARGET.worktreeId
+    });
+    const results = await Promise.allSettled([
+      fixture.service.execute(preflight.command, preflight.preflightId, true),
+      fixture.service.execute(preflight.command, preflight.preflightId, true)
+    ]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(fixture.runtime.queued).toHaveLength(1);
+    const rejected = results.find(result => result.status === "rejected");
+    expect(rejected).toMatchObject({ reason: { code: "PREFLIGHT_EXPIRED" } });
+  });
+
   it("rejects confirmation after switching to another Workspace with the same repository", async () => {
     const fixture = createFixture();
     const preflight = await fixture.service.preflight({
@@ -1277,6 +1292,10 @@ class FakeGitClient
 
   async inspectRepository(): Promise<RepositoryInspection> {
     throw new Error("Not used.");
+  }
+
+  async readRemoteUrls(): Promise<string[]> {
+    return ["https://example.test/origin.git"];
   }
 
   async readRemotes(): Promise<string[]> {

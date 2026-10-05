@@ -108,6 +108,7 @@ import {
   type RepositoryStashRequest,
   type RepositoryStashesRequest,
   type RepositoryPathsMutationRequest,
+  type RepositoryDiscardRequest,
   type RepositoryQueryRequest,
   type RepositoryTabDto,
   type ReadCodeAnalysisFileRequest,
@@ -1005,10 +1006,11 @@ export function registerIpcHandlers(
     (_event, request) =>
       captureGitRead(() => {
         const input =
-          validateRepositoryPathsMutationRequest(request);
+          validateRepositoryDiscardRequest(request);
         return services.repositoryMutations.discard(
           input.target,
-          input.paths
+          input.paths,
+          input.expectedUntrackedPaths
         );
       })
   );
@@ -1349,6 +1351,38 @@ export function validateUpdateAppSettingsRequest(
     );
   }
   const result: UpdateAppSettingsRequest = {};
+
+  if ("repositoryFileBrowsing" in request) {
+    const preference = request.repositoryFileBrowsing;
+    if (!isRecord(preference)) {
+      throw invalidSettingsRequest();
+    }
+    const repositoryId = requireBoundedString(
+      preference.repositoryId, 256, false
+    );
+    if (
+      !repositoryId.trim() ||
+      ["__proto__", "prototype", "constructor"].includes(repositoryId)
+    ) {
+      throw invalidSettingsRequest();
+    }
+    const browsing: NonNullable<
+      UpdateAppSettingsRequest["repositoryFileBrowsing"]
+    > = {
+      repositoryId
+    };
+    if ("fileView" in preference) {
+      browsing.fileView = requireEnum(
+        preference.fileView, DIFF_FILE_VIEWS
+      ) as DiffFileViewDto;
+    }
+    if ("treeDirectoriesCollapsed" in preference) {
+      browsing.treeDirectoriesCollapsed = requireBoolean(
+        preference.treeDirectoriesCollapsed
+      );
+    }
+    result.repositoryFileBrowsing = browsing;
+  }
 
   if ("general" in request) {
     if (!isRecord(request.general)) {
@@ -2850,6 +2884,28 @@ function validateRepositoryPathsMutationRequest(
   };
 }
 
+export function validateRepositoryDiscardRequest(
+  request: unknown
+): RepositoryDiscardRequest {
+  const input = validateRepositoryPathsMutationRequest(request);
+  const suppliedUntrackedPaths =
+    (request as RepositoryDiscardRequest).expectedUntrackedPaths;
+  const expectedUntrackedPaths =
+    suppliedUntrackedPaths === undefined ? [] : suppliedUntrackedPaths;
+  if (
+    !Array.isArray(expectedUntrackedPaths) ||
+    expectedUntrackedPaths.length > MAX_MUTATION_PATHS ||
+    expectedUntrackedPaths.some((path) => !input.paths.includes(path)) ||
+    new Set(expectedUntrackedPaths).size !== expectedUntrackedPaths.length
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Confirmed untracked paths must be unique paths from the discard request."
+    );
+  }
+  return { ...input, expectedUntrackedPaths };
+}
+
 function validateCreateRepositoryCommitRequest(
   request: unknown
 ): CreateRepositoryCommitRequest {
@@ -3525,6 +3581,9 @@ function validateLanguageServerSettingsPatch(
       MAX_LSP_COMMAND_LENGTH,
       false
     );
+    if (!result.command.trim()) {
+      throw invalidSettingsRequest();
+    }
   }
   if ("args" in value) {
     result.args = requireBoundedStringArray(
@@ -3601,13 +3660,17 @@ function requireBoundedStringArray(
   ) {
     throw invalidSettingsRequest();
   }
-  return value.map((item) =>
-    requireBoundedString(
+  return value.map((item) => {
+    const text = requireBoundedString(
       item,
       maximumItemLength,
       false
-    )
-  );
+    );
+    if (!text.trim()) {
+      throw invalidSettingsRequest();
+    }
+    return text;
+  });
 }
 
 function validateOptionalCommandText(

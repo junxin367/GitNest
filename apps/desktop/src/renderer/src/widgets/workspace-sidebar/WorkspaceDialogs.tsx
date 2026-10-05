@@ -39,6 +39,8 @@ export function WorkspaceGroupRenameDialog({
 
   return (
     <Dialog
+      dismissDisabled={busy}
+      onDismiss={onCancel}
       footer={
         <>
           <Button
@@ -94,6 +96,7 @@ export function WorkspaceGroupRenameDialog({
 
 interface WorkspaceRenameDialogProps {
   busy: boolean;
+  error?: string | null;
   initialName: string;
   path?: string;
   onCancel(): void;
@@ -102,6 +105,7 @@ interface WorkspaceRenameDialogProps {
 
 export function WorkspaceRenameDialog({
   busy,
+  error,
   initialName,
   path,
   onCancel,
@@ -126,6 +130,8 @@ export function WorkspaceRenameDialog({
 
   return (
     <Dialog
+      dismissDisabled={busy}
+      onDismiss={onCancel}
       footer={
         <>
           <Button
@@ -186,6 +192,7 @@ export function WorkspaceRenameDialog({
           <code title={path}>{path}</code>
         </div>
       )}
+      <WorkspaceDialogError message={error} />
     </Dialog>
   );
 }
@@ -219,6 +226,8 @@ export function WorkspaceTapdKeywordDialog({
 
   return (
     <Dialog
+      dismissDisabled={busy}
+      onDismiss={onCancel}
       footer={
         <>
           <Button
@@ -280,6 +289,7 @@ export function WorkspaceTapdKeywordDialog({
 
 interface WorkspaceRepositoryRemoveDialogProps {
   busy: boolean;
+  error?: string | null;
   name: string;
   path?: string;
   onCancel(): void;
@@ -288,6 +298,7 @@ interface WorkspaceRepositoryRemoveDialogProps {
 
 export function WorkspaceRepositoryRemoveDialog({
   busy,
+  error,
   name,
   path,
   onCancel,
@@ -301,6 +312,8 @@ export function WorkspaceRepositoryRemoveDialog({
 
   return (
     <Dialog
+      dismissDisabled={busy}
+      onDismiss={onCancel}
       ariaDescribedBy="workspace-repository-remove-description"
       footer={
         <>
@@ -352,6 +365,7 @@ export function WorkspaceRepositoryRemoveDialog({
           的排除列表，后续扫描仍会排除；不会删除磁盘目录、仓库或提交。
         </span>
       </div>
+      <WorkspaceDialogError message={error} />
     </Dialog>
   );
 }
@@ -359,6 +373,7 @@ export function WorkspaceRepositoryRemoveDialog({
 interface WorkspaceDeleteDialogProps {
   name: string;
   busy: boolean;
+  error?: string | null;
   onCancel(): void;
   onConfirm(): Promise<boolean>;
 }
@@ -366,6 +381,7 @@ interface WorkspaceDeleteDialogProps {
 export function WorkspaceDeleteDialog({
   name,
   busy,
+  error,
   onCancel,
   onConfirm
 }: WorkspaceDeleteDialogProps) {
@@ -377,6 +393,8 @@ export function WorkspaceDeleteDialog({
 
   return (
     <Dialog
+      dismissDisabled={busy}
+      onDismiss={onCancel}
       ariaDescribedBy="workspace-delete-description"
       footer={
         <>
@@ -428,6 +446,16 @@ export function WorkspaceDeleteDialog({
           Workspace。
         </span>
       </div>
+      <WorkspaceDialogError message={error} />
     </Dialog>
   );
+}
+
+function WorkspaceDialogError({ message }: { message: string | null | undefined }) {
+  return message ? (
+    <div className="command-warning danger" role="alert">
+      <Icon name="warning" size={15} />
+      <span>{message}</span>
+    </div>
+  ) : null;
 }

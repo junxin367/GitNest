@@ -10,6 +10,7 @@ import {
   type RepositorySnapshot
 } from "@gitnest/git-core";
 import {
+  WorkspaceError,
   listWorkspaceTargets,
   repositoryTargetKey,
   type RepositoryTarget,
@@ -100,6 +101,11 @@ export interface CommandPreflight {
 
 export interface RepositoryCommandExecutionAccepted {
   operationIds: string[];
+  submissionError?: {
+    code: GitError["code"];
+    message: string;
+    details: GitError["details"];
+  };
 }
 
 export interface RepositoryCommandRuntime {
@@ -252,45 +258,73 @@ export class RepositoryCommandService {
       );
     }
 
+    // Claim the one-shot authorization before asynchronous revalidation.
+    this.#preflights.delete(stored.preflightId);
     const current = await this.#buildPreflight(normalized);
     if (current.comparisonKey !== stored.comparisonKey) {
-      this.#preflights.delete(stored.preflightId);
       throw new GitError(
         "PREFLIGHT_CHANGED",
         "Repository state or command impacts changed after preflight."
       );
     }
 
-    this.#preflights.delete(stored.preflightId);
     const operationIds: string[] = [];
-    for (const plan of stored.plans) {
-      const accepted =
-        await this.#runtime.queueRepositoryOperation(
-          plan.target,
-          operationKind(normalized),
-          async (worktreePath, signal) => {
-            const latest = await this.#buildTargetPlan(
-              normalized,
-              plan.target,
-              worktreePath,
-              signal
-            );
-            if (latest.fingerprint !== plan.fingerprint) {
-              throw new GitError(
-                "PREFLIGHT_CHANGED",
-                "Repository state changed while the command was queued."
+    try {
+      for (const plan of stored.plans) {
+        const accepted =
+          await this.#runtime.queueRepositoryOperation(
+            plan.target,
+            operationKind(normalized),
+            async (worktreePath, signal) => {
+              const latest = await this.#buildTargetPlan(
+                normalized,
+                plan.target,
+                worktreePath,
+                signal
               );
-            }
-            await this.#executePlan(
-              normalized,
-              plan,
-              worktreePath,
-              signal
-            );
-          },
-          { expectedWorkspaceId: stored.workspaceId }
-        );
-      operationIds.push(accepted.operationId);
+              if (latest.fingerprint !== plan.fingerprint) {
+                throw new GitError(
+                  "PREFLIGHT_CHANGED",
+                  "Repository state changed while the command was queued."
+                );
+              }
+              await this.#executePlan(
+                normalized,
+                plan,
+                worktreePath,
+                signal
+              );
+            },
+            { expectedWorkspaceId: stored.workspaceId }
+          );
+        operationIds.push(accepted.operationId);
+      }
+    } catch (reason) {
+      if (operationIds.length === 0) {
+        throw reason;
+      }
+      const error = reason instanceof GitError
+        ? reason
+        : new GitError(
+            reason instanceof WorkspaceError &&
+              (reason.code === "INVALID_REQUEST" ||
+                reason.code === "DIRECTORY_UNAVAILABLE")
+              ? reason.code
+              : "COMMAND_FAILED",
+            reason instanceof Error
+              ? reason.message
+              : "Repository operation submission failed.",
+            reason instanceof WorkspaceError ? reason.details : {}
+          );
+      // Already accepted operations remain live and must stay observable.
+      return {
+        operationIds,
+        submissionError: {
+          code: error.code,
+          message: error.message,
+          details: error.details
+        }
+      };
     }
 
     return { operationIds };
@@ -442,12 +476,16 @@ export class RepositoryCommandService {
       context.remotes,
       upstream?.remote
     );
-    const remoteRefs =
-      await this.#gitCommands.readRemoteBranches(
+    const [remoteRefs, remoteUrls] = await Promise.all([
+      this.#gitCommands.readRemoteBranches(
         path,
         remote,
         signalOptions(signal)
-      );
+      ),
+      this.#gitCommands.readRemoteUrls(
+        path, remote, "fetch", signalOptions(signal)
+      )
+    ]);
     const staleTrackingBranches = command.prune
       ? findStaleTrackingBranches(
           context.branches,
@@ -491,10 +529,10 @@ export class RepositoryCommandService {
       fingerprint: planFingerprint({
         target,
         path,
-        context,
+        context: remoteBranchContext(context),
         remote,
+        remoteUrls,
         remoteRefs,
-        staleTrackingBranches,
         prune: command.prune ?? false
       })
     };
@@ -515,12 +553,16 @@ export class RepositoryCommandService {
       );
     }
     const upstream = requireUpstream(context);
-    const remoteRefs =
-      await this.#gitCommands.readRemoteBranches(
+    const [remoteRefs, remoteUrls] = await Promise.all([
+      this.#gitCommands.readRemoteBranches(
         path,
         upstream.remote,
         signalOptions(signal)
-      );
+      ),
+      this.#gitCommands.readRemoteUrls(
+        path, upstream.remote, "fetch", signalOptions(signal)
+      )
+    ]);
     const remoteRef = requireRemoteBranch(
       remoteRefs,
       upstream.branch
@@ -571,11 +613,11 @@ export class RepositoryCommandService {
       fingerprint: planFingerprint({
         target,
         path,
-        context,
+        context: remoteBranchContext(context),
         remote: upstream.remote,
+        remoteUrls,
         remoteBranch: upstream.branch,
-        remoteHead: remoteRef.head,
-        ancestry
+        remoteHead: remoteRef.head
       })
     };
   }
@@ -610,12 +652,19 @@ export class RepositoryCommandService {
       upstream && upstream.remote === remote
         ? upstream.branch
         : context.snapshot.branch;
-    const remoteRefs =
-      await this.#gitCommands.readRemoteBranches(
+    const [remoteRefs, fetchUrls, pushUrls] = await Promise.all([
+      this.#gitCommands.readRemoteBranches(
         path,
         remote,
         signalOptions(signal)
-      );
+      ),
+      this.#gitCommands.readRemoteUrls(
+        path, remote, "fetch", signalOptions(signal)
+      ),
+      this.#gitCommands.readRemoteUrls(
+        path, remote, "push", signalOptions(signal)
+      )
+    ]);
     const remoteRef = remoteRefs.find(
       (candidate) => candidate.name === remoteBranch
     );
@@ -699,8 +748,10 @@ export class RepositoryCommandService {
       fingerprint: planFingerprint({
         target,
         path,
-        context,
+        context: remoteBranchContext(context),
         remote,
+        fetchUrls,
+        pushUrls,
         remoteBranch,
         remoteHead: remoteRef?.head ?? "",
         setUpstream,
@@ -1442,6 +1493,14 @@ function planFingerprint(value: unknown): string {
   return JSON.stringify(value, (key, candidate) =>
     key === "refreshedAt" ? undefined : candidate
   );
+}
+
+function remoteBranchContext(context: CommandContext): unknown {
+  // Other Worktrees may update shared refs before this target runs.
+  // Divergence counts only describe the local tracking-ref cache; the plan
+  // separately binds the advertised remote commit and validates its ancestry.
+  const { ahead: _ahead, behind: _behind, ...snapshot } = context.snapshot;
+  return { snapshot, remotes: context.remotes };
 }
 
 function signalOptions(signal?: AbortSignal): GitReadOptions {

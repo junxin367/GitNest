@@ -71,7 +71,9 @@ export class NodeWorkspaceFileSystem
     const value = relative(parent, child);
     return (
       value === "" ||
-      (!value.startsWith("..") && !isAbsolute(value))
+      (value !== ".." &&
+        !value.startsWith(`..${sep}`) &&
+        !isAbsolute(value))
     );
   }
 
@@ -208,7 +210,9 @@ export class NodeWorktreePathPolicy
     );
     return (
       value === "" ||
-      (!value.startsWith("..") && !isAbsolute(value))
+      (value !== ".." &&
+        !value.startsWith(`..${sep}`) &&
+        !isAbsolute(value))
     );
   }
 

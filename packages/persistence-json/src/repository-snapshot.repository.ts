@@ -72,9 +72,10 @@ export class JsonRepositorySnapshotStore
     const document: RepositorySnapshotDocument = {
       schemaVersion: REPOSITORY_SNAPSHOT_SCHEMA_VERSION,
       workspaceId,
-      snapshots: structuredClone(snapshots),
+      snapshots,
       updatedAt: this.#clock()
     };
+    // write() serializes synchronously and preserves the call-time values.
     return this.#store.write(document);
   }
 }

@@ -1,6 +1,7 @@
 import { Button } from "../../shared/ui/Button";
 import {
   useEffect,
+  useRef,
   useState,
   type FormEvent
 } from "react";
@@ -70,6 +71,9 @@ export function DetailInspector({
     workspace?.selectedTarget
   );
   const [workspaceName, setWorkspaceName] = useState("");
+  const workspaceNameScopeRef = useRef(workspace?.id);
+  const workspaceNameDirtyRef = useRef(false);
+  const workspaceNameVersionRef = useRef(0);
   const [commitNotice, setCommitNotice] = useState<string | null>(
     null
   );
@@ -97,19 +101,36 @@ export function DetailInspector({
           : "初始化";
 
   useEffect(() => {
-    setWorkspaceName(workspace?.name ?? "");
+    if (workspaceNameScopeRef.current !== workspace?.id) {
+      workspaceNameScopeRef.current = workspace?.id;
+      workspaceNameDirtyRef.current = false;
+      workspaceNameVersionRef.current += 1;
+    }
+    if (!workspaceNameDirtyRef.current) {
+      setWorkspaceName(workspace?.name ?? "");
+    }
   }, [workspace?.id, workspace?.name]);
 
   useEffect(() => {
     setCommitNotice(null);
   }, [commit?.hash]);
 
-  const saveWorkspaceName = (event: FormEvent) => {
+  const saveWorkspaceName = async (event: FormEvent) => {
     event.preventDefault();
     const name = workspaceName.trim();
 
-    if (workspace && name) {
-      void onRenameWorkspace(workspace.id, name);
+    if (!workspace || !name || busy || name === workspace.name) {
+      return;
+    }
+    const draftVersion = workspaceNameVersionRef.current;
+    const saved = await onRenameWorkspace(workspace.id, name);
+    if (
+      saved &&
+      workspaceNameScopeRef.current === workspace.id &&
+      workspaceNameVersionRef.current === draftVersion
+    ) {
+      workspaceNameDirtyRef.current = false;
+      setWorkspaceName(name);
     }
   };
 
@@ -442,9 +463,11 @@ export function DetailInspector({
                   fullWidth
                   id="workspace-display-name"
                   maxLength={120}
-                  onChange={(event) =>
-                    setWorkspaceName(event.target.value)
-                  }
+                  onChange={(event) => {
+                    workspaceNameDirtyRef.current = true;
+                    workspaceNameVersionRef.current += 1;
+                    setWorkspaceName(event.target.value);
+                  }}
                   size="small"
                   value={workspaceName}
                 />

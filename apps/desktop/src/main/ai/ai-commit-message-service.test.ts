@@ -50,7 +50,57 @@ describe("normalizeAiEndpoint", () => {
 });
 
 describe("AiCommitMessageService", () => {
+  it.each(["declared-size", "http-status", "read-error"] as const)(
+    "releases failed AI responses (%s)",
+    async (failure) => {
+      const cancel = vi.fn(() => {
+        if (failure === "http-status") {
+          throw new Error("cancel failed");
+        }
+      });
+      let signal: AbortSignal | null | undefined;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (failure === "read-error") {
+            controller.error(new Error("broken response"));
+          } else {
+            controller.enqueue(new Uint8Array([1]));
+          }
+        },
+        cancel
+      });
+      const service = createService({
+        fetchImpl: vi.fn<typeof fetch>(async (_input, init) => {
+          signal = init?.signal;
+          return new Response(body, {
+            status: failure === "http-status" ? 401 : 200,
+            headers: failure === "read-error"
+              ? {}
+              : { "content-length": "1048577" }
+          });
+        })
+      });
+
+      await expect(service.testConnection({
+        apiUrl: baseSettings().apiUrl,
+        model: baseSettings().model
+      })).rejects.toMatchObject({
+        code: failure === "declared-size"
+          ? "OUTPUT_LIMIT_EXCEEDED"
+          : failure === "http-status"
+            ? "AUTHENTICATION_FAILED"
+            : "COMMAND_FAILED"
+      });
+      expect(signal?.aborted).toBe(true);
+      expect(body.locked).toBe(false);
+      if (failure !== "read-error") {
+        expect(cancel).toHaveBeenCalledOnce();
+      }
+    }
+  );
+
   it("reads only staged diffs when the commit scope has staged changes", async () => {
+    let response: Response | undefined;
     const readRepositoryDiff = vi.fn(
       async (
         _path: string,
@@ -76,9 +126,10 @@ describe("AiCommitMessageService", () => {
         expect(body.messages[1]?.content).not.toContain(
           "src/unstaged.ts"
         );
-        return completionResponse(
+        response = completionResponse(
           "```text\nfeat: update staged behavior\n```"
         );
+        return response;
       }
     );
     const service = createService({
@@ -121,6 +172,7 @@ describe("AiCommitMessageService", () => {
       }
     );
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(response?.body?.locked).toBe(false);
   });
 
   it("reads unstaged and untracked diffs when the staged index is empty", async () => {

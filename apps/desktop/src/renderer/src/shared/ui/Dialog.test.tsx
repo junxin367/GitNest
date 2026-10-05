@@ -107,7 +107,7 @@ describe("Dialog", () => {
     ).toBeNull();
   });
 
-  it("supports an icon-only close control and Escape dismissal", () => {
+  it("supports backdrop clicks, the close control and Escape without dismissing from content clicks", () => {
     const onDismiss = vi.fn();
     renderDialog(
       <Dialog
@@ -129,21 +129,75 @@ describe("Dialog", () => {
     expect(container.querySelector(".gn-dialog")).toBeNull();
 
     act(() => {
+      document.querySelector<HTMLElement>(".gn-dialog")?.click();
+      document.querySelector<HTMLElement>(".gn-dialog__header h2")?.click();
+      document.querySelector<HTMLElement>(".gn-dialog__body")?.click();
+      document.querySelector<HTMLElement>(".gn-dialog__footer button")?.click();
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    act(() => {
       document
         .querySelector<HTMLElement>(".gn-dialog-backdrop")
         ?.click();
     });
-    expect(onDismiss).not.toHaveBeenCalled();
+    expect(onDismiss).toHaveBeenCalledTimes(1);
 
     act(() => {
       window.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Escape" })
       );
     });
-    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onDismiss).toHaveBeenCalledTimes(2);
 
     act(() => close?.click());
-    expect(onDismiss).toHaveBeenCalledTimes(2);
+    expect(onDismiss).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([{ isComposing: true }, { keyCode: 229 }])(
+    "does not dismiss an editing dialog when Escape belongs to the input method (%j)",
+    (composition) => {
+      const onDismiss = vi.fn();
+      renderDialog(
+        <Dialog icon="settings" title="修改名称" onDismiss={onDismiss}>
+          <input data-modal-initial-focus aria-label="名称" />
+        </Dialog>
+      );
+      const input = document.querySelector<HTMLInputElement>('input[aria-label="名称"]')!;
+      act(() => input.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape", bubbles: true, cancelable: true, ...composition
+      })));
+      expect(onDismiss).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(input);
+      act(() => input.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape", bubbles: true, cancelable: true
+      })));
+      expect(onDismiss).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each([true, false])("keeps a dialog open when a pointer gesture crosses its boundary (starts inside: %s)", (startsInside) => {
+    const onDismiss = vi.fn();
+    renderDialog(
+      <Dialog icon="settings" title="修改名称" onDismiss={onDismiss}>
+        <input aria-label="名称" />
+      </Dialog>
+    );
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="名称"]')!;
+    const backdrop = document.querySelector<HTMLElement>(".gn-dialog-backdrop")!;
+    act(() => {
+      (startsInside ? input : backdrop).dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+      (startsInside ? backdrop : input).dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+      // Chromium targets the common ancestor when press and release differ.
+      backdrop.click();
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+    act(() => {
+      backdrop.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+      backdrop.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+      backdrop.click();
+    });
+    expect(onDismiss).toHaveBeenCalledOnce();
   });
 
   it("keeps dismissal locked while the dialog is busy", () => {
@@ -162,6 +216,7 @@ describe("Dialog", () => {
     );
 
     act(() => {
+      document.querySelector<HTMLElement>(".gn-dialog-backdrop")?.click();
       window.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Escape" })
       );

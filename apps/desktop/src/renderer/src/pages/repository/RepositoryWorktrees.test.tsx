@@ -689,6 +689,39 @@ describe("RepositoryWorktrees registered cards", () => {
     expect(document.activeElement).toBe(filterButton);
   });
 
+  it.each([{ isComposing: true }, { keyCode: 229 }])(
+    "preserves the Worktree query when Escape belongs to composition (%j)",
+    (composition) => {
+      act(() => root.render(
+        <RepositoryWorktrees commands={commands} directoryOpening={false}
+          onOpenDirectory={vi.fn()} repositoryId="repository" snapshots={[]}
+          worktreeId="worktree" workspace={workspaceWithTwoWorktrees} />
+      ));
+      const trigger = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find(button => button.textContent?.trim() === "筛选")!;
+      act(() => trigger.click());
+      const input = container.querySelector<HTMLInputElement>(".worktree-filter-input")!;
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "feature");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape", bubbles: true, cancelable: true, ...composition
+      });
+      act(() => input.dispatchEvent(event));
+      expect(container.querySelector(".worktree-filter-input")).toBe(input);
+      expect(input.value).toBe("feature");
+      expect(document.activeElement).toBe(input);
+      expect(event.defaultPrevented).toBe(false);
+      act(() => input.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape", bubbles: true, cancelable: true
+      })));
+      expect(container.querySelector(".worktree-filter-input")).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+      expect(container.querySelectorAll(".worktree-summary-card")).toHaveLength(2);
+    }
+  );
+
   it("shows locked status ahead of detached status", () => {
     const lockedWorkspace: WorkspaceDetailsDto = {
       ...workspaceWithTwoWorktrees,

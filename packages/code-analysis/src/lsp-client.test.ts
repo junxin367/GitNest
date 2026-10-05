@@ -42,6 +42,187 @@ import type {
   LspDocumentSymbol
 } from "./model";
 
+describe("language server message identity and coverage", () => {
+  const directories: string[] = [];
+  afterEach(async () => {
+    await Promise.all(
+      directories.splice(0).map((directory) =>
+        rm(directory, { recursive: true, force: true })
+      )
+    );
+  });
+
+  async function serverFixture(mode: string) {
+    const root = await mkdtemp(
+      join(tmpdir(), "gitnest-lsp-coverage-")
+    );
+    directories.push(root);
+    const serverPath = join(root, "server.cjs");
+    await writeFile(serverPath, coverageLanguageServerSource());
+    return { root, serverPath, mode };
+  }
+
+  it("answers a server request sharing the pending client's numeric id", async () => {
+    const fixture = await serverFixture("overlap");
+    const client = new JsonRpcClient(
+      process.execPath,
+      [fixture.serverPath, fixture.mode],
+      fixture.root
+    );
+    try {
+      await client.start();
+      await expect(
+        client.request("initialize", {}, 1_000)
+      ).resolves.toMatchObject({
+        capabilities: { documentSymbolProvider: true }
+      });
+    } finally {
+      await client.terminate();
+    }
+  });
+
+  it.each([
+    ["reference-error", "partial"],
+    ["reference-truncated", "partial"],
+    ["incoming-error", "partial"],
+    ["incoming-unsupported", "partial"],
+    ["type-error", "partial"],
+    ["reference-exact", "complete"],
+    ["reference-duplicates", "complete"]
+  ] as const)(
+    "reports semantic coverage for %s",
+    async (mode, semanticCoverage) => {
+      const fixture = await serverFixture(mode);
+      const settings = typescriptAnalysisSettings(
+        fixture.serverPath
+      );
+      settings.typescript.args.push(mode);
+      settings.typescript.maxReferencesPerSymbol = 1;
+      const pool = new ExternalLanguageServerPool();
+      try {
+        const input = {
+          sessionPrefix: "coverage",
+          workspaceRootPath: fixture.root,
+          workspaceFolders: [fixture.root],
+          lspDataDirectory: join(fixture.root, "lsp"),
+          settings,
+          documents: [{
+            file: sourceFile(fixture.root, "typescript"),
+            content: "const VALUE = 1;"
+          }]
+        };
+        for (let pass = 0; pass < 2; pass += 1) {
+          const result = await pool.analyze(input);
+          expect(
+            result.statuses.find(
+              (status) => status.language === "typescript"
+            )
+          ).toMatchObject({
+            state: "connected",
+            semanticCoverage,
+            enrichmentStoppedEarly: false
+          });
+        }
+      } finally {
+        await pool.disposeAll();
+      }
+    }
+  );
+});
+
+function coverageLanguageServerSource(): string {
+  return String.raw`
+const mode = process.argv[2];
+let buffer = Buffer.alloc(0);
+const range = {
+  start: { line: 0, character: 0 },
+  end: { line: 0, character: 5 }
+};
+const capabilities = {
+  documentSymbolProvider: true,
+  referencesProvider: true,
+  callHierarchyProvider: true,
+  typeHierarchyProvider: true,
+  implementationProvider: true
+};
+function send(message) {
+  const body = JSON.stringify({ jsonrpc: "2.0", ...message });
+  process.stdout.write(
+    "Content-Length: " + Buffer.byteLength(body) + "\r\n\r\n" + body
+  );
+}
+function handle(message) {
+  const { id, method, params } = message;
+  if (method === "exit") return process.exit(0);
+  if (id === undefined) return;
+  if (mode === "overlap" && method === "initialize") {
+    return send({
+      id, method: "workspace/configuration",
+      params: { items: [{ section: "test" }] }
+    });
+  }
+  if (method === "initialize" || (mode === "overlap" && !method)) {
+    return send({ id, result: { capabilities } });
+  }
+  if (method === "textDocument/documentSymbol") {
+    return send({ id, result: [{
+      name: "VALUE",
+      kind: mode.startsWith("incoming-") ? 12 : mode === "type-error" ? 5 : 14,
+      range, selectionRange: range
+    }] });
+  }
+  if (
+    (mode === "reference-error" && method === "textDocument/references") ||
+    (mode.startsWith("incoming-") && method === "callHierarchy/incomingCalls") ||
+    (mode === "type-error" && method === "textDocument/prepareTypeHierarchy")
+  ) {
+    return send({
+      id, error: {
+        code: mode === "incoming-unsupported" ? -32601 : -32603,
+        message: "request failed"
+      }
+    });
+  }
+  if (mode.startsWith("incoming-") && method === "textDocument/prepareCallHierarchy") {
+    return send({ id, result: [{
+      name: "VALUE", kind: 12, uri: params.textDocument.uri,
+      range, selectionRange: range
+    }] });
+  }
+  if (method === "textDocument/references") {
+    const reference = {
+      uri: params.textDocument.uri,
+      range: { start: { line: 2, character: 0 }, end: { line: 2, character: 5 } }
+    };
+    const second = mode === "reference-duplicates" ? reference : {
+      ...reference,
+      range: { start: { line: 3, character: 0 }, end: { line: 3, character: 5 } }
+    };
+    return send({
+      id,
+      result: mode === "reference-truncated" || mode === "reference-duplicates"
+        ? [reference, second] : [reference]
+    });
+  }
+  send({ id, result: null });
+}
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  while (true) {
+    const end = buffer.indexOf("\r\n\r\n");
+    if (end < 0) return;
+    const size = Number(
+      buffer.subarray(0, end).toString().match(/Content-Length: (\d+)/i)[1]
+    );
+    if (buffer.length < end + 4 + size) return;
+    const message = JSON.parse(buffer.subarray(end + 4, end + 4 + size));
+    buffer = buffer.subarray(end + 4 + size);
+    handle(message);
+  }
+});
+`;
+}
+
 describe("parseDocumentSymbols budgets", () => {
   it("retains detail and the full selection identity used for overloaded symbols", () => {
     const parsed = parseDocumentSymbols([

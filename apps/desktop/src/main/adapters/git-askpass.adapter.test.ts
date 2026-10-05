@@ -1,7 +1,8 @@
 import {
   mkdtemp,
   readFile,
-  rm
+  rm,
+  writeFile
 } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -138,6 +139,91 @@ describe("WindowsGitAskPassBroker", () => {
       })
     ).rejects.toThrow();
     await session.dispose();
+  });
+
+  it("rejects cancellation while the authentication helpers are being prepared", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "gitnest-askpass-test-")
+    );
+    temporaryPaths.push(directory);
+    const broker = new WindowsGitAskPassBroker(directory);
+    const controller = new AbortController();
+    let unexpectedSession:
+      | Awaited<ReturnType<WindowsGitAskPassBroker["open"]>>
+      | undefined;
+    const opening = broker.open({
+      host: "git.example.test",
+      secret: TOKEN,
+      signal: controller.signal
+    }).then((session) => {
+      unexpectedSession = session;
+      return session;
+    });
+    controller.abort();
+
+    try {
+      await expect(opening).rejects.toMatchObject({
+        code: "COMMAND_CANCELLED"
+      });
+    } finally {
+      await unexpectedSession?.dispose();
+    }
+  });
+
+  it("retries helper initialization after a temporary filesystem failure", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "gitnest-askpass-test-")
+    );
+    temporaryPaths.push(directory);
+    const blocker = join(directory, "runtime");
+    await writeFile(blocker, "not a directory", "utf8");
+    const broker = new WindowsGitAskPassBroker(
+      join(blocker, "askpass")
+    );
+    const input = {
+      host: "git.example.test",
+      secret: TOKEN
+    };
+
+    await expect(broker.open(input)).rejects.toThrow();
+    await rm(blocker);
+    const session = await broker.open(input);
+    try {
+      await expect(
+        ask(
+          session.environment.GITNEST_ASKPASS_ENDPOINT as string,
+          session.environment.GITNEST_ASKPASS_NONCE as string,
+          { prompt: "Password for 'https://git.example.test/repository.git':" }
+        )
+      ).resolves.toEqual({
+        status: 200,
+        body: { value: TOKEN }
+      });
+    } finally {
+      await session.dispose();
+    }
+  });
+
+  it("closes the server if cancellation arrives before listening completes", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "gitnest-askpass-test-")
+    );
+    temporaryPaths.push(directory);
+    const controller = new AbortController();
+    const broker = new WindowsGitAskPassBroker(directory, {
+      nonceFactory: () => {
+        controller.abort();
+        return "cancelled_while_opening";
+      }
+    });
+
+    await expect(broker.open({
+      host: "git.example.test",
+      secret: TOKEN,
+      signal: controller.signal
+    })).rejects.toMatchObject({
+      code: "COMMAND_CANCELLED"
+    });
   });
 
   it.runIf(process.platform === "win32")(

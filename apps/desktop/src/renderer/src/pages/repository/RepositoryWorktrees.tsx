@@ -455,7 +455,11 @@ export function RepositoryWorktrees({
                     }
                   : {})}
                 onKeyDown={(event) => {
-                  if (event.key !== "Escape") {
+                  if (
+                    event.key !== "Escape" ||
+                    event.nativeEvent.isComposing ||
+                    event.keyCode === 229
+                  ) {
                     return;
                   }
                   event.preventDefault();

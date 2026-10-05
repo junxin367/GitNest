@@ -167,6 +167,75 @@ describe("Workspace overview interactions", () => {
     expect(recentBody?.hasAttribute("hidden")).toBe(true);
   });
 
+  it("reuses history across cloned state events and refreshes changed query inputs", async () => {
+    const getHistory = vi.fn(async () => ({
+      ok: true,
+      value: { page: { commits: [] } }
+    }));
+    const cancelQuery = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal("gitnest", {
+      repository: { getHistory, cancelQuery }
+    });
+    let workspace = createWorktreeWorkspace();
+    let snapshots = [
+      createSnapshot("repository-a", "worktree-a", {
+        contentVersion: 1
+      }),
+      createSnapshot("repository-b", "worktree-b", {
+        contentVersion: 1
+      })
+    ];
+    const render = () =>
+      root.render(
+        <WorkspaceOverviewPage
+          busy={false}
+          error={null}
+          notice={null}
+          onClearFeedback={() => undefined}
+          onCreateWorkspace={async () => false}
+          onSelectTarget={() => undefined}
+          operation={null}
+          snapshots={snapshots}
+          workspace={workspace}
+        />
+      );
+
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(2);
+
+    workspace = structuredClone(workspace);
+    snapshots = structuredClone(snapshots);
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(2);
+    expect(cancelQuery).not.toHaveBeenCalled();
+
+    snapshots = snapshots.map((snapshot, index) =>
+      index === 0 ? { ...snapshot, head: "new-head" } : snapshot
+    );
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(4);
+
+    snapshots = snapshots.map((snapshot, index) =>
+      index === 0 ? { ...snapshot, contentVersion: 2 } : snapshot
+    );
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(6);
+
+    workspace = {
+      ...workspace,
+      groups: workspace.groups.map((group) => ({
+        ...group,
+        targets: group.targets.slice(0, 1)
+      }))
+    };
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(7);
+
+    workspace = { ...workspace, id: "another-workspace" };
+    await act(async () => render());
+    expect(getHistory).toHaveBeenCalledTimes(8);
+  });
+
   it("uses shared layout skeletons while Workspace data is initially loading", () => {
     act(() => {
       root.render(
@@ -193,6 +262,77 @@ describe("Workspace overview interactions", () => {
       container.querySelectorAll(".gn-skeleton").length
     ).toBeGreaterThan(4);
     expect(container.textContent).not.toContain("正在恢复 Workspace");
+  });
+
+  it("opens a loaded recent commit before its repository status snapshot arrives", async () => {
+    let finishHistory!: () => void;
+    const historyReady = new Promise<void>((resolve) => { finishHistory = resolve; });
+    const onSelectTarget = vi.fn();
+    const getHistory = vi.fn(async ({ target }: { target: { repositoryId: string } }) => {
+      await historyReady;
+      return {
+        ok: true,
+        value: {
+          page: {
+            commits: target.repositoryId === "repository-a" ? [{
+              hash: "a".repeat(40), shortHash: "aaaaaaa",
+              subject: "Already loaded recent commit",
+              authorName: "June", authorEmail: "june@example.com",
+              authoredAt: "2026-10-05T00:00:00.000Z", parentHashes: []
+            }] : []
+          }
+        }
+      };
+    });
+    vi.stubGlobal("gitnest", {
+      repository: { getHistory, cancelQuery: vi.fn(async () => ({ ok: true })) }
+    });
+    await act(async () => root.render(
+      <WorkspaceOverviewPage busy={false} error={null} notice={null}
+        onClearFeedback={vi.fn()} onCreateWorkspace={async () => false}
+        onSelectTarget={onSelectTarget} operation={null}
+        snapshots={[]} workspace={createWorktreeWorkspace()} />
+    ));
+    const recentRows = () => [
+      ...container.querySelectorAll<HTMLButtonElement>("#workspace-overview-recent-commits .workspace-activity-row")
+    ];
+    expect(recentRows()).toHaveLength(2);
+    expect(recentRows().every((row) => row.disabled)).toBe(true);
+    await act(async () => finishHistory());
+    const loadedRow = recentRows().find((row) => row.textContent?.includes("Already loaded recent commit"));
+    expect(loadedRow).toBeDefined();
+    expect(loadedRow?.disabled).toBe(false);
+    act(() => loadedRow?.click());
+    expect(onSelectTarget).toHaveBeenCalledExactlyOnceWith({
+      repositoryId: "repository-a", worktreeId: "worktree-a"
+    });
+    const emptyRow = recentRows().find((row) => row.textContent?.includes("Repository B"));
+    expect(emptyRow?.disabled).toBe(true);
+  });
+
+  it("opens the snapshot fallback when recent history cannot be loaded", async () => {
+    vi.stubGlobal("gitnest", {
+      repository: {
+        getHistory: vi.fn(async () => ({ ok: false, error: { code: "COMMAND_FAILED", message: "History unavailable" } })),
+        cancelQuery: vi.fn(async () => ({ ok: true }))
+      }
+    });
+    const onSelectTarget = vi.fn();
+    await act(async () => root.render(
+      <WorkspaceOverviewPage busy={false} error={null} notice={null}
+        onClearFeedback={vi.fn()} onCreateWorkspace={async () => false}
+        onSelectTarget={onSelectTarget} operation={null}
+        snapshots={[createSnapshot("repository-a", "worktree-a")]}
+        workspace={createWorktreeWorkspace()} />
+    ));
+    const row = [
+      ...container.querySelectorAll<HTMLButtonElement>("#workspace-overview-recent-commits .workspace-activity-row")
+    ].find((candidate) => candidate.textContent?.includes("Repository A"));
+    expect(row?.disabled).toBe(false);
+    act(() => row?.click());
+    expect(onSelectTarget).toHaveBeenCalledExactlyOnceWith({
+      repositoryId: "repository-a", worktreeId: "worktree-a"
+    });
   });
 
   it("creates a Workspace from the empty state instead of adding another directory", () => {

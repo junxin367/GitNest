@@ -1,9 +1,17 @@
 export const READ_REMOTES_ARGUMENTS = ["remote"] as const;
 
 export function readRemoteUrlArguments(
-  remote: string
+  remote: string,
+  options: { all?: boolean; push?: boolean } = {}
 ): string[] {
-  return ["remote", "get-url", "--", remote];
+  return [
+    "remote",
+    "get-url",
+    ...(options.push ? ["--push"] : []),
+    ...(options.all ? ["--all"] : []),
+    "--",
+    remote
+  ];
 }
 
 export function readRemoteBranchesArguments(

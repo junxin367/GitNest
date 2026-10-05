@@ -204,6 +204,15 @@ describe("findRequestChains / resolveRequestChain", () => {
       .toBeUndefined();
   });
 
+  it("does not resolve an exact route reference by substring", () => {
+    const resolution = resolveRequestChain(snapshot(), {
+      route: "/api/user"
+    });
+
+    expect(resolution.chain).toBeUndefined();
+    expect(resolution.candidates).toEqual([]);
+  });
+
   it("returns candidates instead of guessing when ambiguous", () => {
     const chain = snapshot().requestChains[0]!;
     const ambiguous = snapshot({
@@ -286,6 +295,58 @@ describe("collectSubgraph", () => {
     expect(shallow.truncationReasons).toContain("max-depth");
   });
 
+  it("does not report truncation when the graph exactly fits the node budget", () => {
+    const exact = collectSubgraph(snapshot(), {
+      nodeIds: ["client"],
+      direction: "both",
+      depth: 2,
+      maxNodes: 3,
+      maxEdges: 2
+    });
+
+    expect(exact.nodes.map((entry) => entry.id)).toEqual([
+      "client",
+      "endpoint",
+      "service"
+    ]);
+    expect(exact.truncated).toBe(false);
+    expect(exact.truncationReasons).toEqual([]);
+  });
+
+  it("does not expand through an edge omitted by the edge budget", () => {
+    const limited = collectSubgraph(snapshot(), {
+      nodeIds: ["client"],
+      direction: "out",
+      depth: 2,
+      maxEdges: 1
+    });
+
+    expect(limited.nodes.map((entry) => entry.id)).toEqual([
+      "client",
+      "endpoint"
+    ]);
+    expect(limited.edges.map((entry) => entry.id)).toEqual(["e1"]);
+    expect(limited.truncated).toBe(true);
+    expect(limited.truncationReasons).toEqual(["max-edges"]);
+  });
+
+  it("applies the node budget to seed nodes", () => {
+    const limited = collectSubgraph(snapshot({
+      edges: [],
+      requestChains: []
+    }), {
+      nodeIds: ["client", "endpoint", "service"],
+      maxNodes: 2
+    });
+
+    expect(limited.nodes.map((entry) => entry.id)).toEqual([
+      "client",
+      "endpoint"
+    ]);
+    expect(limited.truncated).toBe(true);
+    expect(limited.truncationReasons).toEqual(["max-nodes"]);
+  });
+
   it("filters by edge kind", () => {
     const callsOnly = collectSubgraph(snapshot(), {
       nodeIds: ["client"],
@@ -330,6 +391,26 @@ describe("analyzeChangeImpact", () => {
     });
     expect(none.changedNodes).toEqual([]);
     expect(none.subgraph.nodes).toEqual([]);
+  });
+
+  it("honors the impact edge budget", () => {
+    const limited = analyzeChangeImpact(snapshot(), {
+      nodeIds: ["client"],
+      direction: "out",
+      depth: 2,
+      maxEdges: 1
+    });
+
+    expect(limited.subgraph.edges.map((entry) => entry.id)).toEqual([
+      "e1"
+    ]);
+    expect(limited.subgraph.nodes.map((entry) => entry.id)).toEqual([
+      "client",
+      "endpoint"
+    ]);
+    expect(limited.subgraph.truncationReasons).toContain(
+      "max-edges"
+    );
   });
 });
 

@@ -15,6 +15,52 @@ const NOW = "2026-09-04T12:00:00.000Z";
 const TOKEN = "super-secret-token-测试";
 
 describe("AccountService", () => {
+  it.each([
+    { label: "credential", patch: { token: "new-token" } },
+    { label: "host", patch: { host: "other.example.test" } },
+    { label: "username", patch: { username: "new-user" } },
+    { label: "authentication type", patch: { authType: "system-ssh" as const } }
+  ])("does not apply an old connection test to a changed account $label", async ({ patch }) => {
+    let finishTest!: (status: "verified") => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const pendingTest = new Promise<"verified">((resolve) => { finishTest = resolve; });
+    const service = createService(
+      new MemoryAccountStore(),
+      new MemoryVault(),
+      new FakeBroker(),
+      {
+        test: async () => {
+          markStarted();
+          return pendingTest;
+        }
+      }
+    );
+    const account = await service.save({
+      provider: "github",
+      host: "github.com",
+      username: "old-user",
+      authType: "https-token",
+      token: "old-token"
+    });
+    const testing = service.test(account.id, "https://github.com/team/repository.git");
+    await started;
+    await service.save({
+      id: account.id,
+      provider: "github",
+      host: "github.com",
+      username: "old-user",
+      authType: "https-token",
+      ...patch
+    });
+    finishTest("verified");
+    await expect(testing).resolves.toMatchObject({ status: "verified" });
+    expect((await service.list()).accounts[0]).toMatchObject({
+      verificationStatus: "untested"
+    });
+    expect((await service.list()).accounts[0]?.lastVerifiedAt).toBeUndefined();
+  });
+
   it("stores tokens only in the vault and returns metadata-only summaries", async () => {
     const store = new MemoryAccountStore();
     const vault = new MemoryVault();
@@ -180,6 +226,15 @@ describe("AccountService", () => {
     ).rejects.toMatchObject({
       code: "INVALID_REQUEST"
     });
+    await expect(
+      service.test(
+        account.id,
+        "ssh://git:embedded-secret@git.example.test/team/repository.git"
+      )
+    ).rejects.toMatchObject({
+      code: "INVALID_REQUEST"
+    });
+    expect(tester.tests).toHaveLength(1);
   });
 
   it("tests HTTPS access through a disposable token-free session and records status", async () => {

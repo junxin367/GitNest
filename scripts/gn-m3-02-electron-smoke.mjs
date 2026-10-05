@@ -5,6 +5,7 @@ import {
   readFile,
   readdir,
   rm,
+  stat,
   writeFile
 } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -14,7 +15,7 @@ import {
   join,
   resolve
 } from "node:path";
-import { tmpdir } from "node:os";
+import { arch, cpus, platform, release, totalmem } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { CdpClient } from "./electron-cdp-client.mjs";
@@ -23,17 +24,12 @@ import { findElectronDistribution } from "./windows-release-support.mjs";
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDirectory, "..");
 const desktopRoot = join(projectRoot, "apps", "desktop");
-const electronDistribution =
-  await findElectronDistribution({
-    projectRoot,
-    desktopDirectory: desktopRoot
-  });
-const electronExecutable = join(
-  electronDistribution,
-  "electron.exe"
-);
+const workflowOnly = process.argv.includes("--workflow-only");
+const temporaryDirectory = join(projectRoot, "temp");
+await mkdir(temporaryDirectory, { recursive: true });
+let electronExecutable;
 const fixtureRoot = await mkdtemp(
-  join(tmpdir(), "gitnest-e2e-m3-recovery-")
+  join(temporaryDirectory, "gitnest-e2e-m3-recovery-")
 );
 const workspacePath = join(fixtureRoot, "workspace");
 const repositoryPath = join(
@@ -46,16 +42,83 @@ const corruptUserDataPath = join(
   "corrupt-user-data"
 );
 const screenshotDirectory = join(projectRoot, "test-results");
-const secretCanary =
-  "m3-recovery-secret-canary-must-not-appear";
+const baselinePath = join(screenshotDirectory, "electron-workflow-baseline.json");
+const baseline = {
+  schemaVersion: 1,
+  workflow: "startup-switch-watcher-search-diff-restart",
+  startedAt: new Date().toISOString(),
+  environment: {
+    platform: platform(),
+    arch: arch(),
+    release: release(),
+    node: process.version,
+    cpu: cpus()[0]?.model,
+    logicalCpus: cpus().length,
+    totalMemoryBytes: totalmem()
+  },
+  measurements: [],
+  ok: false
+};
+let activeWorkspaceId = "default";
 let firstLaunch;
 let secondLaunch;
 let corruptLaunch;
 
 try {
-  await createFixture();
   await mkdir(screenshotDirectory, { recursive: true });
+  if (workflowOnly) {
+    await rm(join(screenshotDirectory, "electron-workflow-diff.png"), { force: true });
+  }
+  const electronDistribution = await findElectronDistribution({
+    projectRoot,
+    desktopDirectory: desktopRoot
+  });
+  electronExecutable = join(electronDistribution, "electron.exe");
+  baseline.environment.electron = (await readFile(
+    join(electronDistribution, "version"), "utf8"
+  )).trim();
+  await createFixture();
 
+  if (workflowOnly) {
+    await runWorkflow();
+  } else {
+    await runRecovery();
+  }
+} catch (error) {
+  if (workflowOnly) {
+    baseline.error = error instanceof Error ? error.stack : String(error);
+  }
+  throw error;
+} finally {
+  for (const launch of [
+    firstLaunch,
+    secondLaunch,
+    corruptLaunch
+  ]) {
+    if (launch) {
+      await closeElectron(launch).catch(() => undefined);
+    }
+  }
+  if (process.env.GITNEST_KEEP_E2E !== "1") {
+    await removeFixtureRoot(fixtureRoot).catch((error) => {
+      console.warn(
+        `Unable to remove temporary fixture ${fixtureRoot}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    });
+  } else {
+    console.log(`Temporary fixture retained at ${fixtureRoot}`);
+  }
+  if (workflowOnly) {
+    baseline.finishedAt = new Date().toISOString();
+    await mkdir(screenshotDirectory, { recursive: true });
+    await writeFile(baselinePath, JSON.stringify(baseline, null, 2) + "\n", "utf8");
+    console.log(JSON.stringify(baseline, null, 2));
+  }
+}
+
+async function runRecovery() {
   firstLaunch = await launchElectron(userDataPath);
   await addWorkspacePath(firstLaunch.cdp, workspacePath);
   const firstState = await getWorkspaceState(firstLaunch.cdp);
@@ -93,7 +156,7 @@ try {
   );
   assert(
     interrupted?.state === "interrupted",
-    "Persisted running operation was not recovered as interrupted."
+    `Persisted running operation was not recovered as interrupted: ${JSON.stringify(recoveredState.operations)}`
   );
   assertIncludes(
     interrupted.message,
@@ -124,50 +187,12 @@ try {
   );
   await secondLaunch.cdp.waitFor(
     "settings page",
-    `Boolean(document.querySelector(".settings-page"))`
+    `Boolean(document.querySelector(".application-settings-page"))`
   );
-  await selectValue(
-    secondLaunch.cdp,
-    ".account-form-grid label:nth-child(1) select",
-    "custom"
-  );
-  await setInputValue(
-    secondLaunch.cdp,
-    ".account-form-grid label:nth-child(2) input",
-    "recovery.example.test"
-  );
-  await setInputValue(
-    secondLaunch.cdp,
-    ".account-form-grid label:nth-child(4) input",
-    "recovery-user"
-  );
-  await setInputValue(
-    secondLaunch.cdp,
-    ".account-token-field input",
-    secretCanary
-  );
-  await clickButton(
-    secondLaunch.cdp,
-    "保存账号",
-    ".account-form"
-  );
+  await clickSelector(secondLaunch.cdp, 'button[aria-controls="settings-subnav-account"]');
   await secondLaunch.cdp.waitFor(
-    "saved recovery account",
-    `(() => {
-      const input = document.querySelector(
-        ".account-token-field input"
-      );
-      return Boolean(
-        document.body.textContent.includes(
-          "recovery.example.test"
-        ) &&
-        input instanceof HTMLInputElement &&
-        input.value === "" &&
-        !document.body.textContent.includes(
-          ${JSON.stringify(secretCanary)}
-        )
-      );
-    })()`
+    "system Git authentication settings",
+    `document.body.textContent.includes("系统 Git 认证")`
   );
 
   const migratedWorkspace = JSON.parse(
@@ -175,7 +200,7 @@ try {
   );
   assertEqual(
     migratedWorkspace.schemaVersion,
-    1,
+    2,
     "Workspace schema was not migrated."
   );
   assert(
@@ -245,10 +270,6 @@ try {
   ).join("\n");
   assertIncludes(logText, "application.ready");
   assertIncludes(logText, "workspace.operation-state");
-  assert(
-    !logText.includes(secretCanary),
-    "Diagnostic logs contain the account token canary."
-  );
 
   await prepareCorruptWorkspace();
   corruptLaunch = await launchElectron(corruptUserDataPath);
@@ -262,9 +283,8 @@ try {
     "Malformed Workspace was not reported as invalid persisted data."
   );
   const addResult = await corruptLaunch.cdp.evaluate(`(async () =>
-    window.gitnest.workspace.addEntry({
-      path: ${JSON.stringify(repositoryPath)},
-      source: "manual"
+    window.gitnest.workspace.addDirectory({
+      path: ${JSON.stringify(repositoryPath)}
     })
   )()`);
   assert(
@@ -293,65 +313,191 @@ try {
           operations: recoveredOperations.schemaVersion,
           window: savedWindowState.schemaVersion
         },
-        diagnosticsRedacted: !logText.includes(
-          secretCanary
-        ),
+        diagnosticsRecorded: true,
         corruptWorkspacePreserved: true
       },
       null,
       2
     )
   );
-} finally {
-  for (const launch of [
-    firstLaunch,
-    secondLaunch,
-    corruptLaunch
-  ]) {
-    if (launch) {
-      await closeElectron(launch).catch(() => undefined);
-    }
-  }
-  if (process.env.GITNEST_KEEP_E2E !== "1") {
-    await removeFixtureRoot(fixtureRoot).catch((error) => {
-      console.warn(
-        `Unable to remove temporary fixture ${fixtureRoot}: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    });
-  } else {
-    console.log(`Temporary fixture retained at ${fixtureRoot}`);
-  }
 }
 
 async function createFixture() {
-  await mkdir(repositoryPath, { recursive: true });
-  await runGit(repositoryPath, [
+  await createRepository(repositoryPath);
+}
+
+async function createRepository(path) {
+  await mkdir(path, { recursive: true });
+  await runGit(path, [
     "init",
     "--initial-branch=main"
   ]);
-  await runGit(repositoryPath, [
+  await runGit(path, [
     "config",
     "user.name",
     "GitNest Recovery Smoke"
   ]);
-  await runGit(repositoryPath, [
+  await runGit(path, [
     "config",
     "user.email",
     "recovery@example.invalid"
   ]);
   await writeFile(
-    join(repositoryPath, "README.md"),
+    join(path, "README.md"),
     "# GitNest GN-M3-02 recovery smoke\n",
     "utf8"
   );
-  await runGit(repositoryPath, ["add", "README.md"]);
-  await runGit(repositoryPath, [
+  await runGit(path, ["add", "README.md"]);
+  await runGit(path, [
     "commit",
     "-m",
     "Initial recovery fixture"
   ]);
+}
+
+async function runWorkflow() {
+  const secondaryPath = join(workspacePath, "secondary repository");
+  await createRepository(secondaryPath);
+  baseline.environment.gitRevision = await runGit(projectRoot, ["rev-parse", "HEAD"]);
+  baseline.environment.buildModifiedAt = (
+    await stat(join(desktopRoot, "out", "main", "index.js"))
+  ).mtime.toISOString();
+  baseline.fixture = { repositories: 2, filesPerRepository: 1 };
+  firstLaunch = await measure("startup", () => launchElectron(userDataPath));
+  await measure("scan", () => addWorkspacePath(firstLaunch.cdp, workspacePath));
+  const state = await getWorkspaceState(firstLaunch.cdp);
+  assertEqual(state.workspace.repositories.length, 2, "Fixture discovery must find both repositories.");
+  const primary = state.workspace.worktrees.find((item) => item.path === repositoryPath);
+  const secondary = state.workspace.worktrees.find((item) => item.path === secondaryPath);
+  assert(primary && secondary, "Fixture worktrees are missing.");
+  await measure("open-primary", () => openRepositoryThroughSearch(firstLaunch.cdp, primary));
+  await measure("switch-secondary", () => openRepositoryThroughSearch(firstLaunch.cdp, secondary));
+  await measure("switch-primary", () => openRepositoryThroughSearch(firstLaunch.cdp, primary));
+  const changedFile = "workflow-watcher.txt";
+  const marker = "gitnest-workflow-watcher-marker";
+  await firstLaunch.cdp.waitFor("active filesystem watcher", `(async () => {
+    const result = await window.gitnest.workspace.getState();
+    return result.ok && result.value.monitor.mode === "watching" &&
+      result.value.snapshots.every((snapshot) => !snapshot.refreshPending && !snapshot.stale);
+  })()`, 30_000);
+  const beforeChange = await getWorkspaceState(firstLaunch.cdp);
+  const secondarySnapshot = beforeChange.snapshots.find((item) => item.worktreeId === secondary.id);
+  assert(secondarySnapshot, "Secondary snapshot is missing.");
+  await measure("watcher-update", async () => {
+    await writeFile(join(repositoryPath, changedFile), `${marker}\n`, "utf8");
+    // No explicit refresh: the filesystem watcher must publish the new snapshot.
+    await firstLaunch.cdp.waitFor("watcher snapshot", `(async () => {
+      const result = await window.gitnest.workspace.getState();
+      return result.ok && result.value.snapshots.some((snapshot) =>
+        snapshot.worktreeId === ${JSON.stringify(primary.id)} &&
+        snapshot.untracked === 1 && !snapshot.refreshPending && !snapshot.stale
+      );
+    })()`, 30_000);
+    const afterChange = await getWorkspaceState(firstLaunch.cdp);
+    assertEqual(afterChange.monitor.mode, "watching", "Watcher fell back to polling.");
+    assertEqual(
+      JSON.stringify(afterChange.snapshots.find((item) => item.worktreeId === secondary.id)),
+      JSON.stringify(secondarySnapshot),
+      "A file change in the primary repository refreshed the unrelated repository."
+    );
+  });
+  await measure("search-change", async () => {
+    await openGlobalSearch(firstLaunch.cdp, changedFile);
+    await firstLaunch.cdp.waitFor("changed file search result",
+      `[...document.querySelectorAll(".global-search-result strong")].some(
+        (item) => item.textContent === ${JSON.stringify(changedFile)}
+      )`);
+  });
+  await measure("open-diff", async () => {
+    await clickSearchResult(firstLaunch.cdp, changedFile);
+    await firstLaunch.cdp.waitFor("changed file Diff",
+      `document.querySelector(".diff-viewer-code")?.textContent.includes(${JSON.stringify(marker)})`);
+  });
+  await measure("search-diff", async () => {
+    await firstLaunch.cdp.evaluate(`window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true })
+    )`);
+    await firstLaunch.cdp.waitFor("Diff search input",
+      `Boolean(document.querySelector('input[aria-label="搜索文本"]'))`);
+    await setInputValue(firstLaunch.cdp, 'input[aria-label="搜索文本"]', marker);
+    await firstLaunch.cdp.waitFor("Diff search hit",
+      `Boolean(document.querySelector('[data-diff-viewer-search-hit="0"]'))`);
+  });
+  await capture(firstLaunch.cdp, join(screenshotDirectory, "electron-workflow-diff.png"));
+  await closeElectron(firstLaunch);
+  firstLaunch = undefined;
+  await measure("restart-recovery", async () => {
+    secondLaunch = await launchElectron(userDataPath);
+    await secondLaunch.cdp.waitFor("restored selected target", `(async () => {
+      const result = await window.gitnest.workspace.getState();
+      return result.ok && result.value.workspace.repositories.length === 2 &&
+        result.value.workspace.selectedTarget?.worktreeId === ${JSON.stringify(primary.id)} &&
+        Boolean(document.querySelector(".repository-page")) &&
+        result.value.snapshots.some((snapshot) =>
+          snapshot.worktreeId === ${JSON.stringify(primary.id)} && snapshot.untracked === 1
+        );
+    })()`, 30_000);
+    // Reopen the persisted change to verify that the restored target still serves Diff data.
+    await openGlobalSearch(secondLaunch.cdp, changedFile);
+    await secondLaunch.cdp.waitFor("restored file search result",
+      `[...document.querySelectorAll(".global-search-result strong")].some(
+        (item) => item.textContent === ${JSON.stringify(changedFile)}
+      )`);
+    await clickSearchResult(secondLaunch.cdp, changedFile);
+    await secondLaunch.cdp.waitFor("restored Diff content",
+      `document.querySelector(".diff-viewer-code")?.textContent.includes(${JSON.stringify(marker)})`);
+  });
+  await closeElectron(secondLaunch);
+  secondLaunch = undefined;
+  baseline.ok = true;
+}
+
+async function measure(name, action) {
+  const started = performance.now();
+  const measurement = { name, durationMs: 0, ok: false };
+  baseline.measurements.push(measurement);
+  try {
+    const value = await action();
+    measurement.ok = true;
+    return value;
+  } finally {
+    measurement.durationMs = Math.round((performance.now() - started) * 100) / 100;
+  }
+}
+
+async function openGlobalSearch(client, query) {
+  await clickSelector(client, 'button[aria-label="全局搜索"]');
+  await client.waitFor("global search input",
+    'Boolean(document.querySelector("#global-search-input"))');
+  await setInputValue(client, "#global-search-input", query);
+}
+
+async function clickSearchResult(client, title) {
+  const clicked = await client.evaluate(`(() => {
+    const title = [...document.querySelectorAll(".global-search-result strong")]
+      .find((item) => item.textContent === ${JSON.stringify(title)});
+    const button = title?.closest("button");
+    if (!button || button.disabled) return false;
+    button.click();
+    return true;
+  })()`);
+  assert(clicked, `Unable to open search result ${title}.`);
+}
+
+async function openRepositoryThroughSearch(client, worktree) {
+  await openGlobalSearch(client, worktree.name);
+  await client.waitFor("repository search result",
+    `[...document.querySelectorAll(".global-search-result strong")].some(
+      (item) => item.textContent === ${JSON.stringify(worktree.name)}
+    )`);
+  await clickSearchResult(client, worktree.name);
+  await client.waitFor("selected repository", `(async () => {
+    const result = await window.gitnest.workspace.getState();
+    return result.ok &&
+      result.value.workspace.selectedTarget?.worktreeId === ${JSON.stringify(worktree.id)} &&
+      Boolean(document.querySelector(".repository-page")) &&
+      !document.querySelector(".global-search-dialog");
+  })()`);
 }
 
 async function prepareLegacyRecoveryState(
@@ -361,6 +507,18 @@ async function prepareLegacyRecoveryState(
   const workspace = JSON.parse(
     await readFile(workspaceFilePath(), "utf8")
   );
+  workspace.entries = [{
+    id: "recovery-entry",
+    displayName: workspace.name,
+    path: workspace.path ?? workspacePath,
+    canonicalPath: workspace.canonicalPath ?? workspacePath.toLowerCase(),
+    excludes: workspace.excludes,
+    order: 0,
+    groups: workspace.groups,
+    lastScannedAt: workspace.lastScannedAt,
+    kind: "workspace-directory"
+  }];
+  workspace.selectedEntryId = "recovery-entry";
   workspace.schemaVersion = 0;
   workspace.unknownLegacyField = true;
   for (const entry of workspace.entries) {
@@ -399,7 +557,7 @@ async function prepareLegacyRecoveryState(
   await mkdir(operationDirectory, { recursive: true });
   const pendingPath = join(
     operationDirectory,
-    ".default.operations.json.999.1.recovery.tmp"
+    `.${activeWorkspaceId}.operations.json.999.1.recovery.tmp`
   );
   await writeFile(
     pendingPath,
@@ -457,7 +615,8 @@ function workspaceFilePath() {
   return join(
     userDataPath,
     "workspaces",
-    "default.workspace.json"
+    "items",
+    `${activeWorkspaceId}.workspace.json`
   );
 }
 
@@ -466,7 +625,8 @@ function snapshotFilePath() {
     userDataPath,
     "cache",
     "repository-snapshots",
-    "default.snapshots.json"
+    "items",
+    `${activeWorkspaceId}.snapshots.json`
   );
 }
 
@@ -474,7 +634,8 @@ function operationFilePath() {
   return join(
     userDataPath,
     "operations",
-    "default.operations.json"
+    "items",
+    `${activeWorkspaceId}.operations.json`
   );
 }
 
@@ -507,7 +668,9 @@ async function launchElectron(userData) {
       cwd: desktopRoot,
       env: {
         ...process.env,
-        ELECTRON_RENDERER_URL: ""
+        ELECTRON_RENDERER_URL: "",
+        GIT_CONFIG_GLOBAL: join(fixtureRoot, "gitconfig"),
+        GIT_CONFIG_NOSYSTEM: "1"
       },
       shell: false,
       windowsHide: true,
@@ -515,24 +678,32 @@ async function launchElectron(userData) {
     }
   );
   const logs = [];
+  let spawnError;
+  child.once("error", (error) => { spawnError = error; });
   child.stdout.on("data", (chunk) => {
     logs.push(chunk.toString("utf8"));
   });
   child.stderr.on("data", (chunk) => {
     logs.push(chunk.toString("utf8"));
   });
-  const target = await waitForPageTarget(port, child);
-  const cdp = await CdpClient.connect(
-    target.webSocketDebuggerUrl
-  );
-  await cdp.send("Page.enable");
-  await cdp.send("Runtime.enable");
-  await cdp.send("Log.enable");
-  await cdp.waitFor(
-    "GitNest renderer",
-    `Boolean(document.querySelector(".app-shell"))`
-  );
-  return { child, cdp, logs };
+  let cdp;
+  try {
+    const target = await waitForPageTarget(port, child, () => spawnError);
+    cdp = await CdpClient.connect(target.webSocketDebuggerUrl);
+    await cdp.send("Page.enable");
+    await cdp.waitForDocument();
+    await cdp.send("Runtime.enable");
+    await cdp.send("Log.enable");
+    await cdp.waitFor("GitNest renderer",
+      `Boolean(document.querySelector(".app-shell"))`);
+    return { child, cdp, logs };
+  } catch (error) {
+    cdp?.close();
+    if (child.pid && child.exitCode === null) {
+      await terminateProcessTree(child.pid);
+    }
+    throw new Error(`Electron startup failed: ${error instanceof Error ? error.message : error}\n${logs.join("")}`);
+  }
 }
 
 async function closeElectron(launch) {
@@ -549,6 +720,10 @@ async function closeElectron(launch) {
   if (!exited && launch.child.pid) {
     await terminateProcessTree(launch.child.pid);
   }
+  assert(
+    launch.cdp.runtimeErrors.length === 0,
+    `Renderer errors: ${launch.cdp.runtimeErrors.join("\n")}`
+  );
   assert(
     launch.logs.every(
       (entry) =>
@@ -611,48 +786,29 @@ async function readNativeWindowBounds(client) {
 }
 
 async function addWorkspacePath(client, path) {
-  await client.waitFor(
-    "enabled manual path button",
-    `(() => {
-      const normalize = (value) =>
-        String(value ?? "").replace(/\\s+/g, " ").trim();
-      return [...document.querySelectorAll("button")].some(
-        (button) =>
-          !button.disabled &&
-          normalize(button.textContent) === "手动路径"
-      );
-    })()`
-  );
-  await clickButton(client, "手动路径");
-  await client.waitFor(
-    "manual path form",
-    `Boolean(document.querySelector(".manual-path-form input"))`
-  );
-  await setInputValue(
-    client,
-    ".manual-path-form input",
-    path
-  );
-  await clickButton(client, "扫描并添加", ".manual-path-form");
+  // Directory picking is a native OS dialog. Bootstrap via the public preload
+  // contract; all subsequent navigation/search interactions use rendered UI.
+  const result = await client.evaluate(`window.gitnest.workspace.addDirectory({
+    path: ${JSON.stringify(path)}
+  })`);
+  assert(result?.ok, `Unable to add fixture: ${JSON.stringify(result)}`);
   await client.waitFor(
     "workspace repository row",
     `document.querySelectorAll(".repository-status-row").length > 1`,
     30_000
   );
+  const state = await getWorkspaceState(client);
+  activeWorkspaceId = state.workspace.id;
   await client.waitFor(
     "initial snapshot persistence",
     `(async () => {
       const result = await window.gitnest.workspace.getState();
       return Boolean(
         result.ok &&
+        result.value.snapshots.length === result.value.workspace.worktrees.length &&
         result.value.snapshots.length > 0 &&
         result.value.snapshots.every(
-          (snapshot) => !snapshot.refreshPending
-        ) &&
-        result.value.operations.some(
-          (operation) =>
-            operation.kind === "status" &&
-            operation.state === "succeeded"
+          (snapshot) => !snapshot.refreshPending && !snapshot.stale && !snapshot.error
         )
       );
     })()`,
@@ -670,29 +826,6 @@ async function getWorkspaceState(client) {
     );
   }
   return result.value;
-}
-
-async function clickButton(
-  client,
-  label,
-  rootSelector = "body"
-) {
-  const clicked = await client.evaluate(`(() => {
-    const normalize = (value) =>
-      String(value ?? "").replace(/\\s+/g, " ").trim();
-    const root = document.querySelector(
-      ${JSON.stringify(rootSelector)}
-    );
-    const button = root && [...root.querySelectorAll("button")]
-      .find((candidate) =>
-        normalize(candidate.textContent) ===
-          ${JSON.stringify(label)}
-      );
-    if (!button || button.disabled) return false;
-    button.click();
-    return true;
-  })()`);
-  assert(clicked, `Unable to click button ${label}.`);
 }
 
 async function clickSelector(client, selector) {
@@ -722,28 +855,6 @@ async function setInputValue(client, selector, value) {
     return true;
   })()`);
   assert(changed, `Unable to set input ${selector}.`);
-}
-
-async function selectValue(client, selector, value) {
-  const changed = await client.evaluate(`(() => {
-    const select = document.querySelector(
-      ${JSON.stringify(selector)}
-    );
-    if (!(select instanceof HTMLSelectElement)) return false;
-    const option = [...select.options].find(
-      (candidate) => candidate.value ===
-        ${JSON.stringify(value)}
-    );
-    if (!option || option.disabled || select.disabled) return false;
-    const setter = Object.getOwnPropertyDescriptor(
-      HTMLSelectElement.prototype,
-      "value"
-    )?.set;
-    setter?.call(select, ${JSON.stringify(value)});
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    return true;
-  })()`);
-  assert(changed, `Unable to select ${value}.`);
 }
 
 async function setWindowSize(client, width, height) {
@@ -780,18 +891,22 @@ async function runGit(cwd, args) {
       env: {
         ...process.env,
         GIT_TERMINAL_PROMPT: "0",
-        GCM_INTERACTIVE: "Never"
+        GCM_INTERACTIVE: "Never",
+        GIT_CONFIG_GLOBAL: join(fixtureRoot, "gitconfig"),
+        GIT_CONFIG_NOSYSTEM: "1"
       },
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"]
     });
     const stderr = [];
+    const stdout = [];
+    child.stdout.on("data", (chunk) => stdout.push(chunk));
     child.stderr.on("data", (chunk) => stderr.push(chunk));
     child.once("error", rejectPromise);
     child.once("close", (exitCode) => {
       if (exitCode === 0) {
-        resolvePromise();
+        resolvePromise(Buffer.concat(stdout).toString("utf8").trim());
       } else {
         rejectPromise(
           new Error(
@@ -803,9 +918,12 @@ async function runGit(cwd, args) {
   });
 }
 
-async function waitForPageTarget(port, child) {
+async function waitForPageTarget(port, child, getSpawnError = () => undefined) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < 30_000) {
+    if (getSpawnError()) {
+      throw getSpawnError();
+    }
     if (child.exitCode !== null) {
       throw new Error(
         `Electron exited before exposing CDP (${child.exitCode}).`
@@ -870,7 +988,7 @@ async function terminateProcessTree(pid) {
 
 async function removeFixtureRoot(path) {
   if (
-    dirname(path) !== tmpdir() ||
+    dirname(path) !== temporaryDirectory ||
     !basename(path).startsWith(
       "gitnest-e2e-m3-recovery-"
     )

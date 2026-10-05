@@ -90,6 +90,17 @@ export function Select<Value extends string>({
       }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key === "Tab" &&
+        (menuRef.current?.contains(document.activeElement) ||
+          document.activeElement === triggerRef.current)
+      ) {
+        close();
+        // Continue the browser's normal Tab order from the field, not the
+        // menu portal appended at the end of the document.
+        triggerRef.current?.focus();
+        return;
+      }
       if (event.key !== "Escape") {
         return;
       }
@@ -103,17 +114,6 @@ export function Select<Value extends string>({
       }
       close();
     };
-    const focusFrame = window.requestAnimationFrame(() => {
-      const items =
-        menuRef.current?.querySelectorAll<HTMLButtonElement>(
-          '[role="menuitemradio"]:not(:disabled)'
-        ) ?? [];
-      const current = [...items].find(
-        (item) => item.getAttribute("aria-checked") === "true"
-      );
-      (current ?? items[0])?.focus();
-    });
-
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
     window.addEventListener("blur", close);
@@ -121,7 +121,6 @@ export function Select<Value extends string>({
     window.addEventListener("scroll", handleScroll, true);
 
     return () => {
-      window.cancelAnimationFrame(focusFrame);
       document.removeEventListener(
         "pointerdown",
         handlePointerDown
@@ -191,6 +190,7 @@ export function Select<Value extends string>({
           <MenuPopover
             align="start"
             anchor={triggerRef.current}
+            autoFocus
             aria-label={menuAriaLabel ?? `${ariaLabel}选项`}
             className={mergeClassNames(
               "gn-select__menu",

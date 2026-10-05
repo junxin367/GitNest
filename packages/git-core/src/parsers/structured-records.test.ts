@@ -39,8 +39,16 @@ describe("structured Git parsers", () => {
   });
 
   it("parses commit records", () => {
-    const output =
-      "abcdef\x1fabcdef1\x1fJune\x1fjune@example.com\x1f2026-09-04T10:00:00+08:00\x1fInitial commit\x1fparent1 parent2\x1fHEAD -> main, origin/main\x1e";
+    const output = [
+      "abcdef",
+      "abcdef1",
+      "June",
+      "june@example.com",
+      "2026-09-04T10:00:00+08:00",
+      "Initial commit",
+      "parent1 parent2",
+      "HEAD -> main, tag: release,one, origin/main"
+    ].join("\0") + "\0\n";
 
     expect(parseCommitHistory(output)).toEqual([
       {
@@ -51,17 +59,80 @@ describe("structured Git parsers", () => {
         authoredAt: "2026-09-04T10:00:00+08:00",
         subject: "Initial commit",
         parentHashes: ["parent1", "parent2"],
-        refs: ["HEAD -> main", "origin/main"]
+        refs: [
+          "HEAD -> main",
+          "tag: release,one",
+          "origin/main"
+        ]
       }
     ]);
   });
 
-  it("parses branch-comparison side and merge-base markers", () => {
+  it("retains remote branch names ending in HEAD and filters explicit symbolic refs", () => {
     const output = [
-      "<\x1fleft123\x1fleft123\x1fJune\x1fjune@example.com\x1f2026-09-15T10:00:00+08:00\x1fLeft commit\x1fbase123\x1fmain\x1e",
-      "\n>\x1fright12\x1fright12\x1fJune\x1fjune@example.com\x1f2026-09-15T11:00:00+08:00\x1fRight commit\x1fbase123\x1fdevelop\x1e",
-      "\n-\x1fbase123\x1fbase123\x1fJune\x1fjune@example.com\x1f2026-09-14T10:00:00+08:00\x1fMerge base\x1f\x1f\x1e"
-    ].join("");
+      "refs/remotes/origin/feature/HEAD\x1forigin/feature\x1faaa\x1f\x1f \x1f\x1f2026-10-04T00:00:00Z\x1f\x1e",
+      "refs/remotes/team/origin/HEAD\x1fteam/origin\x1faaa\x1f\x1f \x1f\x1f2026-10-04T00:00:00Z\x1frefs/remotes/team/origin/main\x1e",
+      "refs/remotes/origin/alias\x1forigin/alias\x1faaa\x1f\x1f \x1f\x1f2026-10-04T00:00:00Z\x1frefs/remotes/origin/main\x1e"
+    ].join("\n");
+
+    expect(parseBranches(output)).toEqual([
+      expect.objectContaining({
+        fullName: "refs/remotes/origin/feature/HEAD",
+        name: "origin/feature",
+        remote: true
+      })
+    ]);
+  });
+
+  it("keeps nested HEAD branches in legacy six- and seven-field records", () => {
+    for (const suffix of ["", "\x1f2026-10-04T00:00:00Z"]) {
+      const output =
+        `refs/remotes/origin/feature/HEAD\x1forigin/feature\x1faaa\x1f\x1f \x1f${suffix}\x1e`;
+      expect(parseBranches(output)).toEqual([
+        expect.objectContaining({
+          fullName: "refs/remotes/origin/feature/HEAD"
+        })
+      ]);
+    }
+  });
+
+  it("parses branch-comparison side and merge-base markers", () => {
+    const output =
+      [
+        [
+          "<",
+          "left123",
+          "left123",
+          "June",
+          "june@example.com",
+          "2026-09-15T10:00:00+08:00",
+          "Left commit",
+          "base123",
+          "main"
+        ].join("\0"),
+        [
+          ">",
+          "right12",
+          "right12",
+          "June",
+          "june@example.com",
+          "2026-09-15T11:00:00+08:00",
+          "Right commit",
+          "base123",
+          "develop"
+        ].join("\0"),
+        [
+          "-",
+          "base123",
+          "base123",
+          "June",
+          "june@example.com",
+          "2026-09-14T10:00:00+08:00",
+          "Merge base",
+          "",
+          ""
+        ].join("\0")
+      ].join("\0\n") + "\0\n";
 
     expect(parseComparedCommitHistory(output)).toEqual([
       expect.objectContaining({
@@ -162,5 +233,42 @@ describe("structured Git parsers", () => {
         primary: false
       }
     ]);
+  });
+
+  it("preserves a bare primary entry without HEAD before linked worktrees", () => {
+    const output = [
+      "worktree D:/裸仓库/repository.git",
+      "bare",
+      "",
+      "worktree D:/linked worktree",
+      "HEAD abc123",
+      "branch refs/heads/main",
+      "",
+      ""
+    ].join("\0");
+
+    expect(parseWorktrees(output)).toEqual([
+      expect.objectContaining({
+        path: "D:/裸仓库/repository.git",
+        head: "",
+        bare: true,
+        primary: true
+      }),
+      expect.objectContaining({
+        path: "D:/linked worktree",
+        head: "abc123",
+        branch: "main",
+        bare: false,
+        primary: false
+      })
+    ]);
+  });
+
+  it("still rejects a non-bare worktree whose HEAD is missing", () => {
+    expect(() =>
+      parseWorktrees("worktree D:/broken\0branch refs/heads/main\0\0")
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_GIT_OUTPUT" })
+    );
   });
 });

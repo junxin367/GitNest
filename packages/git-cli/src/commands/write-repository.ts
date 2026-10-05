@@ -3,11 +3,13 @@ export function stageAllArguments(): string[] {
 }
 
 export function stageArguments(
-  paths: readonly string[]
+  paths: readonly string[],
+  trackedOnly = false
 ): string[] {
   return [
     "--literal-pathspecs",
     "add",
+    ...(trackedOnly ? ["--update"] : []),
     "--",
     ...paths
   ];
@@ -29,6 +31,7 @@ export function unstageArguments(
         "--literal-pathspecs",
         "rm",
         "--cached",
+        "--force",
         "--ignore-unmatch",
         "--",
         ...paths

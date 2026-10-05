@@ -202,7 +202,7 @@ export function RepositoryOverview({
           </header>
           <SkeletonBoundary
             fallback={<RepositoryRecentCommitsSkeleton />}
-            hasContent={Boolean(latestCommit)}
+            hasContent={Boolean(controller.history)}
             label="正在读取最近提交"
             loading={historyLoading}
             surfaceClassName="repository-overview-skeleton"

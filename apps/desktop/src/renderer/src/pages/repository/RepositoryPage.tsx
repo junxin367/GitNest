@@ -150,6 +150,7 @@ export function RepositoryPage({
     pushAfterCommit,
     setMessage: setCommitMessage,
     setMessageForScope: setCommitMessageForScope,
+    clearMessageIfUnchanged,
     setPushAfterCommit
   } = useRepositoryCommitDraft(commitDraftScopeKey);
   const [directoryOpening, setDirectoryOpening] =
@@ -168,14 +169,30 @@ export function RepositoryPage({
     message: string;
     tone: "success" | "error";
   } | null>(null);
-  const targetKeyRef = useRef(targetKey);
-  targetKeyRef.current = targetKey;
+  const commitDraftScopeRef = useRef(commitDraftScopeKey);
+  commitDraftScopeRef.current = commitDraftScopeKey;
+  const aiRequestsByScope = useRef(new Map<string, symbol>());
+  const commitDraftRevisions = useRef(new Map<string, number>());
+  const updateCommitMessage = useCallback(
+    (message: string) => {
+      commitDraftRevisions.current.set(
+        commitDraftScopeKey,
+        (commitDraftRevisions.current.get(commitDraftScopeKey) ?? 0) + 1
+      );
+      setCommitMessage(message);
+    },
+    [commitDraftScopeKey, setCommitMessage]
+  );
   const handledCommandCompletion = useRef(
     commands.completionVersion
   );
   const handledWorktreeCommandCompletion = useRef(
     worktreeCommands.completionVersion
   );
+
+  useEffect(() => () => {
+    aiRequestsByScope.current.clear();
+  }, []);
 
   useEffect(() => {
     mutations.clearFeedback();
@@ -196,9 +213,19 @@ export function RepositoryPage({
     if (!target || aiGenerating) {
       return;
     }
-    const requestTargetKey = targetKey;
     const requestCommitDraftScopeKey =
       commitDraftScopeKey;
+    const requestToken = Symbol("ai-commit-message");
+    const requestDraftRevision =
+      commitDraftRevisions.current.get(requestCommitDraftScopeKey) ?? 0;
+    aiRequestsByScope.current.set(requestCommitDraftScopeKey, requestToken);
+    const isCurrentRequest = () =>
+      aiRequestsByScope.current.get(requestCommitDraftScopeKey) === requestToken;
+    const isDraftUnchanged = () =>
+      (commitDraftRevisions.current.get(requestCommitDraftScopeKey) ?? 0) ===
+      requestDraftRevision;
+    const isVisibleScope = () =>
+      commitDraftScopeRef.current === requestCommitDraftScopeKey;
     setAiGenerating(true);
     setAiFeedback(null);
     try {
@@ -206,8 +233,11 @@ export function RepositoryPage({
         await window.gitnest.ai.generateCommitMessage({
           target
         });
+      if (!isCurrentRequest() || !isDraftUnchanged()) {
+        return;
+      }
       if (!result.ok) {
-        if (targetKeyRef.current === requestTargetKey) {
+        if (isVisibleScope()) {
           setAiFeedback({
             title: "AI 提交信息未生成",
             message: formatAiError(result.error),
@@ -227,7 +257,7 @@ export function RepositoryPage({
           tapdKeyword
         )
       );
-      if (targetKeyRef.current !== requestTargetKey) {
+      if (!isVisibleScope()) {
         return;
       }
       setAiFeedback({
@@ -238,7 +268,7 @@ export function RepositoryPage({
         tone: "success"
       });
     } catch (reason) {
-      if (targetKeyRef.current === requestTargetKey) {
+      if (isCurrentRequest() && isDraftUnchanged() && isVisibleScope()) {
         setAiFeedback({
           title: "AI 提交信息未生成",
           message:
@@ -249,8 +279,11 @@ export function RepositoryPage({
         });
       }
     } finally {
-      if (targetKeyRef.current === requestTargetKey) {
-        setAiGenerating(false);
+      if (isCurrentRequest()) {
+        aiRequestsByScope.current.delete(requestCommitDraftScopeKey);
+        if (isVisibleScope()) {
+          setAiGenerating(false);
+        }
       }
     }
   }, [
@@ -258,7 +291,6 @@ export function RepositoryPage({
     commitDraftScopeKey,
     setCommitMessageForScope,
     target,
-    targetKey,
     workspace
   ]);
 
@@ -426,6 +458,14 @@ export function RepositoryPage({
       )}
 
       <ToastViewport>
+        {externalApplications.error && (
+          <Toast
+            message={externalApplications.error.message}
+            onClose={externalApplications.clearError}
+            title="无法打开本地应用"
+            tone="error"
+          />
+        )}
         {details.error && !detailErrorBlocksCurrentTab && (
           <Toast
             closeLabel="关闭仓库数据提示"
@@ -613,10 +653,14 @@ export function RepositoryPage({
           controller={details}
           externalApplications={externalApplications}
           mutations={mutations}
-          onCommitMessageChange={setCommitMessage}
+          onCommitMessageChange={updateCommitMessage}
           onGenerateAi={generateAiCommitMessage}
-          onCommitted={() => {
-            setCommitMessage("");
+          onCommitted={(submittedMessage) => {
+            commitDraftRevisions.current.set(
+              commitDraftScopeKey,
+              (commitDraftRevisions.current.get(commitDraftScopeKey) ?? 0) + 1
+            );
+            clearMessageIfUnchanged(submittedMessage);
           }}
           onPushAfterCommitChange={setPushAfterCommit}
           pushAfterCommit={pushAfterCommit}

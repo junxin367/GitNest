@@ -290,10 +290,14 @@ export class WorkspaceRuntimeService {
   #operationPersistenceRequested = false;
   #operationPersistenceTask: Promise<void> | undefined;
   #snapshotPersistenceTail: Promise<void> = Promise.resolve();
+  #snapshotPersistenceRevision = 0;
+  #snapshotPersistenceDirty = false;
   #workspaceTransitionTail: Promise<void> = Promise.resolve();
   #repositoryRefreshController = new AbortController();
   #monitorGeneration = 0;
   #workspaceGeneration = 0;
+  #disposing = false;
+  #disposeTask: Promise<void> | undefined;
   #disposed = false;
 
   constructor(
@@ -511,6 +515,7 @@ export class WorkspaceRuntimeService {
     reason: "startup" | "manual" = "manual"
   ): Promise<WorkspaceRefreshAccepted> {
     await this.#ensureReady();
+    this.#assertAcceptingWork();
     return this.#beginWorkspaceRefresh(reason);
   }
 
@@ -519,7 +524,20 @@ export class WorkspaceRuntimeService {
     kind: WorktreeMutationKind,
     action: (worktreePath: string) => Promise<Result>
   ): Promise<WorktreeMutationCompleted<Result>> {
-    await this.#ensureReady();
+    const admitted = await this.#queueWorkspaceUpdate(async () => ({
+      // Serialize admission, not execution: Git may read runtime state while
+      // it runs, and a Workspace switch must observe its registered tail.
+      completion: this.#admitWorktreeMutation(target, kind, action)
+    }));
+    return admitted.completion;
+  }
+
+  #admitWorktreeMutation<Result>(
+    target: RepositoryTarget,
+    kind: WorktreeMutationKind,
+    action: (worktreePath: string) => Promise<Result>
+  ): Promise<WorktreeMutationCompleted<Result>> {
+    this.#assertAcceptingWork();
     this.#resolveMutationWorktreePath(target);
 
     const key = repositoryTargetKey(target);
@@ -551,12 +569,12 @@ export class WorkspaceRuntimeService {
         blocker.catch(() => undefined)
       )
     ).then(() =>
-        this.#executeWorktreeMutation(
-          target,
-          operation,
-          action
-        )
-      );
+      this.#executeWorktreeMutation(
+        target,
+        operation,
+        action
+      )
+    );
     const tail = run.then(
       () => undefined,
       () => undefined
@@ -594,7 +612,21 @@ export class WorkspaceRuntimeService {
     ) => Promise<void>,
     options: RepositoryOperationOptions = {}
   ): Promise<RepositoryOperationAccepted> {
-    await this.#ensureReady();
+    return this.#queueWorkspaceUpdate(async () =>
+      this.#admitRepositoryOperation(target, kind, action, options)
+    );
+  }
+
+  #admitRepositoryOperation(
+    target: RepositoryTarget,
+    kind: RepositoryOperationKind,
+    action: (
+      worktreePath: string,
+      signal: AbortSignal
+    ) => Promise<void>,
+    options: RepositoryOperationOptions
+  ): RepositoryOperationAccepted {
+    this.#assertAcceptingWork();
     if (
       options.expectedWorkspaceId &&
       this.#workspace?.id !== options.expectedWorkspaceId
@@ -663,10 +695,14 @@ export class WorkspaceRuntimeService {
       }
     }
 
-    const run = Promise.all(
+    const blockersSettled = Promise.all(
       [...blockers].map((blocker) =>
         blocker.catch(() => undefined)
       )
+    ).then(() => undefined);
+    const run = waitForCompletionOrAbort(
+      blockersSettled,
+      controller.signal
     ).then(() =>
       this.#executeRepositoryOperation(
         target,
@@ -676,10 +712,14 @@ export class WorkspaceRuntimeService {
         options
       )
     );
-    const tail = run.then(
+    const runSettled = run.then(
       () => undefined,
       () => undefined
     );
+    const tail = Promise.all([
+      blockersSettled,
+      runSettled
+    ]).then(() => undefined);
     this.#repositoryMutationTails.set(
       target.repositoryId,
       tail
@@ -689,7 +729,9 @@ export class WorkspaceRuntimeService {
       controller
     );
     this.#emit();
-    void run.catch(() => undefined);
+    void runSettled.then(() => {
+      this.#operationControllers.delete(operation.id);
+    });
     void tail.finally(() => {
       if (
         this.#repositoryMutationTails.get(
@@ -700,7 +742,6 @@ export class WorkspaceRuntimeService {
           target.repositoryId
         );
       }
-      this.#operationControllers.delete(operation.id);
     });
 
     return { operationId: operation.id };
@@ -813,7 +854,22 @@ export class WorkspaceRuntimeService {
     }
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    if (!this.#disposeTask) {
+      this.#disposing = true;
+      this.#refreshScheduler.dispose();
+      this.#workspaceRefreshController?.abort();
+      this.#repositoryRefreshController.abort();
+      for (const controller of this.#operationControllers.values()) {
+        controller.abort();
+      }
+      this.#disposeTask = this.#finishDisposal();
+    }
+    return this.#disposeTask;
+  }
+
+  async #finishDisposal(): Promise<void> {
+    await this.#initialization?.catch(() => undefined);
     await this.#workspaceTransitionTail.catch(
       () => undefined
     );
@@ -822,8 +878,13 @@ export class WorkspaceRuntimeService {
     await this.#workspaceRefreshTask?.catch(
       () => undefined
     );
+    // Accepted writes own their Git processes until they settle. Abort
+    // cancellable operations, but let an in-flight commit/index write finish.
+    await Promise.allSettled([
+      ...this.#worktreeMutationTails.values(),
+      ...this.#repositoryMutationTails.values()
+    ]);
     this.#disposed = true;
-    this.#refreshScheduler.dispose();
     await this.#stopMonitoring();
     await Promise.allSettled([
       ...this.#backgroundRefreshTasks
@@ -831,6 +892,9 @@ export class WorkspaceRuntimeService {
     await this.#snapshotPersistenceTail.catch(
       () => undefined
     );
+    if (this.#snapshotPersistenceDirty) {
+      await this.#saveSnapshots().catch(() => undefined);
+    }
     await this.#operationPersistenceTask?.catch(
       () => undefined
     );
@@ -838,16 +902,34 @@ export class WorkspaceRuntimeService {
   }
 
   async #ensureInitialized(): Promise<void> {
-    if (!this.#initialization) {
-      this.#initialization = this.#initialize();
+    this.#assertAcceptingWork();
+    const initialization =
+      this.#initialization ?? this.#initialize();
+    this.#initialization = initialization;
+    try {
+      await initialization;
+      this.#assertAcceptingWork();
+    } catch (error) {
+      if (this.#initialization === initialization) {
+        this.#initialization = undefined;
+      }
+      throw error;
     }
-
-    await this.#initialization;
   }
 
   async #ensureReady(): Promise<void> {
     await this.#ensureInitialized();
     await this.#workspaceTransitionTail;
+    this.#assertAcceptingWork();
+  }
+
+  #assertAcceptingWork(): void {
+    if (this.#disposing || this.#disposed) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "The application is shutting down. No new Workspace work can be started."
+      );
+    }
   }
 
   async #initialize(): Promise<void> {
@@ -869,6 +951,8 @@ export class WorkspaceRuntimeService {
     this.#snapshots.clear();
     this.#snapshotContentSignatures.clear();
     this.#snapshotChangedPaths.clear();
+    this.#snapshotPersistenceRevision = 0;
+    this.#snapshotPersistenceDirty = false;
     this.#operations = [];
     this.#operationSequence = 0;
     this.#monitor = {
@@ -933,6 +1017,7 @@ export class WorkspaceRuntimeService {
     await this.#ensureInitialized();
     const expectedWorkspaceId = this.#workspace?.id;
     const run = () => {
+      this.#assertAcceptingWork();
       if (this.#workspace?.id !== expectedWorkspaceId) {
         throw new WorkspaceError(
           "INVALID_REQUEST",
@@ -953,6 +1038,7 @@ export class WorkspaceRuntimeService {
     action: () => Promise<Workspace>,
     deletedWorkspaceId?: string
   ): Promise<WorkspaceRuntimeState> {
+    this.#assertAcceptingWork();
     const result = this.#workspaceTransitionTail.then(
       () =>
         this.#performWorkspaceTransition(
@@ -1851,6 +1937,11 @@ export class WorkspaceRuntimeService {
       });
       this.#emit();
     } catch (error) {
+      // Recovery reads may still be running when the user clicks Cancel.
+      // That later request must not rewrite the Git outcome already observed.
+      const cancelled =
+        controller.signal.aborted ||
+        getErrorCode(error) === "COMMAND_CANCELLED";
       const refreshWarning = options.refreshTopology
         ? await this.#refreshTopologyAfterRepositoryMutation(
             target.repositoryId
@@ -1865,9 +1956,6 @@ export class WorkspaceRuntimeService {
           ).map(repositoryTargetKey)
         });
       }
-      const cancelled =
-        controller.signal.aborted ||
-        getErrorCode(error) === "COMMAND_CANCELLED";
       this.#updateOperation(operation.id, {
         state: cancelled ? "cancelled" : "failed",
         progress: 1,
@@ -1892,6 +1980,9 @@ export class WorkspaceRuntimeService {
   async #refreshTopologyAfterRepositoryMutation(
     repositoryId: string
   ): Promise<string | undefined> {
+    if (this.#disposing) {
+      return undefined;
+    }
     const warnings: string[] = [];
 
     try {
@@ -1956,7 +2047,7 @@ export class WorkspaceRuntimeService {
   async #refreshMutationTargets(
     requestedTargets: RepositoryTarget[]
   ): Promise<string | undefined> {
-    if (!this.#workspace) {
+    if (!this.#workspace || this.#disposing) {
       return undefined;
     }
 
@@ -2120,6 +2211,7 @@ export class WorkspaceRuntimeService {
 
     if (
       generation !== this.#monitorGeneration ||
+      this.#disposing ||
       this.#disposed ||
       !this.#workspace
     ) {
@@ -2148,6 +2240,7 @@ export class WorkspaceRuntimeService {
       return;
     }
 
+    const routing = createWatchRoutingPlan(this.#workspace);
     try {
       const handle = await this.#watcher.watch(
         registrations,
@@ -2155,14 +2248,20 @@ export class WorkspaceRuntimeService {
           if (generation !== this.#monitorGeneration) {
             return;
           }
-          const targets = this.#targetsForWatchEvent(event);
+          const eventPath = normalizeWatchPath(event.path);
+          const targets = this.#targetsForWatchEvent(
+            event,
+            eventPath,
+            routing
+          );
           if (targets.length === 0) {
             return;
           }
           const forceContentVersion = targets.some((target) =>
             this.#watchEventMayChangeContent(
-              event.path,
-              target
+              eventPath,
+              target,
+              routing
             )
           );
           this.#monitor = {
@@ -2250,106 +2349,41 @@ export class WorkspaceRuntimeService {
   }
 
   #targetsForWatchEvent(
-    event: WorkspaceWatchEvent
+    event: WorkspaceWatchEvent,
+    eventPath: string,
+    routing: WorkspaceWatchRoutingPlan
   ): RepositoryTarget[] {
-    const workspace = this.#workspace;
-    if (!workspace) {
-      return [];
-    }
-
-    const worktrees = listWorkspaceTargets(workspace)
-      .map((target) => ({
-        target,
-        worktree: workspace.worktrees.find(
-          (candidate) =>
-            candidate.id === target.worktreeId
-        ),
-        repository: workspace.repositories.find(
-          (candidate) =>
-            candidate.id === target.repositoryId
-        )
-      }))
-      .filter(
-        (
-          candidate
-        ): candidate is {
-          target: RepositoryTarget;
-          worktree: Workspace["worktrees"][number];
-          repository:
-            | Workspace["repositories"][number]
-            | undefined;
-        } => Boolean(candidate.worktree)
-      );
-
     if (
-      isTransientGitLockPath(
-        event.path,
-        [
-          ...workspace.repositories.map(
-            (repository) => repository.commonDir
-          ),
-          ...workspace.worktrees.map(
-            (worktree) => worktree.gitDir
-          )
-        ]
+      eventPath.endsWith(".lock") &&
+      routing.metadataRoots.some((root) =>
+        normalizedPathContains(root, eventPath)
       )
     ) {
       return [];
     }
 
-    const linkedGitTarget = worktrees
-      .filter(
-        ({ worktree, repository }) =>
-          Boolean(worktree.gitDir) &&
-          !pathsEqual(
-            worktree.gitDir as string,
-            repository?.commonDir
-          ) &&
-          pathContains(worktree.gitDir as string, event.path)
-      )
-      .sort(
-        (left, right) =>
-          (right.worktree.gitDir?.length ?? 0) -
-          (left.worktree.gitDir?.length ?? 0)
-      )[0];
+    const linkedGitTarget = routing.linkedGitRoutes.find(
+      (route) => normalizedPathContains(route.path, eventPath)
+    );
     if (linkedGitTarget) {
       return [linkedGitTarget.target];
     }
 
-    const commonDirRepository = workspace.repositories
-      .filter(
-        (repository) =>
-          Boolean(repository.commonDir) &&
-          pathContains(
-            repository.commonDir as string,
-            event.path
-          )
-      )
-      .sort(
-        (left, right) =>
-          (right.commonDir?.length ?? 0) -
-          (left.commonDir?.length ?? 0)
-      )[0];
-    if (commonDirRepository) {
-      return this.#repositoryTargets(
-        commonDirRepository.id
-      );
+    const commonDir = routing.commonDirRoutes.find(
+      (route) => normalizedPathContains(route.path, eventPath)
+    );
+    if (commonDir) {
+      return commonDir.targets;
     }
 
-    const worktreeTarget = worktrees
-      .filter(({ worktree }) =>
-        pathContains(worktree.path, event.path)
-      )
-      .sort(
-        (left, right) =>
-          right.worktree.path.length -
-          left.worktree.path.length
-      )[0];
+    const worktreeTarget = routing.worktreeRoutes.find(
+      (route) => normalizedPathContains(route.path, eventPath)
+    );
     if (worktreeTarget) {
       return [worktreeTarget.target];
     }
 
-    const fallback = listWorkspaceTargets(workspace).find(
+    const fallback = routing.targets.find(
       (target) =>
         repositoryTargetsEqual(target, event.target)
     );
@@ -2358,27 +2392,15 @@ export class WorkspaceRuntimeService {
 
   #watchEventMayChangeContent(
     eventPath: string,
-    target: RepositoryTarget
+    target: RepositoryTarget,
+    routing: WorkspaceWatchRoutingPlan
   ): boolean {
-    const workspace = this.#workspace;
-    if (!workspace) {
-      return false;
-    }
-
-    const repository = workspace.repositories.find(
-      (candidate) =>
-        candidate.id === target.repositoryId
-    );
-    const worktree = workspace.worktrees.find(
-      (candidate) =>
-        candidate.id === target.worktreeId &&
-        candidate.repositoryId === target.repositoryId
+    const metadataRoots = routing.metadataRootsByTarget.get(
+      repositoryTargetKey(target)
     );
     if (
-      [repository?.commonDir, worktree?.gitDir].some(
-        (root) =>
-          Boolean(root) &&
-          pathContains(root as string, eventPath)
+      metadataRoots?.some((root) =>
+        normalizedPathContains(root, eventPath)
       )
     ) {
       return true;
@@ -2608,11 +2630,21 @@ export class WorkspaceRuntimeService {
 
     const workspaceId = this.#workspace.id;
     const snapshots = structuredClone(this.#orderedSnapshots());
+    const revision = ++this.#snapshotPersistenceRevision;
+    this.#snapshotPersistenceDirty = true;
     const task = this.#snapshotPersistenceTail
       .catch(() => undefined)
-      .then(() =>
-        this.#snapshotStore.save(workspaceId, snapshots)
-      );
+      .then(async () => {
+        await this.#snapshotStore.save(
+          workspaceId,
+          snapshots
+        );
+        if (
+          revision === this.#snapshotPersistenceRevision
+        ) {
+          this.#snapshotPersistenceDirty = false;
+        }
+      });
     this.#snapshotPersistenceTail = task.catch(() => undefined);
     return task;
   }
@@ -2986,20 +3018,46 @@ function createFailedSnapshot(
 function createWatchRegistrations(
   workspace: Workspace
 ): WorkspaceWatchRegistration[] {
+  const repositoriesById = new Map<
+    string,
+    Workspace["repositories"][number]
+  >();
+  for (const repository of workspace.repositories) {
+    if (!repositoriesById.has(repository.id)) {
+      repositoriesById.set(repository.id, repository);
+    }
+  }
+  const worktreesByRepositoryId = new Map<
+    string,
+    Map<string, Workspace["worktrees"][number]>
+  >();
+  for (const worktree of workspace.worktrees) {
+    let repositoryWorktrees = worktreesByRepositoryId.get(
+      worktree.repositoryId
+    );
+    if (!repositoryWorktrees) {
+      repositoryWorktrees = new Map();
+      worktreesByRepositoryId.set(
+        worktree.repositoryId,
+        repositoryWorktrees
+      );
+    }
+    if (!repositoryWorktrees.has(worktree.id)) {
+      repositoryWorktrees.set(worktree.id, worktree);
+    }
+  }
+
   const candidates = new Map<
     string,
     WorkspaceWatchRegistration
   >();
   for (const target of listWorkspaceTargets(workspace)) {
-    const repository = workspace.repositories.find(
-      (candidate) =>
-        candidate.id === target.repositoryId
+    const repository = repositoriesById.get(
+      target.repositoryId
     );
-    const worktree = workspace.worktrees.find(
-      (candidate) =>
-        candidate.id === target.worktreeId &&
-        candidate.repositoryId === target.repositoryId
-    );
+    const worktree = worktreesByRepositoryId
+      .get(target.repositoryId)
+      ?.get(target.worktreeId);
     if (!worktree) {
       continue;
     }
@@ -3051,18 +3109,125 @@ function createWatchRegistrations(
   }
 }
 
-function isTransientGitLockPath(
-  path: string,
-  metadataRoots: Array<string | undefined>
-): boolean {
-  const normalizedPath = normalizeWatchPath(path);
-  if (!normalizedPath.endsWith(".lock")) {
-    return false;
+interface WorkspaceWatchRoutingPlan {
+  targets: RepositoryTarget[];
+  metadataRoots: string[];
+  metadataRootsByTarget: Map<string, string[]>;
+  linkedGitRoutes: Array<{ path: string; target: RepositoryTarget }>;
+  commonDirRoutes: Array<{ path: string; targets: RepositoryTarget[] }>;
+  worktreeRoutes: Array<{ path: string; target: RepositoryTarget }>;
+}
+
+// A watcher closure owns this plan for one monitor generation. Topology
+// changes restart monitoring, so queued events cannot reuse an older plan.
+function createWatchRoutingPlan(
+  workspace: Workspace
+): WorkspaceWatchRoutingPlan {
+  const repositoriesById = new Map<
+    string,
+    Workspace["repositories"][number]
+  >();
+  for (const repository of workspace.repositories) {
+    if (!repositoriesById.has(repository.id)) {
+      repositoriesById.set(repository.id, repository);
+    }
+  }
+  const worktreesById = new Map<
+    string,
+    Workspace["worktrees"][number]
+  >();
+  const worktreesByRepositoryId = new Map<
+    string,
+    Map<string, Workspace["worktrees"][number]>
+  >();
+  for (const worktree of workspace.worktrees) {
+    if (!worktreesById.has(worktree.id)) {
+      worktreesById.set(worktree.id, worktree);
+    }
+    let repositoryWorktrees = worktreesByRepositoryId.get(
+      worktree.repositoryId
+    );
+    if (!repositoryWorktrees) {
+      repositoryWorktrees = new Map();
+      worktreesByRepositoryId.set(
+        worktree.repositoryId,
+        repositoryWorktrees
+      );
+    }
+    if (!repositoryWorktrees.has(worktree.id)) {
+      repositoryWorktrees.set(worktree.id, worktree);
+    }
   }
 
-  return metadataRoots.some(
-    (root): root is string =>
-      Boolean(root) && pathContains(root as string, path)
+  const targets = listWorkspaceTargets(workspace);
+  const targetsByRepositoryId = new Map<string, RepositoryTarget[]>();
+  const metadataRootsByTarget = new Map<string, string[]>();
+  const linkedGitRoutes: WorkspaceWatchRoutingPlan["linkedGitRoutes"] = [];
+  const worktreeRoutes: WorkspaceWatchRoutingPlan["worktreeRoutes"] = [];
+  for (const target of targets) {
+    let repositoryTargets = targetsByRepositoryId.get(target.repositoryId);
+    if (!repositoryTargets) {
+      repositoryTargets = [];
+      targetsByRepositoryId.set(target.repositoryId, repositoryTargets);
+    }
+    repositoryTargets.push(target);
+
+    const repository = repositoriesById.get(target.repositoryId);
+    const metadataWorktree = worktreesByRepositoryId
+      .get(target.repositoryId)?.get(target.worktreeId);
+    metadataRootsByTarget.set(
+      repositoryTargetKey(target),
+      [repository?.commonDir, metadataWorktree?.gitDir]
+        .filter((root): root is string => Boolean(root))
+        .map(normalizeWatchPath)
+    );
+
+    // Routing historically resolves the first matching Worktree ID;
+    // metadata content checks additionally match its repository.
+    const worktree = worktreesById.get(target.worktreeId);
+    if (!worktree) {
+      continue;
+    }
+    worktreeRoutes.push({ path: worktree.path, target });
+    if (worktree.gitDir && !pathsEqual(worktree.gitDir, repository?.commonDir)) {
+      linkedGitRoutes.push({ path: worktree.gitDir, target });
+    }
+  }
+
+  return {
+    targets,
+    metadataRoots: [
+      ...workspace.repositories.map((repository) => repository.commonDir),
+      ...workspace.worktrees.map((worktree) => worktree.gitDir)
+    ].filter((root): root is string => Boolean(root)).map(normalizeWatchPath),
+    metadataRootsByTarget,
+    linkedGitRoutes: normalizeWatchRoutes(linkedGitRoutes),
+    commonDirRoutes: normalizeWatchRoutes(
+      workspace.repositories
+        .filter((repository) => Boolean(repository.commonDir))
+        .map((repository) => ({
+          path: repository.commonDir as string,
+          targets: targetsByRepositoryId.get(repository.id) ?? []
+        }))
+    ),
+    worktreeRoutes: normalizeWatchRoutes(worktreeRoutes)
+  };
+}
+
+function normalizeWatchRoutes<Route extends { path: string }>(
+  routes: Route[]
+): Route[] {
+  // Sort by the original path length to preserve routing precedence,
+  // including equal-length ties and paths with repeated separators.
+  return routes
+    .sort((left, right) => right.path.length - left.path.length)
+    .map((route) => ({ ...route, path: normalizeWatchPath(route.path) }));
+}
+
+function normalizedPathContains(root: string, candidate: string): boolean {
+  return (
+    candidate === root ||
+    candidate.startsWith(`${root}\\`)
   );
 }
 
@@ -3290,6 +3455,28 @@ function repositoryOperationMessage(
     failed: `${label} 失败：`,
     cancelled: `${label} 已取消。`
   }[state];
+}
+
+async function waitForCompletionOrAbort(
+  completion: Promise<void>,
+  signal: AbortSignal
+): Promise<void> {
+  if (signal.aborted) {
+    return;
+  }
+
+  let resolveAbort!: () => void;
+  const aborted = new Promise<void>((resolve) => {
+    resolveAbort = resolve;
+  });
+  signal.addEventListener("abort", resolveAbort, {
+    once: true
+  });
+  try {
+    await Promise.race([completion, aborted]);
+  } finally {
+    signal.removeEventListener("abort", resolveAbort);
+  }
 }
 
 function multiWorkspaceUnavailable(): WorkspaceError {

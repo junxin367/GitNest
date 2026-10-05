@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import {
+  mkdir,
+  readFile,
   rm,
   truncate,
   writeFile
@@ -160,6 +162,82 @@ describe("GitCliClient integration", () => {
       expect(change).not.toHaveProperty("untrackedStats");
     }
   });
+
+  it.each(["snapshot", "staged", "unstaged"] as const)(
+    "does not invoke repository fsmonitor hooks when reading %s",
+    async (mode) => {
+      const monitorFixture =
+        await createTemporaryDirectoryFixture("fsmonitor-read");
+
+      try {
+        await runGit(monitorFixture.path, [
+          "init",
+          "--initial-branch=main",
+          "."
+        ]);
+        await writeFile(
+          join(monitorFixture.path, "tracked.txt"),
+          "index\n"
+        );
+        await runGit(monitorFixture.path, ["add", "tracked.txt"]);
+        await writeFile(
+          join(monitorFixture.path, "tracked.txt"),
+          "worktree\n"
+        );
+        const markerPath = join(monitorFixture.path, "fsmonitor-marker");
+        const hookPath = join(
+          monitorFixture.path,
+          ".git",
+          "hooks",
+          "fsmonitor-read"
+        );
+        const quotedMarker = markerPath
+          .replaceAll("\\", "/")
+          .replaceAll("'", "'\\''");
+        await writeFile(
+          hookPath,
+          `#!/bin/sh\nprintf 'invoked\\n' >> '${quotedMarker}'\nexit 1\n`,
+          { mode: 0o755 }
+        );
+        await runGit(monitorFixture.path, [
+          "config",
+          "core.fsmonitor",
+          hookPath.replaceAll("\\", "/")
+        ]);
+
+        if (mode === "snapshot") {
+          const snapshot = await client.readRepositorySnapshot(
+            monitorFixture.path,
+            { includeChangeStats: true }
+          );
+          expect(snapshot.changes).toEqual([
+            expect.objectContaining({
+              path: "tracked.txt",
+              stagedStats: { additions: 1, deletions: 0 },
+              unstagedStats: { additions: 1, deletions: 1 }
+            })
+          ]);
+        } else {
+          const diff = await client.readRepositoryDiff(
+            monitorFixture.path,
+            { path: "tracked.txt", mode }
+          );
+          expect(diff.content).toContain(
+            mode === "staged" ? "+index" : "+worktree"
+          );
+        }
+        await expect(readFile(markerPath, "utf8")).rejects.toMatchObject({
+          code: "ENOENT"
+        });
+
+        // Establish that this platform actually executes the configured hook.
+        await runGit(monitorFixture.path, ["status", "--porcelain"]);
+        expect(await readFile(markerPath, "utf8")).toContain("invoked");
+      } finally {
+        await monitorFixture.dispose();
+      }
+    }
+  );
 
   it("reports only changed lines for a staged rename", async () => {
     const renamedFixture =
@@ -342,6 +420,130 @@ describe("GitCliClient integration", () => {
       mode: "untracked",
       additions: 1,
       truncated: false
+    });
+  });
+
+  it("counts changed content lines that resemble diff file headers", async () => {
+    const diffFixture =
+      await createTemporaryDirectoryFixture(
+        "diff-header-like-content"
+      );
+
+    try {
+      await runGit(diffFixture.path, [
+        "init",
+        "--initial-branch=main",
+        "."
+      ]);
+      await runGit(diffFixture.path, [
+        "config",
+        "user.name",
+        "Diff Author"
+      ]);
+      await runGit(diffFixture.path, [
+        "config",
+        "user.email",
+        "diff@example.invalid"
+      ]);
+      await writeFile(
+        join(diffFixture.path, "header-like.txt"),
+        "--- old\nunchanged\n",
+        "utf8"
+      );
+      await runGit(diffFixture.path, [
+        "add",
+        "header-like.txt"
+      ]);
+      await runGit(diffFixture.path, [
+        "commit",
+        "-m",
+        "Initial header-like content"
+      ]);
+      await writeFile(
+        join(diffFixture.path, "header-like.txt"),
+        "+++ new\nunchanged\n",
+        "utf8"
+      );
+
+      await expect(
+        client.readRepositoryDiff(diffFixture.path, {
+          path: "header-like.txt",
+          mode: "unstaged"
+        })
+      ).resolves.toMatchObject({
+        additions: 1,
+        deletions: 1
+      });
+    } finally {
+      await diffFixture.dispose();
+    }
+  });
+
+  it("counts a file-to-directory replacement without treating the second patch headers as changes", async () => {
+    const diffFixture =
+      await createTemporaryDirectoryFixture(
+        "diff-file-to-directory"
+      );
+
+    try {
+      await runGit(diffFixture.path, [
+        "init",
+        "--initial-branch=main",
+        "."
+      ]);
+      await runGit(diffFixture.path, [
+        "config",
+        "user.name",
+        "Diff Author"
+      ]);
+      await runGit(diffFixture.path, [
+        "config",
+        "user.email",
+        "diff@example.invalid"
+      ]);
+      await writeFile(
+        join(diffFixture.path, "foo"),
+        "old\n",
+        "utf8"
+      );
+      await runGit(diffFixture.path, ["add", "foo"]);
+      await runGit(diffFixture.path, [
+        "commit",
+        "-m",
+        "Add file foo"
+      ]);
+
+      await rm(join(diffFixture.path, "foo"));
+      await mkdir(join(diffFixture.path, "foo"));
+      await writeFile(
+        join(diffFixture.path, "foo", "bar"),
+        "new\n",
+        "utf8"
+      );
+      await runGit(diffFixture.path, ["add", "--all"]);
+
+      await expect(
+        client.readRepositoryDiff(diffFixture.path, {
+          path: "foo",
+          mode: "staged"
+        })
+      ).resolves.toMatchObject({
+        additions: 1,
+        deletions: 1
+      });
+    } finally {
+      await diffFixture.dispose();
+    }
+  });
+
+  it("rejects a missing untracked path instead of returning an empty diff", async () => {
+    await expect(
+      client.readRepositoryDiff(fixture.repositoryPath, {
+        path: "missing untracked file.txt",
+        mode: "untracked"
+      })
+    ).rejects.toMatchObject({
+      code: "COMMAND_FAILED"
     });
   });
 
@@ -582,6 +784,119 @@ describe("GitCliClient integration", () => {
         })
       ])
     );
+  });
+
+  it("preserves record and field separator bytes in commit subjects", async () => {
+    const historyFixture =
+      await createTemporaryDirectoryFixture(
+        "history-control-characters"
+      );
+    const subject = "Subject \x1e record \x1f field";
+
+    try {
+      await runGit(historyFixture.path, [
+        "init",
+        "--initial-branch=main",
+        "."
+      ]);
+      await runGit(historyFixture.path, [
+        "config",
+        "user.name",
+        "History Author"
+      ]);
+      await runGit(historyFixture.path, [
+        "config",
+        "user.email",
+        "history@example.invalid"
+      ]);
+      await writeFile(
+        join(historyFixture.path, "history.txt"),
+        "history\n",
+        "utf8"
+      );
+      await runGit(historyFixture.path, ["add", "history.txt"]);
+      await runGit(historyFixture.path, [
+        "commit",
+        "-m",
+        subject
+      ]);
+
+      await expect(
+        client.readCommitHistory(historyFixture.path)
+      ).resolves.toMatchObject({
+        commits: [
+          expect.objectContaining({
+            subject
+          })
+        ]
+      });
+    } finally {
+      await historyFixture.dispose();
+    }
+  });
+
+  it("preserves commas in decorated ref names", async () => {
+    const decorationFixture =
+      await createTemporaryDirectoryFixture(
+        "history-ref-with-comma"
+      );
+
+    try {
+      await runGit(decorationFixture.path, [
+        "init",
+        "--initial-branch=main",
+        "."
+      ]);
+      await runGit(decorationFixture.path, [
+        "config",
+        "user.name",
+        "Decoration Author"
+      ]);
+      await runGit(decorationFixture.path, [
+        "config",
+        "user.email",
+        "decoration@example.invalid"
+      ]);
+      await writeFile(
+        join(decorationFixture.path, "decorated.txt"),
+        "decorated\n",
+        "utf8"
+      );
+      await runGit(decorationFixture.path, [
+        "add",
+        "decorated.txt"
+      ]);
+      await runGit(decorationFixture.path, [
+        "commit",
+        "-m",
+        "Decorated commit"
+      ]);
+      await runGit(decorationFixture.path, [
+        "tag",
+        "release,one"
+      ]);
+      const commitHash = (
+        await runGit(decorationFixture.path, [
+          "rev-parse",
+          "HEAD"
+        ])
+      ).trim();
+
+      const history = await client.readCommitHistory(
+        decorationFixture.path
+      );
+      const details = await client.readCommitDetails(
+        decorationFixture.path,
+        commitHash
+      );
+
+      expect(history.commits[0]?.refs).toContain(
+        "tag: release,one"
+      );
+      expect(details.refs).toContain("tag: release,one");
+    } finally {
+      await decorationFixture.dispose();
+    }
   });
 
   it("lists stashes and reads their files and per-file patches including untracked files", async () => {
@@ -848,6 +1163,38 @@ describe("GitCliClient integration", () => {
       ).toMatchObject({ merged: false });
     } finally {
       await mergedFixture.dispose();
+    }
+  });
+
+  it("keeps a real remote branch ending in HEAD while hiding the symbolic remote HEAD", async () => {
+    const remoteFixture = await createGitRepositoryFixture();
+
+    try {
+      const head = await client.resolveRevision(remoteFixture.repositoryPath, "HEAD");
+      await runGit(remoteFixture.repositoryPath, [
+        "update-ref",
+        "refs/remotes/origin/feature/HEAD",
+        head
+      ]);
+      await runGit(remoteFixture.repositoryPath, [
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/feature/HEAD"
+      ]);
+
+      const branches = await client.readBranches(remoteFixture.repositoryPath);
+      expect(branches).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            fullName: "refs/remotes/origin/feature/HEAD",
+            head,
+            remote: true
+          })
+        ])
+      );
+      expect(branches.some((branch) => branch.fullName === "refs/remotes/origin/HEAD")).toBe(false);
+    } finally {
+      await remoteFixture.dispose();
     }
   });
 

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { hash } from "node:crypto";
 
 import type {
   AnalysisConfidence,
@@ -426,15 +426,33 @@ export function buildCodeGraph(input: {
     if (!fileNode || !perFile) {
       continue;
     }
-    for (const endpoint of parsed.serverEndpoints) {
-      const symbolNode = endpoint.symbolQualifiedName
-        ? findSymbolNodeForDeclaration(
-            parsed,
-            endpoint.symbolQualifiedName,
-            endpoint.line
-          )
-        : undefined;
-      const endpointNode = symbolNode
+    const endpointSymbols = new Map(
+      parsed.serverEndpoints.map((endpoint) => (
+        [
+          endpoint,
+          endpoint.symbolQualifiedName
+            ? findSymbolNodeForDeclaration(
+                parsed,
+                endpoint.symbolQualifiedName,
+                endpoint.line
+              )
+            : undefined
+        ] as const
+      ))
+    );
+    const endpointCounts = new Map<CodeGraphNode, number>();
+    for (const symbolNode of endpointSymbols.values()) {
+      if (symbolNode) {
+        endpointCounts.set(
+          symbolNode,
+          (endpointCounts.get(symbolNode) ?? 0) + 1
+        );
+      }
+    }
+    for (const [endpoint, symbolNode] of endpointSymbols) {
+      const useSymbolNode =
+        symbolNode && endpointCounts.get(symbolNode) === 1;
+      const endpointNode = useSymbolNode
         ? convertToEndpoint(symbolNode, endpoint)
         : addNode({
             id: stableId(
@@ -455,6 +473,12 @@ export function buildCodeGraph(input: {
             source: "builtin",
             confidence: "exact",
             metadata: {
+              ...(symbolNode?.metadata.documentation
+                ? {
+                    documentation:
+                      symbolNode.metadata.documentation
+                  }
+                : {}),
               httpMethod: endpoint.method,
               route: endpoint.route,
               rawRoute: endpoint.rawRoute,
@@ -467,7 +491,7 @@ export function buildCodeGraph(input: {
       if (!endpointNode) {
         continue;
       }
-      if (!symbolNode) {
+      if (!useSymbolNode) {
         deferredStructuralEdges.push({
           from: fileNode.id,
           to: endpointNode.id,
@@ -476,6 +500,16 @@ export function buildCodeGraph(input: {
           source: "builtin",
           evidence: `文件 ${parsed.file.relativePath} 声明服务端端点 ${endpoint.method} ${endpoint.route}`
         });
+        if (symbolNode) {
+          addEdge({
+            from: endpointNode.id,
+            to: symbolNode.id,
+            kind: "calls",
+            confidence: "exact",
+            source: "builtin",
+            evidence: `端点 ${endpoint.method} ${endpoint.route} 由 ${symbolNode.qualifiedName} 处理`
+          });
+        }
       }
       endpoints.push(endpointNode);
     }
@@ -2044,10 +2078,7 @@ function stableId(
   kind: string,
   ...parts: string[]
 ): string {
-  return `${kind}_${createHash("sha256")
-    .update(parts.join("\0"))
-    .digest("hex")
-    .slice(0, 20)}`;
+  return `${kind}_${hash("sha256", parts.join("\0"), "hex").slice(0, 20)}`;
 }
 
 function remoteBoundaryMetadata(

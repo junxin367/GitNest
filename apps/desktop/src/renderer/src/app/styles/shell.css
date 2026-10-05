@@ -243,6 +243,13 @@ p {
   background: var(--surface-hover);
 }
 
+.menu-surface,
+.menu-surface * {
+  /* Position and visibility must settle before keyboard focus enters.
+     Reduced-motion duration overrides must not animate these properties. */
+  transition-property: none;
+}
+
 .menu-surface {
   z-index: var(--z-popover);
   display: grid;

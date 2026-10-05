@@ -12,6 +12,56 @@ import type {
 import { parseSourceFile } from "./source-parser";
 
 describe("buildCodeGraph request chains", () => {
+  it("keeps every route and HTTP method mapped to a shared handler", () => {
+    const controller = parseSourceFile(
+      sourceFile("Controller.java", "java"),
+      [
+        "class Controller {",
+        "  /** Loads the shared response. */",
+        '  @RequestMapping(path = {"/first", "/second"}, method = {RequestMethod.GET, RequestMethod.POST})',
+        "  public Object load() { return finish(); }",
+        "  private Object finish() { return null; }",
+        "}"
+      ].join("\n")
+    );
+    const client = parseSourceFile(
+      sourceFile("client.ts", "typescript"),
+      [
+        'export function first() { return fetch("/first"); }',
+        'export function second() { return fetch("/second"); }',
+        'export function save() { return fetch("/first", { method: "POST" }); }'
+      ].join("\n")
+    );
+    const graph = buildCodeGraph({
+      files: [client, controller],
+      scope: "workspace",
+      graphDepth: 6
+    });
+    expect(
+      graph.requestChains.map((chain) => chain.operationKey).sort()
+    ).toEqual(["GET /first", "GET /second", "POST /first"]);
+    const handler = graph.nodes.find(
+      (node) => node.name === "load" && node.kind === "method"
+    );
+    const callee = graph.nodes.find((node) => node.name === "finish");
+    expect(handler).toBeDefined();
+    expect(callee).toBeDefined();
+    expect(
+      graph.nodes.filter((node) => node.kind === "server-endpoint")
+    ).toHaveLength(4);
+    for (const chain of graph.requestChains) {
+      expect(chain.ambiguous).toBe(false);
+      expect(chain.nodeIds).toContain(handler!.id);
+      expect(chain.nodeIds).toContain(callee!.id);
+      const endpoint = graph.nodes.find(
+        (node) => node.id === chain.endpointNodeId
+      );
+      expect(endpoint?.metadata.documentation).toBe(
+        "Loads the shared response."
+      );
+    }
+  });
+
   it("keeps overloaded Java methods as distinct graph nodes and call sources", () => {
     const parsed = parseSourceFile(
       sourceFile("Overloaded.java", "java"),

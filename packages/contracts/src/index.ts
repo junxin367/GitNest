@@ -154,6 +154,7 @@ export type {
   RepositoryMediaUnavailableReasonDto,
   RepositoryPathsMutationDto,
   RepositoryPathsMutationRequest,
+  RepositoryDiscardRequest,
   RepositoryQueryRequest,
   StashFileStatDto,
   StashSummaryDto
@@ -245,6 +246,7 @@ export type {
   LastContentViewDto,
   ReadAiApiKeyRequest,
   RepositoryTabDto,
+  RepositoryFileBrowsingDto,
   TestAiConnectionRequest,
   UpdateAppSettingsRequest,
   WorkspaceTabDto

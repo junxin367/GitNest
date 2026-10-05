@@ -19,10 +19,92 @@ import { Select } from "./Select";
 vi.stubGlobal("React", React);
 
 afterEach(() => {
+  vi.restoreAllMocks();
   document.body.replaceChildren();
 });
 
 describe("Select", () => {
+  it.each([
+    { value: "two", disabled: false, expected: "Two" },
+    { value: "two", disabled: true, expected: "One" },
+    { value: undefined, disabled: false, expected: "One" }
+  ])("focuses a visible enabled option on opening ($value, disabled: $disabled)", ({ value, disabled, expected }) => {
+    // A frame can run before the positioning state has been committed.
+    // Model Chromium's refusal to focus an element with hidden visibility.
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(performance.now());
+      return 1;
+    });
+    const nativeFocus = HTMLElement.prototype.focus;
+    const hiddenAttempts: HTMLElement[] = [];
+    vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+      if (getComputedStyle(this).visibility === "hidden") {
+        hiddenAttempts.push(this);
+        return;
+      }
+      nativeFocus.call(this, options);
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const onChange = vi.fn();
+    try {
+      act(() => root.render(
+        <Select ariaLabel="终端" onChange={onChange}
+          options={[
+            { value: "one", label: "One" },
+            { value: "two", label: "Two", disabled },
+            { value: "three", label: "Three" }
+          ]} value={value} />
+      ));
+      const trigger = container.querySelector<HTMLButtonElement>(".gn-select__trigger")!;
+      trigger.focus();
+      act(() => trigger.click());
+      expect(hiddenAttempts).toEqual([]);
+      expect(document.activeElement?.textContent).toBe(expected);
+      expect(document.activeElement?.getAttribute("role")).toBe("menuitemradio");
+      const firstFocus = document.activeElement!;
+      act(() => firstFocus.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowDown", bubbles: true, cancelable: true
+      })));
+      expect(document.activeElement?.textContent).toBe(
+        expected === "Two" || disabled ? "Three" : "Two"
+      );
+      act(() => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape", bubbles: true, cancelable: true
+      })));
+      expect(onChange).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(trigger);
+    } finally {
+      act(() => root.unmount());
+    }
+  });
+
+  it.each([false, true])("dismisses on Tab without selecting and resumes traversal at the trigger (shift: %s)", (shiftKey) => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const onChange = vi.fn();
+    try {
+      act(() => root.render(
+        <Select ariaLabel="终端" onChange={onChange}
+          options={[{ value: "one", label: "One" }, { value: "two", label: "Two" }]} value="one" />
+      ));
+      const trigger = container.querySelector<HTMLButtonElement>(".gn-select__trigger")!;
+      act(() => trigger.click());
+      const item = document.querySelector<HTMLButtonElement>('[role="menuitemradio"]')!;
+      item.focus();
+      const tab = new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true });
+      act(() => item.dispatchEvent(tab));
+      expect(document.querySelector(".gn-select__menu")).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+      expect(tab.defaultPrevented).toBe(false);
+      expect(onChange).not.toHaveBeenCalled();
+    } finally {
+      act(() => root.unmount());
+    }
+  });
+
   it("uses the shared medium button contract by default", () => {
     const markup = renderToStaticMarkup(
       <Select

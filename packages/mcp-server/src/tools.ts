@@ -19,6 +19,7 @@ import {
 import {
   ToolFailure,
   textResult,
+  type McpToolContext,
   type McpToolHandler,
   type McpToolResult
 } from "./protocol";
@@ -62,7 +63,7 @@ export interface ToolSettings {
   maxStaleAgeDays: number;
 }
 
-export interface ToolContext {
+export interface ToolContext extends McpToolContext {
   access: GitNestDataAccess;
   readSettings(): Promise<ToolSettings>;
   now?(): number;
@@ -84,7 +85,7 @@ export function createTools(
           additionalProperties: false
         }
       },
-      handle: () => runProjects(context)
+      handle: (_args, request) => runProjects({ ...context, ...request })
     },
     {
       definition: {
@@ -110,7 +111,7 @@ export function createTools(
           additionalProperties: false
         }
       },
-      handle: (args) => runStatus(context, args)
+      handle: (args, request) => runStatus({ ...context, ...request }, args)
     },
     {
       definition: {
@@ -158,7 +159,7 @@ export function createTools(
           additionalProperties: false
         }
       },
-      handle: (args) => runTrace(context, args)
+      handle: (args, request) => runTrace({ ...context, ...request }, args)
     }
   ];
 }
@@ -201,35 +202,38 @@ async function runStatus(
           "当前项目不在 GitNest 已登记的分析仓库内；不要使用 GitNest 调用图，请用 rg 检查当前源码。"
       };
     }
-    const available = await Promise.all(
-      matches.map(async (match) => {
-        try {
-          return {
-            match,
-            targets: await context.access.resolveTargets({
-              workspaceId: match.workspaceId
-            })
-          };
-        } catch (error) {
-          if (
-            error instanceof DataAccessError &&
-            error.code === "snapshot-unavailable"
-          ) {
-            return { match, targets: [] as AnalysisTarget[] };
-          }
+    // Matches are already ordered by preference. Once a workspace
+    // snapshot is found, later matches cannot win; loading their full
+    // graphs would waste both memory and the two-entry snapshot cache.
+    let chosen: {
+      match: ProjectAnalysisMatch;
+      targets: AnalysisTarget[];
+    } | undefined;
+    for (const match of matches) {
+      let targets: AnalysisTarget[];
+      try {
+        targets = await context.access.resolveTargets({
+          workspaceId: match.workspaceId
+        });
+      } catch (error) {
+        if (
+          !(error instanceof DataAccessError) ||
+          error.code !== "snapshot-unavailable"
+        ) {
           throw error;
         }
-      })
-    );
-    const chosen =
-      available.find((entry) =>
-        entry.targets.some(
-          (target) => target.scope === "workspace"
-        )
-      ) ??
-      available.find((entry) => entry.targets.length > 0) ??
-      available[0]!;
-    const { match, targets } = chosen;
+        targets = [];
+      }
+      if (targets.some((target) => target.scope === "workspace")) {
+        chosen = { match, targets };
+        break;
+      }
+      if (!chosen || (chosen.targets.length === 0 && targets.length > 0)) {
+        chosen = { match, targets };
+      }
+    }
+    // The unmatched case returned above, so at least one was visited.
+    const { match, targets } = chosen!;
     const probes = new Map();
     const summaries = await Promise.all(
       targets.map((target) =>
@@ -820,7 +824,7 @@ async function guard(
     }
     const body = await run(settings);
     return textResult(
-      limitPayload(body, settings.maxResponseKb)
+      limitPayload(body, settings.maxResponseKb, context.responseEnvelopeBytes)
     );
   } catch (error) {
     if (error instanceof DataAccessError) {
@@ -831,7 +835,9 @@ async function guard(
             useMcp: false,
             guidance: error.message
           },
-          maxResponseKb
+          maxResponseKb,
+          context.responseEnvelopeBytes,
+          true
         ),
         { isError: true }
       );
@@ -844,7 +850,9 @@ async function guard(
             useMcp: false,
             guidance: error.message
           },
-          maxResponseKb
+          maxResponseKb,
+          context.responseEnvelopeBytes,
+          true
         ),
         { isError: true }
       );
@@ -858,7 +866,9 @@ async function guard(
           useMcp: false,
           guidance: message
         },
-        maxResponseKb
+        maxResponseKb,
+        context.responseEnvelopeBytes,
+        true
       ),
       { isError: true }
     );
@@ -896,13 +906,20 @@ function envelope(
 
 function limitPayload(
   payload: Record<string, unknown>,
-  maxResponseKb: number
+  maxResponseKb: number,
+  responseEnvelopeBytes = 0,
+  isError = false
 ): Record<string, unknown> {
   const limit = Math.min(
     Math.max(maxResponseKb, MIN_MAX_RESPONSE_KB),
     MAX_MAX_RESPONSE_KB
   ) * 1_024;
-  if (responseBytes(payload) <= limit) {
+  const fits = (candidate: Record<string, unknown>): boolean =>
+    responseEnvelopeBytes + Buffer.byteLength(
+      JSON.stringify(textResult(candidate, { isError })),
+      "utf8"
+    ) <= limit;
+  if (fits(payload)) {
     return payload;
   }
   const reduced: Record<string, unknown> = {
@@ -919,25 +936,25 @@ function limitPayload(
       : [];
     reduced.guidance =
       "调用关系超过响应上限；请缩小查询、从更具体的函数继续追踪，或提高 MCP 响应上限。";
-    if (responseBytes(reduced) <= limit) {
+    if (fits(reduced)) {
       return reduced;
     }
   } else if (Array.isArray(payload.analyses)) {
     let count = payload.analyses.length;
-    while (count > 0 && responseBytes(reduced) > limit) {
+    while (count > 0 && !fits(reduced)) {
       count = Math.floor(count / 2);
       reduced.analyses = payload.analyses.slice(0, count);
     }
-    if (responseBytes(reduced) <= limit) {
+    if (fits(reduced)) {
       return reduced;
     }
   } else if (Array.isArray(payload.projects)) {
     let count = payload.projects.length;
-    while (count > 0 && responseBytes(reduced) > limit) {
+    while (count > 0 && !fits(reduced)) {
       count = Math.floor(count / 2);
       reduced.projects = payload.projects.slice(0, count);
     }
-    if (responseBytes(reduced) <= limit) {
+    if (fits(reduced)) {
       return reduced;
     }
   }
@@ -974,22 +991,13 @@ function limitPayload(
     guidance:
       "结果超过响应上限；请缩小查询范围后重试。"
   };
-  return responseBytes(minimal) <= limit
+  return fits(minimal)
     ? minimal
     : {
         code: "response-too-large",
         truncated: true,
         truncationReasons: ["max-response-size"]
       };
-}
-
-function responseBytes(
-  payload: Record<string, unknown>
-): number {
-  return Buffer.byteLength(
-    JSON.stringify(textResult(payload)),
-    "utf8"
-  );
 }
 
 function targetSelector(

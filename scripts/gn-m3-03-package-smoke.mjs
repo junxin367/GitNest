@@ -915,6 +915,7 @@ async function launchApplication({
       target.webSocketDebuggerUrl
     );
     await launch.cdp.send("Page.enable");
+    await launch.cdp.waitForDocument();
     await launch.cdp.send("Runtime.enable");
     await launch.cdp.send("Log.enable");
     await launch.cdp.waitFor(

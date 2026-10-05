@@ -57,6 +57,30 @@ export class CodeAnalysisEngine {
   ): Promise<CodeAnalysisSnapshot> {
     const startedAt = Date.now();
     throwIfAborted(input.signal);
+    const cache = new AnalysisCache(
+      input.cacheDirectory,
+      input.workspaceId
+    );
+    const cacheDocument = await cache.load(
+      input.settings,
+      input.roots
+    );
+    const currentDirtyPaths =
+      input.freshnessChangedPaths ?? input.changedPaths;
+    const currentDirtyCanonicalPaths = changedCanonicalPaths({
+      ...input,
+      changedPaths: currentDirtyPaths
+    });
+    // A restored tracked path or a removed untracked path disappears from
+    // Git's current change list. Reconcile the previous baseline as well.
+    const reconciliationPaths = [...new Map(
+      [...input.changedPaths, ...cacheDocument.dirtyPaths].map(
+        (path) => [
+          `${path.repositoryId}\0${path.worktreeId}\0${path.path}`,
+          path
+        ]
+      )
+    ).values()];
     input.onProgress?.({
       stage: "discovering",
       completed: 0,
@@ -68,11 +92,18 @@ export class CodeAnalysisEngine {
     });
     const inventory = await discoverSourceFiles({
       roots: input.roots,
-      changedPaths: input.changedPaths,
+      changedPaths: reconciliationPaths,
       scope: input.scope,
       settings: input.settings,
       ...(input.signal ? { signal: input.signal } : {})
     });
+    if (input.scope === "changed") {
+      for (const file of inventory.files) {
+        file.changed = currentDirtyCanonicalPaths.has(
+          file.canonicalPath
+        );
+      }
+    }
     input.onProgress?.({
       stage: "discovering",
       completed: 1,
@@ -80,14 +111,6 @@ export class CodeAnalysisEngine {
       message: `已发现 ${inventory.files.length} 个可分析文件`
     });
 
-    const cache = new AnalysisCache(
-      input.cacheDirectory,
-      input.workspaceId
-    );
-    const cacheDocument = await cache.load(
-      input.settings,
-      input.roots
-    );
     const currentRootRevisions =
       rootRevisionRecord(input.roots);
     const cacheRevisionMatches = rootRevisionsMatch(
@@ -326,7 +349,10 @@ export class CodeAnalysisEngine {
           ? { ...cacheDocument.files }
           : {};
     if (input.scope === "changed") {
-      for (const path of changedCanonicalPaths(input)) {
+      for (const path of changedCanonicalPaths({
+        ...input,
+        changedPaths: reconciliationPaths
+      })) {
         if (!parsedByPath.has(path)) {
           delete cacheFiles[path];
         }
@@ -413,6 +439,7 @@ export class CodeAnalysisEngine {
       total: 1,
       message: "正在保存应用侧增量索引"
     });
+    throwIfAborted(input.signal);
     const generatedAt = new Date().toISOString();
     const analyzedSourceSetComplete =
       !inventory.truncated &&
@@ -459,6 +486,7 @@ export class CodeAnalysisEngine {
           fullIndexAvailable &&
           semanticAnalysisComplete,
         fullIndexRevisions: currentRootRevisions,
+        dirtyPaths: currentDirtyPaths,
         ...(lastFullIndexAt ? { lastFullIndexAt } : {}),
         files: cacheFiles,
         updatedAt: generatedAt
@@ -480,6 +508,7 @@ export class CodeAnalysisEngine {
         message: "分析已完成，但缓存保存失败"
       });
     }
+    throwIfAborted(input.signal);
 
     const indexMessage = resultComplete
       ? input.scope === "workspace"
@@ -537,6 +566,7 @@ export class CodeAnalysisEngine {
         ...(input.worktreeStatuses
           ? {
               sourceState: {
+                changedPaths: currentDirtyPaths,
                 worktreeStatuses: input.worktreeStatuses,
                 changedSourceFiles: inventory.files
                   .filter((file) =>

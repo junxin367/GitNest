@@ -2,6 +2,7 @@ import type {
   AppSettingsDto,
   ExternalTerminalKindDto,
   ExternalTerminalProfileDto,
+  RepositoryCommandDto,
   RepositoryTargetDto
 } from "@gitnest/contracts";
 
@@ -15,6 +16,18 @@ export interface StartupNavigation {
   view: Extract<AppView, "workspace" | "repository">;
   workspaceTab: WorkspaceTab;
   repositoryTab: RepositoryTab;
+}
+
+export function resolveRepositoryFileBrowsing(
+  settings: AppSettingsDto,
+  repositoryId: string
+) {
+  return Object.hasOwn(settings.repositoryFileBrowsing, repositoryId)
+    ? settings.repositoryFileBrowsing[repositoryId]!
+    : {
+        fileView: settings.diff.fileView,
+        treeDirectoriesCollapsed: settings.diff.treeDirectoriesCollapsed
+      };
 }
 
 export function resolveStartupNavigation(
@@ -73,4 +86,16 @@ export function chunkRepositoryTargets(
     batches.push(targets.slice(index, index + batchSize));
   }
   return batches;
+}
+
+export async function requestRepositoryFetchBatches(
+  targets: readonly RepositoryTargetDto[],
+  request: (command: RepositoryCommandDto) => Promise<boolean>
+): Promise<boolean> {
+  for (const batch of chunkRepositoryTargets(targets)) {
+    if (!await request({ type: "fetch", targets: batch })) {
+      return false;
+    }
+  }
+  return true;
 }

@@ -50,6 +50,7 @@ export function Dialog({
   tone = "default"
 }: DialogProps) {
   const dialogRef = useRef<HTMLElement>(null);
+  const ignoreBackdropClick = useRef(false);
   const titleId = useId();
   useModalFocusTrap(dialogRef);
 
@@ -59,7 +60,12 @@ export function Dialog({
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || dismissDisabled) {
+      if (
+        event.key !== "Escape" ||
+        dismissDisabled ||
+        event.isComposing ||
+        event.keyCode === 229
+      ) {
         return;
       }
       event.preventDefault();
@@ -84,7 +90,34 @@ export function Dialog({
 
   return (
     <LayerPortal>
-      <div className="gn-dialog-backdrop" data-modal-layer>
+      <div
+        className="gn-dialog-backdrop"
+        data-modal-layer
+        onPointerDownCapture={(event) => {
+          ignoreBackdropClick.current =
+            event.target !== event.currentTarget;
+        }}
+        onPointerUpCapture={(event) => {
+          if (event.target !== event.currentTarget) {
+            ignoreBackdropClick.current = true;
+          }
+        }}
+        onPointerCancel={() => {
+          ignoreBackdropClick.current = false;
+        }}
+        onClick={(event) => {
+          // A drag from the dialog can produce a click on the common backdrop.
+          const ignoreClick = ignoreBackdropClick.current;
+          ignoreBackdropClick.current = false;
+          if (
+            event.target === event.currentTarget &&
+            !ignoreClick &&
+            !dismissDisabled
+          ) {
+            onDismiss?.();
+          }
+        }}
+      >
         <section
           aria-describedby={ariaDescribedBy}
           aria-labelledby={titleId}

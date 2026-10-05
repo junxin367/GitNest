@@ -21,6 +21,7 @@ const VIEWPORT_PADDING = 8;
 
 export interface RepositoryStashContextMenuState {
   stash: StashSummaryDto;
+  anchor?: HTMLButtonElement;
   x: number;
   y: number;
 }
@@ -28,7 +29,8 @@ export interface RepositoryStashContextMenuState {
 export function createRepositoryStashContextMenuState(
   stash: StashSummaryDto,
   clientX: number,
-  clientY: number
+  clientY: number,
+  anchor?: HTMLButtonElement
 ): RepositoryStashContextMenuState {
   const maxX = Math.max(
     VIEWPORT_PADDING,
@@ -45,6 +47,7 @@ export function createRepositoryStashContextMenuState(
 
   return {
     stash,
+    ...(anchor ? { anchor } : {}),
     x: Math.max(VIEWPORT_PADDING, Math.min(clientX, maxX)),
     y: Math.max(VIEWPORT_PADDING, Math.min(clientY, maxY))
   };
@@ -68,6 +71,13 @@ export function RepositoryStashContextMenu({
   const closeContextMenu = useCallback(() => {
     onClose();
   }, [onClose]);
+  const closeAndRestoreFocus = useCallback(() => {
+    const anchor = contextMenu?.anchor;
+    if (anchor?.isConnected) {
+      anchor.focus({ preventScroll: true });
+    }
+    closeContextMenu();
+  }, [closeContextMenu, contextMenu?.anchor]);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -85,9 +95,18 @@ export function RepositoryStashContextMenu({
       closeContextMenu();
     };
     const closeFromKeyboard = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeContextMenu();
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.keyCode === 229
+      ) {
+        return;
+      }
+      if (event.key === "Escape" || event.key === "Tab") {
+        if (event.key === "Escape") {
+          event.preventDefault();
+        }
+        closeAndRestoreFocus();
       }
     };
     const focusFrame = window.requestAnimationFrame(() => {
@@ -128,7 +147,7 @@ export function RepositoryStashContextMenu({
         closeContextMenu
       );
     };
-  }, [closeContextMenu, contextMenu]);
+  }, [closeAndRestoreFocus, closeContextMenu, contextMenu]);
 
   useEffect(() => {
     if (mutationBusy) {
@@ -145,7 +164,8 @@ export function RepositoryStashContextMenu({
       return;
     }
     const { stash } = contextMenu;
-    closeContextMenu();
+    // The menu item unmounts before the dialog opens; hand focus to its row.
+    closeAndRestoreFocus();
     onChoose(action, stash);
   };
 

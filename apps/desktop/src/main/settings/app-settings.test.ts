@@ -7,7 +7,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
@@ -22,6 +22,7 @@ import {
   AppSettingsService,
   type SettingsSecretVault
 } from "./app-settings";
+import { SafeStorageCredentialVault } from "../adapters/credential-vault.adapter";
 
 describe("AppSettingsService", () => {
   let testDirectory = "";
@@ -202,6 +203,59 @@ describe("AppSettingsService", () => {
     await expect(
       vault.read("settings_ai_api_key_test")
     ).resolves.toBe("plain-text-test-key");
+  });
+
+  it("persists independent repository browsing preferences and merges queued partial updates", async () => {
+    const filePath = await createSettingsPath();
+    const vault = new MemorySecretVault();
+    const service = new AppSettingsService(filePath, vault);
+    await Promise.all([
+      service.update({ repositoryFileBrowsing: { repositoryId: "repo-a", fileView: "tree" } }),
+      service.update({ repositoryFileBrowsing: { repositoryId: "repo-b", treeDirectoriesCollapsed: true } }),
+      service.update({ repositoryFileBrowsing: { repositoryId: "repo-a", treeDirectoriesCollapsed: true } })
+    ]);
+    const saved = await service.get();
+    expect(saved.settings.repositoryFileBrowsing).toEqual({
+      "repo-a": { fileView: "tree", treeDirectoriesCollapsed: true },
+      "repo-b": { fileView: "list", treeDirectoriesCollapsed: true }
+    });
+    expect(saved.settings.diff).toEqual(createDefaultAppSettings().diff);
+    // Returned data must not mutate the service cache.
+    saved.settings.repositoryFileBrowsing["repo-a"]!.fileView = "list";
+    expect((await service.get()).settings.repositoryFileBrowsing["repo-a"]!.fileView).toBe("tree");
+    expect((await new AppSettingsService(filePath, vault).get()).settings.repositoryFileBrowsing)
+      .toEqual((await service.get()).settings.repositoryFileBrowsing);
+  });
+
+  it("preserves legacy browsing defaults when adding repository preferences to existing settings", async () => {
+    const filePath = await createSettingsPath();
+    const vault = new MemorySecretVault();
+    const service = new AppSettingsService(filePath, vault);
+    await service.update({ diff: { fileView: "tree", treeDirectoriesCollapsed: true } });
+    const legacy = JSON.parse(await readFile(filePath, "utf8"));
+    delete legacy.repositoryFileBrowsing;
+    await writeFile(filePath, JSON.stringify(legacy));
+    const reloaded = new AppSettingsService(filePath, vault);
+    expect((await reloaded.get()).settings.repositoryFileBrowsing).toEqual({});
+    const updated = await reloaded.update({
+      repositoryFileBrowsing: { repositoryId: "repo-a", fileView: "list" }
+    });
+    expect(updated.repositoryFileBrowsing["repo-a"]).toEqual({
+      fileView: "list", treeDirectoriesCollapsed: true
+    });
+    expect(updated.diff.fileView).toBe("tree");
+  });
+
+  it("rejects malformed persisted repository preferences", async () => {
+    const filePath = await createSettingsPath();
+    const vault = new MemorySecretVault();
+    await new AppSettingsService(filePath, vault).update({ appearance: { theme: "light" } });
+    const document = JSON.parse(await readFile(filePath, "utf8"));
+    document.repositoryFileBrowsing = { "repo-a": { fileView: "invalid", treeDirectoriesCollapsed: false } };
+    await writeFile(filePath, JSON.stringify(document));
+    await expect(new AppSettingsService(filePath, vault).get()).rejects.toMatchObject({
+      code: "INVALID_PERSISTED_DATA"
+    });
   });
 
   it("merges partial periodic refresh and MCP updates without resetting sibling settings", async () => {
@@ -1098,6 +1152,129 @@ describe("AppSettingsService", () => {
       vault.read("settings_ai_api_key_legacy")
     ).resolves.toBe("retry-this-key");
   });
+
+  it.each([
+    { typescript: { enabled: false, command: "" } },
+    { typescript: { command: "   " } },
+    { typescript: { args: [""] } },
+    { mcp: { maxStaleAgeDays: 0 } },
+    { mcp: { maxStaleAgeDays: 366 } },
+    { ignoreDirectories: [" "] }
+  ])("rejects settings that cannot survive restart before saving credentials: %j", async (codeAnalysis) => {
+    const filePath = await createSettingsPath();
+    const vault = new MemorySecretVault();
+    const service = new AppSettingsService(filePath, vault);
+    const previous = await service.update({
+      appearance: { theme: "light" }
+    });
+    const persisted = await readFile(filePath, "utf8");
+
+    await expect(service.update({
+      codeAnalysis,
+      ai: { apiKey: "must-not-be-saved" }
+    })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+
+    expect(vault.saveAttempts).toBe(0);
+    expect(await readFile(filePath, "utf8")).toBe(persisted);
+    await expect(new AppSettingsService(filePath, vault).get())
+      .resolves.toMatchObject({ settings: previous });
+    await expect(service.update({ appearance: { theme: "dark" } }))
+      .resolves.toMatchObject({ appearance: { theme: "dark" } });
+  });
+
+  it.each(["internal", "reveal"] as const)(
+    "waits for key replacement when a concurrent %s read starts during old-file cleanup",
+    async (reader) => {
+      const filePath = await createSettingsPath();
+      const vault = createFileVault();
+      let sequence = 0;
+      const service = new AppSettingsService(filePath, vault, {
+        credentialRefFactory: () => `settings_ai_api_key_race_${++sequence}`
+      });
+      await service.update({ ai: { apiKey: "old-canary-key" } });
+      const remove = vault.delete.bind(vault);
+      let concurrentRead: Promise<unknown> | undefined;
+      vi.spyOn(vault, "delete").mockImplementation(async (reference) => {
+        await remove(reference);
+        concurrentRead = (
+          reader === "internal"
+            ? service.getInternalAiSettings()
+            : service.readAiApiKey(true)
+        ).then((value) => value, (error: unknown) => error);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await service.update({ ai: { apiKey: "new-canary-key" } });
+
+      expect(await concurrentRead).toMatchObject({ apiKey: "new-canary-key" });
+      expect((await new AppSettingsService(filePath, vault)
+        .getInternalAiSettings()).apiKey).toBe("new-canary-key");
+    }
+  );
+
+  it.each([
+    ["internal", "replace"], ["reveal", "replace"],
+    ["internal", "clear"], ["reveal", "clear"],
+    ["internal", "endpoint"], ["reveal", "endpoint"]
+  ] as const)(
+    "finishes an existing %s key read before %s deletes its protected file",
+    async (reader, mutation) => {
+      const filePath = await createSettingsPath();
+      const vault = createFileVault();
+      let sequence = 0;
+      const service = new AppSettingsService(filePath, vault, {
+        credentialRefFactory: () => `settings_ai_api_key_race_${++sequence}`
+      });
+      await service.update({ ai: {
+        apiUrl: "https://first.example.test/v1",
+        apiKey: "old-canary-key"
+      } });
+      const read = vault.read.bind(vault);
+      let markReading!: () => void;
+      let releaseRead!: () => void;
+      const reading = new Promise<void>((resolveRead) => { markReading = resolveRead; });
+      const heldRead = new Promise<void>((resolveRead) => { releaseRead = resolveRead; });
+      vi.spyOn(vault, "read").mockImplementationOnce(async (reference) => {
+        markReading();
+        await heldRead;
+        return read(reference);
+      });
+      const pendingRead = (
+        reader === "internal"
+          ? service.getInternalAiSettings()
+          : service.readAiApiKey(true)
+      ).then((value) => value, (error: unknown) => error);
+      await reading;
+      const updating = mutation === "clear"
+        ? service.clearAiApiKey(true)
+        : service.update({ ai: mutation === "replace"
+          ? { apiKey: "new-canary-key" }
+          : { apiUrl: "https://second.example.test/v1" } });
+      // If mutations are not serialized with the read, they finish while its
+      // protected-file open is held. Always release the read in the fixed path.
+      await Promise.race([
+        updating,
+        new Promise<void>((resolveWait) => setTimeout(resolveWait, 50))
+      ]);
+      releaseRead();
+
+      expect(await pendingRead).toMatchObject({ apiKey: "old-canary-key" });
+      await updating;
+      expect((await new AppSettingsService(filePath, vault)
+        .getInternalAiSettings()).apiKey).toBe(
+          mutation === "replace" ? "new-canary-key" : ""
+        );
+    }
+  );
+
+  function createFileVault(): SafeStorageCredentialVault {
+    return new SafeStorageCredentialVault(join(testDirectory, "vault"), {
+      isEncryptionAvailable: () => true,
+      encryptString: (value) => Buffer.from(value),
+      decryptString: (value) => value.toString()
+    });
+  }
 
   async function createSettingsPath(): Promise<string> {
     testDirectory = await mkdtemp(

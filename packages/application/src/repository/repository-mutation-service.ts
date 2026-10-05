@@ -124,9 +124,20 @@ export class RepositoryMutationService {
 
   async discard(
     target: RepositoryTarget,
-    paths: readonly string[]
+    paths: readonly string[],
+    expectedUntrackedPaths: readonly string[] = []
   ): Promise<RepositoryPathsMutationResult> {
     const requestedPaths = validateMutationPaths(paths);
+    if (
+      expectedUntrackedPaths.some((path) => !requestedPaths.includes(path)) ||
+      new Set(expectedUntrackedPaths).size !== expectedUntrackedPaths.length
+    ) {
+      throw new GitError(
+        "INVALID_REQUEST",
+        "Confirmed untracked paths must be unique paths from the discard request."
+      );
+    }
+    const confirmedUntracked = new Set(expectedUntrackedPaths);
     const completed = await this.#runtime.runWorktreeMutation(
       target,
       "discard",
@@ -174,6 +185,16 @@ export class RepositoryMutationService {
             "INVALID_REQUEST",
             "Requested paths are no longer eligible for discard.",
             { unavailableCount: unavailable.length }
+          );
+        }
+
+        if (
+          untrackedPaths.some((path) => !confirmedUntracked.has(path)) ||
+          expectedUntrackedPaths.some((path) => !untrackedPaths.includes(path))
+        ) {
+          throw new GitError(
+            "INVALID_REQUEST",
+            "文件的跟踪状态已变化，请重新读取并确认放弃范围；未执行任何文件写操作。"
           );
         }
 

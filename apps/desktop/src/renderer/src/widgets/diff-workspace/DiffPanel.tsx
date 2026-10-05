@@ -12,6 +12,7 @@ import { copyTextToClipboard } from "../../shared/lib/copyTextToClipboard";
 import {
   buildLocalizedDiffContent,
   collectDiffViewerSearchHits,
+  createDiffContentSnapshot,
   parseDiffViewModel,
   type DiffViewerLayout
 } from "../../shared/model/diffViewModel";
@@ -62,6 +63,7 @@ const searchQueriesByScope = new Map<string, string>();
 
 interface DiffContextState {
   scopeKey: string;
+  changeIdentity: string;
   hunks: Record<number, DiffHunkContextState>;
 }
 
@@ -183,9 +185,18 @@ export function DiffPanel({
   );
   const [activeSearchHit, setActiveSearchHit] = useState(0);
   const [activeHunk, setActiveHunk] = useState(0);
+  const hasMediaPreview = media !== undefined;
+  const sourceSnapshot = useMemo(
+    () => createDiffContentSnapshot(
+      hasMediaPreview ? "" : content ?? "",
+      DEFAULT_DIFF_CONTEXT_LINES
+    ),
+    [content, hasMediaPreview]
+  );
   const [diffContextState, setDiffContextState] =
     useState<DiffContextState>({
       scopeKey,
+      changeIdentity: sourceSnapshot.changeIdentity,
       hunks: {}
     });
   const [hunkContextMenu, setHunkContextMenu] =
@@ -199,25 +210,42 @@ export function DiffPanel({
     useRef<PendingDiffHunkFocus | null>(null);
   const compactContentRef = useRef({
     scopeKey,
-    content: content ?? ""
+    changeIdentity: sourceSnapshot.changeIdentity,
+    content: contextLines <= DEFAULT_DIFF_CONTEXT_LINES
+      ? content ?? ""
+      : sourceSnapshot.compactContent
   });
   const contextAnchorRef = useRef<{
     hunkIndex: number;
     offsetTop: number;
     scrollTop: number;
   } | null>(null);
-  const hasMediaPreview = media !== undefined;
   const contentIdentity = content ?? "";
-  if (compactContentRef.current.scopeKey !== scopeKey) {
-    compactContentRef.current = {
-      scopeKey,
-      content: content ?? ""
-    };
-  }
   const hunkContextStates =
-    diffContextState.scopeKey === scopeKey
+    diffContextState.scopeKey === scopeKey &&
+    diffContextState.changeIdentity === sourceSnapshot.changeIdentity
       ? diffContextState.hunks
       : {};
+  const sourceChanged =
+    compactContentRef.current.changeIdentity !== sourceSnapshot.changeIdentity;
+  if (
+    compactContentRef.current.scopeKey !== scopeKey ||
+    sourceChanged ||
+    (contextLines <= DEFAULT_DIFF_CONTEXT_LINES &&
+      Object.keys(hunkContextStates).length === 0)
+  ) {
+    compactContentRef.current = {
+      scopeKey,
+      changeIdentity: sourceSnapshot.changeIdentity,
+      content: contextLines <= DEFAULT_DIFF_CONTEXT_LINES
+        ? content ?? ""
+        : sourceSnapshot.compactContent
+    };
+    if (sourceChanged) {
+      contextAnchorRef.current = null;
+      pendingHunkContextFocusRef.current = null;
+    }
+  }
   const localizedContent = useMemo(
     () =>
       hasMediaPreview
@@ -351,12 +379,14 @@ export function DiffPanel({
       ) {
         compactContentRef.current = {
           scopeKey,
+          changeIdentity: sourceSnapshot.changeIdentity,
           content
         };
       }
 
       const currentHunks =
-        diffContextState.scopeKey === scopeKey
+        diffContextState.scopeKey === scopeKey &&
+        diffContextState.changeIdentity === sourceSnapshot.changeIdentity
           ? diffContextState.hunks
           : {};
       const current = currentHunks[request.hunkIndex] ?? {
@@ -400,6 +430,7 @@ export function DiffPanel({
       }
       setDiffContextState({
         scopeKey,
+        changeIdentity: sourceSnapshot.changeIdentity,
         hunks: nextHunks
       });
 
@@ -422,7 +453,8 @@ export function DiffPanel({
       contextLines,
       diffContextState,
       onContextRequest,
-      scopeKey
+      scopeKey,
+      sourceSnapshot.changeIdentity
     ]
   );
   const closeHunkContextMenu = useCallback(
@@ -531,14 +563,24 @@ export function DiffPanel({
     hunkContextStates,
     requestDiffContext
   ]);
-  const contextControls = canExpandContext
-    ? {
-        hunkContextStates,
-        contextLoading,
-        onContextMenu: openHunkContextMenu,
-        onContextRequest: requestDiffContext
-      }
-    : undefined;
+  const contextControls = useMemo(
+    () =>
+      canExpandContext
+        ? {
+            hunkContextStates,
+            contextLoading,
+            onContextMenu: openHunkContextMenu,
+            onContextRequest: requestDiffContext
+          }
+        : undefined,
+    [
+      canExpandContext,
+      contextLoading,
+      hunkContextStates,
+      openHunkContextMenu,
+      requestDiffContext
+    ]
+  );
   useEffect(() => {
     hunkContextMenuReturnFocusRef.current = null;
     pendingHunkContextFocusRef.current = null;
@@ -766,21 +808,11 @@ export function DiffPanel({
   useEffect(() => {
     setDiffContextState({
       scopeKey,
+      changeIdentity: sourceSnapshot.changeIdentity,
       hunks: {}
     });
-  }, [scopeKey]);
-
-  useEffect(() => {
-    if (
-      contextLines <= DEFAULT_DIFF_CONTEXT_LINES &&
-      Object.keys(hunkContextStates).length === 0
-    ) {
-      compactContentRef.current = {
-        scopeKey,
-        content: content ?? ""
-      };
-    }
-  }, [content, contextLines, hunkContextStates, scopeKey]);
+    setActiveHunk(0);
+  }, [scopeKey, sourceSnapshot.changeIdentity]);
 
   useEffect(() => {
     if (pathCopyStatus === "idle") {
@@ -1153,7 +1185,7 @@ export function DiffPanel({
           tabIndex={0}
         >
           {state?.busy ? (
-            <DiffContentSkeleton />
+            <DiffContentSkeleton layout={layout} />
           ) : state ? (
             <DiffViewerState {...state} />
           ) : media ? (

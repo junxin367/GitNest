@@ -23,8 +23,13 @@ import { GlobalSearchDialog } from "./GlobalSearchDialog";
 describe("GlobalSearchDialog", () => {
   let container: HTMLDivElement;
   let root: Root;
+  let scrollIntoView: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true, value: scrollIntoView
+    });
     vi.stubGlobal("React", React);
     (
       globalThis as typeof globalThis & {
@@ -40,6 +45,62 @@ describe("GlobalSearchDialog", () => {
     act(() => root.unmount());
     container.remove();
     vi.unstubAllGlobals();
+    Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+  });
+
+  it("keeps the keyboard-selected result visible without moving focus from the query", () => {
+    renderDialog({ changes: [] });
+    const input = document.querySelector<HTMLInputElement>("#global-search-input")!;
+    scrollIntoView.mockClear();
+    act(() => input.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "ArrowUp", bubbles: true, cancelable: true
+    })));
+    const selected = document.querySelector('.global-search-result[aria-selected="true"]');
+    expect(scrollIntoView.mock.contexts.at(-1)).toBe(selected);
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest", inline: "nearest" });
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("closes from a backdrop click but keeps search input and dialog content clicks inside", () => {
+    const onClose = vi.fn();
+    renderDialog({ changes: [], onClose });
+    act(() => {
+      document.querySelector<HTMLElement>("#global-search-dialog")?.click();
+      document.querySelector<HTMLElement>("#global-search-input")?.click();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    act(() => document.querySelector<HTMLElement>(".global-search-backdrop")?.click());
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])("keeps the search query when a pointer gesture crosses its boundary (starts inside: %s)", (startsInside) => {
+    const onClose = vi.fn();
+    renderDialog({ changes: [], onClose });
+    const input = document.querySelector<HTMLInputElement>("#global-search-input")!;
+    const backdrop = document.querySelector<HTMLElement>(".global-search-backdrop")!;
+    act(() => {
+      setInputValue(input, "repository");
+      (startsInside ? input : backdrop).dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+      (startsInside ? backdrop : input).dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+      backdrop.click();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(input.value).toBe("repository");
+    act(() => {
+      backdrop.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+      backdrop.click();
+    });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a preserved selection visible when late file results move it down the list", () => {
+    renderDialog({ changes: [] });
+    const input = document.querySelector<HTMLInputElement>("#global-search-input")!;
+    act(() => setInputValue(input, "repository-a"));
+    scrollIntoView.mockClear();
+    renderDialog({ changes: [CHANGES] });
+    expect(scrollIntoView.mock.contexts.at(-1)).toBe(findRepositoryResult());
+    expect(document.activeElement).toBe(input);
   });
 
   it("searches changed files and opens the exact repository, path, and mode", () => {
@@ -82,6 +143,61 @@ describe("GlobalSearchDialog", () => {
       path: "src/changed.ts",
       mode: "unstaged"
     });
+  });
+
+  it("matches changed paths entered with Windows separators", () => {
+    renderDialog({ changes: [CHANGES] });
+    const input = document.querySelector<HTMLInputElement>(
+      "#global-search-input"
+    );
+
+    act(() => setInputValue(input, "src\\changed.ts"));
+
+    const results = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        ".global-search-result"
+      )
+    );
+    expect(results).toHaveLength(2);
+    expect(
+      results.every((result) =>
+        result.textContent?.includes("src/changed.ts")
+      )
+    ).toBe(true);
+  });
+
+  it.each([
+    { key: "Enter", isComposing: true },
+    { key: "Escape", isComposing: true },
+    { key: "ArrowDown", isComposing: true },
+    { key: "Enter", keyCode: 229 }
+  ])("leaves IME candidate keys to the input method (%j)", (keyEvent) => {
+    const onOpenChange = vi.fn();
+    const onClose = vi.fn();
+    renderDialog({ changes: [CHANGES], onOpenChange, onClose });
+    const input = document.querySelector<HTMLInputElement>(
+      "#global-search-input"
+    )!;
+    act(() => setInputValue(input, "src/changed.ts"));
+    const selected = input.getAttribute("aria-activedescendant");
+    const composingKey = new KeyboardEvent("keydown", {
+      ...keyEvent,
+      bubbles: true,
+      cancelable: true
+    });
+
+    act(() => input.dispatchEvent(composingKey));
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(input.getAttribute("aria-activedescendant")).toBe(selected);
+    expect(composingKey.defaultPrevented).toBe(false);
+
+    act(() => input.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Enter", bubbles: true, cancelable: true
+    })));
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the selected repository stable when file results arrive", () => {
@@ -148,28 +264,92 @@ describe("GlobalSearchDialog", () => {
     );
   });
 
+  it("keeps a completed empty search visible while its index refreshes", () => {
+    renderDialog({ changes: [], changesLoading: true, changesLoaded: true });
+    act(() => setInputValue(
+      document.querySelector<HTMLInputElement>("#global-search-input"),
+      "src/missing.ts"
+    ));
+    expect(document.querySelector(".global-search-results-skeleton")).toBeNull();
+    expect(document.body.textContent).toContain("没有匹配的仓库、变更文件或命令");
+    expect(document.body.textContent).toContain("正在继续读取其他有变更仓库");
+  });
+
+  it("stops normalizing changed-file candidates after filling the visible result limit", () => {
+    let laterCandidateReads = 0;
+    const manyChanges: RepositoryChangesDto = {
+      ...CHANGES,
+      snapshot: {
+        ...CHANGES.snapshot,
+        staged: 0,
+        unstaged: 0,
+        untracked: 200,
+        changes: Array.from({ length: 200 }, (_, index) => {
+          const path = `src/file-${String(index).padStart(3, "0")}.ts`;
+          return {
+            path:
+              index < 20
+                ? path
+                : ({
+                    localeCompare(value: unknown) {
+                      return path.localeCompare(
+                        String(value),
+                        "zh-CN"
+                      );
+                    },
+                    toString() {
+                      laterCandidateReads += 1;
+                      return path;
+                    }
+                  } as unknown as string),
+            indexStatus: ".",
+            worktreeStatus: "?",
+            kind: "untracked" as const
+          };
+        })
+      }
+    };
+    renderDialog({ changes: [manyChanges] });
+    laterCandidateReads = 0;
+    const input = document.querySelector<HTMLInputElement>(
+      "#global-search-input"
+    );
+
+    act(() => setInputValue(input, "src/file-"));
+
+    expect(
+      document.querySelectorAll(".global-search-result")
+    ).toHaveLength(20);
+    expect(laterCandidateReads).toBe(0);
+  });
+
   function renderDialog({
     changes,
     changesLoading = false,
+    changesLoaded = false,
     failedChangeTargetCount = 0,
-    onOpenChange = () => undefined
+    onOpenChange = () => undefined,
+    onClose = vi.fn()
   }: {
     changes: RepositoryChangesDto[];
     changesLoading?: boolean;
+    changesLoaded?: boolean;
     failedChangeTargetCount?: number;
     onOpenChange?: (
       location: RepositoryChangeLocation
     ) => void;
+    onClose?: () => void;
   }) {
     act(() => {
       root.render(
         <GlobalSearchDialog
           changes={changes}
           changesLoading={changesLoading}
+          changesLoaded={changesLoaded}
           failedChangeTargetCount={failedChangeTargetCount}
           snapshots={[SNAPSHOT]}
           workspace={WORKSPACE}
-          onClose={vi.fn()}
+          onClose={onClose}
           onFetchAll={vi.fn()}
           onNavigate={vi.fn()}
           onOpenChange={onOpenChange}

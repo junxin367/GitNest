@@ -92,7 +92,10 @@ export function mergeIncrementalWorkspaceSnapshot(
   }
 
   const changedLocationKeys = new Set(
-    changedPaths.map(changedPathKey)
+    [
+      ...changedPaths,
+      ...(previous.sourceState?.changedPaths ?? [])
+    ].map(changedPathKey)
   );
   for (const node of refreshed.nodes) {
     if (node.changed) {
@@ -146,6 +149,7 @@ export function mergeIncrementalWorkspaceSnapshot(
   const previousEdgesById = new Map(
     previous.edges
       .filter((edge) =>
+        (edge.source === "lsp" || edge.source === "merged") &&
         edgeCanBePreserved(
           edge,
           includedNodeIds,
@@ -245,6 +249,7 @@ export function mergeIncrementalWorkspaceSnapshot(
   const previousIndexStatus = previous.indexStatus;
   const preservePreviousIndexStatus =
     previousIndexStatus !== undefined &&
+    !refreshed.stats.truncated &&
     !currentSemanticProblem;
   let indexStatus =
     refreshed.indexStatus ?? previousIndexStatus;
@@ -273,7 +278,8 @@ export function mergeIncrementalWorkspaceSnapshot(
     (node) => node.kind === "file"
   ).length;
   const fullAnalyzedFileCount =
-    analyzedFileCount > 0
+    analyzedFileCount > 0 ||
+    previous.nodes.some((node) => node.kind === "file")
       ? analyzedFileCount
       : Math.max(
           previous.stats.analyzedFiles,

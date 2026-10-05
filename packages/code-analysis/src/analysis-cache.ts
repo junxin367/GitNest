@@ -14,6 +14,7 @@ import { dirname, join, resolve } from "node:path";
 
 import type {
   AnalysisRoot,
+  ChangedAnalysisPath,
   CodeAnalysisScope,
   CodeAnalysisSettings,
   CodeAnalysisSnapshot,
@@ -24,8 +25,10 @@ import { BUILTIN_ANALYSIS_PROFILE_VERSIONS } from "./profiles/registry";
 const CACHE_SCHEMA_VERSION = 3;
 const SNAPSHOT_CACHE_SCHEMA_VERSION = 4;
 const SNAPSHOT_POINTER_SCHEMA_VERSION = 1;
-const PARSER_VERSION = 13;
-const GRAPH_VERSION = 14;
+// Older indexes and snapshots do not retain the dirty-path baseline needed
+// to reconcile restored files and removed untracked files.
+const PARSER_VERSION = 15;
+const GRAPH_VERSION = 16;
 export const MAX_ANALYSIS_INDEX_CACHE_BYTES =
   128 * 1_024 * 1_024;
 export const MAX_ANALYSIS_SNAPSHOT_BYTES =
@@ -45,6 +48,7 @@ export interface AnalysisCacheDocument {
   fullIndexComplete: boolean;
   semanticIndexComplete: boolean;
   fullIndexRevisions: Record<string, string>;
+  dirtyPaths: ChangedAnalysisPath[];
   lastFullIndexAt?: string;
   files: Record<string, CachedFile>;
   updatedAt: string;
@@ -282,6 +286,7 @@ export async function loadSnapshotFromDirectory(
         pointer?.scope
       );
 
+  let latestDocument: AnalysisSnapshotDocument | undefined;
   for (const scope of scopes) {
     const document = await loadSnapshotDocument(
       scopedSnapshotFilePath(
@@ -294,16 +299,33 @@ export async function loadSnapshotFromDirectory(
       roots,
       scope
     );
-    if (document) {
-      return {
-        snapshot: document.snapshot,
-        savedAt: document.savedAt,
-        source: "scoped",
-        pointerNeedsRepair:
-          requestedScope === undefined &&
-          pointer?.scope !== document.snapshot.scope
-      };
+    if (
+      document &&
+      (
+        !latestDocument ||
+        snapshotSavedAtMilliseconds(document.savedAt) >
+          snapshotSavedAtMilliseconds(
+            latestDocument.savedAt
+          )
+      )
+    ) {
+      latestDocument = document;
     }
+  }
+
+  if (latestDocument) {
+    return {
+      snapshot: latestDocument.snapshot,
+      savedAt: latestDocument.savedAt,
+      source: "scoped",
+      pointerNeedsRepair:
+        requestedScope === undefined &&
+        (
+          !pointer ||
+          pointer.scope !== latestDocument.snapshot.scope ||
+          pointer.savedAt !== latestDocument.savedAt
+        )
+    };
   }
 
   const legacy = await loadSnapshotDocument(
@@ -324,6 +346,13 @@ export async function loadSnapshotFromDirectory(
         pointerNeedsRepair: true
       }
     : null;
+}
+
+function snapshotSavedAtMilliseconds(savedAt: string): number {
+  const milliseconds = Date.parse(savedAt);
+  return Number.isFinite(milliseconds)
+    ? milliseconds
+    : Number.NEGATIVE_INFINITY;
 }
 
 async function loadSnapshotDocument(
@@ -526,6 +555,7 @@ function createEmptyCache(
     fullIndexComplete: false,
     semanticIndexComplete: false,
     fullIndexRevisions: {},
+    dirtyPaths: [],
     files: {},
     updatedAt: new Date(0).toISOString()
   };
@@ -723,6 +753,23 @@ async function readBoundedTextFile(
     ) {
       return null;
     }
+    const content = Buffer.allocUnsafe(details.size);
+    let totalBytes = 0;
+    while (totalBytes < content.length) {
+      const { bytesRead } = await handle.read(
+        content,
+        totalBytes,
+        content.length - totalBytes,
+        null
+      );
+      if (bytesRead === 0) {
+        return content
+          .subarray(0, totalBytes)
+          .toString("utf8");
+      }
+      totalBytes += bytesRead;
+    }
+
     const chunk = Buffer.allocUnsafe(
       Math.min(
         CACHE_READ_CHUNK_BYTES,
@@ -730,7 +777,6 @@ async function readBoundedTextFile(
       )
     );
     const chunks: Buffer[] = [];
-    let totalBytes = 0;
     while (true) {
       const remainingBytes = maximumBytes - totalBytes;
       const { bytesRead } = await handle.read(
@@ -750,7 +796,13 @@ async function readBoundedTextFile(
         Buffer.from(chunk.subarray(0, bytesRead))
       );
     }
-    return Buffer.concat(chunks, totalBytes).toString("utf8");
+    if (chunks.length === 0) {
+      return content.toString("utf8");
+    }
+    return Buffer.concat(
+      [content, ...chunks],
+      totalBytes
+    ).toString("utf8");
   } catch {
     return null;
   } finally {
@@ -863,6 +915,8 @@ function isCacheDocument(
     typeof input.fullIndexComplete === "boolean" &&
     typeof input.semanticIndexComplete === "boolean" &&
     isStringRecord(input.fullIndexRevisions) &&
+    Array.isArray(input.dirtyPaths) &&
+    input.dirtyPaths.every(isChangedAnalysisPath) &&
     (input.lastFullIndexAt === undefined ||
       typeof input.lastFullIndexAt === "string") &&
     isRecord(files) &&
@@ -939,6 +993,9 @@ function isCodeAnalysisSnapshot(
 function isAnalysisSourceState(value: unknown): boolean {
   return (
     isRecord(value) &&
+    (value.changedPaths === undefined ||
+      (Array.isArray(value.changedPaths) &&
+        value.changedPaths.every(isChangedAnalysisPath))) &&
     Array.isArray(value.worktreeStatuses) &&
     value.worktreeStatuses.every(
       (entry: unknown) =>
@@ -957,6 +1014,15 @@ function isAnalysisSourceState(value: unknown): boolean {
         isFiniteNumber(entry.size) &&
         isFiniteNumber(entry.modifiedAtMs)
     )
+  );
+}
+
+function isChangedAnalysisPath(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.repositoryId === "string" &&
+    typeof value.worktreeId === "string" &&
+    typeof value.path === "string"
   );
 }
 

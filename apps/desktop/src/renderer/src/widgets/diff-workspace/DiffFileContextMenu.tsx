@@ -14,6 +14,7 @@ import type { DiffViewerFile } from "../../shared/model/diffViewModel";
 import { Icon } from "../../shared/ui/Icon";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
 import {
+  isEventInsideMenu,
   Menu,
   MenuHeading,
   MenuItem,
@@ -72,8 +73,11 @@ export function DiffFileContextMenu({
   onClose(): void;
 }) {
   const [openInMenuOpen, setOpenInMenuOpen] = useState(false);
+  const [focusOpenInMenu, setFocusOpenInMenu] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  const openInTriggerRef = useRef<HTMLButtonElement>(null);
   const openInMenuRef = useRef<HTMLDivElement>(null);
+  const restoringTriggerFocusRef = useRef(false);
   const openInCloseTimerRef = useRef<number | null>(null);
 
   const cancelOpenInMenuClose = useCallback(() => {
@@ -86,6 +90,7 @@ export function DiffFileContextMenu({
   const closeContextMenu = useCallback(() => {
     cancelOpenInMenuClose();
     setOpenInMenuOpen(false);
+    setFocusOpenInMenu(false);
     onClose();
   }, [cancelOpenInMenuClose, onClose]);
 
@@ -94,17 +99,36 @@ export function DiffFileContextMenu({
     setOpenInMenuOpen(true);
   }, [cancelOpenInMenuClose]);
 
+  const enterOpenInMenu = useCallback(() => {
+    setFocusOpenInMenu(true);
+    openOpenInMenu();
+    openInMenuRef.current
+      ?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')
+      ?.focus();
+  }, [openOpenInMenu]);
+
+  const returnToOpenInTrigger = useCallback(() => {
+    cancelOpenInMenuClose();
+    setOpenInMenuOpen(false);
+    setFocusOpenInMenu(false);
+    restoringTriggerFocusRef.current = true;
+    openInTriggerRef.current?.focus();
+    restoringTriggerFocusRef.current = false;
+  }, [cancelOpenInMenuClose]);
+
   const scheduleOpenInMenuClose = useCallback(() => {
     cancelOpenInMenuClose();
     openInCloseTimerRef.current = window.setTimeout(() => {
       openInCloseTimerRef.current = null;
       setOpenInMenuOpen(false);
+      setFocusOpenInMenu(false);
     }, 120);
   }, [cancelOpenInMenuClose]);
 
   useEffect(() => {
     cancelOpenInMenuClose();
     setOpenInMenuOpen(false);
+    setFocusOpenInMenu(false);
   }, [
     cancelOpenInMenuClose,
     contextMenu?.file.key,
@@ -124,9 +148,7 @@ export function DiffFileContextMenu({
       return;
     }
 
-    const closeFromOutside = (
-      event: globalThis.PointerEvent
-    ) => {
+    const closeFromOutside = (event: Event) => {
       const target = event.target;
       if (
         target instanceof Node &&
@@ -140,10 +162,22 @@ export function DiffFileContextMenu({
     const closeFromKeyboard = (
       event: globalThis.KeyboardEvent
     ) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
+        return;
+      }
       if (event.key === "Escape") {
         event.preventDefault();
         closeContextMenu();
       }
+    };
+    const closeFromScroll = (event: Event) => {
+      if (
+        isEventInsideMenu(event, contextMenuRef.current) ||
+        isEventInsideMenu(event, openInMenuRef.current)
+      ) {
+        return;
+      }
+      closeContextMenu();
     };
     const focusFrame = window.requestAnimationFrame(() => {
       contextMenuRef.current
@@ -155,13 +189,14 @@ export function DiffFileContextMenu({
       "pointerdown",
       closeFromOutside
     );
+    document.addEventListener("focusin", closeFromOutside);
     document.addEventListener(
       "keydown",
       closeFromKeyboard
     );
     document.addEventListener(
       "scroll",
-      closeContextMenu,
+      closeFromScroll,
       true
     );
     window.addEventListener("blur", closeContextMenu);
@@ -172,13 +207,14 @@ export function DiffFileContextMenu({
         "pointerdown",
         closeFromOutside
       );
+      document.removeEventListener("focusin", closeFromOutside);
       document.removeEventListener(
         "keydown",
         closeFromKeyboard
       );
       document.removeEventListener(
         "scroll",
-        closeContextMenu,
+        closeFromScroll,
         true
       );
       window.removeEventListener("blur", closeContextMenu);
@@ -207,7 +243,11 @@ export function DiffFileContextMenu({
         <div
           className="workspace-context-open-in"
           onBlurCapture={scheduleOpenInMenuClose}
-          onFocusCapture={openOpenInMenu}
+          onFocusCapture={() => {
+            if (!restoringTriggerFocusRef.current) {
+              openOpenInMenu();
+            }
+          }}
           onPointerEnter={openOpenInMenu}
           onPointerLeave={scheduleOpenInMenuClose}
         >
@@ -216,9 +256,18 @@ export function DiffFileContextMenu({
             aria-haspopup="menu"
             className="workspace-context-open-in-trigger"
             leading={<Icon name="external" size={14} />}
-            onClick={() =>
-              setOpenInMenuOpen((open) => !open)
-            }
+            onClick={enterOpenInMenu}
+            onKeyDown={(event) => {
+              if (
+                event.key === "ArrowRight" &&
+                !event.nativeEvent.isComposing &&
+                event.keyCode !== 229
+              ) {
+                event.preventDefault();
+                enterOpenInMenu();
+              }
+            }}
+            ref={openInTriggerRef}
             title="选择用于打开此文件的应用"
             trailing={<Icon name="collapse" size={14} />}
           >
@@ -229,9 +278,20 @@ export function DiffFileContextMenu({
               align="start"
               anchor={contextMenuRef.current}
               aria-label="选择用于打开此文件的应用"
+              autoFocus={focusOpenInMenu && !applications.loading}
               className="workspace-context-open-in-submenu"
               onBlurCapture={scheduleOpenInMenuClose}
               onFocusCapture={openOpenInMenu}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing || event.keyCode === 229) {
+                  return;
+                }
+                if (event.key === "Escape" || event.key === "ArrowLeft") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  returnToOpenInTrigger();
+                }
+              }}
               onPointerEnter={openOpenInMenu}
               onPointerLeave={scheduleOpenInMenuClose}
               ref={openInMenuRef}

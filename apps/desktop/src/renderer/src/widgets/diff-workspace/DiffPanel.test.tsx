@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import React, { act } from "react";
+import React, { act, Profiler } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
   afterEach,
@@ -173,6 +173,158 @@ describe("DiffPanel configuration", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["unified", "split"] as const)(
+    "updates %s text and search hits after the same file refreshes",
+    (layout) => {
+      const props = {
+        config: standaloneDiffWorkspaceConfiguration.document,
+        scopeKey: `same-file-refresh-${layout}`,
+        path: "src/App.tsx",
+        preferredLayout: layout
+      };
+      act(() => root.render(<DiffPanel {...props} content={content} />));
+      setInputValue(openDiffSearch(container), "updatedValue");
+      expect(
+        container.querySelectorAll(".diff-viewer-search-hit")
+      ).toHaveLength(0);
+      act(() =>
+        root.render(
+          <DiffPanel
+            {...props}
+            content={content.replace("newValue", "updatedValue")}
+          />
+        )
+      );
+      expect(container.textContent).toContain("updatedValue");
+      expect(container.textContent).not.toContain("newValue");
+      expect(
+        container.querySelectorAll(".diff-viewer-search-hit")
+      ).toHaveLength(1);
+    }
+  );
+
+  it("uses the refreshed compact hunk as the expansion and collapse baseline", () => {
+    const props = {
+      config: repositoryDiffWorkspaceConfiguration.document,
+      scopeKey: "refresh-before-expand",
+      path: "src/App.tsx",
+      onContextRequest: vi.fn()
+    };
+    act(() =>
+      root.render(<DiffPanel {...props} content={compactMultiHunkContent} />)
+    );
+    const compact = compactMultiHunkContent.replace("new line 7", "refreshed line 7");
+    act(() =>
+      root.render(<DiffPanel {...props} content={compact} />)
+    );
+    act(() => findHunkContextTrigger(container, 0, "expand").click());
+    act(() =>
+      root.render(
+        <DiffPanel
+          {...props}
+          content={expandedMultiHunkContent.replace("new line 7", "refreshed line 7")}
+          contextLines={10}
+        />
+      )
+    );
+    const visibleCodeLines = () =>
+      Array.from(
+        container.querySelectorAll(".diff-viewer-code-cell > code")
+      ).map((element) => element.textContent);
+    expect(visibleCodeLines()).toContain("line 1");
+    expect(readHunkText(container, 0)).toContain("refreshed line 7");
+    act(() => findHunkContextTrigger(container, 0, "collapse").click());
+    expect(visibleCodeLines()).not.toContain("line 1");
+    expect(readHunkText(container, 0)).toContain("refreshed line 7");
+    expect(readHunkText(container, 0)).not.toContain("new line 7");
+  });
+
+  it.each([false, true])(
+    "refreshes all hunks after context was expanded (collapsed: %s)",
+    (collapsed) => {
+      const props = {
+        config: repositoryDiffWorkspaceConfiguration.document,
+        scopeKey: `expanded-refresh-${collapsed}`,
+        path: "src/App.tsx",
+        onContextRequest: vi.fn()
+      };
+      act(() =>
+        root.render(<DiffPanel {...props} content={compactMultiHunkContent} />)
+      );
+      act(() => findHunkContextTrigger(container, 0, "expand").click());
+      act(() =>
+        root.render(
+          <DiffPanel {...props} content={expandedMultiHunkContent} contextLines={10} />
+        )
+      );
+      if (collapsed) {
+        act(() => findHunkContextTrigger(container, 0, "collapse").click());
+      }
+      const refreshed = expandedMultiHunkContent
+        .replace("new line 7", "latest first change")
+        .replace("new line 23", "latest second change");
+      act(() =>
+        root.render(<DiffPanel {...props} content={refreshed} contextLines={10} />)
+      );
+      expect(readHunkText(container, 0)).toContain("latest first change");
+      expect(readHunkText(container, 1)).toContain("latest second change");
+      expect(container.textContent).not.toContain("new line 7");
+      expect(container.textContent).not.toContain("new line 23");
+      expect(
+        container.querySelectorAll('[aria-label^="收起第"]')
+      ).toHaveLength(0);
+      expect(
+        Array.from(container.querySelectorAll(".diff-viewer-code-cell > code"))
+          .map((element) => element.textContent)
+      ).not.toContain("line 1");
+      // The expanded source is still cached and can expand the new revision
+      // without another IPC read.
+      act(() => findHunkContextTrigger(container, 1, "expand").click());
+      expect(readHunkText(container, 1)).toContain("line 15");
+      expect(readHunkText(container, 1)).toContain("latest second change");
+      expect(props.onContextRequest).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each(["unified", "split"] as const)(
+    "refreshes %s content and context actions after unrelated toolbar updates",
+    (layout) => {
+      const oldRequest = vi.fn();
+      const nextRequest = vi.fn();
+      const props = {
+        config: standaloneDiffWorkspaceConfiguration.document,
+        scopeKey: `refresh-${layout}`,
+        path: "src/App.tsx",
+        content,
+        preferredLayout: layout,
+        onContextRequest: oldRequest
+      };
+      act(() => root.render(<DiffPanel {...props} />));
+      act(() => root.render(<DiffPanel {...props} searchOpen />));
+      const nextContent = content.replaceAll("newValue", "updatedValue");
+      act(() =>
+        root.render(
+          <DiffPanel
+            {...props}
+            content={nextContent}
+            onContextRequest={nextRequest}
+            scopeKey={`next-${layout}`}
+            searchOpen
+          />
+        )
+      );
+      expect(container.textContent).toContain("updatedValue");
+      expect(container.textContent).not.toContain("newValue");
+      act(() => findHunkContextTrigger(container, 0, "expand").click());
+      expect(nextRequest).toHaveBeenCalledWith({
+        direction: "around",
+        hunkIndex: 0,
+        contextLines: 10
+      });
+      expect(oldRequest).not.toHaveBeenCalled();
+    }
+  );
+
   it("keeps the standalone layout controls from the Diff window", () => {
     act(() => {
       root.render(
@@ -323,6 +475,27 @@ describe("DiffPanel configuration", () => {
       )
     ).toHaveLength(10);
     expect(container.textContent).not.toContain("读取 Diff…");
+  });
+
+  it("adapts the loading placeholder when switching between split and unified views", () => {
+    const renderLoading = (layout: "split" | "unified") => {
+      act(() => {
+        root.render(
+          <DiffPanel
+            config={standaloneDiffWorkspaceConfiguration.document}
+            path="src/App.tsx"
+            preferredLayout={layout}
+            scopeKey="unstaged:src/App.tsx"
+            state={{ busy: true, icon: "refresh", title: "读取 Diff", message: "加载中" }}
+          />
+        );
+      });
+    };
+    renderLoading("split");
+    expect(container.querySelector(".diff-content-skeleton")?.getAttribute("data-layout")).toBe("split");
+    expect(container.querySelectorAll(".diff-content-skeleton-pane")).toHaveLength(2);
+    renderLoading("unified");
+    expect(container.querySelectorAll(".diff-content-skeleton-pane")).toHaveLength(1);
   });
 
   it("omits the empty stats placeholder and its separator", () => {
@@ -810,6 +983,32 @@ describe("DiffPanel configuration", () => {
     expect(revokeObjectUrlMock).toHaveBeenCalledWith(
       "blob:media-preview-1"
     );
+  });
+
+  it("does not carry a failed media preview into the first frame of a new file", () => {
+    const failures: boolean[] = [];
+    const renderMedia = (path: string) => {
+      act(() => {
+        root.render(
+          <Profiler id="media-preview" onRender={() => {
+            failures.push(Boolean(container.textContent?.includes("媒体预览失败")));
+          }}>
+            <DiffPanel config={standaloneDiffWorkspaceConfiguration.document}
+              scopeKey={`unstaged:${path}`} path={path}
+              media={{status:"available",kind:"image",mimeType:"image/png",
+                size:3,content:new Uint8Array([1,2,3])}} />
+          </Profiler>
+        );
+      });
+    };
+    renderMedia("first.png");
+    act(() => { container.querySelector("img")!.dispatchEvent(new Event("error")); });
+    expect(container.textContent).toContain("媒体预览失败");
+    failures.length = 0;
+    renderMedia("second.png");
+    expect(failures.length).toBeGreaterThan(0);
+    expect(failures.every(failed => !failed)).toBe(true);
+    expect(container.querySelector("img")?.alt).toBe("second.png 图片预览");
   });
 
   it("explains why an oversized media file is unavailable", () => {

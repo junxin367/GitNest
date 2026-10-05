@@ -27,6 +27,7 @@ describe("useWorkspaceChangedFiles", () => {
   let container: HTMLDivElement;
   let root: Root;
   let getChanges: ReturnType<typeof vi.fn>;
+  let cancelQuery: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.stubGlobal("React", React);
@@ -39,11 +40,12 @@ describe("useWorkspaceChangedFiles", () => {
     document.body.append(container);
     root = createRoot(container);
     getChanges = vi.fn();
+    cancelQuery = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(window, "gitnest", {
       configurable: true,
       value: {
         repository: {
-          cancelQuery: vi.fn().mockResolvedValue(undefined),
+          cancelQuery,
           getChanges
         }
       } as unknown as typeof window.gitnest
@@ -54,6 +56,27 @@ describe("useWorkspaceChangedFiles", () => {
     act(() => root.unmount());
     container.remove();
     vi.unstubAllGlobals();
+  });
+
+  it("reports loading on the first enabled render instead of publishing the disabled empty state", async () => {
+    const snapshots = [
+      createSnapshot(TARGET_A, { unstaged: 1 }),
+      createSnapshot(TARGET_B)
+    ];
+    await act(async () => {
+      root.render(<Harness enabled={false} snapshots={snapshots} onChange={() => {}} />);
+      await flushPromises();
+    });
+    getChanges.mockImplementation(() => new Promise(() => {}));
+    const observed: WorkspaceChangedFilesIndex[] = [];
+    await act(async () => {
+      root.render(<Harness enabled snapshots={snapshots} onChange={(value) => observed.push(value)} />);
+      await flushPromises();
+    });
+
+    expect(observed[0]?.loaded).toBe(false);
+    expect(observed[0]?.loading).toBe(true);
+    expect(observed.every((value) => value.loading)).toBe(true);
   });
 
   it("loads only repositories that may contain changes and reuses the revision cache", async () => {
@@ -128,6 +151,204 @@ describe("useWorkspaceChangedFiles", () => {
 
     expect(getChanges).toHaveBeenCalledOnce();
     expect(latest?.changes).toHaveLength(1);
+  });
+
+  it("indexes each snapshot once when building plans for many targets", async () => {
+    const targets = Array.from({ length: 100 }, (_, index) => ({
+      repositoryId: `repository-${index}`,
+      worktreeId: `worktree-${index}`
+    }));
+    const workspace: WorkspaceDetailsDto = {
+      ...WORKSPACE,
+      groups: [
+        {
+          ...WORKSPACE.groups[0]!,
+          targets
+        }
+      ],
+      repositories: [],
+      worktrees: []
+    };
+    let snapshotReads = 0;
+    const snapshotValues = [...targets]
+      .reverse()
+      .map((target) => createSnapshot(target));
+    const snapshots = new Proxy(snapshotValues, {
+      get(target, property, receiver) {
+        if (
+          typeof property === "string" &&
+          /^\d+$/.test(property)
+        ) {
+          snapshotReads += 1;
+        }
+        return Reflect.get(target, property, receiver);
+      }
+    });
+
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled
+          workspace={workspace}
+          snapshots={snapshots}
+          onChange={() => {}}
+        />
+      );
+      await flushPromises();
+    });
+
+    expect(getChanges).not.toHaveBeenCalled();
+    expect(snapshotReads).toBe(snapshotValues.length);
+  });
+
+  it("uses the first matching snapshot when a target appears more than once", async () => {
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled
+          snapshots={[
+            createSnapshot(TARGET_A),
+            createSnapshot(TARGET_A, {
+              stale: true,
+              unstaged: 1
+            }),
+            createSnapshot(TARGET_B)
+          ]}
+          onChange={() => {}}
+        />
+      );
+      await flushPromises();
+    });
+
+    expect(getChanges).not.toHaveBeenCalled();
+  });
+
+  it("keeps first target order, removes duplicate targets, and reads missing snapshots", async () => {
+    const targetC: RepositoryTargetDto = {
+      repositoryId: "repository-c",
+      worktreeId: "worktree-c"
+    };
+    const workspace: WorkspaceDetailsDto = {
+      ...WORKSPACE,
+      groups: [
+        {
+          ...WORKSPACE.groups[0]!,
+          targets: [TARGET_B, TARGET_A, TARGET_B, targetC]
+        }
+      ]
+    };
+    getChanges.mockImplementation(
+      ({
+        target
+      }: {
+        target: RepositoryTargetDto;
+      }) =>
+        Promise.resolve({
+          ok: true,
+          value: createChanges(
+            target,
+            `${target.repositoryId}.ts`
+          )
+        })
+    );
+    let latest: WorkspaceChangedFilesIndex | undefined;
+
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled
+          workspace={workspace}
+          snapshots={[
+            createSnapshot(TARGET_A, { unstaged: 1 }),
+            createSnapshot(TARGET_B, { unstaged: 1 })
+          ]}
+          onChange={(value) => {
+            latest = value;
+          }}
+        />
+      );
+      await flushPromises();
+    });
+
+    expect(
+      getChanges.mock.calls.map((call) => call[0].target)
+    ).toEqual([TARGET_B, TARGET_A, targetC]);
+    expect(
+      latest?.changes.map((change) => change.target)
+    ).toEqual([TARGET_B, TARGET_A, targetC]);
+  });
+
+  it("does not cache a cancelled read and retries it when indexing is enabled again", async () => {
+    let resolveFirst!: (value: unknown) => void;
+    getChanges
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          })
+      )
+      .mockResolvedValueOnce({
+        ok: true,
+        value: createChanges(TARGET_A, "src/retried.ts")
+      });
+    const snapshots = [
+      createSnapshot(TARGET_A, { unstaged: 1 }),
+      createSnapshot(TARGET_B)
+    ];
+    let latest: WorkspaceChangedFilesIndex | undefined;
+    const onChange = (value: WorkspaceChangedFilesIndex) => {
+      latest = value;
+    };
+
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled
+          snapshots={snapshots}
+          onChange={onChange}
+        />
+      );
+      await flushPromises();
+    });
+    const firstQueryId =
+      getChanges.mock.calls[0]?.[0].queryId;
+
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled={false}
+          snapshots={snapshots}
+          onChange={onChange}
+        />
+      );
+      await flushPromises();
+    });
+
+    expect(cancelQuery).toHaveBeenCalledWith({
+      queryId: firstQueryId
+    });
+    expect(latest?.changes).toHaveLength(0);
+
+    await act(async () => {
+      resolveFirst({
+        ok: true,
+        value: createChanges(TARGET_A, "src/cancelled.ts")
+      });
+      await flushPromises();
+      root.render(
+        <Harness
+          enabled
+          snapshots={snapshots}
+          onChange={onChange}
+        />
+      );
+      await flushPromises();
+    });
+
+    expect(getChanges).toHaveBeenCalledTimes(2);
+    expect(
+      latest?.changes[0]?.snapshot.changes[0]?.path
+    ).toBe("src/retried.ts");
   });
 
   it("invalidates one target when its status revision changes and keeps partial results", async () => {
@@ -231,6 +452,151 @@ describe("useWorkspaceChangedFiles", () => {
       latest?.changes[0]?.snapshot.changes[0]?.path
     ).toBe("src/second.ts");
     expect(latest?.failedTargetCount).toBe(0);
+  });
+
+  it("retains current target results while a newer status revision is read", async () => {
+    getChanges.mockResolvedValueOnce({
+      ok: true,
+      value: createChanges(TARGET_A, "src/previous.ts")
+    });
+    let latest: WorkspaceChangedFilesIndex | undefined;
+    const onChange = (value: WorkspaceChangedFilesIndex) => { latest = value; };
+    await act(async () => {
+      root.render(
+        <Harness enabled snapshots={[
+          createSnapshot(TARGET_A, { contentVersion: 1, unstaged: 1 }),
+          createSnapshot(TARGET_B)
+        ]} onChange={onChange} />
+      );
+      await flushPromises();
+    });
+    let resolveRefresh!: (value: unknown) => void;
+    getChanges.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRefresh = resolve;
+    }));
+    await act(async () => {
+      root.render(
+        <Harness enabled snapshots={[
+          createSnapshot(TARGET_A, { contentVersion: 2, unstaged: 1 }),
+          createSnapshot(TARGET_B)
+        ]} onChange={onChange} />
+      );
+      await flushPromises();
+    });
+    expect(latest?.loading).toBe(true);
+    expect(latest?.loaded).toBe(true);
+    expect(latest?.changes[0]?.snapshot.changes[0]?.path).toBe("src/previous.ts");
+    await act(async () => {
+      resolveRefresh({ ok: true, value: createChanges(TARGET_A, "src/current.ts") });
+      await flushPromises();
+    });
+    expect(latest?.loading).toBe(false);
+    expect(latest?.changes[0]?.snapshot.changes[0]?.path).toBe("src/current.ts");
+  });
+
+  it("preserves indexed results and reports a failed background refresh", async () => {
+    getChanges
+      .mockResolvedValueOnce({ ok: true, value: createChanges(TARGET_A, "src/available.ts") })
+      .mockRejectedValueOnce(new Error("temporary read failure"));
+    let latest: WorkspaceChangedFilesIndex | undefined;
+    const onChange = (value: WorkspaceChangedFilesIndex) => { latest = value; };
+    await act(async () => {
+      root.render(
+        <Harness enabled snapshots={[
+          createSnapshot(TARGET_A, { contentVersion: 1, unstaged: 1 }),
+          createSnapshot(TARGET_B)
+        ]} onChange={onChange} />
+      );
+      await flushPromises();
+    });
+    await act(async () => {
+      root.render(
+        <Harness enabled snapshots={[
+          createSnapshot(TARGET_A, { contentVersion: 2, unstaged: 1 }),
+          createSnapshot(TARGET_B)
+        ]} onChange={onChange} />
+      );
+      await flushPromises();
+    });
+    expect(latest?.changes[0]?.snapshot.changes[0]?.path).toBe("src/available.ts");
+    expect(latest?.loaded).toBe(true);
+    expect(latest?.loading).toBe(false);
+    expect(latest?.failedTargetCount).toBe(1);
+  });
+
+  it("retains a known empty index while a stale target is refreshed", async () => {
+    let latest: WorkspaceChangedFilesIndex | undefined;
+    const onChange = (value: WorkspaceChangedFilesIndex) => { latest = value; };
+    await act(async () => {
+      root.render(
+        <Harness enabled snapshots={[createSnapshot(TARGET_A), createSnapshot(TARGET_B)]}
+          onChange={onChange} />
+      );
+      await flushPromises();
+    });
+    getChanges.mockImplementationOnce(() => new Promise(() => {}));
+    await act(async () => {
+      root.render(
+        <Harness enabled snapshots={[createSnapshot(TARGET_A, { stale: true }), createSnapshot(TARGET_B)]}
+          onChange={onChange} />
+      );
+      await flushPromises();
+    });
+    expect(latest?.loading).toBe(true);
+    expect(latest?.loaded).toBe(true);
+    expect(latest?.changes).toEqual([]);
+  });
+
+  it("reads a repository when a previously clean snapshot becomes stale", async () => {
+    getChanges.mockResolvedValue({
+      ok: true,
+      value: createChanges(TARGET_A, "src/appeared.ts")
+    });
+    let latest: WorkspaceChangedFilesIndex | undefined;
+    const cleanSnapshots = [
+      createSnapshot(TARGET_A),
+      createSnapshot(TARGET_B)
+    ];
+
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled
+          snapshots={cleanSnapshots}
+          onChange={(value) => {
+            latest = value;
+          }}
+        />
+      );
+      await flushPromises();
+    });
+
+    expect(getChanges).not.toHaveBeenCalled();
+    expect(latest?.changes).toHaveLength(0);
+
+    await act(async () => {
+      root.render(
+        <Harness
+          enabled
+          snapshots={[
+            createSnapshot(TARGET_A, { stale: true }),
+            cleanSnapshots[1]!
+          ]}
+          onChange={(value) => {
+            latest = value;
+          }}
+        />
+      );
+      await flushPromises();
+    });
+
+    expect(getChanges).toHaveBeenCalledOnce();
+    expect(getChanges.mock.calls[0]?.[0].target).toEqual(
+      TARGET_A
+    );
+    expect(
+      latest?.changes[0]?.snapshot.changes[0]?.path
+    ).toBe("src/appeared.ts");
   });
 
   it("never publishes the previous Workspace cache during a switch, even for a shared target", async () => {

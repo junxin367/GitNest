@@ -9,7 +9,7 @@ export function parseBranches(output: string): Branch[] {
     .split(RECORD_SEPARATOR)
     .map((record) => record.replace(/^[\r\n]+|[\r\n]+$/g, ""))
     .filter(Boolean)
-    .map((record) => {
+    .flatMap((record): Branch[] => {
       const fields = record.split(FIELD_SEPARATOR);
 
       if (fields.length < 6) {
@@ -26,11 +26,18 @@ export function parseBranches(output: string): Branch[] {
         upstream = "",
         current = "",
         worktreePath = "",
-        updatedAt = ""
+        updatedAt = "",
+        symbolicTarget = ""
       ] = fields;
       const remote = fullName.startsWith("refs/remotes/");
+      const legacyRemoteHead =
+        fields.length < 8 &&
+        /^refs\/remotes\/[^/]+\/HEAD$/.test(fullName);
+      if (remote && (symbolicTarget || legacyRemoteHead)) {
+        return [];
+      }
 
-      return {
+      return [{
         fullName,
         name,
         head,
@@ -39,10 +46,6 @@ export function parseBranches(output: string): Branch[] {
         remote,
         ...(worktreePath ? { worktreePath } : {}),
         ...(updatedAt ? { updatedAt } : {})
-      };
-    })
-    .filter(
-      (branch) =>
-        !(branch.remote && branch.fullName.endsWith("/HEAD"))
-    );
+      }];
+    });
 }

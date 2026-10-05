@@ -1,6 +1,12 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import { join } from "node:path";
-import { mkdtemp, rm } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  rm,
+  stat,
+  writeFile
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 
@@ -259,6 +265,199 @@ describe("ApplicationUpdateService", () => {
     service.dispose();
   });
 
+  it.each([
+    ["declared-size", "UPDATE_DOWNLOAD_SIZE_MISMATCH"],
+    ["stream-size", "UPDATE_DOWNLOAD_SIZE_MISMATCH"],
+    ["http-status", "UPDATE_DOWNLOAD_REQUEST_FAILED"],
+    ["open-file", "UPDATE_INSTALL_FAILED"]
+  ] as const)(
+    "cancels rejected installer responses (%s)",
+    async (failure, errorCode) => {
+      const root = await createTemporaryDirectory();
+      const manifest = createUpdateManifest();
+      const cancel = vi.fn();
+      let downloadSignal: AbortSignal | null | undefined;
+      const launchInstaller = vi.fn(async () => undefined);
+      const service = new ApplicationUpdateService({
+        currentVersion: "1.0.0",
+        distribution: "installed",
+        platform: "win32",
+        architecture: "x64",
+        stateFilePath: join(root, "updates", "state.json"),
+        downloadDirectory: join(root, "updates", "downloads"),
+        fetch: vi.fn<typeof fetch>(async (url, init) => {
+          if (String(url) !== manifest.asset.downloadUrl) {
+            return new Response(JSON.stringify(manifest));
+          }
+          downloadSignal = init?.signal;
+          if (failure === "open-file") {
+            await mkdir(join(
+              root,
+              "updates",
+              "downloads",
+              `${manifest.asset.name}.partial`
+            ));
+          }
+          return new Response(new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array(manifest.asset.sizeBytes + 1));
+            },
+            cancel
+          }), {
+            status: failure === "http-status" ? 503 : 200,
+            headers: failure === "declared-size"
+              ? { "content-length": String(manifest.asset.sizeBytes + 1) }
+              : {}
+          });
+        }),
+        launchInstaller,
+        openExternal: vi.fn(async () => undefined),
+        requestQuit: vi.fn()
+      });
+      try {
+        await service.check("manual");
+        await expect(service.downloadAndInstall()).resolves.toMatchObject({
+          phase: "error",
+          errorCode
+        });
+        expect(downloadSignal?.aborted).toBe(true);
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(launchInstaller).not.toHaveBeenCalled();
+      } finally {
+        service.dispose();
+      }
+    }
+  );
+
+  it.each(["declared-size", "http-status", "read-error"] as const)(
+    "releases failed manifest responses (%s)",
+    async (failure) => {
+      const root = await createTemporaryDirectory();
+      const cancel = vi.fn(() => {
+        if (failure === "http-status") {
+          throw new Error("cancel failed");
+        }
+      });
+      let signal: AbortSignal | null | undefined;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (failure === "read-error") {
+            controller.error(new Error("broken response"));
+          } else {
+            controller.enqueue(new Uint8Array([1]));
+          }
+        },
+        cancel
+      });
+      const service = new ApplicationUpdateService({
+        currentVersion: "1.0.0",
+        distribution: "installed",
+        platform: "win32",
+        architecture: "x64",
+        stateFilePath: join(root, "updates", "state.json"),
+        downloadDirectory: join(root, "updates", "downloads"),
+        fetch: vi.fn<typeof fetch>(async (_input, init) => {
+          signal = init?.signal;
+          return new Response(body, {
+            status: failure === "http-status" ? 503 : 200,
+            headers: failure === "declared-size"
+              ? { "content-length": "1048577" }
+              : {}
+          });
+        }),
+        launchInstaller: vi.fn(async () => undefined),
+        openExternal: vi.fn(async () => undefined),
+        requestQuit: vi.fn()
+      });
+      try {
+        await expect(service.check("manual")).resolves.toMatchObject({
+          phase: "error",
+          errorCode: failure === "declared-size"
+            ? "UPDATE_MANIFEST_TOO_LARGE"
+            : failure === "http-status"
+              ? "UPDATE_MANIFEST_REQUEST_FAILED"
+              : "UPDATE_CHECK_FAILED"
+        });
+        expect(signal?.aborted).toBe(true);
+        expect(body.locked).toBe(false);
+        if (failure !== "read-error") {
+          expect(cancel).toHaveBeenCalledOnce();
+        }
+      } finally {
+        service.dispose();
+      }
+    }
+  );
+
+  it("does not apply a manifest after disposal interrupts the check", async () => {
+    const root = await createTemporaryDirectory();
+    const manifest = createUpdateManifest();
+    let markManifestStarted!: () => void;
+    const manifestStarted = new Promise<void>((resolve) => {
+      markManifestStarted = resolve;
+    });
+    let releaseManifest!: () => void;
+    const manifestGate = new Promise<void>((resolve) => {
+      releaseManifest = resolve;
+    });
+    let manifestCancelled = false;
+    const diagnostics = vi.fn();
+    const service = new ApplicationUpdateService({
+      currentVersion: "1.0.0",
+      distribution: "installed",
+      platform: "win32",
+      architecture: "x64",
+      stateFilePath: join(root, "updates", "state.json"),
+      downloadDirectory: join(
+        root,
+        "updates",
+        "downloads"
+      ),
+      fetch: vi.fn<typeof fetch>(async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              markManifestStarted();
+              void manifestGate.then(() => {
+                if (manifestCancelled) {
+                  return;
+                }
+                controller.enqueue(
+                  Buffer.from(JSON.stringify(manifest))
+                );
+                controller.close();
+              });
+            },
+            cancel() {
+              manifestCancelled = true;
+            }
+          }),
+          { status: 200 }
+        )
+      ),
+      launchInstaller: vi.fn(async () => undefined),
+      openExternal: vi.fn(async () => undefined),
+      requestQuit: vi.fn(),
+      onDiagnostic: diagnostics
+    });
+
+    const check = service.check("manual");
+    await manifestStarted;
+    service.dispose();
+    releaseManifest();
+    const state = await check;
+
+    expect(state).toMatchObject({
+      latestVersion: null,
+      updateAvailable: false
+    });
+    expect(diagnostics).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "update.check-complete"
+      })
+    );
+  });
+
   it("downloads, verifies and launches the declared installer", async () => {
     const root = await createTemporaryDirectory();
     const installer = Buffer.from("safe installer");
@@ -317,6 +516,136 @@ describe("ApplicationUpdateService", () => {
     );
     expect(requestQuit).toHaveBeenCalledOnce();
     service.dispose();
+  });
+
+  it("does not launch the installer after disposal interrupts a download", async () => {
+    const root = await createTemporaryDirectory();
+    const installer = Buffer.from("safe installer");
+    const manifest = createUpdateManifest();
+    manifest.asset.sizeBytes = installer.byteLength;
+    manifest.asset.sha256 = createHash("sha256")
+      .update(installer)
+      .digest("hex");
+    let markDownloadStarted!: () => void;
+    const downloadStarted = new Promise<void>((resolve) => {
+      markDownloadStarted = resolve;
+    });
+    let releaseDownload!: () => void;
+    const downloadGate = new Promise<void>((resolve) => {
+      releaseDownload = resolve;
+    });
+    const launchInstaller = vi.fn(async () => undefined);
+    const requestQuit = vi.fn();
+    const service = new ApplicationUpdateService({
+      currentVersion: "1.0.0",
+      distribution: "installed",
+      platform: "win32",
+      architecture: "x64",
+      stateFilePath: join(root, "updates", "state.json"),
+      downloadDirectory: join(
+        root,
+        "updates",
+        "downloads"
+      ),
+      fetch: vi.fn<typeof fetch>(async (input) => {
+        if (String(input).endsWith("latest.json")) {
+          return new Response(JSON.stringify(manifest), {
+            status: 200
+          });
+        }
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              markDownloadStarted();
+              void downloadGate.then(() => {
+                controller.enqueue(installer);
+                controller.close();
+              });
+            }
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-length": String(
+                installer.byteLength
+              )
+            }
+          }
+        );
+      }),
+      launchInstaller,
+      openExternal: vi.fn(async () => undefined),
+      requestQuit
+    });
+
+    await service.check("manual");
+    const download = service.downloadAndInstall();
+    await downloadStarted;
+    service.dispose();
+    releaseDownload();
+    await download;
+
+    expect(launchInstaller).not.toHaveBeenCalled();
+    expect(requestQuit).not.toHaveBeenCalled();
+    await expect(
+      stat(
+        join(
+          root,
+          "updates",
+          "downloads",
+          `${manifest.asset.name}.partial`
+        )
+      )
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not launch a cached installer after disposal during verification", async () => {
+    const root = await createTemporaryDirectory();
+    const installer = Buffer.from("safe installer");
+    const manifest = createUpdateManifest();
+    manifest.asset.sizeBytes = installer.byteLength;
+    manifest.asset.sha256 = createHash("sha256")
+      .update(installer)
+      .digest("hex");
+    const downloadDirectory = join(
+      root,
+      "updates",
+      "downloads"
+    );
+    await mkdir(downloadDirectory, { recursive: true });
+    await writeFile(
+      join(downloadDirectory, manifest.asset.name),
+      installer
+    );
+    const launchInstaller = vi.fn(async () => undefined);
+    const requestQuit = vi.fn();
+    const service = new ApplicationUpdateService({
+      currentVersion: "1.0.0",
+      distribution: "installed",
+      platform: "win32",
+      architecture: "x64",
+      stateFilePath: join(root, "updates", "state.json"),
+      downloadDirectory,
+      fetch: vi.fn<typeof fetch>(async () =>
+        new Response(JSON.stringify(manifest), {
+          status: 200
+        })
+      ),
+      launchInstaller,
+      openExternal: vi.fn(async () => undefined),
+      requestQuit
+    });
+
+    await service.check("manual");
+    service.subscribe((state) => {
+      if (state.phase === "verifying") {
+        service.dispose();
+      }
+    });
+    await service.downloadAndInstall();
+
+    expect(launchInstaller).not.toHaveBeenCalled();
+    expect(requestQuit).not.toHaveBeenCalled();
   });
 });
 

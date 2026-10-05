@@ -320,6 +320,63 @@ describe("ApplicationSettingsPage", () => {
     }
   });
 
+  it("shows a retryable first-read failure instead of editable default settings", () => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const appSettings = settingsController({
+      loaded: false,
+      loading: false,
+      error: {
+        code: "COMMAND_FAILED",
+        message: "settings unavailable",
+        details: {}
+      }
+    });
+    try {
+      act(() => {
+        root.render(
+          <ApplicationSettingsPage
+            appSettings={appSettings}
+            gitEnvironment={null}
+            terminalProfiles={[]}
+          />
+        );
+      });
+      expect(container.textContent).toContain("settings unavailable");
+      expect(container.querySelector(".settings-layout")).toBeNull();
+      expect(container.querySelector(".gn-skeleton-surface")).toBeNull();
+      const retry = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button")
+      ).find((button) => button.textContent?.includes("重新读取"));
+      expect(retry).toBeDefined();
+      act(() => retry?.click());
+      expect(appSettings.reload).toHaveBeenCalledOnce();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps loaded settings visible during a background reload", () => {
+    vi.stubGlobal("React", React);
+    try {
+      const html = renderToStaticMarkup(
+        <ApplicationSettingsPage
+          appSettings={settingsController({ loading: true })}
+          gitEnvironment={null}
+          terminalProfiles={[]}
+        />
+      );
+      expect(html).toContain("settings-nav-item-title");
+      expect(html).not.toContain("gn-skeleton-surface");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("shows only system Git authentication in the account section", () => {
     vi.stubGlobal("React", React);
     try {
@@ -387,11 +444,13 @@ describe("ApplicationSettingsPage", () => {
       );
 
       expect(preferenceLabelsByGroup).toEqual({
-        文件浏览: ["变更文件视图", "树形目录"],
         差异查看: ["Diff 布局", "自动换行"],
         提交体验: ["提交区域高度"]
       });
       expect(html).not.toContain("界面主题");
+      expect(html).not.toContain("文件浏览");
+      expect(html).not.toContain("变更文件视图");
+      expect(html).not.toContain("树形目录");
       expect(
         groups.every(
           (group) =>
@@ -628,6 +687,89 @@ describe("ApplicationSettingsPage", () => {
     }
   });
 
+  it("ignores a late key reveal after leaving AI settings and allows a fresh reveal", async () => {
+    vi.stubGlobal("React", React);
+    const firstReveal = deferred<{
+      ok: true;
+      value: { apiKey: string; length: number };
+    }>();
+    const secondReveal = deferred<{
+      ok: true;
+      value: { apiKey: string; length: number };
+    }>();
+    const reveal = vi.fn()
+      .mockReturnValueOnce(firstReveal.promise)
+      .mockReturnValueOnce(secondReveal.promise);
+    vi.stubGlobal("gitnest", {
+      settings: {
+        readAiApiKey: vi.fn(({ reveal: requested }: { reveal: boolean }) =>
+          requested
+            ? reveal()
+            : Promise.resolve({
+                ok: true,
+                value: { apiKey: null, length: 15 }
+              })
+        )
+      }
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const settings = createDefaultAppSettings();
+    settings.ai.apiKeyConfigured = true;
+    const appSettings = settingsController({ settings });
+    const render = (section: "ai" | "general") =>
+      root.render(
+        <ApplicationSettingsPage
+          appSettings={appSettings}
+          gitEnvironment={null}
+          initialSection={section}
+          terminalProfiles={[]}
+        />
+      );
+    const revealButton = () =>
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="显示 API Key"]'
+      )!;
+
+    try {
+      await act(async () => render("ai"));
+      act(() => revealButton().click());
+      await act(async () => render("general"));
+      await act(async () => render("ai"));
+      expect(revealButton().disabled).toBe(false);
+      act(() => revealButton().click());
+
+      await act(async () =>
+        firstReveal.resolve({
+          ok: true,
+          value: { apiKey: "fake-old-secret", length: 15 }
+        })
+      );
+      expect(
+        container.querySelector<HTMLInputElement>("#ai-api-key")?.type
+      ).toBe("password");
+      expect(revealButton().disabled).toBe(true);
+
+      await act(async () =>
+        secondReveal.resolve({
+          ok: true,
+          value: { apiKey: "fake-new-secret", length: 15 }
+        })
+      );
+      expect(
+        container.querySelector<HTMLInputElement>("#ai-api-key")?.value
+      ).toBe("fake-new-secret");
+      expect(
+        container.querySelector<HTMLInputElement>("#ai-api-key")?.type
+      ).toBe("text");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("saves a newly entered AI API Key while hiding it by default", async () => {
     vi.stubGlobal("React", React);
     const container = document.createElement("div");
@@ -694,6 +836,86 @@ describe("ApplicationSettingsPage", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it.each(["success", "failure", "rejection"] as const)(
+    "ignores an outdated AI connection %s after editing and lets the user test again",
+    async (outcome) => {
+      vi.stubGlobal("React", React);
+      const firstTest = deferred<unknown>();
+      const testConnection = vi.fn()
+        .mockReturnValueOnce(firstTest.promise)
+        .mockResolvedValue({
+          ok: true,
+          value: { model: "new-model", endpoint: "https://new.example/v1" }
+        });
+      vi.stubGlobal("gitnest", { ai: { testConnection } });
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      const settings = createDefaultAppSettings();
+      settings.ai.apiUrl = "https://old.example/v1";
+      settings.ai.model = "old-model";
+      const testButton = () => Array.from(
+        container.querySelectorAll<HTMLButtonElement>("button")
+      ).find((button) => /测试连接|测试中/.test(button.textContent ?? ""))!;
+      const edit = (id: string, value: string) => {
+        const input = container.querySelector<HTMLInputElement>(id);
+        setNativeInputValue(input, value);
+        input?.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+
+      try {
+        act(() => root.render(
+          <ApplicationSettingsPage
+            appSettings={settingsController({ settings })}
+            gitEnvironment={null}
+            initialSection="ai"
+            terminalProfiles={[]}
+          />
+        ));
+        act(() => edit("#ai-api-key", "fake-test-key"));
+        act(() => testButton().click());
+        expect(testButton().disabled).toBe(true);
+        expect(testConnection).toHaveBeenCalledTimes(1);
+        act(() => {
+          edit("#ai-api-url", "https://new.example/v1");
+          edit("#ai-model", "new-model");
+        });
+
+        await act(async () => firstTest.resolve(
+          outcome === "success"
+            ? {
+                ok: true,
+                value: { model: "old-model", endpoint: "https://old.example/v1" }
+              }
+            : outcome === "failure"
+              ? {
+                  ok: false,
+                  error: { code: "COMMAND_FAILED", message: "old connection failed" }
+                }
+              : Promise.reject(new Error("old transport failed"))
+        ));
+
+        expect(document.body.textContent).not.toContain("AI 连接测试成功");
+        expect(document.body.textContent).not.toContain("AI 连接测试失败");
+        expect(testButton().disabled).toBe(false);
+        await act(async () => testButton().click());
+        expect(testConnection).toHaveBeenLastCalledWith({
+          apiUrl: "https://new.example/v1",
+          model: "new-model",
+          apiKey: "fake-test-key"
+        });
+        expect(document.body.textContent).toContain("AI 连接测试成功");
+        expect(document.body.textContent).toContain("new-model");
+        act(() => edit("#ai-model", "third-model"));
+        expect(document.body.textContent).not.toContain("AI 连接测试成功");
+      } finally {
+        act(() => root.unmount());
+        container.remove();
+        vi.unstubAllGlobals();
+      }
+    }
+  );
 
   it("preserves unsaved AI fields across unrelated settings updates", () => {
     vi.stubGlobal("React", React);
@@ -798,6 +1020,118 @@ describe("ApplicationSettingsPage", () => {
           "#lsp-command-typescript-language-server"
         )?.value
       ).toBe("draft-language-server");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([
+    ["忽略目录", "#analysis-ignore-directories"],
+    ["LSP 启动参数", "#lsp-args-typescript-language-server"]
+  ])("preserves typed multiline %s drafts until a successful save", async (_, selector) => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const update = vi.fn<AppSettingsController["update"]>(async () => false);
+    const appSettings = settingsController({ update });
+    const render = (controller = appSettings) =>
+      root.render(
+        <ApplicationSettingsPage
+          appSettings={controller}
+          gitEnvironment={null}
+          initialSection="analysis"
+          terminalProfiles={[]}
+        />
+      );
+    const input = () =>
+      container.querySelector<HTMLTextAreaElement>(selector)!;
+    const setText = (value: string) => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value"
+      )?.set?.call(input(), value);
+      input().dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    const save = () =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent?.includes("保存代码分析设置"))!
+        .click();
+
+    try {
+      act(() => render());
+      act(() => setText(""));
+      const draft = "first\n\n second \n";
+      for (const character of draft) {
+        const expected = input().value + character;
+        act(() => setText(expected));
+        expect(input().value).toBe(expected);
+      }
+
+      if (selector.includes("lsp-args")) {
+        act(() =>
+          container.querySelector<HTMLButtonElement>(
+            '[data-language-server-id="java"]'
+          )?.click()
+        );
+        act(() =>
+          container.querySelector<HTMLButtonElement>(
+            '[data-language-server-id="typescript"]'
+          )?.click()
+        );
+      }
+      expect(input().value).toBe(draft);
+
+      await act(async () => save());
+      const patch = update.mock.calls.at(-1)?.[0] as
+        Parameters<AppSettingsController["update"]>[0] | undefined;
+      expect(
+        selector.includes("lsp-args")
+          ? patch?.codeAnalysis?.typescript?.args
+          : patch?.codeAnalysis?.ignoreDirectories
+      ).toEqual(["first", "second"]);
+      expect(input().value).toBe(draft);
+
+      act(() =>
+        render({
+          ...appSettings,
+          settings: {
+            ...appSettings.settings,
+            codeAnalysis: {
+              ...appSettings.settings.codeAnalysis,
+              ignoreDirectories: ["external"],
+              typescript: {
+                ...appSettings.settings.codeAnalysis.typescript,
+                args: ["external"]
+              }
+            }
+          }
+        })
+      );
+      expect(input().value).toBe(draft);
+
+      update.mockResolvedValue(true);
+      await act(async () => save());
+      expect(input().value).toBe("first\nsecond");
+      act(() =>
+        render({
+          ...appSettings,
+          settings: {
+            ...appSettings.settings,
+            codeAnalysis: {
+              ...appSettings.settings.codeAnalysis,
+              ignoreDirectories: ["reloaded"],
+              typescript: {
+                ...appSettings.settings.codeAnalysis.typescript,
+                args: ["reloaded"]
+              }
+            }
+          }
+        })
+      );
+      expect(input().value).toBe("reloaded");
     } finally {
       act(() => root.unmount());
       container.remove();
@@ -1546,6 +1880,89 @@ describe("ApplicationSettingsPage", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it.each(["failure", "rejection"] as const)(
+    "retries a Codex registration read after dismissing its %s feedback",
+    async (failureKind) => {
+      vi.stubGlobal("React", React);
+      const retry = deferred<unknown>();
+      const getMcpRegistration = vi.fn()
+        .mockImplementationOnce(async () => {
+          if (failureKind === "rejection") {
+            throw new Error("Registration read failed");
+          }
+          return {
+            ok: false,
+            error: { code: "COMMAND_FAILED", message: "Registration read failed" }
+          };
+        })
+        .mockReturnValueOnce(retry.promise);
+      const setMcpRegistration = vi.fn();
+      vi.stubGlobal("gitnest", {
+        codeAnalysis: { getMcpRegistration, setMcpRegistration }
+      });
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+
+      try {
+        await act(async () => root.render(
+          <ApplicationSettingsPage
+            appSettings={settingsController()}
+            gitEnvironment={null}
+            initialSection="analysis"
+            terminalProfiles={[]}
+          />
+        ));
+        const card = container.querySelector("#settings-analysis-codex")!;
+        expect(card.textContent).toContain("状态不可用");
+        expect(document.body.textContent).toContain("Registration read failed");
+        act(() => document.querySelector<HTMLButtonElement>(
+          '[aria-label="关闭 MCP 注册提示"]'
+        )?.click());
+
+        expect(card.textContent).toContain("状态不可用");
+        expect(card.textContent).not.toContain("正在读取");
+        expect(getMcpRegistration).toHaveBeenCalledTimes(1);
+        const retryButton = Array.from(
+          card.querySelectorAll<HTMLButtonElement>("button")
+        ).find((button) => button.textContent?.trim() === "重新读取");
+        expect(retryButton).toBeDefined();
+        act(() => retryButton!.click());
+        expect(getMcpRegistration).toHaveBeenCalledTimes(2);
+        expect(retryButton!.disabled).toBe(true);
+        expect(card.textContent).toContain("正在读取");
+        act(() => retryButton!.click());
+        expect(getMcpRegistration).toHaveBeenCalledTimes(2);
+
+        await act(async () => retry.resolve({
+          ok: true,
+          value: {
+            executablePath: "C:\\GitNest\\GitNest.exe",
+            entryScriptPath: "C:\\GitNest\\resources\\mcp\\gitnest-mcp.mjs",
+            dataDirectory: "C:\\GitNest\\user-data",
+            command: "fixture command",
+            configSnippet: "fixture config",
+            registered: false,
+            codexAvailable: true,
+            serverAvailable: true,
+            message: "尚未注册。"
+          }
+        }));
+        expect(card.textContent).toContain("未注册");
+        expect(card.textContent).not.toContain("正在读取");
+        const register = Array.from(
+          card.querySelectorAll<HTMLButtonElement>("button")
+        ).find((button) => button.textContent?.trim() === "一键注册");
+        expect(register?.disabled).toBe(false);
+        expect(setMcpRegistration).not.toHaveBeenCalled();
+      } finally {
+        act(() => root.unmount());
+        container.remove();
+        vi.unstubAllGlobals();
+      }
+    }
+  );
 
   it("shows Codex registration status and invokes registration explicitly", async () => {
     vi.stubGlobal("React", React);

@@ -1,0 +1,205 @@
+GitNest continued fault audit
+Recorded: 2026-10-04T23:54:02.1886188+08:00
+
+Electron initial-document controlled RED:
+{
+  "mode": "early",
+  "electron": "44.2.0",
+  "initialUrl": "http://127.0.0.1:49675/index.html",
+  "contexts": [
+    {
+      "origin": "://",
+      "name": "Electron Isolated Context"
+    },
+    {
+      "origin": "://",
+      "name": ""
+    },
+    {
+      "origin": "http://127.0.0.1:49675",
+      "name": ""
+    },
+    {
+      "origin": "http://127.0.0.1:49675",
+      "name": "Electron Isolated Context"
+    }
+  ],
+  "errors": [
+    "Electron sandboxed_renderer.bundle.js script failed to run",
+    "TypeError: Cannot destructure property 'preloadScripts' of 'binding.startupData' as it is null.\n    at node:electron/js2c/sandbox_bundle:2:133687\n    at node:electron/js2c/sandbox_bundle:2:134791\n    at ___electron_webpack_init__ (node:electron/js2c/sandbox_bundle:2:134795)\n    at node:electron/js2c/sandbox_bundle:2:134918"
+  ],
+  "preloadLoaded": true,
+  "ok": false
+}
+
+Committed-document control:
+{
+  "mode": "committed",
+  "electron": "44.2.0",
+  "initialUrl": "http://127.0.0.1:55916/index.html",
+  "contexts": [
+    {
+      "origin": "http://127.0.0.1:55916",
+      "name": "Electron Isolated Context"
+    },
+    {
+      "origin": "http://127.0.0.1:55916",
+      "name": ""
+    }
+  ],
+  "errors": [],
+  "preloadLoaded": true,
+  "ok": true
+}
+
+Shared helper GREEN (also rejects uncommitted document):
+{
+  "mode": "helper",
+  "electron": "44.2.0",
+  "initialUrl": "http://127.0.0.1:55637/index.html",
+  "contexts": [
+    {
+      "origin": "http://127.0.0.1:55637",
+      "name": "Electron Isolated Context"
+    },
+    {
+      "origin": "http://127.0.0.1:55637",
+      "name": ""
+    }
+  ],
+  "errors": [],
+  "preloadLoaded": true,
+  "ok": true
+}
+
+Initial full suite - one failure retained:
+$ vitest run
+
+ RUN  v5.0.0 E:/code/junes/github/GitNest
+
+ ❯ packages/git-cli/src/adapters/git-cli-client.repository-operations.integration.test.ts (14 tests | 1 failed) 56180ms
+   ❯ GitCliClient repository operations integration (14)
+     × cancels a long push hook and terminates its process tree 11930ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/git-cli/src/adapters/git-cli-client.repository-operations.integration.test.ts > GitCliClient repository operations integration > cancels a long push hook and terminates its process tree
+AssertionError: expected '3d0f4c4ad9269781a3cec75e45f08e5a92535…' to be '16e307d6cd51192b2468feff8c6ae0c5bd365…' // Object.is equality
+
+Expected: "16e307d6cd51192b2468feff8c6ae0c5bd36522b"
+Received: "3d0f4c4ad9269781a3cec75e45f08e5a92535947"
+
+ ❯ packages/git-cli/src/adapters/git-cli-client.repository-operations.integration.test.ts:518:24
+    516|       "HEAD"
+    517|     );
+    518|     expect(remoteHead).toBe(peerHead);
+       |                        ^
+    519|   }, 15_000);
+    520| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 118 passed (119)
+      Tests  1 failed | 1275 passed (1276)
+   Start at  23:46:35
+   Duration  58.55s (tests 80%, environment 14%, transform 3%, import 3%)
+
+    Isolate  119 workers spawned · ~383ms startup each (spawn + environment, per file)
+             at least ~11.02s faster with isolate: false — reuses workers across files instead of one per file
+
+[ELIFECYCLE] Test failed. See above for more details.
+
+Typecheck: exit 0
+Architecture: exit 0
+Build: exit 0
+Diff check: exit 0
+
+New-build Electron recovery:
+{
+  "ok": true,
+  "fixtureRoot": "E:\\code\\junes\\github\\GitNest\\temp\\gitnest-e2e-m3-recovery-XHjmvd",
+  "screenshot": "gn-m3-02-1440-interrupted-operation.png",
+  "recoveredOperation": "interrupted",
+  "schemas": {
+    "workspace": 2,
+    "snapshots": 1,
+    "operations": 1,
+    "window": 1
+  },
+  "diagnosticsRecorded": true,
+  "corruptWorkspacePreserved": true
+}
+
+New-build Worktree smoke:
+{
+  "ok": true,
+  "fixtureRoot": "C:\\Users\\junes\\AppData\\Local\\Temp\\gitnest-e2e-m3-worktree-S2cf0Z",
+  "screenshots": [
+    "gn-m3-01-1440-worktrees.png",
+    "gn-m3-01-1100-worktrees.png",
+    "gn-m3-01-1100-create-preflight.png",
+    "gn-m3-01-1100-remove-preflight.png",
+    "gn-m3-01-1100-operation-center.png"
+  ],
+  "operations": {
+    "create": "succeeded",
+    "lock": "succeeded",
+    "unlock": "succeeded",
+    "move": "succeeded",
+    "repair": "succeeded",
+    "remove": "succeeded",
+    "prune": "succeeded"
+  },
+  "interactionCoverage": {
+    "ui": [
+      "create",
+      "remove",
+      "prune"
+    ],
+    "publicBridge": [
+      "lock",
+      "unlock",
+      "move",
+      "repair"
+    ]
+  }
+}
+
+Temporary probe source files removed.
+Recursive cleanup of owned electron-startup-* fixture directories rejected by automatic review: blocked by policy. No workaround attempted.
+
+Final full suite:
+$ vitest run
+
+ RUN  v5.0.0 E:/code/junes/github/GitNest
+
+
+ Test Files  119 passed (119)
+      Tests  1276 passed (1276)
+   Start at  23:55:31
+   Duration  59.04s (tests 77%, environment 17%, transform 3%, import 3%)
+
+    Isolate  119 workers spawned · ~387ms startup each (spawn + environment, per file)
+             at least ~11.13s faster with isolate: false — reuses workers across files instead of one per file
+
+
+Final typecheck: exit 0
+Final diff check: exit 0
+
+Controlled late-abort evidence:
+{
+  "mode": "abort-after-remote-completion-before-io-delivery",
+  "before": "bf47bb9445b685e4d0be57a852f46f8d00cf54d0",
+  "after": "683f7598e44d87c81445f6816469525331913908",
+  "startedAt": 1791129287376,
+  "readyAt": 1791129287693,
+  "timerDueAt": 1791129287732,
+  "hookCompletedAt": 1791129287775,
+  "remoteObservedAt": 1791129288042,
+  "abortAt": 1791129288051,
+  "outcome": "COMMAND_CANCELLED",
+  "remoteHead": "683f7598e44d87c81445f6816469525331913908"
+}
+
+Recorded completion: 2026-10-04T23:57:23.2471607+08:00

@@ -16,6 +16,7 @@ import {
   Menu,
   MenuHeading,
   MenuItem,
+  MenuPopover,
   MenuSeparator,
   resolveMenuPlacement
 } from "./Menu";
@@ -95,6 +96,37 @@ describe("Menu", () => {
     container.remove();
   });
 
+  it("keeps keyboard focus on the navigated item when an autofocus menu is repositioned", async () => {
+    const container = document.createElement("div");
+    const anchor = document.createElement("button");
+    document.body.append(container, anchor);
+    const root = createRoot(container);
+    try {
+      act(() => root.render(
+        <MenuPopover anchor={anchor} autoFocus aria-label="自动焦点">
+          <MenuItem role="menuitemradio" aria-checked>First</MenuItem>
+          <MenuItem role="menuitemradio">Second</MenuItem>
+        </MenuPopover>
+      ));
+      await act(async () => {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      });
+      const menu = document.querySelector<HTMLElement>('[aria-label="自动焦点"]')!;
+      const items = menu.querySelectorAll<HTMLButtonElement>("button");
+      expect(document.activeElement).toBe(items[0]);
+      act(() => items[0]!.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowDown", bubbles: true
+      })));
+      expect(document.activeElement).toBe(items[1]);
+      act(() => window.dispatchEvent(new Event("resize")));
+      expect(document.activeElement).toBe(items[1]);
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      anchor.remove();
+    }
+  });
+
   it("positions menus to the right with a 4px gap by default", () => {
     expect(
       resolveMenuPlacement(
@@ -118,6 +150,73 @@ describe("Menu", () => {
       side: "right",
       top: 20
     });
+  });
+
+  it("focuses an explicitly marked search field before checked menu options", () => {
+    const anchor = document.createElement("button");
+    const container = document.createElement("div");
+    document.body.append(anchor, container);
+    const root = createRoot(container);
+    try {
+      act(() => root.render(
+        <MenuPopover anchor={anchor} autoFocus aria-label="搜索菜单">
+          <input data-menu-initial-focus aria-label="搜索选项" />
+          <MenuItem role="menuitemradio" aria-checked>Selected</MenuItem>
+        </MenuPopover>
+      ));
+      const input = document.querySelector<HTMLInputElement>('[aria-label="搜索选项"]')!;
+      expect(document.activeElement).toBe(input);
+      act(() => input.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowDown", bubbles: true, cancelable: true
+      })));
+      expect(document.activeElement?.getAttribute("role")).toBe("menuitemradio");
+    } finally {
+      act(() => root.unmount());
+      anchor.remove();
+      container.remove();
+    }
+  });
+
+  it.each([
+    { isComposing: true },
+    { keyCode: 229 },
+    { key: "Home" },
+    { key: "End" }
+  ])("preserves input editing keys inside a searchable menu (%j)", (keyboardState) => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      act(() => root.render(
+        <Menu>
+          <input aria-label="分支搜索" defaultValue="feature/branch" />
+          <MenuItem>First</MenuItem>
+          <MenuItem>Last</MenuItem>
+        </Menu>
+      ));
+      const input = container.querySelector<HTMLInputElement>("input")!;
+      input.focus();
+      input.setSelectionRange(4, 4);
+      const keys = keyboardState.key
+        ? [keyboardState.key]
+        : ["ArrowDown", "ArrowUp", "Home", "End"];
+      for (const key of keys) {
+        const event = new KeyboardEvent("keydown", {
+          bubbles: true, cancelable: true, ...keyboardState, key
+        });
+        act(() => input.dispatchEvent(event));
+        expect(document.activeElement).toBe(input);
+        expect(input.value).toBe("feature/branch");
+        expect(event.defaultPrevented).toBe(false);
+      }
+      act(() => input.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowDown", bubbles: true, cancelable: true
+      })));
+      expect(document.activeElement?.textContent).toBe("First");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
   });
 
   it("supports custom menu side, alignment, and gap", () => {

@@ -34,6 +34,54 @@ describe("repository query parsers", () => {
     });
   });
 
+  it("counts hunk content that resembles unified diff file headers", () => {
+    const diff = parseRepositoryDiff(
+      "header-like.txt",
+      "unstaged",
+      [
+        "diff --git a/header-like.txt b/header-like.txt",
+        "--- a/header-like.txt",
+        "+++ b/header-like.txt",
+        "@@ -1 +1 @@",
+        "---- old",
+        "++++ new",
+        ""
+      ].join("\n")
+    );
+
+    expect(diff).toMatchObject({
+      additions: 1,
+      deletions: 1
+    });
+  });
+
+  it("resets hunk parsing when a pathspec produces multiple file patches", () => {
+    const diff = parseRepositoryDiff(
+      "foo",
+      "staged",
+      [
+        "diff --git a/foo b/foo",
+        "deleted file mode 100644",
+        "--- a/foo",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-old",
+        "diff --git a/foo/bar b/foo/bar",
+        "new file mode 100644",
+        "--- /dev/null",
+        "+++ b/foo/bar",
+        "@@ -0,0 +1 @@",
+        "+new",
+        ""
+      ].join("\n")
+    );
+
+    expect(diff).toMatchObject({
+      additions: 1,
+      deletions: 1
+    });
+  });
+
   it("recognizes binary diff output without inventing line counts", () => {
     const diff = parseRepositoryDiff(
       "assets/logo.png",
@@ -61,7 +109,7 @@ describe("repository query parsers", () => {
         "committer@example.com",
         "2026-09-04T10:01:00+08:00",
         "parent1 parent2",
-        "HEAD -> main, tag: v1.0",
+        "HEAD -> main, tag: release,one",
         "Subject line\n\nBody line\n"
       ].join("\0")
     );
@@ -71,7 +119,7 @@ describe("repository query parsers", () => {
       subject: "Subject line",
       body: "Subject line\n\nBody line",
       parentHashes: ["parent1", "parent2"],
-      refs: ["HEAD -> main", "tag: v1.0"]
+      refs: ["HEAD -> main", "tag: release,one"]
     });
   });
 

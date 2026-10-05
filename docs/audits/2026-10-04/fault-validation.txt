@@ -1,0 +1,132 @@
+GitNest fault follow-up validation
+Recorded: 2026-10-04T23:31:45.8571361+08:00
+
+Before-fix real Electron push shutdown:
+{
+  "fixture": "E:\\code\\junes\\github\\GitNest\\temp\\fault-audit-20261004\\root\\shutdown-fixture-oyCJMW",
+  "hookCompleted": true,
+  "remoteChanged": true,
+  "electronExitCode": 0,
+  "ok": false
+}
+
+After-fix real Electron push shutdown:
+{
+  "fixture": "E:\\code\\junes\\github\\GitNest\\temp\\fault-audit-20261004\\root\\shutdown-fixture-2XzmbC",
+  "hookCompleted": false,
+  "remoteChanged": false,
+  "electronExitCode": 0,
+  "ok": true
+}
+
+Full test result:
+
+ RUN  v5.0.0 E:/code/junes/github/GitNest
+
+
+ Test Files  119 passed (119)
+      Tests  1242 passed (1242)
+   Start at  23:26:47
+   Duration  60.55s (tests 78%, environment 16%, transform 3%, import 3%)
+
+    Isolate  119 workers spawned · ~445ms startup each (spawn + environment, per file)
+             at least ~12.80s faster with isolate: false — reuses workers across files instead of one per file
+
+
+Typecheck: exit 0
+Architecture: exit 0
+Build: exit 0
+git diff --check: exit 0
+
+Recovery first attempt failure (retained, not diagnosed):
+file:///E:/code/junes/github/GitNest/scripts/gn-m3-02-electron-smoke.mjs:1025
+    throw new Error(message);
+          ^
+
+Error: Renderer errors: Electron sandboxed_renderer.bundle.js script failed to run
+TypeError: Cannot destructure property 'preloadScripts' of 'binding.startupData' as it is null.
+    at node:electron/js2c/sandbox_bundle:2:133687
+    at node:electron/js2c/sandbox_bundle:2:134791
+    at ___electron_webpack_init__ (node:electron/js2c/sandbox_bundle:2:134795)
+    at node:electron/js2c/sandbox_bundle:2:134918
+    at assert (file:///E:/code/junes/github/GitNest/scripts/gn-m3-02-electron-smoke.mjs:1025:11)
+    at closeElectron (file:///E:/code/junes/github/GitNest/scripts/gn-m3-02-electron-smoke.mjs:722:3)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async runRecovery (file:///E:/code/junes/github/GitNest/scripts/gn-m3-02-electron-smoke.mjs:243:3)
+    at async file:///E:/code/junes/github/GitNest/scripts/gn-m3-02-electron-smoke.mjs:85:5
+
+Node.js v22.22.2
+
+Recovery independent retry:
+{
+  "ok": true,
+  "fixtureRoot": "E:\\code\\junes\\github\\GitNest\\temp\\gitnest-e2e-m3-recovery-ENQ7LB",
+  "screenshot": "gn-m3-02-1440-interrupted-operation.png",
+  "recoveredOperation": "interrupted",
+  "schemas": {
+    "workspace": 2,
+    "snapshots": 1,
+    "operations": 1,
+    "window": 1
+  },
+  "diagnosticsRecorded": true,
+  "corruptWorkspacePreserved": true
+}
+
+Recovery confirmation attempt (failed):
+file:///E:/code/junes/github/GitNest/scripts/gn-m3-02-electron-smoke.mjs:1025
+    throw new Error(message);
+          ^
+
+Error: Renderer errors: Electron sandboxed_renderer.bundle.js script failed to run
+TypeError: Cannot destructure property 'preloadScripts' of 'binding.startupData' as it is null.
+    at node:electron/js2c/sandbox_bundle:2:133687
+    at node:electron/js2c/sandbox_bundle:2:134791
+    at ___electron_webpack_init__ (node:electron/js2c/sandbox_bundle:2:134795)
+    at node:electron/js2c/sandbox_bundle:2:134918
+    at assert (file:///E:/code/junes/github/GitNest/scripts/gn-m3-02-electron-smoke.mjs:1025:11)
+    at closeElectron (file:///E:/code/junes/github/GitNest/scripts/gn-m3-02-electron-smoke.mjs:722:3)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async runRecovery (file:///E:/code/junes/github/GitNest/scripts/gn-m3-02-electron-smoke.mjs:299:3)
+    at async file:///E:/code/junes/github/GitNest/scripts/gn-m3-02-electron-smoke.mjs:85:5
+
+Node.js v22.22.2
+
+Recovery diagnostic runs with CDP execution-context logging: 3 passed (recovery-trace.log, recovery-trace-2.log, recovery-trace-3.log)
+
+Worktree desktop smoke:
+{
+  "ok": true,
+  "fixtureRoot": "C:\\Users\\junes\\AppData\\Local\\Temp\\gitnest-e2e-m3-worktree-Qf1m1B",
+  "screenshots": [
+    "gn-m3-01-1440-worktrees.png",
+    "gn-m3-01-1100-worktrees.png",
+    "gn-m3-01-1100-create-preflight.png",
+    "gn-m3-01-1100-remove-preflight.png",
+    "gn-m3-01-1100-operation-center.png"
+  ],
+  "operations": {
+    "create": "succeeded",
+    "lock": "succeeded",
+    "unlock": "succeeded",
+    "move": "succeeded",
+    "repair": "succeeded",
+    "remove": "succeeded",
+    "prune": "succeeded"
+  },
+  "interactionCoverage": {
+    "ui": [
+      "create",
+      "remove",
+      "prune"
+    ],
+    "publicBridge": [
+      "lock",
+      "unlock",
+      "move",
+      "repair"
+    ]
+  }
+}
+
+Follow-up completed: 2026-10-04T23:34:21.6252181+08:00

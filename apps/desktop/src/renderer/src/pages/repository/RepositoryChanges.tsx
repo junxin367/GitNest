@@ -1,7 +1,6 @@
 import {
   useEffect,
   useMemo,
-  useRef,
   useState
 } from "react";
 
@@ -21,6 +20,7 @@ import {
 import type { ExternalApplicationController } from "../../features/external-application/useExternalApplications";
 import type { RepositoryCommandController } from "../../features/repository-command/useRepositoryCommands";
 import type { AppSettingsController } from "../../features/settings/useAppSettings";
+import { resolveRepositoryFileBrowsing } from "../../features/settings/settingsRuntime";
 import { buildDiffViewerFiles } from "../../shared/model/diffViewModel";
 import { useSkeletonVisibility } from "../../shared/ui/Skeleton";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
@@ -39,16 +39,12 @@ import { RepositoryStashBrowser } from "./RepositoryStashBrowser";
 
 export function shouldShowRepositoryChangesSkeleton({
   hasCurrentChanges,
-  hasError,
-  scopeChanged
+  loading
 }: {
   hasCurrentChanges: boolean;
-  hasError: boolean;
-  scopeChanged: boolean;
+  loading: boolean;
 }): boolean {
-  return (
-    scopeChanged || (!hasCurrentChanges && !hasError)
-  );
+  return loading && !hasCurrentChanges;
 }
 
 export function RepositoryChanges({
@@ -80,10 +76,13 @@ export function RepositoryChanges({
   onCommitMessageChange(value: string): void;
   onGenerateAi(): void | Promise<void>;
   onPushAfterCommitChange(value: boolean): void;
-  onCommitted(): void;
+  onCommitted(submittedMessage: string): void;
   workspaceId: string | undefined;
   target: RepositoryTargetDto;
 }) {
+  const fileBrowsing = resolveRepositoryFileBrowsing(
+    appSettings.settings, target.repositoryId
+  );
   const changesScopeKey = `${workspaceId ?? ""}\u0001${target.repositoryId}:${target.worktreeId}`;
   const controllerChangesScopeKey = controller.changes
     ? `${workspaceId ?? ""}\u0001${controller.changes.target.repositoryId}:${controller.changes.target.worktreeId}`
@@ -92,12 +91,6 @@ export function RepositoryChanges({
     controllerChangesScopeKey === changesScopeKey
       ? controller.changes
       : null;
-  const previousChangesScopeKey = useRef(changesScopeKey);
-  const scopeChanged =
-    previousChangesScopeKey.current !== changesScopeKey;
-  if (scopeChanged) {
-    previousChangesScopeKey.current = changesScopeKey;
-  }
   const changes = currentChanges?.snapshot.changes ?? [];
   const files = useMemo(
     () => buildDiffViewerFiles(changes),
@@ -125,8 +118,7 @@ export function RepositoryChanges({
     useSkeletonVisibility(
       shouldShowRepositoryChangesSkeleton({
         hasCurrentChanges: Boolean(currentChanges),
-        hasError: Boolean(controller.error),
-        scopeChanged
+        loading: controller.loading.changes
       }),
       Boolean(currentChanges)
     );
@@ -395,7 +387,7 @@ export function RepositoryChanges({
               body
             );
             if (committed) {
-              onCommitted();
+              onCommitted(message);
               if (push) {
                 await commands.request({
                   type: "push",
@@ -407,14 +399,19 @@ export function RepositoryChanges({
         }}
         configuration={repositoryDiffWorkspaceConfiguration}
         externalApplications={externalApplications}
-        fileView={appSettings.settings.diff.fileView}
+        fileView={fileBrowsing.fileView}
         files={workspaceFiles}
         mutationBusy={
           mutations.active !== null || stashes.active !== null
         }
         onFileViewChange={(fileView) =>
           void appSettings.update(
-            { diff: { fileView } },
+            {
+              repositoryFileBrowsing: {
+                repositoryId: target.repositoryId,
+                fileView
+              }
+            },
             { silent: true }
           )
         }
@@ -486,13 +483,13 @@ export function RepositoryChanges({
         selectionRevealKey={selectionRevealKey}
         treePreference={{
           initiallyCollapsed:
-            appSettings.settings.diff
-              .treeDirectoriesCollapsed,
+            fileBrowsing.treeDirectoriesCollapsed,
           scopeKey: changesScopeKey,
           onCollapsedPreferenceChange: (collapsed) =>
             void appSettings.update(
               {
-                diff: {
+                repositoryFileBrowsing: {
+                  repositoryId: target.repositoryId,
                   treeDirectoriesCollapsed: collapsed
                 }
               },

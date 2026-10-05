@@ -452,6 +452,7 @@ export function registerServices(): ApplicationServices {
         (await gitClient.getEnvironment()).executablePath
     });
   const operationStates = new Map<string, string>();
+  let operationWorkspaceId: string | undefined;
   let lastSelectionKey: string | undefined;
   let lastWatchEventAt: string | undefined;
   workspace.subscribe((state) => {
@@ -484,6 +485,19 @@ export function registerServices(): ApplicationServices {
           IPC_EVENTS.workspaceStateChanged,
           state
         );
+      }
+    }
+    if (operationWorkspaceId !== state.workspace.id) {
+      operationStates.clear();
+      operationWorkspaceId = state.workspace.id;
+    }
+    // Follow runtime history retention, including every active operation.
+    const liveOperationIds = new Set(
+      state.operations.map((operation) => operation.id)
+    );
+    for (const operationId of operationStates.keys()) {
+      if (!liveOperationIds.has(operationId)) {
+        operationStates.delete(operationId);
       }
     }
     for (const operation of state.operations) {

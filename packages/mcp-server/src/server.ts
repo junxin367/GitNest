@@ -78,7 +78,11 @@ export async function runMcpServer(
           });
           return;
         }
-        const messages = Array.isArray(parsed) ? parsed : [parsed];
+        // An empty batch is an invalid request, not zero notifications.
+        // Pass it through validation so the caller receives one error.
+        const messages = Array.isArray(parsed) && parsed.length > 0
+          ? parsed
+          : [parsed];
         for (const message of messages) {
           const response = await server.handleMessage(message);
           if (response) {

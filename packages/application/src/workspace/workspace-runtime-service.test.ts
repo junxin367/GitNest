@@ -34,6 +34,244 @@ import {
 import { WorkspaceRefreshScheduler } from "./workspace-refresh-scheduler";
 
 describe("WorkspaceRuntimeService", () => {
+  it.each([
+    ["stage", "write-first"],
+    ["fetch", "write-first"],
+    ["stage", "switch-first"],
+    ["fetch", "switch-first"]
+  ] as const)(
+    "keeps %s admission in its original Workspace (%s)",
+    async (kind, order) => {
+      const first = createWorkspace(1);
+      first.id = "workspace-before";
+      const second = { ...structuredClone(first), id: "workspace-after" };
+      const runtime = new WorkspaceRuntimeService(
+        new SwitchingConfiguration([first, second]),
+        new TrackingGitClient(),
+        new WorkspaceScopedMemorySnapshotStore({}),
+        new FakeWatcher(),
+        { autoRefresh: false }
+      );
+      let actionWorkspace: string | undefined;
+      try {
+        await runtime.getState();
+        const action = async () => {
+          actionWorkspace = (await runtime.getCurrent()).id;
+        };
+        const startMutation = () => kind === "stage"
+          ? runtime.runWorktreeMutation(first.selectedTarget!, kind, action)
+          : runtime.queueRepositoryOperation(first.selectedTarget!, kind, action, {
+              expectedWorkspaceId: first.id
+            });
+        const switchingFirst = order === "switch-first"
+          ? runtime.switchWorkspace(second.id) : undefined;
+        const mutation = startMutation();
+        const switching = switchingFirst ?? runtime.switchWorkspace(second.id);
+        const outcomes = await Promise.allSettled([mutation, switching]);
+        await vi.waitFor(async () => {
+          const state = await runtime.getState();
+          expect(state.operations.every((operation) =>
+            ["succeeded", "failed", "cancelled"].includes(operation.state)
+          )).toBe(true);
+        });
+        expect(actionWorkspace === undefined || actionWorkspace === first.id).toBe(true);
+        expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+        const beforeRetry = await runtime.getState();
+        if (outcomes[0]!.status === "fulfilled") {
+          expect(beforeRetry.workspace.id).toBe(first.id);
+          expect(beforeRetry.operations).toHaveLength(1);
+          expect(beforeRetry.operations[0]!.state).toBe("succeeded");
+          await runtime.switchWorkspace(second.id);
+        }
+        await runtime.runWorktreeMutation(second.selectedTarget!, "stage", async () => undefined);
+        const retried = await runtime.getState();
+        expect(retried.workspace.id).toBe(second.id);
+        expect(retried.operations).toHaveLength(1);
+        expect(retried.operations[0]!.state).toBe("succeeded");
+      } finally {
+        await runtime.dispose();
+      }
+    }
+  );
+
+  it("cancels running and queued repository operations before shutdown finishes", async () => {
+    const workspace = createWorkspace(1);
+    const target = workspace.selectedTarget as RepositoryTarget;
+    const operationStore = new MemoryOperationStore();
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      new FakeWatcher(),
+      { autoRefresh: false, operationStore }
+    );
+    let activeSignal: AbortSignal | undefined;
+    let release!: () => void;
+    let queuedActionStarted = false;
+    await runtime.getState();
+    const running = await runtime.queueRepositoryOperation(
+      target, "push", async (_path, signal) => {
+        activeSignal = signal;
+        await new Promise<void>((resolve, reject) => {
+          release = resolve;
+          signal.addEventListener("abort", () => reject(
+            new GitError("COMMAND_CANCELLED", "Shutdown cancelled push.")
+          ), { once: true });
+        });
+      }
+    );
+    await vi.waitFor(() => expect(activeSignal).toBeDefined());
+    const queued = await runtime.queueRepositoryOperation(
+      target, "fetch", async () => { queuedActionStarted = true; }
+    );
+    let abortedAtShutdown = false;
+    let persistedAtShutdown: WorkspaceOperation[] = [];
+    try {
+      await runtime.dispose();
+      abortedAtShutdown = activeSignal!.aborted;
+      persistedAtShutdown = structuredClone(operationStore.saved);
+    } finally {
+      release();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(abortedAtShutdown).toBe(true);
+    expect(queuedActionStarted).toBe(false);
+    for (const id of [running.operationId, queued.operationId]) {
+      expect(persistedAtShutdown.find((operation) => operation.id === id))
+        .toMatchObject({ state: "cancelled" });
+    }
+  });
+
+  it("waits for a non-cancellable Git mutation before completing shutdown", async () => {
+    const workspace = createWorkspace(1);
+    const target = workspace.selectedTarget as RepositoryTarget;
+    const operationStore = new MemoryOperationStore();
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      new FakeWatcher(),
+      { autoRefresh: false, operationStore }
+    );
+    await runtime.getState();
+    let release!: () => void;
+    let entered = false;
+    const mutation = runtime.runWorktreeMutation(target, "commit", async () => {
+      entered = true;
+      await new Promise<void>((resolve) => { release = resolve; });
+    });
+    await vi.waitFor(() => expect(entered).toBe(true));
+    let shutdownCompleted = false;
+    const shutdown = runtime.dispose().then(() => { shutdownCompleted = true; });
+    let completedWhileGitBlocked: boolean;
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      completedWhileGitBlocked = shutdownCompleted;
+    } finally {
+      release();
+      await mutation;
+      await shutdown;
+    }
+    expect(completedWhileGitBlocked).toBe(false);
+    expect(operationStore.saved.find((operation) => operation.kind === "commit"))
+      .toMatchObject({ state: "succeeded" });
+  });
+
+  it("rejects new repository writes after shutdown", async () => {
+    const workspace = createWorkspace(1);
+    const target = workspace.selectedTarget as RepositoryTarget;
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      new FakeWatcher(),
+      { autoRefresh: false }
+    );
+    await runtime.getState();
+    await runtime.dispose();
+    let writes = 0;
+    await expect(runtime.runWorktreeMutation(target, "stage", async () => {
+      writes += 1;
+    })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(writes).toBe(0);
+  });
+
+  it("reuses watcher routing across event bursts without rescanning workspace records", async () => {
+    const workspace = createWorkspace(96);
+    const watcher = new FakeWatcher();
+    const request = vi
+      .spyOn(WorkspaceRefreshScheduler.prototype, "request")
+      .mockImplementation(() => undefined);
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      watcher,
+      {
+        autoRefresh: false,
+        watcherRegistrationLimit: 200,
+        selectedTargetPollingIntervalMs: 0
+      }
+    );
+    try {
+      await runtime.getState();
+      await runtime.rescan();
+      await waitForState(
+        runtime,
+        (state) => state.monitor.mode === "watching"
+      );
+      const current = await runtime.getCurrent();
+      const repositoryFind = vi.spyOn(current.repositories, "find");
+      const worktreeFind = vi.spyOn(current.worktrees, "find");
+      const groupScan = vi.spyOn(current.groups, "flatMap");
+      const target = listWorkspaceTargets(current)[95] as RepositoryTarget;
+      groupScan.mockClear();
+      request.mockClear();
+      for (let index = 0; index < 500; index += 1) {
+        watcher.emitPath("C:\\root\\repository-95\\src\\app.ts", target);
+      }
+
+      expect(repositoryFind).not.toHaveBeenCalled();
+      expect(worktreeFind).not.toHaveBeenCalled();
+      expect(groupScan).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledTimes(500);
+      expect(request).toHaveBeenLastCalledWith([target], "watcher", false);
+    } finally {
+      await runtime.dispose();
+      request.mockRestore();
+    }
+  });
+
+  it("retries a failed initialization while sharing the concurrent retry", async () => {
+    const workspace = createWorkspace(1);
+    const configuration =
+      new FailingOnceConfiguration(workspace);
+    const runtime = new WorkspaceRuntimeService(
+      configuration,
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      new FakeWatcher(),
+      { autoRefresh: false }
+    );
+
+    try {
+      await expect(runtime.getState()).rejects.toThrow(
+        "Configuration is temporarily unavailable."
+      );
+
+      const [state, current] = await Promise.all([
+        runtime.getState(),
+        runtime.getCurrent()
+      ]);
+
+      expect(state.workspace.id).toBe(workspace.id);
+      expect(current.id).toBe(workspace.id);
+      expect(configuration.getCurrentCalls).toBe(2);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("shows cached snapshots first, caps Git reads at four, merges duplicate requests, and debounces watcher events", async () => {
     const workspace = createWorkspace(6);
     const configuration = new FakeConfiguration(workspace);
@@ -202,7 +440,7 @@ describe("WorkspaceRuntimeService", () => {
   });
 
   it("switches without waiting for superseded background status reads", async () => {
-    const first = createWorkspace(2);
+    const first = createWorkspace(5);
     first.id = "workspace_first";
     first.name = "First Workspace";
     const second = structuredClone(first);
@@ -236,7 +474,7 @@ describe("WorkspaceRuntimeService", () => {
       gitClient,
       new WorkspaceScopedMemorySnapshotStore({}),
       new FakeWatcher(),
-      { autoRefresh: false }
+      { autoRefresh: false, concurrency: 1 }
     );
 
     await runtime.getState();
@@ -262,7 +500,7 @@ describe("WorkspaceRuntimeService", () => {
     const settled = await runtime.getState();
     expect(settled.workspace.id).toBe("workspace_second");
     expect(settled.snapshots).toEqual([]);
-    await runtime.dispose();
+    await resolveWithin(runtime.dispose(), 500);
   });
 
   it("returns the cached Workspace before its background topology scan completes", async () => {
@@ -578,6 +816,239 @@ describe("WorkspaceRuntimeService", () => {
     await runtime.dispose();
   });
 
+  it("builds watcher registrations without repeatedly scanning workspace records", async () => {
+    const workspace = createWorkspace(96);
+    const firstRepository = workspace.repositories[0];
+    const firstWorktree = workspace.worktrees[0];
+    if (!firstRepository || !firstWorktree) {
+      throw new Error("Workspace fixture is incomplete.");
+    }
+
+    firstRepository.commonDir = "C:\\metadata\\repository-first";
+    firstWorktree.path = "C:\\worktrees\\repository-first";
+    firstWorktree.gitDir = "C:\\metadata\\worktree-first";
+    workspace.repositories.unshift({
+      ...firstRepository,
+      id: firstRepository.id.toLocaleUpperCase("en-US"),
+      commonDir: "C:\\metadata\\repository-case-mismatch"
+    });
+    workspace.repositories.push({
+      ...firstRepository,
+      commonDir: "C:\\metadata\\repository-duplicate"
+    });
+    workspace.worktrees.unshift({
+      ...firstWorktree,
+      id: firstWorktree.id.toLocaleUpperCase("en-US"),
+      path: "C:\\worktrees\\worktree-case-mismatch"
+    });
+    workspace.worktrees.push({
+      ...firstWorktree,
+      path: "C:\\worktrees\\worktree-duplicate",
+      gitDir: "C:\\metadata\\worktree-duplicate"
+    });
+
+    const repositoryFind = vi.spyOn(
+      workspace.repositories,
+      "find"
+    );
+    const worktreeFind = vi.spyOn(workspace.worktrees, "find");
+    const configuration: WorkspaceConfigurationService = {
+      getCurrent: async () => workspace,
+      rescan: async () => workspace,
+      excludeRepository: async () => workspace,
+      setGroupCollapsed: async () => workspace,
+      selectTarget: async () => workspace
+    };
+    let observeRegistrations:
+      | ((observation: {
+          repositoryFindCalls: number;
+          worktreeFindCalls: number;
+          paths: string[];
+        }) => void)
+      | undefined;
+    const registrationsObserved = new Promise<{
+      repositoryFindCalls: number;
+      worktreeFindCalls: number;
+      paths: string[];
+    }>((resolve) => {
+      observeRegistrations = resolve;
+    });
+    const watcher: WorkspaceWatcher = {
+      watch: async (registrations) => {
+        observeRegistrations?.({
+          repositoryFindCalls: repositoryFind.mock.calls.length,
+          worktreeFindCalls: worktreeFind.mock.calls.length,
+          paths: registrations.map(({ path }) => path)
+        });
+        return { close: () => undefined };
+      }
+    };
+    const runtime = new WorkspaceRuntimeService(
+      configuration,
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      watcher,
+      {
+        autoRefresh: false,
+        watcherRegistrationLimit: 200,
+        selectedTargetPollingIntervalMs: 0
+      }
+    );
+
+    try {
+      await runtime.getState();
+      repositoryFind.mockClear();
+      worktreeFind.mockClear();
+      await runtime.rescan();
+      const observation = await registrationsObserved;
+
+      expect(observation.repositoryFindCalls).toBe(0);
+      expect(observation.worktreeFindCalls).toBe(0);
+      expect(observation.paths).toEqual(
+        expect.arrayContaining([
+          "C:\\metadata\\repository-first",
+          "C:\\metadata\\worktree-first",
+          "C:\\worktrees\\repository-first"
+        ])
+      );
+      expect(observation.paths).not.toEqual(
+        expect.arrayContaining([
+          "C:\\metadata\\repository-case-mismatch",
+          "C:\\metadata\\repository-duplicate",
+          "C:\\metadata\\worktree-duplicate",
+          "C:\\worktrees\\worktree-case-mismatch",
+          "C:\\worktrees\\worktree-duplicate"
+        ])
+      );
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("preserves watcher route precedence, Windows paths, and target fallback", async () => {
+    const workspace = addLinkedWorktree(createNestedRepositoriesWorkspace());
+    const primary = workspace.selectedTarget as RepositoryTarget;
+    const child = { repositoryId: "repository-1", worktreeId: "worktree-1" };
+    const linked = { repositoryId: "repository-0", worktreeId: "worktree-linked" };
+    const unknown = { repositoryId: "unknown", worktreeId: "unknown" };
+    const childRepository = workspace.repositories[1]!;
+    const childWorktree = workspace.worktrees[1]!;
+    const linkedWorktree = workspace.worktrees[2]!;
+    childRepository.commonDir = "C:\\root\\.git\\modules\\child";
+    childWorktree.gitDir = childRepository.commonDir;
+    childWorktree.path = "C:\\root\\..project";
+    linkedWorktree.gitDir = `${childRepository.commonDir}\\worktrees\\linked`;
+    const watcher = new FakeWatcher();
+    const request = vi
+      .spyOn(WorkspaceRefreshScheduler.prototype, "request")
+      .mockImplementation(() => undefined);
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      watcher,
+      { autoRefresh: false, selectedTargetPollingIntervalMs: 0 }
+    );
+
+    try {
+      await runtime.rescan();
+      await waitForState(runtime, (state) => state.monitor.mode === "watching");
+      const cases: Array<{
+        path: string;
+        target: RepositoryTarget;
+        expected: RepositoryTarget[];
+        force?: boolean;
+      }> = [
+        // Linked metadata wins even inside another repository's commonDir.
+        { path: `${linkedWorktree.gitDir}\\index`, target: primary, expected: [linked], force: true },
+        { path: `${linkedWorktree.gitDir}\\index.lock`, target: primary, expected: [] },
+        // The deepest commonDir wins over the root repository's commonDir.
+        { path: `${childRepository.commonDir}\\HEAD`, target: primary, expected: [child], force: true },
+        { path: "c:/ROOT/.GIT/refs/heads/main", target: child, expected: [primary, linked], force: true },
+        { path: "C:\\root\\.git\\packed-refs.lock", target: primary, expected: [] },
+        // A legal directory name starting with ".." is still a nested Worktree.
+        { path: "c:/ROOT/..PROJECT/src/app.ts", target: primary, expected: [child] },
+        { path: "C:\\root\\..project\\dependency.lock", target: primary, expected: [child] },
+        { path: "C:\\root\\..project-sibling\\app.ts", target: child, expected: [primary] },
+        { path: "C:\\root\\repository-0-linked\\src\\app.ts", target: primary, expected: [linked] },
+        { path: "D:\\outside\\app.ts", target: child, expected: [child] },
+        { path: "D:\\outside\\app.ts", target: unknown, expected: [] },
+        { path: "D:\\outside\\app.ts", target: { ...child, repositoryId: "REPOSITORY-1" }, expected: [] }
+      ];
+      for (const scenario of cases) {
+        request.mockClear();
+        watcher.emitPath(scenario.path, scenario.target);
+        if (scenario.expected.length === 0) {
+          expect(request, scenario.path).not.toHaveBeenCalled();
+        } else {
+          expect(request, scenario.path).toHaveBeenCalledExactlyOnceWith(
+            scenario.expected,
+            "watcher",
+            scenario.force ?? false
+          );
+        }
+      }
+    } finally {
+      await runtime.dispose();
+      request.mockRestore();
+    }
+  });
+
+  it("rebuilds watcher routing when topology changes and ignores older generation callbacks", async () => {
+    const workspace = createWorkspace(1);
+    const expanded = addLinkedWorktree(workspace);
+    expanded.worktrees[1]!.path = "D:\\linked-worktree";
+    const primary = workspace.selectedTarget as RepositoryTarget;
+    const linked = { repositoryId: "repository-0", worktreeId: "worktree-linked" };
+    const configuration = new FakeConfiguration(workspace);
+    const callbacks: Array<(event: WorkspaceWatchEvent) => void> = [];
+    const watcher: WorkspaceWatcher = {
+      watch: async (_registrations, onChange) => {
+        callbacks.push(onChange);
+        return { close: () => undefined };
+      }
+    };
+    const request = vi
+      .spyOn(WorkspaceRefreshScheduler.prototype, "request")
+      .mockImplementation(() => undefined);
+    const runtime = new WorkspaceRuntimeService(
+      configuration,
+      new TrackingGitClient(),
+      new MemorySnapshotStore(),
+      watcher,
+      { autoRefresh: false, selectedTargetPollingIntervalMs: 0 }
+    );
+    try {
+      await runtime.rescan();
+      await waitForCondition(() => callbacks.length === 1);
+      configuration.nextRescanWorkspace = expanded;
+      await runtime.rescan();
+      await waitForCondition(() => callbacks.length === 2);
+      request.mockClear();
+
+      const metadataEvent = { path: "C:\\root\\repository-0\\.git\\HEAD", target: primary };
+      callbacks[0]?.(metadataEvent);
+      expect(request).not.toHaveBeenCalled();
+      callbacks[1]?.(metadataEvent);
+      expect(request).toHaveBeenLastCalledWith([primary, linked], "watcher", true);
+      callbacks[1]?.({ path: "D:\\linked-worktree\\src\\app.ts", target: primary });
+      expect(request).toHaveBeenLastCalledWith([linked], "watcher", false);
+
+      configuration.nextRescanWorkspace = workspace;
+      await runtime.rescan();
+      await waitForCondition(() => callbacks.length === 3);
+      request.mockClear();
+      callbacks[1]?.(metadataEvent);
+      callbacks[2]?.({ path: "D:\\linked-worktree\\src\\app.ts", target: linked });
+      expect(request).not.toHaveBeenCalled();
+      callbacks[2]?.(metadataEvent);
+      expect(request).toHaveBeenCalledExactlyOnceWith([primary], "watcher", true);
+    } finally {
+      await runtime.dispose();
+      request.mockRestore();
+    }
+  });
+
   it("deduplicates nested Git watches, routes linked metadata, and ignores transient Git locks", async () => {
     const workspace = addLinkedWorktree(createWorkspace(1));
     const gitClient = new TrackingGitClient();
@@ -722,6 +1193,65 @@ describe("WorkspaceRuntimeService", () => {
     await runtime.dispose();
 
     expect(snapshotStore.maxActive).toBe(1);
+  });
+
+  it("retries the final snapshot save during disposal after a transient persistence failure", async () => {
+    const workspace = createWorkspace(1);
+    const snapshotStore = new FailingOnceSnapshotStore();
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      snapshotStore,
+      new FakeWatcher(),
+      {
+        autoRefresh: false,
+        selectedTargetPollingIntervalMs: 0
+      }
+    );
+
+    await runtime.requestWorkspaceRefresh("manual");
+    await waitForState(
+      runtime,
+      (state) =>
+        state.snapshots[0]?.refreshPending === false &&
+        state.operations.some(
+          (operation) =>
+            operation.kind === "scan" &&
+            operation.state === "failed"
+        )
+    );
+    await runtime.dispose();
+
+    expect(snapshotStore.saveCalls).toBe(2);
+    expect(snapshotStore.saved).toEqual([
+      expect.objectContaining({
+        repositoryId: "repository-0",
+        worktreeId: "worktree-0",
+        stale: false,
+        refreshPending: false
+      })
+    ]);
+  });
+
+  it("does not overwrite persisted snapshots when cache loading fails before disposal", async () => {
+    const workspace = createWorkspace(1);
+    const snapshotStore = new FailingLoadSnapshotStore();
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      snapshotStore,
+      new FakeWatcher(),
+      {
+        autoRefresh: false
+      }
+    );
+
+    await expect(runtime.getState()).resolves.toMatchObject({
+      snapshots: []
+    });
+    await runtime.dispose();
+
+    expect(snapshotStore.saveCalls).toBe(0);
   });
 
   it("waits for an in-flight status read before starting a mutation on the same Worktree", async () => {
@@ -1848,6 +2378,67 @@ describe("WorkspaceRuntimeService", () => {
     await runtime.dispose();
   });
 
+  it.each([false, true])(
+    "preserves a command failure when cancellation arrives during recovery refresh (topology: %s)",
+    async (refreshTopology) => {
+      const workspace = createWorkspace(1);
+      const target = workspace.selectedTarget as RepositoryTarget;
+      let releaseRefresh!: () => void;
+      const refreshGate = new Promise<void>((resolve) => {
+        releaseRefresh = resolve;
+      });
+      let refreshStarted = false;
+      const runtime = new WorkspaceRuntimeService(
+        new FakeConfiguration(workspace),
+        new TrackingGitClient(async () => {
+          refreshStarted = true;
+          await refreshGate;
+        }),
+        new MemorySnapshotStore([createCachedSnapshot(target)]),
+        new FakeWatcher(),
+        { autoRefresh: false }
+      );
+      try {
+        await runtime.getState();
+        const accepted = await runtime.queueRepositoryOperation(
+          target,
+          refreshTopology ? "worktree-remove" : "push",
+          async () => {
+            throw new GitError("COMMAND_FAILED", "Original Git operation failed.");
+          },
+          { refreshTopology }
+        );
+        await vi.waitFor(() => expect(refreshStarted).toBe(true));
+        await runtime.cancelOperation(accepted.operationId);
+        releaseRefresh();
+        const completed = await waitForState(runtime, (state) =>
+          state.operations.some((operation) =>
+            operation.id === accepted.operationId &&
+            ["failed", "cancelled"].includes(operation.state)
+          )
+        );
+        expect(completed.operations.find((operation) =>
+          operation.id === accepted.operationId
+        )).toMatchObject({
+          state: "failed",
+          failed: 1,
+          message: expect.stringContaining("Original Git operation failed.")
+        });
+        const retry = await runtime.queueRepositoryOperation(
+          target, "fetch", async () => undefined
+        );
+        await waitForState(runtime, (state) =>
+          state.operations.some((operation) =>
+            operation.id === retry.operationId && operation.state === "succeeded"
+          )
+        );
+      } finally {
+        releaseRefresh();
+        await runtime.dispose();
+      }
+    }
+  );
+
   it("cancels a running repository operation through its AbortSignal", async () => {
     const workspace = createWorkspace(1);
     const target =
@@ -1919,6 +2510,187 @@ describe("WorkspaceRuntimeService", () => {
     });
     await runtime.dispose();
   });
+
+  it("cancels a queued repository operation without waiting for its blocker", async () => {
+    const workspace = createWorkspace(1);
+    const target =
+      workspace.selectedTarget as RepositoryTarget;
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      new MemorySnapshotStore([
+        createCachedSnapshot(target)
+      ]),
+      new FakeWatcher(),
+      {
+        autoRefresh: false,
+        clock: () => "2026-09-04T12:00:00.000Z"
+      }
+    );
+    await runtime.getState();
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    let repositoryActionStarted = false;
+    const write = runtime.runWorktreeMutation(
+      target,
+      "commit",
+      async () => {
+        await writeGate;
+      }
+    );
+    const accepted = await runtime.queueRepositoryOperation(
+      target,
+      "fetch",
+      async () => {
+        repositoryActionStarted = true;
+      }
+    );
+
+    await waitForState(
+      runtime,
+      (state) =>
+        state.operations.some(
+          (operation) =>
+            operation.kind === "commit" &&
+            operation.state === "running"
+        ) &&
+        state.operations.some(
+          (operation) =>
+            operation.id === accepted.operationId &&
+            operation.state === "queued"
+        )
+    );
+    await runtime.cancelOperation(accepted.operationId);
+
+    let cancelled: WorkspaceRuntimeState;
+    try {
+      cancelled = await resolveWithin(
+        waitForState(
+          runtime,
+          (state) =>
+            state.operations.some(
+              (operation) =>
+                operation.id === accepted.operationId &&
+                operation.state === "cancelled"
+            )
+        ),
+        500
+      );
+    } finally {
+      releaseWrite();
+      await write;
+    }
+
+    expect(
+      cancelled.operations.find(
+        (operation) => operation.id === accepted.operationId
+      )
+    ).toMatchObject({
+      state: "cancelled",
+      failed: 0,
+      progress: 1
+    });
+    expect(repositoryActionStarted).toBe(false);
+    await runtime.dispose();
+  });
+
+  it("keeps upstream repository serialization after cancelling a queued operation", async () => {
+    const workspace = createWorkspace(1);
+    const target =
+      workspace.selectedTarget as RepositoryTarget;
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace),
+      new TrackingGitClient(),
+      new MemorySnapshotStore([
+        createCachedSnapshot(target)
+      ]),
+      new FakeWatcher(),
+      {
+        autoRefresh: false,
+        clock: () => "2026-09-04T12:00:00.000Z"
+      }
+    );
+    await runtime.getState();
+    let releaseRepositoryOperation!: () => void;
+    const repositoryOperationGate = new Promise<void>(
+      (resolve) => {
+        releaseRepositoryOperation = resolve;
+      }
+    );
+    let cancelledActionStarted = false;
+    let worktreeActionStarted = false;
+    const running = await runtime.queueRepositoryOperation(
+      target,
+      "fetch",
+      async () => {
+        await repositoryOperationGate;
+      }
+    );
+    const cancelled = await runtime.queueRepositoryOperation(
+      target,
+      "push",
+      async () => {
+        cancelledActionStarted = true;
+      }
+    );
+
+    await waitForState(
+      runtime,
+      (state) =>
+        state.operations.some(
+          (operation) =>
+            operation.id === running.operationId &&
+            operation.state === "running"
+        ) &&
+        state.operations.some(
+          (operation) =>
+            operation.id === cancelled.operationId &&
+            operation.state === "queued"
+        )
+    );
+    await runtime.cancelOperation(cancelled.operationId);
+    await resolveWithin(
+      waitForState(
+        runtime,
+        (state) =>
+          state.operations.some(
+            (operation) =>
+              operation.id === cancelled.operationId &&
+              operation.state === "cancelled"
+          )
+      ),
+      500
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const worktreeMutation = runtime.runWorktreeMutation(
+      target,
+      "stage",
+      async () => {
+        worktreeActionStarted = true;
+      }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const startedBeforeRelease = worktreeActionStarted;
+
+    releaseRepositoryOperation();
+    await worktreeMutation;
+    await waitForState(
+      runtime,
+      (state) =>
+        state.operations.some(
+          (operation) =>
+            operation.id === running.operationId &&
+            operation.state === "succeeded"
+        )
+    );
+
+    expect(startedBeforeRelease).toBe(false);
+    expect(cancelledActionStarted).toBe(false);
+    await runtime.dispose();
+  });
 });
 
 class FakeConfiguration implements WorkspaceConfigurationService {
@@ -1964,6 +2736,20 @@ class FakeConfiguration implements WorkspaceConfigurationService {
       selectedTarget: target
     };
     return structuredClone(this.#workspace);
+  }
+}
+
+class FailingOnceConfiguration extends FakeConfiguration {
+  getCurrentCalls = 0;
+
+  override async getCurrent(): Promise<Workspace> {
+    this.getCurrentCalls += 1;
+    if (this.getCurrentCalls === 1) {
+      throw new Error(
+        "Configuration is temporarily unavailable."
+      );
+    }
+    return super.getCurrent();
   }
 }
 
@@ -2228,6 +3014,42 @@ class TrackingSnapshotStore
     this.active = 0;
     this.maxActive = 0;
     this.saveCalls = 0;
+  }
+}
+
+class FailingOnceSnapshotStore
+  implements RepositorySnapshotStore
+{
+  saveCalls = 0;
+  saved: RepositoryStatusSnapshot[] = [];
+
+  async load(): Promise<RepositoryStatusSnapshot[]> {
+    return [];
+  }
+
+  async save(
+    _workspaceId: string,
+    snapshots: RepositoryStatusSnapshot[]
+  ): Promise<void> {
+    this.saveCalls += 1;
+    if (this.saveCalls === 1) {
+      throw new Error("Snapshot store is temporarily unavailable.");
+    }
+    this.saved = structuredClone(snapshots);
+  }
+}
+
+class FailingLoadSnapshotStore
+  implements RepositorySnapshotStore
+{
+  saveCalls = 0;
+
+  async load(): Promise<RepositoryStatusSnapshot[]> {
+    throw new Error("Snapshot cache is temporarily unavailable.");
+  }
+
+  async save(): Promise<void> {
+    this.saveCalls += 1;
   }
 }
 

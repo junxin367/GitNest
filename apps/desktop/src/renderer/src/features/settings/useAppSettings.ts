@@ -101,6 +101,7 @@ export function useAppSettings(): AppSettingsController {
           return false;
         }
         setSettings(result.value);
+        setLoaded(true);
         if (!options.silent) {
           setNotice(options.notice ?? "设置已保存。");
         }
@@ -134,12 +135,12 @@ export function useAppSettings(): AppSettingsController {
         return;
       }
       if (!result.ok) {
-        setSettings(createDefaultAppSettings());
         setError(result.error);
         return;
       }
 
       setSettings(result.value.settings);
+      setLoaded(true);
       if (result.value.storageState === "missing") {
         const legacyTheme = readLegacyTheme();
         if (legacyTheme) {
@@ -165,13 +166,11 @@ export function useAppSettings(): AppSettingsController {
       }
     } catch (reason) {
       if (requestGeneration === generation.current) {
-        setSettings(createDefaultAppSettings());
         setError(unexpectedSettingsError(reason));
       }
     } finally {
       if (requestGeneration === generation.current) {
         setLoading(false);
-        setLoaded(true);
       }
     }
   }, []);
@@ -234,6 +233,7 @@ export function useAppSettings(): AppSettingsController {
         return false;
       }
       setSettings(result.value);
+      setLoaded(true);
       setNotice("AI API Key 已清空。");
       return true;
     } catch (reason) {

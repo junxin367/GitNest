@@ -445,6 +445,72 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     ).toHaveLength(1);
   });
 
+  it.each([
+    { isComposing: true },
+    { keyCode: 229 }
+  ])("keeps code-node search open while confirming an IME candidate (%j)", async (composition) => {
+    const snapshot = createSnapshot();
+    analysisMock.controller = createController({
+      ...snapshot,
+      nodes: snapshot.nodes.map((node) => node.id === "callee"
+        ? { ...node, name: "用户查询", qualifiedName: "用户查询" }
+        : node
+      )
+    });
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+    const input = container.querySelector<HTMLInputElement>(
+      'input[aria-label="搜索代码节点"]'
+    )!;
+    await act(async () => {
+      input.focus();
+      setInputValue(input, "用户");
+      await flushAsyncWork();
+    });
+    expect(container.querySelectorAll(".analysis-symbol-result")).toHaveLength(1);
+    const composingEnter = new KeyboardEvent("keydown", {
+      ...composition, key: "Enter", bubbles: true, cancelable: true
+    });
+
+    await act(async () => {
+      input.dispatchEvent(composingEnter);
+      await flushAsyncWork();
+    });
+
+    expect(container.querySelector(".analysis-chain-panel.is-node-detail")).toBeNull();
+    expect(composingEnter.defaultPrevented).toBe(false);
+    expect(container.querySelector('input[aria-label="搜索代码节点"]')).toBe(input);
+    expect(input.value).toBe("用户");
+    const enter = new KeyboardEvent("keydown", {
+      key: "Enter", bubbles: true, cancelable: true
+    });
+    await act(async () => {
+      input.dispatchEvent(enter);
+      await flushAsyncWork();
+    });
+    expect(enter.defaultPrevented).toBe(true);
+    expect(container.querySelector(".analysis-chain-panel.is-node-detail")?.textContent)
+      .toContain("用户查询");
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="返回代码导航"]'
+      )!.click();
+      await flushAsyncWork();
+    });
+    expect(container.querySelector<HTMLInputElement>(
+      'input[aria-label="搜索代码节点"]'
+    )?.value).toBe("用户");
+  });
+
   it("shows qualified class member names and renders their containment graph", async () => {
     const base = createSnapshot();
     const nestedClass = {
@@ -647,6 +713,7 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
 
   it("shows a layout-matched skeleton while the initial analysis state loads", async () => {
     const controller = createController();
+    controller.loaded = false;
     controller.state = {
       state: "idle",
       snapshotAvailable: false
@@ -690,6 +757,127 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(container.textContent).not.toContain(
       "正在读取代码分析状态"
     );
+  });
+
+  it("does not reuse another Workspace snapshot while the selected Workspace loads", async () => {
+    const controller = createController();
+    controller.loading = true;
+    analysisMock.controller = controller;
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={{ ...createWorkspaceDetails(), id: "other-workspace" }}
+        />
+      );
+      await flushAsyncWork();
+    });
+    expect(container.querySelector('[aria-label="正在读取代码分析"]')).not.toBeNull();
+    expect(container.querySelector(".analysis-empty-state")).toBeNull();
+  });
+
+  it("retains a successfully loaded empty analysis state during reload", async () => {
+    const controller = createController();
+    controller.state = {
+      state: "idle",
+      snapshotAvailable: false,
+      workspaceId: "workspace",
+      scope: "changed"
+    };
+    controller.snapshot = null;
+    controller.loaded = true;
+    controller.loading = true;
+    analysisMock.controller = controller;
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={createWorkspaceDetails()}
+        />
+      );
+      await flushAsyncWork();
+    });
+    expect(container.querySelector(".analysis-empty-state")).not.toBeNull();
+    expect(container.querySelector('[aria-label="正在读取代码分析"]')).toBeNull();
+  });
+
+  it("shows a settled initial read failure with a retry instead of a missing-index state", async () => {
+    const controller = createController();
+    controller.state = { state: "idle", snapshotAvailable: false };
+    controller.snapshot = null;
+    controller.loaded = false;
+    controller.error = {
+      code: "COMMAND_FAILED",
+      message: "analysis state unavailable",
+      details: {}
+    };
+    analysisMock.controller = controller;
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+    expect(container.textContent).toContain("analysis state unavailable");
+    expect(container.textContent).not.toContain("尚未生成代码关系索引");
+    expect(container.querySelector('[aria-label="正在读取代码分析"]')).toBeNull();
+    const retry = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("重新读取"));
+    expect(retry).toBeDefined();
+    await act(async () => { retry?.click(); });
+    expect(controller.reload).toHaveBeenCalledOnce();
+  });
+
+  it("shows a skeleton instead of a known empty state while restoring another scope", async () => {
+    const controller = createController();
+    controller.state = { state: "idle", snapshotAvailable: false, workspaceId: "workspace" };
+    controller.snapshot = null;
+    controller.loading = true;
+    controller.action = "restoring";
+    analysisMock.controller = controller;
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={createWorkspaceDetails()}
+        />
+      );
+      await flushAsyncWork();
+    });
+    expect(container.querySelector('[aria-label="正在读取代码分析"]')).not.toBeNull();
+    expect(container.querySelector(".analysis-empty-state")).toBeNull();
+  });
+
+  it("keeps actual analysis progress visible while reloading its state", async () => {
+    const controller = createController();
+    controller.state = { state: "running", snapshotAvailable: false };
+    controller.snapshot = null;
+    controller.loading = true;
+    analysisMock.controller = controller;
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+    expect(container.querySelector('[aria-label="代码分析进度"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="正在读取代码分析"]')).toBeNull();
   });
 
   it("replaces the empty state with full-page progress as soon as analysis starts", async () => {
@@ -1010,6 +1198,32 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(
       container.querySelector(".analysis-summary-grid")
     ).not.toBeNull();
+  });
+
+  it("does not start analysis when switching scope fails instead of missing the cache", async () => {
+    const controller = createController();
+    controller.restoreSnapshot = vi.fn(async () => null);
+    analysisMock.controller = controller;
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+    const changedScope = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".analysis-scope-switch button")
+    ).find((button) => button.textContent === "变动代码");
+    await act(async () => {
+      changedScope?.click();
+      await flushAsyncWork();
+    });
+    expect(controller.start).not.toHaveBeenCalled();
+    expect(container.querySelector(".analysis-summary-grid")).not.toBeNull();
   });
 
   it("uses a cached scope snapshot without starting a new analysis", async () => {
@@ -2212,6 +2426,37 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
         ".analysis-source-token.is-function"
       )?.textContent
     ).toBe("callee");
+    const sourceScroll = vi.mocked(
+      Element.prototype.scrollIntoView
+    );
+    sourceScroll.mockClear();
+    act(() => {
+      setInputValue(
+        sourceSearchInput as HTMLInputElement,
+        "actual"
+      );
+    });
+    const replacementHit = container.querySelector(
+      '[data-source-search-hit="0"]'
+    );
+    expect(replacementHit?.textContent).toBe("actual");
+    expect(sourceScroll).toHaveBeenCalledExactlyOnceWith({
+      block: "center"
+    });
+    expect(sourceScroll.mock.instances[0]).toBe(replacementHit);
+
+    sourceScroll.mockClear();
+    act(() => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+    });
+    expect(sourceScroll).not.toHaveBeenCalled();
     expect(
       window.gitnest.codeAnalysis.readFile
     ).toHaveBeenCalledWith({
@@ -2473,6 +2718,7 @@ function createController(
     },
     snapshot,
     snapshotDetail: snapshot.detailLevel ?? "full",
+    loaded: true,
     loading: false,
     loadingFullSnapshot: false,
     action: null,

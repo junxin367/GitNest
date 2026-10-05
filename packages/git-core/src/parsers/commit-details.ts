@@ -46,7 +46,7 @@ export function parseCommitMetadata(output: string): CommitMetadata {
     body: bodyParts.join("\0").replace(/[\r\n]+$/, ""),
     parentHashes: parents ? parents.split(" ") : [],
     refs: decorations
-      .split(",")
+      .split(", ")
       .map((value) => value.trim())
       .filter(Boolean)
   };

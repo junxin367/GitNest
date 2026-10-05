@@ -34,8 +34,10 @@ let querySequence = 0;
 export function useCodeNodeDiff(
   node: CodeGraphNodeDto | null
 ): CodeNodeDiffState {
-  const [state, setState] =
-    useState<CodeNodeDiffState>(EMPTY_STATE);
+  const [state, setScopedState] = useState({
+    fileKey: "",
+    value: EMPTY_STATE
+  });
   const activeQueriesRef = useRef(new Set<string>());
   const generationRef = useRef(0);
   const repositoryId = node?.location.repositoryId ?? "";
@@ -47,6 +49,8 @@ export function useCodeNodeDiff(
       : "";
 
   useEffect(() => {
+    const setState = (value: CodeNodeDiffState) =>
+      setScopedState({ fileKey, value });
     const generation = ++generationRef.current;
     cancelQueries(activeQueriesRef.current);
 
@@ -202,7 +206,9 @@ export function useCodeNodeDiff(
     };
   }, [fileKey]);
 
-  return state;
+  return state.fileKey === fileKey
+    ? state.value
+    : { ...EMPTY_STATE, loading: Boolean(fileKey) };
 }
 
 function uniqueDiffFiles(

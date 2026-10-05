@@ -107,6 +107,63 @@ describe("RepositoryStashBrowser", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["hash", "target"] as const)(
+    "resets the file filter when stash identity changes by %s while its ref is reused",
+    (change) => {
+      const render = (stashes: RepositoryStashesDto, stashFiles: RepositoryStashFilesDto) => {
+        root.render(<RepositoryStashBrowser error={null} loading={{ stashes: false, files: false }}
+          selectedStashRef="stash@{0}" stashFiles={stashFiles} stashes={stashes}
+          onReload={vi.fn()} onSelectStash={vi.fn()} />);
+      };
+      act(() => render(STASHES, FILES));
+      act(() => setInputValue(container.querySelector<HTMLInputElement>('[aria-label="筛选储藏文件"]')!, "preview"));
+      expect(container.textContent).not.toContain("AppSettings.tsx");
+      const target = change === "target" ? { repositoryId: "repository-b", worktreeId: "worktree-b" } : TARGET;
+      const hash = change === "hash" ? "new-stash-hash" : FILES.stash.hash;
+      act(() => render(
+        { target, stashes: [{ ...STASHES.stashes[0]!, hash }] },
+        { target, stash: { ...FILES.stash, hash } }
+      ));
+      expect(container.querySelector<HTMLInputElement>('[aria-label="筛选储藏文件"]')?.value).toBe("");
+      expect(container.textContent).toContain("AppSettings.tsx");
+    }
+  );
+
+  it("keeps an already loaded empty stash result visible during refresh", () => {
+    act(() => {
+      root.render(
+        <RepositoryStashBrowser error={null} loading={{ stashes: true, files: false }}
+          selectedStashRef={null} stashFiles={null} stashes={{ target: TARGET, stashes: [] }}
+          onReload={vi.fn()} onSelectStash={vi.fn()} />
+      );
+    });
+    expect(container.textContent).toContain("没有储藏的变更");
+    expect(container.querySelector(".gn-skeleton")).toBeNull();
+  });
+
+  it.each([false, true])("shows refresh errors without hiding previously loaded stash content (empty: %s)", (empty) => {
+    const onReload = vi.fn();
+    act(() => {
+      root.render(
+        <RepositoryStashBrowser
+          error={{ code: "COMMAND_FAILED", message: "储藏刷新失败，请检查仓库路径", details: {} }}
+          loading={{ stashes: false, files: false }}
+          selectedStashRef={empty ? null : "stash@{0}"}
+          stashFiles={empty ? null : FILES}
+          stashes={empty ? { target: TARGET, stashes: [] } : STASHES}
+          onReload={onReload}
+          onSelectStash={vi.fn()}
+        />
+      );
+    });
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("储藏刷新失败");
+    expect(container.textContent).toContain(empty ? "没有储藏的变更" : "AppSettings.tsx");
+    expect(container.querySelector(".gn-skeleton")).toBeNull();
+    const retry = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("重试"));
+    act(() => { retry?.click(); });
+    expect(onReload).toHaveBeenCalledOnce();
+  });
+
   it("renders exactly two panes and shows files for the selected stash", () => {
     const onSelectStash = vi.fn();
 
@@ -316,6 +373,56 @@ describe("RepositoryStashBrowser", () => {
       document.querySelector('[role="alertdialog"]')
     ).toBeNull();
   });
+
+  function renderInteractiveStashes() {
+    act(() => root.render(
+      <RepositoryStashBrowser
+        error={null}
+        loading={{ stashes: false, files: false }}
+        selectedStashRef="stash@{0}"
+        stashFiles={FILES}
+        stashes={STASHES}
+        onMutateStash={vi.fn(async () => true)}
+        onReload={vi.fn()}
+        onSelectStash={vi.fn()}
+      />
+    ));
+  }
+
+  it.each([
+    { key: "Escape", shiftKey: false },
+    { key: "Tab", shiftKey: false },
+    { key: "Tab", shiftKey: true }
+  ])("returns to the right-clicked stash on $key (shift: $shiftKey)", (keyboard) => {
+    renderInteractiveStashes();
+    const stash = findStashButton("stash@{1}");
+    openContextMenu("stash@{1}");
+    const event = new KeyboardEvent("keydown", {
+      ...keyboard, bubbles: true, cancelable: true
+    });
+    act(() => document.activeElement?.dispatchEvent(event));
+    expect(document.querySelector(".repository-stash-context-menu")).toBeNull();
+    expect(document.activeElement).toBe(stash);
+    expect(event.defaultPrevented).toBe(keyboard.key === "Escape");
+  });
+
+  it.each(["恢复", "删除", "恢复并删除"])(
+    "restores the stash row after cancelling the %s confirmation",
+    (action) => {
+      renderInteractiveStashes();
+      const stash = findStashButton("stash@{1}");
+      openContextMenu("stash@{1}");
+      act(() => findButtonByText(
+        document.querySelector(".repository-stash-context-menu"), action
+      ).click());
+      expect(document.querySelector('[role="alertdialog"]')).not.toBeNull();
+      act(() => findButtonByText(
+        document.querySelector('[role="alertdialog"]'), "取消"
+      ).click());
+      expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+      expect(document.activeElement).toBe(stash);
+    }
+  );
 
   it("closes the context menu from escape and outside interaction", () => {
     act(() => {

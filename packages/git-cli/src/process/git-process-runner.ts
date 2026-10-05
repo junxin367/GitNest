@@ -3,6 +3,7 @@ import {
   type ChildProcess,
   type SpawnOptions
 } from "node:child_process";
+import { win32 } from "node:path";
 
 import {
   GitError,
@@ -475,8 +476,15 @@ function terminateProcessTree(child: ChildProcess): void {
   }
 
   if (process.platform === "win32") {
+    const taskkillExecutable = process.env.SystemRoot
+      ? win32.join(
+          process.env.SystemRoot,
+          "System32",
+          "taskkill.exe"
+        )
+      : "taskkill.exe";
     const killer = spawn(
-      "taskkill.exe",
+      taskkillExecutable,
       ["/PID", String(child.pid), "/T", "/F"],
       {
         shell: false,
@@ -484,6 +492,9 @@ function terminateProcessTree(child: ChildProcess): void {
         stdio: "ignore"
       }
     );
+    killer.once("error", () => {
+      child.kill();
+    });
     killer.unref();
     return;
   }

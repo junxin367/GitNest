@@ -168,7 +168,7 @@ export function NodeSourceViewer({
       });
   }, [
     normalizedActiveSearchHit,
-    searchHits.length,
+    searchHits,
     searchOpen
   ]);
 

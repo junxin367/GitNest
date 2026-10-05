@@ -306,13 +306,17 @@ export class ApplicationUpdateService {
       errorCode: null,
       errorMessage: null
     });
+    if (this.#disposed) {
+      return this.#snapshot();
+    }
     const controller = new AbortController();
     this.#manifestAbort = controller;
     const timeout = setTimeout(
       () => controller.abort(),
       MANIFEST_TIMEOUT_MS
     );
-
+    let responseBody: ReadableStream<Uint8Array> | null = null;
+    let bodyConsumed = false;
     try {
       if (!isStableVersion(this.#currentVersion)) {
         throw new UpdateError(
@@ -331,6 +335,16 @@ export class ApplicationUpdateService {
           signal: controller.signal
         }
       );
+      responseBody = response.body;
+      if (this.#disposed) {
+        return this.#snapshot();
+      }
+      if (controller.signal.aborted) {
+        throw new UpdateError(
+          "UPDATE_REQUEST_TIMEOUT",
+          "更新请求超时。"
+        );
+      }
       if (!response.ok) {
         throw new UpdateError(
           "UPDATE_MANIFEST_REQUEST_FAILED",
@@ -351,13 +365,32 @@ export class ApplicationUpdateService {
         response,
         MAX_MANIFEST_BYTES
       );
+      bodyConsumed = true;
+      if (this.#disposed) {
+        return this.#snapshot();
+      }
+      if (controller.signal.aborted) {
+        throw new UpdateError(
+          "UPDATE_REQUEST_TIMEOUT",
+          "更新请求超时。"
+        );
+      }
       const manifest = validateUpdateManifest(
         JSON.parse(bytes.toString("utf8")) as unknown
       );
-      this.#manifest = manifest;
       const checkedAt = this.#now().toISOString();
       this.#persisted.lastSuccessfulCheckAt = checkedAt;
       await this.#persist();
+      if (this.#disposed) {
+        return this.#snapshot();
+      }
+      if (controller.signal.aborted) {
+        throw new UpdateError(
+          "UPDATE_REQUEST_TIMEOUT",
+          "更新请求超时。"
+        );
+      }
+      this.#manifest = manifest;
       const updateAvailable =
         compareStableVersions(
           manifest.version,
@@ -393,6 +426,9 @@ export class ApplicationUpdateService {
       });
       return this.#snapshot();
     } catch (error) {
+      if (this.#disposed) {
+        return this.#snapshot();
+      }
       const normalized = normalizeUpdateError(
         error,
         "UPDATE_CHECK_FAILED",
@@ -409,6 +445,10 @@ export class ApplicationUpdateService {
       );
     } finally {
       clearTimeout(timeout);
+      if (!bodyConsumed) {
+        controller.abort();
+        await responseBody?.cancel().catch(() => undefined);
+      }
       if (this.#manifestAbort === controller) {
         this.#manifestAbort = null;
       }
@@ -443,6 +483,9 @@ export class ApplicationUpdateService {
         recursive: true
       });
       await this.#cleanupDownloadCache();
+      if (this.#disposed) {
+        return this.#snapshot();
+      }
       const installerName = basename(manifest.asset.name);
       const installerPath = join(
         this.#downloadDirectory,
@@ -450,12 +493,15 @@ export class ApplicationUpdateService {
       );
       partialPath = `${installerPath}.partial`;
 
-      if (
+      const cachedInstallerMatches =
         await fileMatchesAsset(
           installerPath,
           manifest.asset
-        )
-      ) {
+        );
+      if (this.#disposed) {
+        return this.#snapshot();
+      }
+      if (cachedInstallerMatches) {
         this.#setState({
           phase: "verifying",
           downloadedBytes: manifest.asset.sizeBytes,
@@ -491,6 +537,9 @@ export class ApplicationUpdateService {
         partialPath = null;
       }
 
+      if (this.#disposed) {
+        return this.#snapshot();
+      }
       this.#setState({
         phase: "launching",
         downloadedBytes: manifest.asset.sizeBytes,
@@ -498,7 +547,13 @@ export class ApplicationUpdateService {
         errorCode: null,
         errorMessage: null
       });
+      if (this.#disposed) {
+        return this.#snapshot();
+      }
       await this.#launchInstaller(installerPath);
+      if (this.#disposed) {
+        return this.#snapshot();
+      }
       this.#diagnostic("info", "update.installer-launched", {
         version: manifest.version,
         installer: installerName
@@ -508,6 +563,9 @@ export class ApplicationUpdateService {
     } catch (error) {
       if (partialPath) {
         await unlink(partialPath).catch(() => undefined);
+      }
+      if (this.#disposed) {
+        return this.#snapshot();
       }
       const normalized = normalizeUpdateError(
         error,
@@ -529,6 +587,12 @@ export class ApplicationUpdateService {
     manifest: UpdateManifest,
     partialPath: string
   ): Promise<void> {
+    if (this.#disposed) {
+      throw new UpdateError(
+        "UPDATE_INSTALL_CANCELLED",
+        "更新安装已取消。"
+      );
+    }
     const controller = new AbortController();
     this.#downloadAbort = controller;
     const timeout = setTimeout(
@@ -546,6 +610,9 @@ export class ApplicationUpdateService {
     let handle:
       | Awaited<ReturnType<typeof open>>
       | undefined;
+    let body: ReadableStream<Uint8Array> | null = null;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let completed = false;
     try {
       const response = await this.#fetch(
         manifest.asset.downloadUrl,
@@ -558,6 +625,7 @@ export class ApplicationUpdateService {
           signal: controller.signal
         }
       );
+      body = response.body;
       if (!response.ok || !response.body) {
         throw new UpdateError(
           "UPDATE_DOWNLOAD_REQUEST_FAILED",
@@ -575,12 +643,19 @@ export class ApplicationUpdateService {
         );
       }
       handle = await open(partialPath, "wx");
-      const reader = response.body.getReader();
+      reader = response.body.getReader();
       const hash = createHash("sha256");
       let downloadedBytes = 0;
       let lastPublishedAt = 0;
       while (true) {
         const result = await reader.read();
+        if (this.#disposed || controller.signal.aborted) {
+          await reader.cancel().catch(() => undefined);
+          throw new UpdateError(
+            "UPDATE_REQUEST_TIMEOUT",
+            "更新请求超时。"
+          );
+        }
         if (result.done) {
           break;
         }
@@ -616,10 +691,26 @@ export class ApplicationUpdateService {
         );
       }
       await handle.sync();
+      if (this.#disposed || controller.signal.aborted) {
+        throw new UpdateError(
+          "UPDATE_REQUEST_TIMEOUT",
+          "更新请求超时。"
+        );
+      }
       await handle.close();
       handle = undefined;
+      completed = true;
     } finally {
       clearTimeout(timeout);
+      if (!completed) {
+        controller.abort();
+        if (reader) {
+          await reader.cancel().catch(() => undefined);
+        } else {
+          await body?.cancel().catch(() => undefined);
+        }
+      }
+      reader?.releaseLock();
       await handle?.close().catch(() => undefined);
       if (this.#downloadAbort === controller) {
         this.#downloadAbort = null;
@@ -983,23 +1074,29 @@ async function readResponseBodyBounded(
   const reader = response.body.getReader();
   const chunks: Buffer[] = [];
   let totalBytes = 0;
-  while (true) {
-    const result = await reader.read();
-    if (result.done) {
-      break;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) {
+        break;
+      }
+      const chunk = Buffer.from(result.value);
+      totalBytes += chunk.byteLength;
+      if (totalBytes > maxBytes) {
+        throw new UpdateError(
+          "UPDATE_MANIFEST_TOO_LARGE",
+          "更新清单超过允许的大小。"
+        );
+      }
+      chunks.push(chunk);
     }
-    const chunk = Buffer.from(result.value);
-    totalBytes += chunk.byteLength;
-    if (totalBytes > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      throw new UpdateError(
-        "UPDATE_MANIFEST_TOO_LARGE",
-        "更新清单超过允许的大小。"
-      );
-    }
-    chunks.push(chunk);
+    return Buffer.concat(chunks, totalBytes);
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
   }
-  return Buffer.concat(chunks, totalBytes);
 }
 
 function readContentLength(

@@ -372,6 +372,8 @@ async function requestCompletion(
 ): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let responseBody: ReadableStream<Uint8Array> | null = null;
+  let bodyConsumed = false;
   try {
     const response = await fetchImpl(endpoint, {
       method: "POST",
@@ -386,7 +388,7 @@ async function requestCompletion(
       redirect: "error",
       signal: controller.signal
     });
-    const body = await readBoundedResponse(response);
+    responseBody = response.body;
     if (!response.ok) {
       throw new GitError(
         response.status === 401 || response.status === 403
@@ -398,6 +400,8 @@ async function requestCompletion(
         { status: response.status }
       );
     }
+    const body = await readBoundedResponse(response);
+    bodyConsumed = true;
 
     let parsed: unknown;
     try {
@@ -445,6 +449,10 @@ async function requestCompletion(
     );
   } finally {
     clearTimeout(timer);
+    if (!bodyConsumed) {
+      controller.abort();
+      await responseBody?.cancel().catch(() => undefined);
+    }
   }
 }
 
@@ -484,21 +492,27 @@ async function readBoundedResponse(
   const decoder = new TextDecoder();
   let size = 0;
   let content = "";
-  while (true) {
-    const chunk = await reader.read();
-    if (chunk.done) {
-      content += decoder.decode();
-      return content;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        content += decoder.decode();
+        return content;
+      }
+      size += chunk.value.byteLength;
+      if (size > MAX_AI_RESPONSE_BYTES) {
+        throw new GitError(
+          "OUTPUT_LIMIT_EXCEEDED",
+          "The AI response exceeded the allowed size."
+        );
+      }
+      content += decoder.decode(chunk.value, { stream: true });
     }
-    size += chunk.value.byteLength;
-    if (size > MAX_AI_RESPONSE_BYTES) {
-      await reader.cancel().catch(() => undefined);
-      throw new GitError(
-        "OUTPUT_LIMIT_EXCEEDED",
-        "The AI response exceeded the allowed size."
-      );
-    }
-    content += decoder.decode(chunk.value, { stream: true });
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
   }
 }
 

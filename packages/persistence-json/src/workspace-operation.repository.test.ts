@@ -1,5 +1,7 @@
 import {
+  mkdir,
   readFile,
+  rename,
   writeFile
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -143,6 +145,95 @@ describe("JsonWorkspaceOperationStore", () => {
     );
     expect(persisted.unknownDocumentField).toBeUndefined();
     expect(persisted.operations[0].unknown).toBeUndefined();
+  });
+
+  it.each([
+    ["pending history", true, false],
+    ["pending empty history", true, true],
+    ["primary empty history", false, true]
+  ] as const)(
+    "prefers scoped %s over legacy operations",
+    async (_label, pendingOnly, empty) => {
+      temporary = await createTemporaryDirectoryFixture("operation-scoped-recovery");
+      const directoryPath = join(temporary.path, "items");
+      const legacyFilePath = join(temporary.path, "legacy.json");
+      const scopedPath = join(directoryPath, "default.operations.json");
+      const legacy = [createOperation("legacy", "succeeded")];
+      const current = empty ? [] : [createOperation("current", "running")];
+      await new JsonWorkspaceOperationStore(legacyFilePath).save("default", legacy);
+      await new JsonWorkspaceOperationStore(scopedPath).save("default", current);
+      const pendingPath = join(directoryPath, ".default.operations.json.pending.tmp");
+      if (pendingOnly) {
+        await rename(scopedPath, pendingPath);
+      }
+      const store = new JsonWorkspaceOperationCollectionStore({ directoryPath, legacyFilePath });
+
+      await expect(store.load("default")).resolves.toEqual(current);
+      await expect(store.load("default")).resolves.toEqual(current);
+      expect(JSON.parse(await readFile(scopedPath, "utf8")).operations).toEqual(current);
+      if (pendingOnly) {
+        await expect(readFile(pendingPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect(JSON.parse(await readFile(legacyFilePath, "utf8")).operations).toEqual(legacy);
+    }
+  );
+
+  it.each([false, true])(
+    "migrates legacy operations once and preserves an emptied scoped history (pending=%s)",
+    async (pendingOnly) => {
+      temporary = await createTemporaryDirectoryFixture("operation-legacy-recovery");
+      const directoryPath = join(temporary.path, "items");
+      const legacyFilePath = join(temporary.path, "legacy.json");
+      const operations = [createOperation("legacy", "succeeded")];
+      await new JsonWorkspaceOperationStore(legacyFilePath).save("default", operations);
+      if (pendingOnly) {
+        await rename(legacyFilePath, join(temporary.path, ".legacy.json.pending.tmp"));
+      }
+      const store = new JsonWorkspaceOperationCollectionStore({ directoryPath, legacyFilePath });
+
+      await expect(store.load("default")).resolves.toEqual(operations);
+      await store.save("default", []);
+      await expect(
+        new JsonWorkspaceOperationCollectionStore({ directoryPath, legacyFilePath }).load("default")
+      ).resolves.toEqual([]);
+    }
+  );
+
+  it.each([false, true])(
+    "preserves corrupt scoped operations and refuses writes instead of using legacy (pending=%s)",
+    async (pendingOnly) => {
+      temporary = await createTemporaryDirectoryFixture("operation-collection-invalid");
+      const directoryPath = join(temporary.path, "items");
+      const legacyFilePath = join(temporary.path, "legacy.json");
+      await new JsonWorkspaceOperationStore(legacyFilePath).save(
+        "default", [createOperation("legacy", "succeeded")]
+      );
+      await mkdir(directoryPath, { recursive: true });
+      const corruptPath = join(
+        directoryPath,
+        pendingOnly ? ".default.operations.json.pending.tmp" : "default.operations.json"
+      );
+      await writeFile(corruptPath, "{malformed", "utf8");
+      const store = new JsonWorkspaceOperationCollectionStore({ directoryPath, legacyFilePath });
+
+      await expect(store.load("default")).rejects.toMatchObject({ code: "INVALID_PERSISTED_DATA" });
+      await expect(store.save("default", [])).rejects.toMatchObject({
+        code: pendingOnly ? "INVALID_PERSISTED_DATA" : "PERSISTENCE_FAILED"
+      });
+      await expect(readFile(corruptPath, "utf8")).resolves.toBe("{malformed");
+    }
+  );
+
+  it("keeps absent scoped and legacy operation stores absent", async () => {
+    temporary = await createTemporaryDirectoryFixture("operation-collection-missing");
+    const directoryPath = join(temporary.path, "items");
+    const legacyFilePath = join(temporary.path, "legacy.json");
+    const store = new JsonWorkspaceOperationCollectionStore({ directoryPath, legacyFilePath });
+
+    await expect(store.load("default")).resolves.toEqual([]);
+    await expect(readFile(join(directoryPath, "default.operations.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(legacyFilePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("blocks overwrite after invalid persisted operation data", async () => {

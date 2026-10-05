@@ -691,6 +691,47 @@ describe("parseSourceFile Spring endpoints", () => {
       ["HEAD", "/v2/items"]
     ]);
   });
+
+  it("indexes bodyless interface methods and their Spring endpoints", () => {
+    const parsed = parseSourceFile(
+      sourceFile("UserApi.java", "java"),
+      [
+        "package example;",
+        "",
+        '@RequestMapping("/api")',
+        "public interface UserApi {",
+        '  @GetMapping("/users/{id}")',
+        "  User getUser(String id);",
+        "",
+        "  User parse(User input);",
+        "}"
+      ].join("\n")
+    );
+
+    expect(parsed.symbols).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "getUser",
+          qualifiedName: "UserApi.getUser",
+          kind: "method",
+          parentQualifiedName: "UserApi"
+        }),
+        expect.objectContaining({
+          name: "parse",
+          qualifiedName: "UserApi.parse",
+          kind: "method",
+          parentQualifiedName: "UserApi"
+        })
+      ])
+    );
+    expect(parsed.serverEndpoints).toContainEqual(
+      expect.objectContaining({
+        method: "GET",
+        route: "/api/users/:param",
+        symbolQualifiedName: "UserApi.getUser"
+      })
+    );
+  });
 });
 
 function sourceFile(

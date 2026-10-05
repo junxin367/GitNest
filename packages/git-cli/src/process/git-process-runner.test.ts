@@ -55,6 +55,33 @@ describe("createReadOnlyProcessEnvironment", () => {
     });
   });
 
+  it.runIf(
+    process.platform === "win32" &&
+      Boolean(process.env.SystemRoot)
+  )(
+    "terminates a timed-out process when PATH cannot locate taskkill",
+    async () => {
+      const originalPath = process.env.PATH;
+      const startedAt = performance.now();
+      process.env.PATH = "";
+
+      try {
+        await expect(
+          runProcess({
+            executable: process.execPath,
+            args: ["-e", "setTimeout(() => {}, 10_000)"],
+            timeoutMs: 25
+          })
+        ).rejects.toMatchObject({
+          code: "COMMAND_TIMEOUT"
+        });
+        expect(performance.now() - startedAt).toBeLessThan(5_000);
+      } finally {
+        process.env.PATH = originalPath;
+      }
+    }
+  );
+
   it("terminates a running process when aborted", async () => {
     const controller = new AbortController();
     const request = runProcess({
@@ -212,5 +239,32 @@ describe("GitProcessScheduler", () => {
     releaseBackground();
     await firstBackground;
     expect(queuedStarted).toBe(false);
+  });
+
+  it("releases the shared slot after a task throws synchronously", async () => {
+    const scheduler = new GitProcessScheduler({
+      sharedConcurrency: 1
+    });
+    const failed = scheduler.run(
+      "foreground",
+      undefined,
+      () => {
+        throw new Error("synchronous task failure");
+      }
+    );
+    let nextStarted = false;
+    const next = scheduler.run(
+      "foreground",
+      undefined,
+      async () => {
+        nextStarted = true;
+      }
+    );
+
+    await expect(failed).rejects.toThrow(
+      "synchronous task failure"
+    );
+    await expect(next).resolves.toBeUndefined();
+    expect(nextStarted).toBe(true);
   });
 });

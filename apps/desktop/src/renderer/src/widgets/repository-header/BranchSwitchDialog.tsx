@@ -1,4 +1,5 @@
 import { Button } from "../../shared/ui/Button";
+import type { KeyboardEvent } from "react";
 
 import type { BranchDto } from "@gitnest/contracts";
 
@@ -14,6 +15,7 @@ interface BranchSwitchDialogProps {
   currentBranch: string;
   errorMessage: string | null;
   loading: boolean;
+  hasLoaded: boolean;
   isDisabled(branch: BranchDto): boolean;
   onCancel(): void;
   onRetry(): void;
@@ -25,6 +27,7 @@ export function BranchSwitchDialog({
   currentBranch,
   errorMessage,
   loading,
+  hasLoaded,
   isDisabled,
   onCancel,
   onRetry,
@@ -64,11 +67,20 @@ export function BranchSwitchDialog({
 
       <SkeletonBoundary
         fallback={<BranchSwitchListSkeleton />}
-        hasContent={branches.length > 0}
+        hasContent={hasLoaded}
         label="正在读取分支"
         loading={loading}
         surfaceClassName="branch-switch-list-skeleton"
       >
+        {errorMessage && branches.length > 0 ? (
+          <div className="branch-switch-refresh-error" role="alert">
+            <Icon name="warning" size={16} />
+            <span>{errorMessage}</span>
+            <Button onClick={onRetry} size="small" type="button">
+              重试
+            </Button>
+          </div>
+        ) : null}
         {errorMessage && branches.length === 0 ? (
           <div className="branch-switch-dialog-state error">
             <Icon name="warning" size={18} />
@@ -90,6 +102,7 @@ export function BranchSwitchDialog({
           <div
             aria-label="本地分支列表"
             className="branch-switch-list"
+            onKeyDown={navigateBranchOptions}
             role="listbox"
           >
             {branches.map((branch) => {
@@ -157,6 +170,35 @@ export function BranchSwitchDialog({
       </SkeletonBoundary>
     </Dialog>
   );
+}
+
+function navigateBranchOptions(event: KeyboardEvent<HTMLDivElement>) {
+  if (
+    !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) ||
+    event.nativeEvent.isComposing
+  ) {
+    return;
+  }
+  const options = Array.from(
+    event.currentTarget.querySelectorAll<HTMLButtonElement>(
+      'button[role="option"]:not(:disabled)'
+    )
+  );
+  if (options.length === 0) {
+    return;
+  }
+  event.preventDefault();
+  const current = options.indexOf(
+    event.currentTarget.ownerDocument.activeElement as HTMLButtonElement
+  );
+  const next = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? options.length - 1
+      : event.key === "ArrowDown"
+        ? Math.min(current + 1, options.length - 1)
+        : Math.max(current - 1, 0);
+  options[next]?.focus();
 }
 
 function BranchSwitchListSkeleton() {

@@ -357,9 +357,14 @@ function HistoryRefPicker({
       setQuery("");
     };
     const closeForEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") {
+      if (
+        event.key !== "Escape" ||
+        event.isComposing ||
+        event.keyCode === 229
+      ) {
         return;
       }
+      event.preventDefault();
       setAnchor(null);
       setQuery("");
       anchor.focus();
@@ -460,6 +465,7 @@ function HistoryRefPicker({
         <MenuPopover
           align="start"
           anchor={anchor}
+          autoFocus
           aria-label={`${label}分支`}
           className="history-ref-menu"
           ref={menuRef}
@@ -469,7 +475,7 @@ function HistoryRefPicker({
             <Input
               appearance="unstyled"
               aria-label={`搜索${label}分支`}
-              autoFocus
+              data-menu-initial-focus
               className="history-ref-search"
               onChange={(event) =>
                 setQuery(event.target.value)

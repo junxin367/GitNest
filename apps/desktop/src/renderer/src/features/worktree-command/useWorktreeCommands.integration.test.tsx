@@ -101,6 +101,93 @@ describe("useWorktreeCommands", () => {
     );
   });
 
+  it("keeps automatic execution busy until submission resolves and rejects a second request", async () => {
+    const command: WorktreeCommandDto = {
+      type: "lock",
+      worktreeId: "worktree-linked"
+    };
+    let resolveExecution!: (value: {
+      ok: true;
+      value: { operationId: string };
+    }) => void;
+    const preflightCommand = vi.fn(async () => ({
+      ok: true as const,
+      value: createPreflight(command, false)
+    }));
+    const executeCommand = vi.fn(
+      () =>
+        new Promise<{
+          ok: true;
+          value: { operationId: string };
+        }>((resolve) => {
+          resolveExecution = resolve;
+        })
+    );
+    installBridge({ preflightCommand, executeCommand });
+    await renderHarness([]);
+
+    let pending: Promise<boolean> | undefined;
+    await act(async () => {
+      pending = controller?.request(command);
+      await Promise.resolve();
+    });
+
+    expect(controller?.active).toBe("lock");
+    expect(controller?.busy).toBe(true);
+    await act(async () => {
+      expect(await controller?.request(command)).toBe(false);
+    });
+    expect(preflightCommand).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveExecution({
+        ok: true,
+        value: { operationId: "operation-pending" }
+      });
+      expect(await pending).toBe(true);
+    });
+    expect(controller?.active).toBeNull();
+    expect(controller?.busy).toBe(true);
+    expect(controller?.notice).toContain("已加入操作中心");
+  });
+
+  it("reports automatic execution rejection as feedback and permits retry", async () => {
+    const command: WorktreeCommandDto = {
+      type: "unlock",
+      worktreeId: "worktree-linked"
+    };
+    const executeCommand = vi.fn()
+      .mockRejectedValueOnce(new Error("IPC submission failed"))
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { operationId: "operation-retry" }
+      });
+    installBridge({
+      preflightCommand: vi.fn(async () => ({
+        ok: true as const,
+        value: createPreflight(command, false)
+      })),
+      executeCommand
+    });
+    await renderHarness([]);
+
+    await act(async () => {
+      await expect(controller?.request(command)).resolves.toBe(false);
+    });
+    expect(controller?.error).toMatchObject({
+      code: "COMMAND_FAILED",
+      message: "IPC submission failed"
+    });
+    expect(controller?.active).toBeNull();
+    expect(controller?.busy).toBe(false);
+
+    await act(async () => {
+      expect(await controller?.request(command)).toBe(true);
+    });
+    expect(controller?.error).toBeNull();
+    expect(executeCommand).toHaveBeenCalledTimes(2);
+  });
+
   it("holds remove behind an explicit danger confirmation", async () => {
     const command: WorktreeCommandDto = {
       type: "remove",
@@ -135,6 +222,56 @@ describe("useWorktreeCommands", () => {
       confirmed: true
     });
   });
+
+  it.each(["single", "workspace"] as const)(
+    "invalidates an expired %s confirmation and allows a fresh retry",
+    async (kind) => {
+      const command: WorktreeCommandDto = { type: "remove", worktreeId: "worktree-linked" };
+      let preflightNumber = 0;
+      const executeCommand = vi.fn()
+        .mockResolvedValueOnce({
+          ok: false, error: { code: "PREFLIGHT_EXPIRED", message: "Confirmation expired.", details: {} }
+        })
+        .mockResolvedValueOnce({ ok: true, value: { operationId: "fresh-confirmation" } });
+      installBridge({
+        preflightCommand: vi.fn(async () => ({
+          ok: true as const,
+          value: { ...createPreflight(command, true), preflightId: `preflight-${++preflightNumber}` }
+        })),
+        executeCommand
+      });
+      if (kind === "single") {
+        await renderHarness([]);
+      } else {
+        await renderWorkspaceCommandHarness([]);
+      }
+      const request = () => kind === "single"
+        ? controller!.request(command)
+        : workspaceCommandController!.request([command]);
+      const current = () => kind === "single" ? controller! : workspaceCommandController!;
+      await act(async () => { expect(await request()).toBe(true); });
+      const expiredConfirm = current().confirm;
+      await act(async () => {
+        expect(await Promise.all([expiredConfirm(), expiredConfirm()])).toEqual([false, false]);
+      });
+      expect(executeCommand).toHaveBeenCalledTimes(1);
+      expect(current().busy).toBe(false);
+      expect(current().error?.message).toContain("请重新预检");
+      await act(async () => {
+        expect(await expiredConfirm()).toBe(false);
+        expect(await request()).toBe(true);
+      });
+      await act(async () => {
+        expect(await expiredConfirm()).toBe(false);
+        expect(await current().confirm()).toBe(true);
+      });
+      expect(executeCommand).toHaveBeenCalledTimes(2);
+      expect(executeCommand).toHaveBeenLastCalledWith({
+        command, preflightId: "preflight-2", confirmed: true
+      });
+      expect(current().error).toBeNull();
+    }
+  );
 
   it("returns a Main-authorized directory selection and formats stale preflight errors", async () => {
     const selectDirectory = vi.fn(async () => ({
@@ -462,6 +599,67 @@ describe("useWorktreeCommands", () => {
     expect(workspaceCommandController?.busy).toBe(false);
   });
 
+  it.each([
+    ["failed", "succeeded"],
+    ["interrupted", "cancelled"],
+    ["cancelled", "succeeded"]
+  ] as const)("retains Workspace batch %s through a later %s result and permits retry", async (firstState, lastState) => {
+    const commands = ["repository-1", "repository-2"].map((repositoryId) => ({
+      type: "prune" as const, repositoryId
+    }));
+    const executeCommand = vi.fn()
+      .mockResolvedValueOnce({ ok: true, value: { operationId: "first" } })
+      .mockResolvedValueOnce({ ok: true, value: { operationId: "last" } })
+      .mockResolvedValueOnce({ ok: true, value: { operationId: "retry-first" } })
+      .mockResolvedValueOnce({ ok: true, value: { operationId: "retry-last" } });
+    installBridge({
+      preflightCommand: vi.fn(async ({ command }) => {
+        if (command.type !== "prune") {
+          throw new Error("Expected prune.");
+        }
+        return { ok: true as const, value: createPrunePreflight(command, 1) };
+      }),
+      executeCommand
+    });
+    await renderWorkspaceCommandHarness([]);
+    await act(async () => {
+      expect(await workspaceCommandController!.request(commands)).toBe(true);
+    });
+    await act(async () => {
+      expect(await workspaceCommandController!.confirm()).toBe(true);
+    });
+    const first = {
+      ...createPruneOperation("first", firstState, "repository-1"),
+      message: "第一个 Worktree 未完成"
+    };
+    const last = createPruneOperation("last", "running", "repository-2");
+    await renderWorkspaceCommandHarness([first, last]);
+    expect(workspaceCommandController!.busy).toBe(true);
+    await renderWorkspaceCommandHarness([{ ...last, state: lastState, message: "第二个 Worktree 已结束" }]);
+    expect(workspaceCommandController!.busy).toBe(false);
+    expect(workspaceCommandsSettled).toHaveBeenCalledTimes(1);
+    if (firstState === "cancelled") {
+      expect(workspaceCommandController!.notice).toBe(first.message);
+    } else {
+      expect(workspaceCommandController!.error?.message).toBe(first.message);
+      expect(workspaceCommandController!.notice).toBeNull();
+    }
+    await act(async () => {
+      expect(await workspaceCommandController!.request(commands)).toBe(true);
+    });
+    await act(async () => {
+      expect(await workspaceCommandController!.confirm()).toBe(true);
+    });
+    expect(workspaceCommandController!.error).toBeNull();
+    await renderWorkspaceCommandHarness([
+      createPruneOperation("retry-first", "succeeded", "repository-1"),
+      createPruneOperation("retry-last", "succeeded", "repository-2")
+    ]);
+    expect(workspaceCommandController!.error).toBeNull();
+    expect(workspaceCommandController!.busy).toBe(false);
+    expect(workspaceCommandController!.notice).toContain("已完成");
+  });
+
   it("rejects a batch that could overflow runtime operation history", async () => {
     const preflightCommand = vi.fn();
     installBridge({
@@ -485,8 +683,253 @@ describe("useWorktreeCommands", () => {
     );
   });
 
+  it("rejects a captured Worktree confirmation after a repository switch", async () => {
+    const command: WorktreeCommandDto = { type: "remove", worktreeId: "worktree-linked" };
+    const executeCommand = vi.fn(async () => ({ ok: true as const, value: { operationId: "old" } }));
+    installBridge({
+      preflightCommand: vi.fn(async () => ({ ok: true as const, value: createPreflight(command, true) })),
+      executeCommand
+    });
+    await renderHarness([]);
+    await act(async () => { await controller!.request(command); });
+    const confirm = controller!.confirm;
+    await renderHarness([], "repository-2");
+    await act(async () => { expect(await confirm()).toBe(false); });
+    expect(executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("does not return a directory selected for a previous repository", async () => {
+    const selection = deferred<Awaited<ReturnType<GitNestBridge["worktree"]["selectDirectory"]>>>();
+    installBridge({ selectDirectory: vi.fn(() => selection.promise) });
+    await renderHarness([]);
+    let pending!: Promise<string | null>;
+    act(() => { pending = controller!.chooseDirectory(); });
+    await renderHarness([], "repository-2");
+    await act(async () => {
+      selection.resolve({ ok: true, value: { cancelled: false, path: "D:\\old" } });
+      expect(await pending).toBeNull();
+    });
+    expect(controller!.error).toBeNull();
+  });
+
+  it("ignores old cancellation failures after switching repositories", async () => {
+    const cancellation = deferred<Awaited<ReturnType<GitNestBridge["repository"]["cancelOperation"]>>>();
+    installBridge({}, { cancelOperation: vi.fn(() => cancellation.promise) });
+    await renderHarness([]);
+    let pending!: Promise<boolean>;
+    act(() => { pending = controller!.cancelOperation("old"); });
+    await renderHarness([], "repository-2");
+    await act(async () => {
+      cancellation.resolve({ ok: false, error: { code: "COMMAND_FAILED", message: "old cancellation failed", details: {} } });
+      expect(await pending).toBe(false);
+    });
+    expect(controller!.error).toBeNull();
+    expect(controller!.notice).toBeNull();
+  });
+
+  it("blocks repeat Worktree submissions after acceptance until completion", async () => {
+    const command: WorktreeCommandDto = { type: "lock", worktreeId: "worktree-linked" };
+    const preflightCommand = vi.fn(async () => ({ ok: true as const, value: createPreflight(command, false) }));
+    installBridge({
+      preflightCommand,
+      executeCommand: vi.fn(async () => ({ ok: true as const, value: { operationId: "operation-1" } }))
+    });
+    await renderHarness([]);
+    const request = controller!.request;
+    await act(async () => {
+      expect(await request(command)).toBe(true);
+      expect(await request(command)).toBe(false);
+    });
+    expect(preflightCommand).toHaveBeenCalledTimes(1);
+    await renderHarness([createOperation("operation-1", "failed")]);
+    await act(async () => { expect(await controller!.request(command)).toBe(true); });
+  });
+
+  it("blocks Worktree requests when an operation is already running", async () => {
+    const preflightCommand = vi.fn(async () => ({ ok: false as const, error: { code: "COMMAND_FAILED" as const, message: "must not be called", details: {} } }));
+    installBridge({ preflightCommand });
+    await renderHarness([createOperation("external-operation", "running")]);
+    await act(async () => {
+      expect(await controller!.request({ type: "lock", worktreeId: "worktree-linked" })).toBe(false);
+    });
+    expect(preflightCommand).not.toHaveBeenCalled();
+  });
+
+  it.each(["single", "workspace"] as const)(
+    "does not settle old %s operations arriving in the scope-switch render",
+    async (kind) => {
+      const command: WorktreeCommandDto = { type: "remove", worktreeId: "worktree-linked" };
+      installBridge({
+        preflightCommand: vi.fn(async () => ({
+          ok: true as const, value: createPreflight(command, true)
+        })),
+        executeCommand: vi.fn(async () => ({ ok: true as const, value: { operationId: "old" } }))
+      });
+      if (kind === "single") {
+        await renderHarness([]);
+        await act(async () => { await controller!.request(command); });
+        await act(async () => { await controller!.confirm(); });
+        await renderHarness([
+          { ...createOperation("old", "failed"), message: "旧 Worktree 失败" }
+        ], "repository-2");
+        expect(controller!.completionVersion).toBe(0);
+      } else {
+        await renderWorkspaceCommandHarness([]);
+        await act(async () => { await workspaceCommandController!.request([command]); });
+        await act(async () => { await workspaceCommandController!.confirm(); });
+        await renderWorkspaceCommandHarness([
+          { ...createOperation("old", "failed"), message: "旧 Worktree 失败" }
+        ], undefined, "workspace-2");
+        expect(workspaceCommandsSettled).not.toHaveBeenCalled();
+      }
+      const current = kind === "single" ? controller! : workspaceCommandController!;
+      expect(current.error).toBeNull();
+      expect(current.notice).toBeNull();
+      expect(current.busy).toBe(false);
+    }
+  );
+  it("rejects captured Workspace requests and confirmations after changing scope", async () => {
+    const command = { type: "prune" as const, repositoryId: REPOSITORY_ID };
+    const preflightCommand = vi.fn(async () => ({ ok: true as const, value: createPrunePreflight(command, 1) }));
+    const executeCommand = vi.fn(async () => ({ ok: true as const, value: { operationId: "old" } }));
+    installBridge({ preflightCommand, executeCommand });
+    await renderWorkspaceCommandHarness([]);
+    const request = workspaceCommandController!.request;
+    await act(async () => { await request([command]); });
+    const confirm = workspaceCommandController!.confirm;
+    await renderWorkspaceCommandHarness([], undefined, "workspace-2");
+    await act(async () => { expect(await confirm()).toBe(false); });
+    await act(async () => { expect(await request([command])).toBe(false); });
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(preflightCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects dismissed Workspace confirmations and duplicate requests from the same render", async () => {
+    const command = { type: "prune" as const, repositoryId: REPOSITORY_ID };
+    const preflightCommand = vi.fn(async () => ({ ok: true as const, value: createPrunePreflight(command, 1) }));
+    const executeCommand = vi.fn(async () => ({ ok: true as const, value: { operationId: "old" } }));
+    installBridge({ preflightCommand, executeCommand });
+    await renderWorkspaceCommandHarness([]);
+    const request = workspaceCommandController!.request;
+    await act(async () => {
+      expect(await request([command])).toBe(true);
+      expect(await request([command])).toBe(false);
+    });
+    const confirm = workspaceCommandController!.confirm;
+    act(() => { workspaceCommandController!.dismissPreflight(); });
+    await act(async () => { expect(await confirm()).toBe(false); });
+    expect(executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("does not execute an automatic Worktree preflight after unmount", async () => {
+    const result = deferred<Awaited<ReturnType<GitNestBridge["worktree"]["preflightCommand"]>>>();
+    const executeCommand = vi.fn();
+    installBridge({ preflightCommand: vi.fn(() => result.promise), executeCommand });
+    await renderHarness([]);
+    const command: WorktreeCommandDto = { type: "lock", worktreeId: "worktree-linked" };
+    const request = controller!.request;
+    let pending!: Promise<boolean>;
+    act(() => { pending = request(command); });
+    act(() => { root.render(null); });
+    await act(async () => {
+      result.resolve({ ok: true, value: createPreflight(command, false) });
+      expect(await pending).toBe(false);
+      expect(await request(command)).toBe(false);
+    });
+    expect(executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("does not replace or replay a dismissed Worktree confirmation", async () => {
+    const command: WorktreeCommandDto = { type: "remove", worktreeId: "worktree-linked" };
+    const preflightCommand = vi.fn(async () => ({ ok: true as const, value: createPreflight(command, true) }));
+    const executeCommand = vi.fn();
+    installBridge({ preflightCommand, executeCommand });
+    await renderHarness([]);
+    await act(async () => { expect(await controller!.request(command)).toBe(true); });
+    const confirm = controller!.confirm;
+    await act(async () => { expect(await controller!.request(command)).toBe(false); });
+    act(() => { controller!.dismissPreflight(); });
+    await act(async () => { expect(await confirm()).toBe(false); });
+    expect(preflightCommand).toHaveBeenCalledTimes(1);
+    expect(executeCommand).not.toHaveBeenCalled();
+  });
+
+  it("ignores directory errors and old callbacks after returning to the same repository", async () => {
+    const selection = deferred<Awaited<ReturnType<GitNestBridge["worktree"]["selectDirectory"]>>>();
+    const selectDirectory = vi.fn(() => selection.promise);
+    const preflightCommand = vi.fn();
+    const cancelOperation = vi.fn();
+    installBridge({ selectDirectory, preflightCommand }, { cancelOperation });
+    await renderHarness([]);
+    const old = controller!;
+    let pending!: Promise<string | null>;
+    act(() => { pending = old.chooseDirectory(); });
+    await renderHarness([], "repository-2");
+    await renderHarness([]);
+    await act(async () => {
+      selection.resolve({ ok: false, error: { code: "DIRECTORY_UNAVAILABLE", message: "old directory failed", details: {} } });
+      expect(await pending).toBeNull();
+      expect(await old.chooseDirectory()).toBeNull();
+      expect(await old.request({ type: "lock", worktreeId: "old" })).toBe(false);
+      expect(await old.cancelOperation("old")).toBe(false);
+    });
+    expect(controller!.error).toBeNull();
+    expect(selectDirectory).toHaveBeenCalledTimes(1);
+    expect(preflightCommand).not.toHaveBeenCalled();
+    expect(cancelOperation).not.toHaveBeenCalled();
+  });
+
+  it("stops a partially submitted Workspace batch when the controller unmounts", async () => {
+    const execution = deferred<Awaited<ReturnType<GitNestBridge["worktree"]["executeCommand"]>>>();
+    const executeCommand = vi.fn(() => execution.promise);
+    installBridge({
+      preflightCommand: vi.fn(async ({ command }) => ({ ok: true as const, value: createPreflight(command, true) })),
+      executeCommand
+    });
+    await renderWorkspaceCommandHarness([]);
+    await act(async () => {
+      await workspaceCommandController!.request([
+        { type: "prune", repositoryId: "repository-1" },
+        { type: "prune", repositoryId: "repository-2" }
+      ]);
+    });
+    const confirm = workspaceCommandController!.confirm;
+    let pending!: Promise<boolean>;
+    act(() => { pending = confirm(); });
+    act(() => { root.render(null); });
+    await act(async () => {
+      execution.resolve({ ok: true, value: { operationId: "first" } });
+      expect(await pending).toBe(false);
+      expect(await confirm()).toBe(false);
+    });
+    expect(executeCommand).toHaveBeenCalledTimes(1);
+    expect(workspaceCommandsSettled).not.toHaveBeenCalled();
+  });
+
+  it("permits Workspace retry after rejected submission without replaying its confirmation", async () => {
+    const command = { type: "prune" as const, repositoryId: REPOSITORY_ID };
+    const executeCommand = vi.fn()
+      .mockRejectedValueOnce(new Error("IPC failed"))
+      .mockResolvedValueOnce({ ok: true, value: { operationId: "retry" } });
+    installBridge({
+      preflightCommand: vi.fn(async () => ({ ok: true as const, value: createPrunePreflight(command, 1) })),
+      executeCommand
+    });
+    await renderWorkspaceCommandHarness([]);
+    await act(async () => { await workspaceCommandController!.request([command]); });
+    const oldConfirm = workspaceCommandController!.confirm;
+    await act(async () => { expect(await oldConfirm()).toBe(false); });
+    expect(workspaceCommandController!.busy).toBe(false);
+    expect(workspaceCommandController!.error?.message).toBe("IPC failed");
+    await act(async () => { expect(await oldConfirm()).toBe(false); });
+    await act(async () => { expect(await workspaceCommandController!.request([command])).toBe(true); });
+    await act(async () => { expect(await workspaceCommandController!.confirm()).toBe(true); });
+    expect(executeCommand).toHaveBeenCalledTimes(2);
+  });
+
   async function renderHarness(
-    operations: WorkspaceOperationDto[]
+    operations: WorkspaceOperationDto[],
+    repositoryId = REPOSITORY_ID
   ): Promise<void> {
     await act(async () => {
       root.render(
@@ -495,6 +938,7 @@ describe("useWorktreeCommands", () => {
             controller = value;
           }}
           operations={operations}
+          repositoryId={repositoryId}
         />
       );
     });
@@ -502,7 +946,8 @@ describe("useWorktreeCommands", () => {
 
   async function renderWorkspaceCommandHarness(
     operations: WorkspaceOperationDto[],
-    repositoryId?: string
+    repositoryId?: string,
+    scopeKey = "workspace-1"
   ): Promise<void> {
     await act(async () => {
       root.render(
@@ -512,6 +957,7 @@ describe("useWorktreeCommands", () => {
           }}
           onSettled={workspaceCommandsSettled}
           operations={operations}
+          scopeKey={scopeKey}
           {...(repositoryId ? { repositoryId } : {})}
         />
       );
@@ -519,15 +965,23 @@ describe("useWorktreeCommands", () => {
   }
 });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => { resolve = complete; });
+  return { promise, resolve };
+}
+
 function Harness({
   operations,
+  repositoryId,
   onController
 }: {
   operations: WorkspaceOperationDto[];
+  repositoryId: string;
   onController(value: WorktreeCommandController): void;
 }) {
   onController(
-    useWorktreeCommands(REPOSITORY_ID, operations)
+    useWorktreeCommands(repositoryId, operations)
   );
   return null;
 }
@@ -536,7 +990,8 @@ function WorkspaceCommandHarness({
   operations,
   onController,
   onSettled,
-  repositoryId
+  repositoryId,
+  scopeKey
 }: {
   operations: WorkspaceOperationDto[];
   onController(
@@ -544,10 +999,11 @@ function WorkspaceCommandHarness({
   ): void;
   onSettled(): Promise<void>;
   repositoryId?: string;
+  scopeKey: string;
 }) {
   onController(
     useWorkspaceWorktreeCommands(
-      "workspace-1",
+      scopeKey,
       operations,
       onSettled,
       repositoryId

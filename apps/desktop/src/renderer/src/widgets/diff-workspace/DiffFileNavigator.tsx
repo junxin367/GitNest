@@ -203,6 +203,8 @@ export function DiffFileNavigator({
   const viewMenuRef = useRef<HTMLDivElement>(null);
   const fileListRef = useRef<HTMLDivElement>(null);
   const treeScopeRef = useRef("");
+  const treeCollapsedPreferenceRef =
+    useRef<boolean | undefined>(undefined);
   const knownDirectoryKeysRef = useRef<Set<string>>(new Set());
   const requestedSelectionRef = useRef("");
   const revealedSelectionRef = useRef("");
@@ -235,6 +237,8 @@ export function DiffFileNavigator({
     filteredFiles.find(
       (file) => file.key === selectedFileKey
     ) ?? filteredFiles[0];
+  const selectedPath = selectedFile?.path;
+  const selectedMode = selectedFile?.mode;
   const directoryKeys = useMemo(
     () =>
       [
@@ -319,8 +323,14 @@ export function DiffFileNavigator({
     const scopeKey = treePreference?.scopeKey ?? "";
     const nextKeys = new Set(directoryKeys);
 
-    if (treeScopeRef.current !== scopeKey) {
+    const initiallyCollapsed =
+      treePreference?.initiallyCollapsed ?? false;
+    if (
+      treeScopeRef.current !== scopeKey ||
+      treeCollapsedPreferenceRef.current !== initiallyCollapsed
+    ) {
       treeScopeRef.current = scopeKey;
+      treeCollapsedPreferenceRef.current = initiallyCollapsed;
       knownDirectoryKeysRef.current = nextKeys;
       setCollapsedDirectories(
         treePreference?.initiallyCollapsed
@@ -356,20 +366,22 @@ export function DiffFileNavigator({
   useEffect(() => {
     if (
       treePreference?.initiallyCollapsed ||
-      !selectedFile ||
+      !selectedPath ||
+      !selectedMode ||
       viewMode !== "tree"
     ) {
       return;
     }
     setCollapsedDirectories((current) => {
       const next = new Set(current);
-      changeTreeDirectoryPaths(selectedFile.path).forEach(
-        (path) => next.delete(`${selectedFile.mode}:${path}`)
+      changeTreeDirectoryPaths(selectedPath).forEach(
+        (path) => next.delete(`${selectedMode}:${path}`)
       );
       return next;
     });
   }, [
-    selectedFile,
+    selectedPath,
+    selectedMode,
     treePreference?.initiallyCollapsed,
     viewMode
   ]);

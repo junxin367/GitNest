@@ -1,6 +1,7 @@
 import {
   mkdir,
   mkdtemp,
+  rename,
   rm,
   writeFile
 } from "node:fs/promises";
@@ -15,6 +16,9 @@ import {
 
 import {
   CodeAnalysisEngine,
+  AnalysisSnapshotCache,
+  createChangedAnalysisSnapshot,
+  mergeIncrementalWorkspaceSnapshot,
   ExternalLanguageServerPool,
   type AnalysisRoot,
   type CodeAnalysisInput,
@@ -23,6 +27,121 @@ import {
 import type { LspDocumentSymbol } from "./model";
 
 describe("CodeAnalysisEngine", () => {
+  it.each(
+    (["restore", "remove-untracked", "undo-rename"] as const).flatMap(
+      (operation) => (["workspace", "changed"] as const).map(
+        (dirtyScope) => ({ operation, dirtyScope })
+      )
+    )
+  )(
+    "reconciles $operation after paths disappear from the $dirtyScope baseline",
+    async ({ operation, dirtyScope }) => {
+      const fixture = await createFixture();
+      const engine = new CodeAnalysisEngine();
+      const settings = { ...defaultSettings(), enabled: false };
+      const store = new AnalysisSnapshotCache(fixture.cacheDirectory);
+      const change = (path: string) =>
+        changedPath(fixture.frontendRoot, path);
+      const statuses = [{
+        repositoryId: fixture.frontendRoot.repositoryId,
+        worktreeId: fixture.frontendRoot.worktreeId,
+        fingerprint: "test-status"
+      }];
+      const initial = {
+        ...analysisInput(fixture, {
+          analysisId: "clean",
+          scope: "workspace",
+          changedPaths: []
+        }),
+        freshnessChangedPaths: [],
+        worktreeStatuses: statuses,
+        settings
+      };
+      const pendingFile = join(fixture.frontendRoot.path, "pending.ts");
+      try {
+        const clean = await engine.analyze(initial);
+        let dirtyPaths;
+        if (operation === "restore") {
+          await writeFile(
+            fixture.frontendFile,
+            "export function pendingFunction() { return pendingTarget(); }\n" +
+              "export function pendingTarget() { return 1; }\n"
+          );
+          dirtyPaths = [change("client.ts")];
+        } else if (operation === "remove-untracked") {
+          await writeFile(
+            pendingFile,
+            "export function pendingFunction() { return pendingTarget(); }\n" +
+              "export function pendingTarget() { return 1; }\n"
+          );
+          dirtyPaths = [change("pending.ts")];
+        } else {
+          await rename(fixture.frontendFile, pendingFile);
+          dirtyPaths = [change("client.ts"), change("pending.ts")];
+        }
+        const dirtyResult = await engine.analyze({
+          ...initial,
+          analysisId: "dirty",
+          scope: dirtyScope,
+          resultScope: "workspace",
+          changedPaths: dirtyPaths,
+          freshnessChangedPaths: dirtyPaths
+        });
+        const dirty = dirtyScope === "workspace"
+          ? dirtyResult
+          : mergeIncrementalWorkspaceSnapshot(clean, dirtyResult, dirtyPaths);
+        // Exercise the disk baseline consumed by the next desktop/MCP cycle.
+        await store.save(dirty, settings);
+        const restoredDirty = await store.load(
+          initial.workspaceId, settings, initial.roots, "workspace"
+        );
+        expect(restoredDirty?.sourceState?.changedPaths).toEqual(dirtyPaths);
+
+        if (operation === "restore") {
+          await writeFile(fixture.frontendFile, frontendSource());
+        } else if (operation === "remove-untracked") {
+          await rm(pendingFile);
+        } else {
+          await rename(pendingFile, fixture.frontendFile);
+        }
+        const refreshed = await engine.analyze({
+          ...initial,
+          analysisId: "clean-again",
+          scope: "changed",
+          resultScope: "workspace"
+        });
+        const merged = mergeIncrementalWorkspaceSnapshot(
+          restoredDirty!, refreshed, []
+        );
+        expect(merged.nodes).toEqual(clean.nodes);
+        expect(merged.edges).toEqual(clean.edges);
+        expect(merged.requestChains).toEqual(clean.requestChains);
+        expect(merged.stats.analyzedFiles).toBe(clean.stats.analyzedFiles);
+        expect(merged.indexStatus?.resultCompleteness).toBe("complete");
+        expect(createChangedAnalysisSnapshot(merged).nodes).toEqual([]);
+        await store.save(merged, settings);
+        const persisted = await store.load(
+          initial.workspaceId, settings, initial.roots, "workspace"
+        );
+        expect(persisted?.nodes).toEqual(clean.nodes);
+        expect(persisted?.edges).toEqual(clean.edges);
+        expect(persisted?.sourceState?.changedPaths).toEqual([]);
+        const repeated = await engine.analyze({
+          ...initial,
+          analysisId: "clean-retry",
+          scope: "changed",
+          resultScope: "workspace"
+        });
+        expect(repeated.nodes).toEqual(clean.nodes);
+        expect(repeated.edges).toEqual(clean.edges);
+        expect(repeated.stats.discoveredFiles).toBe(0);
+      } finally {
+        await engine.dispose();
+        await fixture.dispose();
+      }
+    }
+  );
+
   it("uses the Workspace identity for LSP sessions and snapshots", async () => {
     const fixture = await createFixture();
     const lspPool = new SessionCapturingLanguageServerPool();
@@ -344,6 +463,37 @@ describe("CodeAnalysisEngine", () => {
           settings
         })
       ).rejects.toThrow("内置分析降级已关闭");
+    } finally {
+      await engine.dispose();
+      await fixture.dispose();
+    }
+  });
+
+  it("rejects cancellation requested as cache persistence begins", async () => {
+    const fixture = await createFixture();
+    const engine = new CodeAnalysisEngine();
+    const controller = new AbortController();
+    const reason = new Error("cancelled while caching");
+
+    try {
+      await expect(
+        engine.analyze({
+          ...analysisInput(fixture, {
+            analysisId: "cancelled-while-caching",
+            scope: "workspace",
+            changedPaths: []
+          }),
+          signal: controller.signal,
+          onProgress: (progress) => {
+            if (
+              progress.stage === "caching" &&
+              progress.completed === 0
+            ) {
+              controller.abort(reason);
+            }
+          }
+        })
+      ).rejects.toBe(reason);
     } finally {
       await engine.dispose();
       await fixture.dispose();

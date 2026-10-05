@@ -114,6 +114,81 @@ describe("DiffFileNavigator selection reveal", () => {
     expect(scrollIntoView).toHaveBeenCalledOnce();
   });
 
+  it("keeps a manually collapsed directory closed when a refresh updates the selected file", () => {
+    const onSelectedFileChange = vi.fn();
+    const render = (files: DiffViewerFile[]) => {
+      root.render(
+        <DiffFileNavigator configuration={repositoryDiffWorkspaceConfiguration.navigation}
+          fileView="tree" files={files} selectedFileKey={FILES[1]!.key}
+          treePreference={{ initiallyCollapsed: false, scopeKey: "manual-collapse-refresh" }}
+          onSelectedFileChange={onSelectedFileChange} />
+      );
+    };
+    act(() => render(FILES));
+    const directory = container.querySelector<HTMLSpanElement>('.diff-workspace-tree-directory span[title="src"]')
+      ?.closest("button");
+    expect(directory?.getAttribute("aria-expanded")).toBe("true");
+    act(() => directory?.click());
+    expect(directory?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('button[aria-label="target.ts"]')).toBeNull();
+
+    act(() => render(FILES.map((file) => ({
+      ...file, additions: 5, deletions: 1, change: { ...file.change }
+    }))));
+
+    expect(directory?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('button[aria-label="target.ts"]')).toBeNull();
+    expect(onSelectedFileChange).not.toHaveBeenCalled();
+  });
+
+  it("applies a changed saved collapse preference without changing the file scope", () => {
+    const render = (initiallyCollapsed: boolean) => root.render(
+      <DiffFileNavigator
+        configuration={repositoryDiffWorkspaceConfiguration.navigation}
+        fileView="tree" files={FILES}
+        treePreference={{ initiallyCollapsed, scopeKey: "saved-preference-sync" }}
+        onSelectedFileChange={vi.fn()} />
+    );
+    act(() => render(false));
+    expect(container.querySelector('button[aria-label="target.ts"]')).not.toBeNull();
+    act(() => render(true));
+    expect(container.querySelector('button[aria-label="target.ts"]')).toBeNull();
+    act(() => render(false));
+    expect(container.querySelector('button[aria-label="target.ts"]')).not.toBeNull();
+  });
+
+  it.each(["selection", "reveal"] as const)(
+    "expands a manually collapsed directory after an explicit %s",
+    (action) => {
+      const render = (selectedFileKey: string, selectionRevealKey?: string) => {
+        root.render(
+          <DiffFileNavigator configuration={repositoryDiffWorkspaceConfiguration.navigation}
+            fileView="tree" files={FILES} selectedFileKey={selectedFileKey}
+            selectionRevealKey={selectionRevealKey}
+            treePreference={{ initiallyCollapsed: false, scopeKey: `manual-collapse-${action}` }}
+            onSelectedFileChange={vi.fn()} />
+        );
+      };
+      act(() => render(FILES[0]!.key));
+      const directory = container.querySelector<HTMLSpanElement>('.diff-workspace-tree-directory span[title="src"]')
+        ?.closest("button");
+      act(() => directory?.click());
+      expect(directory?.getAttribute("aria-expanded")).toBe("false");
+      act(() => render(
+        action === "selection" ? FILES[1]!.key : FILES[0]!.key,
+        action === "reveal" ? "reveal-collapsed-file" : undefined
+      ));
+      expect(directory?.getAttribute("aria-expanded")).toBe("true");
+      const selectedButton = container.querySelector<HTMLButtonElement>(
+        `.diff-workspace-file-select[aria-current="true"]`
+      );
+      expect(selectedButton).not.toBeNull();
+      if (action === "reveal") {
+        expect(document.activeElement).toBe(selectedButton);
+      }
+    }
+  );
+
   it("summarizes the visible additions and deletions for each file group", () => {
     act(() => {
       root.render(

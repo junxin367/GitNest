@@ -56,6 +56,7 @@ import {
   validateRepositoryCommandPreflightRequest,
   validateRepositoryCommitDiffRequest,
   validateRepositoryDiffRequest,
+  validateRepositoryDiscardRequest,
   validateRepositoryHistoryRequest,
   validateRepositoryStashDiffRequest,
   validateRepositoryStashMutationRequest,
@@ -68,6 +69,37 @@ import {
   validateWorktreeCommandPreflightRequest
 } from "./register-ipc";
 import { McpRegistrationService } from "../code-analysis/mcp-registration";
+
+describe("Discard confirmation IPC validation", () => {
+  const input = {
+    target: { repositoryId: "repo", worktreeId: "wt" },
+    paths: ["tracked.txt", "new.txt"]
+  };
+
+  it("preserves an explicit subset of confirmed untracked paths", () => {
+    expect(validateRepositoryDiscardRequest({
+      ...input, expectedUntrackedPaths: ["new.txt"]
+    })).toEqual({ ...input, expectedUntrackedPaths: ["new.txt"] });
+  });
+
+  it("treats omitted deletion confirmation as tracked-only discard", () => {
+    expect(validateRepositoryDiscardRequest(input)).toEqual({
+      ...input, expectedUntrackedPaths: []
+    });
+  });
+
+  it.each([
+    { expectedUntrackedPaths: "new.txt" },
+    { expectedUntrackedPaths: ["outside.txt"] },
+    { expectedUntrackedPaths: ["new.txt", "new.txt"] },
+    { expectedUntrackedPaths: [42] },
+    { expectedUntrackedPaths: null }
+  ])("rejects malformed deletion confirmation $expectedUntrackedPaths", ({ expectedUntrackedPaths }) => {
+    expect(() => validateRepositoryDiscardRequest({
+      ...input, expectedUntrackedPaths
+    })).toThrow();
+  });
+});
 
 describe("MCP registration availability", () => {
   it("does not register a development build without a bundled entry", async () => {
@@ -1089,6 +1121,33 @@ describe("application settings and AI IPC validation", () => {
     ).toThrowError(
       expect.objectContaining({ code: "INVALID_REQUEST" })
     );
+  });
+
+  it.each([
+    { typescript: { enabled: false, command: "" } },
+    { typescript: { command: "   " } },
+    { typescript: { args: [""] } },
+    { ignoreDirectories: [" "] }
+  ])("rejects settings strings that persisted validation rejects: %j", (codeAnalysis) => {
+    expect(() => validateUpdateAppSettingsRequest({ codeAnalysis }))
+      .toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
+  });
+
+  it("validates repository browsing patches independently of workspace and worktree", () => {
+    expect(validateUpdateAppSettingsRequest({
+      repositoryFileBrowsing: { repositoryId: "repo-a", fileView: "tree", treeDirectoriesCollapsed: true }
+    })).toEqual({
+      repositoryFileBrowsing: { repositoryId: "repo-a", fileView: "tree", treeDirectoriesCollapsed: true }
+    });
+    for (const repositoryFileBrowsing of [
+      null, {}, { repositoryId: "" }, { repositoryId: " " },
+      { repositoryId: "__proto__" }, { repositoryId: "x".repeat(257) },
+      { repositoryId: "repo-a", fileView: "grid" },
+      { repositoryId: "repo-a", treeDirectoriesCollapsed: "true" }
+    ]) {
+      expect(() => validateUpdateAppSettingsRequest({ repositoryFileBrowsing }))
+        .toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
+    }
   });
 
   it("validates explicit key clearing, connection tests, and exact generation targets", () => {

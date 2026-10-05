@@ -66,6 +66,74 @@ export interface RelationGraphLayout {
   truncated: boolean;
 }
 
+interface DirectionalEdges {
+  incoming: Map<string, CodeGraphEdgeDto[]>;
+  outgoing: Map<string, CodeGraphEdgeDto[]>;
+}
+
+const EMPTY_DIRECTIONAL_EDGES: DirectionalEdges = {
+  incoming: new Map(),
+  outgoing: new Map()
+};
+
+interface RelationGraphIndex {
+  nodes: CodeGraphNodeDto[];
+  edges: CodeGraphEdgeDto[];
+  nodeById: Map<string, CodeGraphNodeDto>;
+  relationEdges: CodeGraphEdgeDto[];
+  fallbackIds: string[];
+  directional?: DirectionalEdges;
+  container?: {
+    structural: DirectionalEdges;
+    semantic: DirectionalEdges;
+  };
+}
+
+// Snapshots are replaced when analysis changes. Weak keys release indexes with
+// their snapshot; array identity also handles replacement on the same object.
+// The retained node/edge references and lazy adjacency lists are O(N + E).
+const relationGraphIndexes = new WeakMap<
+  CodeAnalysisSnapshotDto,
+  RelationGraphIndex
+>();
+
+function getRelationGraphIndex(
+  snapshot: CodeAnalysisSnapshotDto
+): RelationGraphIndex {
+  const cached = relationGraphIndexes.get(snapshot);
+  if (
+    cached?.nodes === snapshot.nodes &&
+    cached.edges === snapshot.edges
+  ) {
+    return cached;
+  }
+  const nodeById = new Map(
+    snapshot.nodes.map((node) => [node.id, node])
+  );
+  const index: RelationGraphIndex = {
+    nodes: snapshot.nodes,
+    edges: snapshot.edges,
+    nodeById,
+    relationEdges: snapshot.edges.filter((edge) =>
+      isCodeRelation(edge, nodeById)
+    ),
+    fallbackIds: snapshot.nodes
+      .filter((node) => node.kind !== "file")
+      .map((node) => node.id)
+  };
+  relationGraphIndexes.set(snapshot, index);
+  return index;
+}
+
+function directionalEdges(
+  edges: CodeGraphEdgeDto[]
+): DirectionalEdges {
+  return {
+    incoming: edgeAdjacency(edges, "to"),
+    outgoing: edgeAdjacency(edges, "from")
+  };
+}
+
 type GraphDragState =
   | {
       kind: "canvas";
@@ -759,12 +827,8 @@ export function buildRelationGraphLayout(
   chain: CodeRequestChainDto | null,
   focusNodeId: string | null
 ): RelationGraphLayout {
-  const nodeById = new Map(
-    snapshot.nodes.map((node) => [node.id, node])
-  );
-  const relationEdges = snapshot.edges.filter((edge) =>
-    isCodeRelation(edge, nodeById)
-  );
+  const index = getRelationGraphIndex(snapshot);
+  const { nodeById, relationEdges } = index;
   let preferredIds: string[];
   let levelById: Map<string, number>;
   let candidateEdges: CodeGraphEdgeDto[];
@@ -785,7 +849,7 @@ export function buildRelationGraphLayout(
     );
     const context = collectDirectionalContext(
       chain.clientNodeId,
-      candidateEdges,
+      directionalEdges(candidateEdges),
       chainIds,
       Math.max(NODE_GRAPH_DEPTH, chainIds.length)
     );
@@ -802,15 +866,27 @@ export function buildRelationGraphLayout(
       focusNode && isRelationContainer(focusNode)
         ? collectContainerRelationContext(
             focusNode.id,
-            relationEdges,
+            (index.container ??= {
+              structural: directionalEdges(
+                relationEdges.filter(
+                  (edge) => edge.kind === "contains"
+                )
+              ),
+              semantic: directionalEdges(
+                relationEdges.filter(
+                  (edge) => edge.kind !== "contains"
+                )
+              )
+            }),
             NODE_GRAPH_DEPTH
           )
         : collectDirectionalContext(
             focusNodeId,
-            relationEdges,
-            snapshot.nodes
-              .filter((node) => node.kind !== "file")
-              .map((node) => node.id),
+            focusNodeId
+              ? (index.directional ??=
+                  directionalEdges(relationEdges))
+              : EMPTY_DIRECTIONAL_EDGES,
+            index.fallbackIds,
             NODE_GRAPH_DEPTH
           );
     preferredIds = context.nodeIds;
@@ -1132,56 +1208,34 @@ function median(values: number[]): number {
 
 function collectContainerRelationContext(
   selectedNodeId: string,
-  edges: CodeGraphEdgeDto[],
+  adjacency: NonNullable<RelationGraphIndex["container"]>,
   depthLimit: number
 ): {
   nodeIds: string[];
   levelById: Map<string, number>;
 } {
-  const structuralEdges = edges.filter(
-    (edge) => edge.kind === "contains"
-  );
-  const semanticEdges = edges.filter(
-    (edge) => edge.kind !== "contains"
-  );
-  const structuralIncoming = edgeAdjacency(
-    structuralEdges,
-    "to"
-  );
-  const structuralOutgoing = edgeAdjacency(
-    structuralEdges,
-    "from"
-  );
-  const semanticIncoming = edgeAdjacency(
-    semanticEdges,
-    "to"
-  );
-  const semanticOutgoing = edgeAdjacency(
-    semanticEdges,
-    "from"
-  );
   const descendants = traverseDirection(
     selectedNodeId,
-    structuralOutgoing,
+    adjacency.structural.outgoing,
     (edge) => edge.to,
     depthLimit
   );
   const ancestors = traverseDirection(
     selectedNodeId,
-    structuralIncoming,
+    adjacency.structural.incoming,
     (edge) => edge.from,
     depthLimit
   );
   const memberIds = new Set(descendants.keys());
   const upstream = traverseDirections(
     [...memberIds],
-    semanticIncoming,
+    adjacency.semantic.incoming,
     (edge) => edge.from,
     depthLimit
   );
   const downstream = traverseDirections(
     [...memberIds],
-    semanticOutgoing,
+    adjacency.semantic.outgoing,
     (edge) => edge.to,
     depthLimit
   );
@@ -1208,7 +1262,7 @@ function collectContainerRelationContext(
       levelById.set(nodeId, -depth);
     }
   }
-  const memberDepth = Math.max(0, ...descendants.values());
+  const memberDepth = maximumDepth(descendants.values());
   for (const [nodeId, depth] of downstream) {
     if (
       depth > 0 &&
@@ -1236,7 +1290,7 @@ function collectContainerRelationContext(
 
 function collectDirectionalContext(
   selectedNodeId: string | null,
-  edges: CodeGraphEdgeDto[],
+  adjacency: DirectionalEdges,
   fallbackIds: string[],
   depthLimit: number
 ): {
@@ -1254,27 +1308,15 @@ function collectDirectionalContext(
     };
   }
 
-  const incoming = new Map<string, CodeGraphEdgeDto[]>();
-  const outgoing = new Map<string, CodeGraphEdgeDto[]>();
-  for (const [nodeId, group] of edgeAdjacency(
-    edges,
-    "from"
-  )) {
-    outgoing.set(nodeId, group);
-  }
-  for (const [nodeId, group] of edgeAdjacency(edges, "to")) {
-    incoming.set(nodeId, group);
-  }
-
   const upstream = traverseDirection(
     selectedNodeId,
-    incoming,
+    adjacency.incoming,
     (edge) => edge.from,
     depthLimit
   );
   const downstream = traverseDirection(
     selectedNodeId,
-    outgoing,
+    adjacency.outgoing,
     (edge) => edge.to,
     depthLimit
   );
@@ -1302,9 +1344,8 @@ function collectDirectionalContext(
 
   const nodeIds = [selectedNodeId];
   const maxDepth = Math.max(
-    0,
-    ...upstream.values(),
-    ...downstream.values()
+    maximumDepth(upstream.values()),
+    maximumDepth(downstream.values())
   );
   for (let depth = 1; depth <= maxDepth; depth += 1) {
     const upstreamIds = [...levelById]
@@ -1336,6 +1377,14 @@ function collectDirectionalContext(
     nodeIds: unique(nodeIds),
     levelById
   };
+}
+
+function maximumDepth(depths: Iterable<number>): number {
+  let maximum = 0;
+  for (const depth of depths) {
+    maximum = Math.max(maximum, depth);
+  }
+  return maximum;
 }
 
 function traverseDirection(

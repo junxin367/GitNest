@@ -5,8 +5,6 @@ import {
   type ReactNode
 } from "react";
 
-import { useMinimumLoadingIndicator } from "../lib/useMinimumLoadingIndicator";
-
 export type SkeletonVariant = "block" | "circle" | "text";
 
 export interface SkeletonProps
@@ -68,6 +66,8 @@ export function SkeletonSurface({
       ...props,
       "aria-busy": "true",
       "aria-label": label,
+      "aria-live": "polite",
+      "aria-atomic": "true",
       className: mergeClassNames("gn-skeleton-surface", className),
       role: "status"
     },
@@ -108,10 +108,9 @@ export function useSkeletonVisibility(
   loading: boolean,
   hasContent: boolean
 ): boolean {
-  const minimumVisible = useMinimumLoadingIndicator(
-    loading && !hasContent
-  );
-  return !hasContent && minimumVisible;
+  // A completed empty result and an error are real page states too.
+  // Never delay them or carry a previous page's minimum timer into this one.
+  return loading && !hasContent;
 }
 
 function mergeClassNames(

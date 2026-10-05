@@ -1,6 +1,6 @@
 import { Button } from "../../shared/ui/Button";
 import type { RuntimeInfo } from "@gitnest/contracts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { useWindowMaximized } from "../../shared/lib/useWindowMaximized";
 import { Icon } from "../../shared/ui/Icon";
@@ -41,10 +41,28 @@ export function AppTitlebar({
     setOpenMenu((current) =>
       current === menu ? null : menu
     );
-  const closeMenu = () => setOpenMenu(null);
+  const closeMenu = () => {
+    // The action can open a dialog. Restore a persistent anchor before the
+    // menu item unmounts so the dialog can return focus here when it closes.
+    (openMenu === "file" ? fileTriggerRef : helpTriggerRef).current?.focus();
+    setOpenMenu(null);
+  };
+  const openFromKeyboard = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    menu: Exclude<OpenMenu, null>
+  ) => {
+    if (event.key === "ArrowDown" && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      setOpenMenu(menu);
+    }
+  };
 
   useEffect(() => {
+    if (!openMenu) {
+      return;
+    }
     const menuRefs = [fileMenuRef, helpMenuRef];
+    const trigger = (openMenu === "file" ? fileTriggerRef : helpTriggerRef).current;
     const closeMenus = () => setOpenMenu(null);
     const closeFromOutside = (event: PointerEvent) => {
       const target = event.target;
@@ -59,19 +77,35 @@ export function AppTitlebar({
       }
       closeMenus();
     };
-    const closeFromKeyboard = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        closeMenus();
+    const closeFromKeyboard = (event: globalThis.KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        (document.activeElement !== trigger &&
+          !menuSurfaceRef.current?.contains(document.activeElement))
+      ) {
+        return;
       }
+      if (event.key !== "Escape" && event.key !== "Tab") {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+      }
+      closeMenus();
+      trigger?.focus();
     };
 
     document.addEventListener("pointerdown", closeFromOutside);
     document.addEventListener("keydown", closeFromKeyboard);
+    window.addEventListener("blur", closeMenus);
     return () => {
       document.removeEventListener("pointerdown", closeFromOutside);
       document.removeEventListener("keydown", closeFromKeyboard);
+      window.removeEventListener("blur", closeMenus);
     };
-  }, []);
+  }, [openMenu]);
 
   return (
     <header className="titlebar">
@@ -91,6 +125,7 @@ export function AppTitlebar({
             aria-expanded={openMenu === "file"}
             aria-haspopup="menu"
             onClick={() => toggleMenu("file")}
+            onKeyDown={(event) => openFromKeyboard(event, "file")}
             ref={fileTriggerRef}
             type="button"
           >
@@ -100,6 +135,7 @@ export function AppTitlebar({
             <MenuPopover
               align="start"
               anchor={fileTriggerRef.current}
+              autoFocus
               aria-label="文件"
               className="titlebar-file-popover"
               ref={menuSurfaceRef}
@@ -122,6 +158,7 @@ export function AppTitlebar({
             aria-expanded={openMenu === "help"}
             aria-haspopup="menu"
             onClick={() => toggleMenu("help")}
+            onKeyDown={(event) => openFromKeyboard(event, "help")}
             ref={helpTriggerRef}
             type="button"
           >
@@ -131,6 +168,7 @@ export function AppTitlebar({
             <MenuPopover
               align="start"
               anchor={helpTriggerRef.current}
+              autoFocus
               aria-label="帮助"
               className="titlebar-file-popover"
               ref={menuSurfaceRef}

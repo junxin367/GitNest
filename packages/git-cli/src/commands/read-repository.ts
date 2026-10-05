@@ -10,6 +10,8 @@ export const STATUS_ARGUMENTS = [
 
 export const UNSTAGED_DIFF_PATH_ARGUMENTS = [
   "-c",
+  "core.fsmonitor=false",
+  "-c",
   "diff.autoRefreshIndex=false",
   "--literal-pathspecs",
   "diff",
@@ -22,6 +24,8 @@ export const UNSTAGED_DIFF_PATH_ARGUMENTS = [
 ] as const;
 
 export const STAGED_DIFF_STAT_ARGUMENTS = [
+  "-c",
+  "core.fsmonitor=false",
   "-c",
   "diff.autoRefreshIndex=false",
   "--literal-pathspecs",
@@ -37,7 +41,7 @@ export const STAGED_DIFF_STAT_ARGUMENTS = [
 
 export const BRANCH_ARGUMENTS = [
   "for-each-ref",
-  "--format=%(refname)%1f%(refname:short)%1f%(objectname)%1f%(upstream:short)%1f%(HEAD)%1f%(worktreepath)%1f%(authordate:iso-strict)%1e",
+  "--format=%(refname)%1f%(refname:short)%1f%(objectname)%1f%(upstream:short)%1f%(HEAD)%1f%(worktreepath)%1f%(authordate:iso-strict)%1f%(symref)%1e",
   "refs/heads",
   "refs/remotes"
 ] as const;
@@ -62,7 +66,7 @@ export function historyArguments(limit: number): string[] {
     `--max-count=${limit}`,
     "--date=iso-strict",
     "--decorate=short",
-    "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P%x1f%D%x1e"
+    "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00"
   ];
 }
 
@@ -77,7 +81,7 @@ export function historyPageArguments(
     `--skip=${offset}`,
     "--date=iso-strict",
     "--decorate=short",
-    "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P%x1f%D%x1e",
+    "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00",
     ...(ref ? [ref] : [])
   ];
 }
@@ -97,7 +101,7 @@ export function compareHistoryPageArguments(
     "--topo-order",
     "--date=iso-strict",
     "--decorate=short",
-    "--format=%m%x1f%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P%x1f%D%x1e",
+    "--format=%m%x00%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00",
     `${leftRef}...${rightRef}`
   ];
 }
@@ -127,6 +131,8 @@ export function diffArguments(
   contextLines: number
 ): string[] {
   const base = [
+    "-c",
+    "core.fsmonitor=false",
     "--literal-pathspecs",
     "diff",
     "--no-ext-diff",

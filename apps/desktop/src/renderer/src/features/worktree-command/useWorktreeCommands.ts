@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState
 } from "react";
@@ -35,10 +36,25 @@ export function useWorktreeCommands(
   repositoryId: string | undefined,
   operations: WorkspaceOperationDto[]
 ): WorktreeCommandController {
+  const scope = useMemo(
+    () => ({ repositoryId }),
+    [repositoryId]
+  );
+  const currentScopeRef = useRef<typeof scope | null>(scope);
+  currentScopeRef.current = scope;
   const [active, setActive] =
     useState<WorktreeCommandDto["type"] | null>(null);
-  const [preflight, setPreflight] =
+  const [preflight, setPreflightState] =
     useState<WorktreeCommandPreflightDto | null>(null);
+  const preflightRef =
+    useRef<WorktreeCommandPreflightDto | null>(null);
+  const setPreflight = useCallback(
+    (value: WorktreeCommandPreflightDto | null) => {
+      preflightRef.current = value;
+      setPreflightState(value);
+    },
+    []
+  );
   const [error, setError] =
     useState<GitReadErrorDto | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -47,6 +63,7 @@ export function useWorktreeCommands(
   const [completionVersion, setCompletionVersion] = useState(0);
   const generation = useRef(0);
   const inFlight = useRef(false);
+  const acceptedOperationIds = useRef(new Set<string>());
   const operationBusy = operations.some(
     (operation) =>
       isWorktreeOperation(operation.kind) &&
@@ -65,22 +82,33 @@ export function useWorktreeCommands(
       return !operation || isActiveOperation(operation.state);
     }
   );
+  const operationBusyRef = useRef(operationBusy);
+  operationBusyRef.current = operationBusy;
 
   useEffect(() => {
+    currentScopeRef.current = scope;
     generation.current += 1;
     inFlight.current = false;
+    acceptedOperationIds.current.clear();
     setActive(null);
     setPreflight(null);
     setError(null);
     setNotice(null);
     setTrackedOperationIds([]);
-  }, [repositoryId]);
+    return () => {
+      generation.current += 1;
+      if (currentScopeRef.current === scope) {
+        currentScopeRef.current = null;
+      }
+    };
+  }, [scope, setPreflight]);
 
   useEffect(() => {
     if (trackedOperationIds.length === 0) {
       return;
     }
     const terminal = trackedOperationIds
+      .filter((operationId) => acceptedOperationIds.current.has(operationId))
       .map((operationId) =>
         operations.find(
           (operation) => operation.id === operationId
@@ -102,6 +130,9 @@ export function useWorktreeCommands(
     const ids = new Set(
       terminal.map((operation) => operation.id)
     );
+    for (const id of ids) {
+      acceptedOperationIds.current.delete(id);
+    }
     setTrackedOperationIds((current) =>
       current.filter((operationId) => !ids.has(operationId))
     );
@@ -136,6 +167,7 @@ export function useWorktreeCommands(
       operationId: string,
       command: WorktreeCommandDto
     ) => {
+      acceptedOperationIds.current.add(operationId);
       setTrackedOperationIds((current) => [
         ...new Set([...current, operationId])
       ]);
@@ -145,7 +177,7 @@ export function useWorktreeCommands(
         `${worktreeCommandLabel(command.type)} 已加入操作中心。`
       );
     },
-    []
+    [setPreflight]
   );
 
   const executePreflight = useCallback(
@@ -172,12 +204,19 @@ export function useWorktreeCommands(
       accept(result.value.operationId, candidate.command);
       return true;
     },
-    [accept]
+    [accept, setPreflight]
   );
 
   const request = useCallback(
     async (command: WorktreeCommandDto): Promise<boolean> => {
-      if (inFlight.current || !repositoryId) {
+      if (
+        inFlight.current ||
+        !repositoryId ||
+        currentScopeRef.current !== scope ||
+        preflightRef.current ||
+        operationBusyRef.current ||
+        acceptedOperationIds.current.size > 0
+      ) {
         return false;
       }
       const requestGeneration = generation.current;
@@ -203,7 +242,7 @@ export function useWorktreeCommands(
           setPreflight(result.value);
           return true;
         }
-        return executePreflight(
+        return await executePreflight(
           result.value,
           false,
           requestGeneration
@@ -220,15 +259,21 @@ export function useWorktreeCommands(
         }
       }
     },
-    [executePreflight, repositoryId]
+    [executePreflight, repositoryId, scope, setPreflight]
   );
 
   const confirm = useCallback(async (): Promise<boolean> => {
-    if (!preflight || inFlight.current) {
+    if (
+      !preflight ||
+      preflightRef.current !== preflight ||
+      currentScopeRef.current !== scope ||
+      inFlight.current
+    ) {
       return false;
     }
     const requestGeneration = generation.current;
     inFlight.current = true;
+    preflightRef.current = null;
     setActive(preflight.command.type);
     setError(null);
     setNotice(null);
@@ -251,19 +296,26 @@ export function useWorktreeCommands(
         setActive(null);
       }
     }
-  }, [executePreflight, preflight]);
+  }, [executePreflight, preflight, scope, setPreflight]);
 
   const dismissPreflight = useCallback(() => {
-    if (!inFlight.current) {
+    if (!inFlight.current && currentScopeRef.current === scope) {
       setPreflight(null);
     }
-  }, []);
+  }, [scope, setPreflight]);
 
   const chooseDirectory =
     useCallback(async (): Promise<string | null> => {
+      if (currentScopeRef.current !== scope) {
+        return null;
+      }
+      const requestGeneration = generation.current;
       try {
         const result =
           await window.gitnest.worktree.selectDirectory();
+        if (requestGeneration !== generation.current) {
+          return null;
+        }
         if (!result.ok) {
           setNotice(null);
           setError({
@@ -279,19 +331,29 @@ export function useWorktreeCommands(
         setError(null);
         return result.value.path;
       } catch (reason) {
+        if (requestGeneration !== generation.current) {
+          return null;
+        }
         setNotice(null);
         setError(unexpectedWorktreeError(reason));
         return null;
       }
-    }, []);
+    }, [scope]);
 
   const cancelOperation = useCallback(
     async (operationId: string): Promise<boolean> => {
+      if (currentScopeRef.current !== scope) {
+        return false;
+      }
+      const requestGeneration = generation.current;
       try {
         const result =
           await window.gitnest.repository.cancelOperation({
             operationId
           });
+        if (requestGeneration !== generation.current) {
+          return false;
+        }
         if (!result.ok) {
           setNotice(null);
           setError(formatWorktreeError(result.error));
@@ -301,18 +363,24 @@ export function useWorktreeCommands(
         setNotice("正在取消 Worktree 操作…");
         return true;
       } catch (reason) {
+        if (requestGeneration !== generation.current) {
+          return false;
+        }
         setNotice(null);
         setError(unexpectedWorktreeError(reason));
         return false;
       }
     },
-    []
+    [scope]
   );
 
   const clearFeedback = useCallback(() => {
+    if (currentScopeRef.current !== scope) {
+      return;
+    }
     setError(null);
     setNotice(null);
-  }, []);
+  }, [scope]);
 
   return {
     active,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  GitError,
   type Branch,
   type CommitDetails,
   type CommitHistoryPage,
@@ -20,9 +21,10 @@ import {
   type RepositoryInspection,
   type RepositorySnapshot
 } from "@gitnest/git-core";
-import type {
-  RepositoryTarget,
-  Workspace
+import {
+  WorkspaceError,
+  type RepositoryTarget,
+  type Workspace
 } from "@gitnest/workspace-core";
 
 import {
@@ -43,6 +45,176 @@ const LOCAL_HEAD = "a".repeat(40);
 const REMOTE_HEAD = "b".repeat(40);
 
 describe("RepositoryCommandService", () => {
+  it.each([
+    new GitError("INVALID_REQUEST", "A target was removed."),
+    new WorkspaceError("INVALID_REQUEST", "Workspace changed during submission."),
+    new Error("Queue unavailable.")
+  ])("returns accepted operations when later batch submission fails: %s", async (failure) => {
+    const runtime = new FakeRuntime(createWorkspace(3));
+    const queue = runtime.queueRepositoryOperation.bind(runtime);
+    runtime.queueRepositoryOperation = async (...args) => {
+      if (runtime.queued.length === 1) {
+        throw failure;
+      }
+      return queue(...args);
+    };
+    const service = createService(runtime, new FakeRepositoryClient());
+    const preflight = await service.preflight({
+      type: "fetch",
+      targets: runtime.workspace.groups[0]!.targets
+    });
+
+    await expect(
+      service.execute(preflight.command, preflight.preflightId, false)
+    ).resolves.toEqual({
+      operationIds: ["operation-1"],
+      submissionError: {
+        code: failure instanceof GitError || failure instanceof WorkspaceError
+          ? failure.code : "COMMAND_FAILED",
+        message: failure.message,
+        details: {}
+      }
+    });
+    expect(runtime.queued).toHaveLength(1);
+  });
+
+  it("preserves the original failure when no batch operation was accepted", async () => {
+    const failure = new GitError("INVALID_REQUEST", "Workspace changed.");
+    const runtime = new FakeRuntime(createWorkspace(2));
+    runtime.queueRepositoryOperation = async () => { throw failure; };
+    const service = createService(runtime, new FakeRepositoryClient());
+    const preflight = await service.preflight({
+      type: "fetch",
+      targets: runtime.workspace.groups[0]!.targets
+    });
+    await expect(
+      service.execute(preflight.command, preflight.preflightId, false)
+    ).rejects.toBe(failure);
+    expect(runtime.queued).toHaveLength(0);
+  });
+
+  it("consumes a confirmed preflight once when execution requests overlap", async () => {
+    const client = new FakeRepositoryClient();
+    const runtime = new FakeRuntime();
+    const service = createService(runtime, client);
+    const preflight = await service.preflight({
+      type: "create-branch", target: TARGET, branch: "feature/once"
+    });
+    const results = await Promise.allSettled([
+      service.execute(preflight.command, preflight.preflightId, true),
+      service.execute(preflight.command, preflight.preflightId, true)
+    ]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(runtime.queued).toHaveLength(1);
+    const rejected = results.find(result => result.status === "rejected");
+    expect(rejected).toMatchObject({ reason: { code: "PREFLIGHT_EXPIRED" } });
+  });
+
+  for (const type of ["pull", "push"] as const) {
+    for (const phase of ["before-confirm", "while-queued"] as const) {
+      it.each(["head", "dirty", "conflict", "upstream", "remote-head", "ancestry"] as const)(
+        `rejects ${type} when its own %s changes (${phase})`,
+        async (change) => {
+          const client = new FakeRepositoryClient();
+          const runtime = new FakeRuntime();
+          const service = createService(runtime, client);
+          const preflight = await service.preflight(type === "pull"
+            ? { type, targets: [TARGET], strategy: "ff-only" }
+            : { type, targets: [TARGET] });
+          if (phase === "while-queued") {
+            await service.execute(preflight.command, preflight.preflightId, true);
+          }
+          switch (change) {
+            case "head":
+              client.snapshot.head = REMOTE_HEAD;
+              break;
+            case "dirty":
+              client.snapshot.untracked = 1;
+              break;
+            case "conflict":
+              client.snapshot.conflicted = 1;
+              break;
+            case "upstream":
+              client.snapshot.upstream = "origin/feature";
+              client.remoteBranches.get("origin")!.push(createRemoteBranch("feature", LOCAL_HEAD));
+              break;
+            case "remote-head":
+              client.remoteBranches.set("origin", [createRemoteBranch("main", REMOTE_HEAD)]);
+              break;
+            case "ancestry":
+              client.ancestry = "diverged";
+              break;
+          }
+          const expectedCode = change === "conflict" || (type === "pull" && change === "dirty")
+            ? "INVALID_REQUEST"
+            : type === "pull" && change === "ancestry"
+              ? "NON_FAST_FORWARD"
+              : "PREFLIGHT_CHANGED";
+          await expect(phase === "while-queued"
+            ? runtime.runQueued(0)
+            : service.execute(preflight.command, preflight.preflightId, true)
+          ).rejects.toMatchObject({ code: expectedCode });
+          expect(client.fetchCalls).toHaveLength(0);
+          expect(client.pullCalls).toHaveLength(0);
+          expect(client.pushCalls).toHaveLength(0);
+          if (phase === "before-confirm") {
+            expect(runtime.queued).toHaveLength(0);
+          }
+        }
+      );
+    }
+  }
+
+  it.each(["fetch", "pull", "push"] as const)(
+    "rejects %s when the fetch destination changed without changing advertised refs",
+    async (type) => {
+      const client = new FakeRepositoryClient();
+      const runtime = new FakeRuntime();
+      const service = createService(runtime, client);
+      const command: RepositoryCommand = type === "pull"
+        ? { type, targets: [TARGET], strategy: "ff-only" }
+        : { type, targets: [TARGET] };
+      const preflight = await service.preflight(command);
+      client.fetchUrls = ["https://other.example.test/repository.git"];
+      await expect(
+        service.execute(preflight.command, preflight.preflightId, true)
+      ).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
+      expect(runtime.queued).toHaveLength(0);
+    }
+  );
+
+  it.each(["fetch", "pull", "push"] as const)(
+    "rechecks %s destination after the operation waits in the queue",
+    async (type) => {
+      const client = new FakeRepositoryClient();
+      const runtime = new FakeRuntime();
+      const service = createService(runtime, client);
+      const command: RepositoryCommand = type === "pull"
+        ? { type, targets: [TARGET], strategy: "ff-only" }
+        : { type, targets: [TARGET] };
+      const preflight = await service.preflight(command);
+      await service.execute(preflight.command, preflight.preflightId, true);
+      client.fetchUrls = ["https://other.example.test/repository.git"];
+      await expect(runtime.runQueued(0)).rejects.toMatchObject({
+        code: "PREFLIGHT_CHANGED"
+      });
+    }
+  );
+
+  it("binds all push destinations and leaves fetch unaffected by push-only changes", async () => {
+    const client = new FakeRepositoryClient();
+    const runtime = new FakeRuntime();
+    const service = createService(runtime, client);
+    const push = await service.preflight({ type: "push", targets: [TARGET] });
+    const fetch = await service.preflight({ type: "fetch", targets: [TARGET] });
+    client.pushUrls.push("https://backup.example.test/repository.git");
+    await expect(
+      service.execute(push.command, push.preflightId, true)
+    ).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
+    await service.execute(fetch.command, fetch.preflightId, false);
+    await runtime.runQueued(0);
+  });
+
   it("rejects a preflight from another Workspace even when both contain the same repository", async () => {
     const runtime = new FakeRuntime();
     const client = new FakeRepositoryClient();
@@ -154,6 +326,16 @@ describe("RepositoryCommandService", () => {
       code: "CONFIRMATION_REQUIRED"
     });
     expect(runtime.queued).toHaveLength(0);
+    await expect(
+      service.execute(
+        preflight.command,
+        preflight.preflightId,
+        true
+      )
+    ).resolves.toEqual({
+      operationIds: ["operation-1"]
+    });
+    expect(runtime.queued).toHaveLength(1);
   });
 
   it("rejects expired and unknown preflight ids", async () => {
@@ -542,6 +724,8 @@ class FakeRepositoryClient
   snapshot: RepositorySnapshot = createSnapshot();
   branches: Branch[] = createBranches();
   remotes = ["origin"];
+  fetchUrls = ["https://example.test/origin.git"];
+  pushUrls = ["https://example.test/origin.git"];
   readonly remoteBranches = new Map<string, RemoteBranchRef[]>([
     ["origin", [createRemoteBranch("main", LOCAL_HEAD)]]
   ]);
@@ -617,6 +801,14 @@ class FakeRepositoryClient
     _options?: InspectRepositoryOptions
   ): Promise<RepositoryInspection> {
     throw new Error("Not used.");
+  }
+
+  async readRemoteUrls(
+    _path: string,
+    _remote: string,
+    direction: "fetch" | "push"
+  ): Promise<string[]> {
+    return [...(direction === "push" ? this.pushUrls : this.fetchUrls)];
   }
 
   async readRemotes(

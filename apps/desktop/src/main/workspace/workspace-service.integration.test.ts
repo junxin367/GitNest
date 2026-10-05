@@ -529,6 +529,74 @@ describe("WorkspaceService integration", () => {
     }
   }, 15_000);
 
+  it.each(["parent-first", "child-first"] as const)(
+    "preserves root exclusions across overlapping directories and restarts (%s)",
+    async (order) => {
+      const localAppData = await createTemporaryDirectoryFixture(
+        "overlapping-root-exclusion"
+      );
+      const path = join(localAppData.path, "workspace.json");
+      const store = new JsonWorkspaceStore(path);
+      const createService = () => new WorkspaceService(
+        new GitCliClient(),
+        new NodeWorkspaceFileSystem(),
+        new JsonWorkspaceStore(path)
+      );
+      try {
+        const localService = createService();
+        const childRoot = join(fixture.metaRootPath, "svr");
+        const roots = order === "parent-first"
+          ? [fixture.metaRootPath, childRoot]
+          : [childRoot, fixture.metaRootPath];
+        await localService.configureRoot(roots[0]!);
+        const { workspace } = await localService.addDirectory({ path: roots[1]! });
+        const targetAt = (repositoryPath: string) => {
+          const worktree = workspace.worktrees.find(
+            (candidate) => candidate.path === repositoryPath
+          )!;
+          return {
+            repositoryId: worktree.repositoryId,
+            worktreeId: worktree.id
+          };
+        };
+        const childTarget = targetAt(fixture.nestedRepositoryPath);
+        const parentTarget = targetAt(fixture.directRepositoryPath);
+        const withoutChild = await localService.excludeRepository({ target: childTarget });
+        expect(withoutChild.groups.flatMap((group) => group.targets))
+          .not.toContainEqual(childTarget);
+        expect(withoutChild.groups.flatMap((group) => group.targets))
+          .toContainEqual(parentTarget);
+        await localService.excludeRepository({ target: parentTarget });
+        const restored = await createService().rescan();
+        const targets = restored.groups.flatMap((group) => group.targets);
+        expect(targets).not.toContainEqual(childTarget);
+        expect(targets).not.toContainEqual(parentTarget);
+        await expect(access(fixture.nestedRepositoryPath)).resolves.toBeUndefined();
+        await expect(access(fixture.directRepositoryPath)).resolves.toBeUndefined();
+
+        // There is no unexclude UI; clear persisted exclusions through the
+        // store to verify that filtering does not permanently drop topology.
+        await store.save({
+          ...restored,
+          excludes: [],
+          ...(restored.additionalRoots ? {
+            additionalRoots: restored.additionalRoots.map(
+              (root) => ({ ...root, excludes: [] })
+            )
+          } : {})
+        });
+        const recovered = await createService().rescan();
+        expect(recovered.groups.flatMap((group) => group.targets))
+          .toContainEqual(childTarget);
+        expect(recovered.groups.flatMap((group) => group.targets))
+          .toContainEqual(parentTarget);
+      } finally {
+        await localAppData.dispose();
+      }
+    },
+    15_000
+  );
+
   it("preserves the last known topology while a root is offline and recovers after it returns", async () => {
     const offlineFixture = await createWorkspaceFixture();
     const offlineAppData =

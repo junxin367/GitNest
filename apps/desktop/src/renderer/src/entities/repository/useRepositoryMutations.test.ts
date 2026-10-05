@@ -17,7 +17,7 @@ describe("repository mutation selection", () => {
       kind: "renamed"
     } as const;
 
-    expect(mutationPathsForChange(change)).toEqual([
+    expect(mutationPathsForChange(change, "stage")).toEqual([
       "new name.txt",
       "old name.txt"
     ]);

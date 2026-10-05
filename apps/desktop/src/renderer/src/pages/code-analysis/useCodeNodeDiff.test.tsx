@@ -25,6 +25,10 @@ import {
   useCodeNodeDiff,
   type CodeNodeDiffState
 } from "./useCodeNodeDiff";
+import {
+  useCodeNodeSource,
+  type CodeNodeSourceState
+} from "./useCodeNodeSource";
 
 const TARGET = {
   repositoryId: "repository-a",
@@ -52,6 +56,52 @@ describe("useCodeNodeDiff", () => {
     act(() => root.unmount());
     container.remove();
     vi.restoreAllMocks();
+  });
+
+  it("reports the initial file read as loading on the first render", async () => {
+    installBridge({
+      getChanges: vi.fn<GitNestBridge["repository"]["getChanges"]>(() => new Promise(() => {})),
+      getDiff: vi.fn()
+    });
+    const observed: CodeNodeDiffState[] = [];
+    await act(async () => {
+      root.render(
+        <Harness node={createNode("src/pending.ts", "pending")}
+          onState={(value) => observed.push(value)} />
+      );
+      await flushAsyncWork();
+    });
+    expect(observed[0]).toMatchObject({ loading: true, documents: [], error: null });
+  });
+
+  it("never publishes the previous file diff during a file switch or deselection", async () => {
+    installBridge({
+      getChanges: vi.fn<GitNestBridge["repository"]["getChanges"]>()
+        .mockResolvedValueOnce({
+          ok: true,
+          value: createChanges([{
+            path: "src/first.ts", indexStatus: ".", worktreeStatus: "M", kind: "ordinary"
+          }])
+        })
+        .mockImplementationOnce(() => new Promise(() => {})),
+      getDiff: vi.fn(async () => ({
+        ok: true as const, value: createDiff("src/first.ts", "unstaged", "first content")
+      }))
+    });
+    await renderNode(createNode("src/first.ts", "first"));
+    const switched: CodeNodeDiffState[] = [];
+    await act(async () => {
+      root.render(<Harness node={createNode("src/second.ts", "second")}
+        onState={(value) => switched.push(value)} />);
+      await flushAsyncWork();
+    });
+    expect(switched.every((value) => value.documents.length === 0)).toBe(true);
+    expect(switched[0]?.loading).toBe(true);
+    const deselected: CodeNodeDiffState[] = [];
+    await act(async () => {
+      root.render(<Harness node={null} onState={(value) => deselected.push(value)} />);
+    });
+    expect(deselected[0]).toEqual({ documents: [], loading: false, error: null });
   });
 
   it("loads every current diff mode even when the analysis node is not marked changed", async () => {
@@ -376,6 +426,109 @@ describe("useCodeNodeDiff", () => {
     });
   }
 });
+
+describe("useCodeNodeSource request scope", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
+      .IS_REACT_ACT_ENVIRONMENT = true;
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.restoreAllMocks();
+  });
+
+  it("reports the source read as loading from the first render", async () => {
+    Object.defineProperty(window, "gitnest", {
+      configurable: true,
+      value: { codeAnalysis: { readFile: vi.fn(() => new Promise(() => {})) } }
+    });
+    const observed: CodeNodeSourceState[] = [];
+    await act(async () => {
+      root.render(<SourceHarness node={createNode("src/first.ts", "first")}
+        onState={(value) => observed.push(value)} />);
+      await flushAsyncWork();
+    });
+    expect(observed[0]).toEqual({ file: null, loading: true, error: null });
+  });
+
+  it("hides source from a previous node immediately and ignores a late response", async () => {
+    let resolveSecond!: (value: Awaited<ReturnType<GitNestBridge["codeAnalysis"]["readFile"]>>) => void;
+    const file = {
+      nodeId: "first", path: "src/first.ts", language: "typescript" as const,
+      content: "first content", startLine: 1, endLine: 1, totalLines: 1, truncated: false
+    };
+    const readFile = vi.fn<GitNestBridge["codeAnalysis"]["readFile"]>()
+      .mockResolvedValueOnce({ ok: true, value: file })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }))
+      .mockResolvedValueOnce({ ok: true, value: { ...file, nodeId: "third", path: "src/third.ts", content: "third content" } });
+    Object.defineProperty(window, "gitnest", {
+      configurable: true, value: { codeAnalysis: { readFile } }
+    });
+    await act(async () => {
+      root.render(<SourceHarness node={createNode("src/first.ts", "first")} onState={() => {}} />);
+      await flushAsyncWork();
+    });
+    const switched: CodeNodeSourceState[] = [];
+    await act(async () => {
+      root.render(<SourceHarness node={createNode("src/second.ts", "second")}
+        onState={(value) => switched.push(value)} />);
+      await flushAsyncWork();
+    });
+    expect(switched[0]).toEqual({ file: null, loading: true, error: null });
+    let current: CodeNodeSourceState | undefined;
+    await act(async () => {
+      root.render(<SourceHarness node={createNode("src/third.ts", "third")}
+        onState={(value) => { current = value; }} />);
+      await flushAsyncWork();
+      resolveSecond({ ok: true, value: { ...file, nodeId: "second", content: "late second content" } });
+      await flushAsyncWork();
+    });
+    expect(current?.file?.content).toBe("third content");
+  });
+
+  it("reloads a reused node id when its Worktree changes", async () => {
+    const node = createNode("src/shared.ts", "shared");
+    const readFile = vi.fn<GitNestBridge["codeAnalysis"]["readFile"]>()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { nodeId: "shared", path: node.location.path, language: "typescript",
+          content: "old worktree", startLine: 1, endLine: 1, totalLines: 1, truncated: false }
+      })
+      .mockImplementationOnce(() => new Promise(() => {}));
+    Object.defineProperty(window, "gitnest", {
+      configurable: true, value: { codeAnalysis: { readFile } }
+    });
+    await act(async () => {
+      root.render(<SourceHarness node={node} onState={() => {}} />);
+      await flushAsyncWork();
+    });
+    const observed: CodeNodeSourceState[] = [];
+    await act(async () => {
+      root.render(<SourceHarness node={{ ...node, location: { ...node.location, worktreeId: "other-worktree" } }}
+        onState={(value) => observed.push(value)} />);
+      await flushAsyncWork();
+    });
+    expect(observed.every((value) => value.file === null)).toBe(true);
+    expect(observed[0]?.loading).toBe(true);
+    expect(readFile).toHaveBeenCalledTimes(2);
+  });
+});
+
+function SourceHarness({ node, onState }: {
+  node: CodeGraphNodeDto | null;
+  onState(state: CodeNodeSourceState): void;
+}) {
+  onState(useCodeNodeSource(node));
+  return null;
+}
 
 function Harness({
   node,

@@ -104,6 +104,7 @@ interface AppSettingsDocument {
   general: AppSettingsDto["general"];
   appearance: AppSettingsDto["appearance"];
   diff: AppSettingsDiffDocument;
+  repositoryFileBrowsing: AppSettingsDto["repositoryFileBrowsing"];
   git: AppSettingsDto["git"];
   ai: StoredAiSettings;
   codeAnalysis: CodeAnalysisSettingsDto;
@@ -119,6 +120,7 @@ interface AppSettingsDocumentV3Input
     | "codeAnalysis"
     | "general"
     | "languageServerLaunchApprovals"
+    | "repositoryFileBrowsing"
   > {
   general: StoredGeneralSettings;
   ai: StoredAiSettings & {
@@ -126,6 +128,7 @@ interface AppSettingsDocumentV3Input
   };
   codeAnalysis: StoredCodeAnalysisSettings;
   languageServerLaunchApprovals?: LanguageServerLaunchApprovals;
+  repositoryFileBrowsing?: AppSettingsDto["repositoryFileBrowsing"];
 }
 
 type StoredLanguageServerSettings = Omit<
@@ -281,6 +284,12 @@ export class AppSettingsService {
     return this.#enqueue(async () => {
       const current = await this.#load();
       const next = mergeSettings(current, patch, this.#clock());
+      if (!isAppSettingsDocument(next)) {
+        throw new WorkspaceError(
+          "INVALID_REQUEST",
+          "The application settings are invalid."
+        );
+      }
       const approvedLanguageServerLaunches =
         options.approvedLanguageServerLaunches ?? [];
       assertApprovedLanguageServerLaunchesMatch(
@@ -440,37 +449,41 @@ export class AppSettingsService {
     });
   }
 
-  async readAiApiKey(
+  readAiApiKey(
     reveal: boolean
   ): Promise<AiApiKeyValueDto> {
-    const document = await this.#load();
-    const credentialRef = document.ai.apiKeyCredentialRef;
-    if (!credentialRef) {
+    return this.#enqueue(async () => {
+      const document = await this.#load();
+      const credentialRef = document.ai.apiKeyCredentialRef;
+      if (!credentialRef) {
+        return {
+          apiKey: null,
+          length: 0
+        };
+      }
+      const apiKey = await this.#secretVault.read(credentialRef);
       return {
-        apiKey: null,
-        length: 0
+        apiKey: reveal ? apiKey : null,
+        length: apiKey.length
       };
-    }
-    const apiKey = await this.#secretVault.read(credentialRef);
-    return {
-      apiKey: reveal ? apiKey : null,
-      length: apiKey.length
-    };
+    });
   }
 
-  async getInternalAiSettings(
+  getInternalAiSettings(
     options: { includeApiKey?: boolean } = {}
   ): Promise<InternalAiSettings> {
-    const document = await this.#load();
-    const { apiKeyCredentialRef, ...settings } = document.ai;
-    return {
-      ...settings,
-      apiKey:
-        options.includeApiKey !== false &&
-        apiKeyCredentialRef
-        ? await this.#secretVault.read(apiKeyCredentialRef)
-        : ""
-    };
+    return this.#enqueue(async () => {
+      const document = await this.#load();
+      const { apiKeyCredentialRef, ...settings } = document.ai;
+      return {
+        ...settings,
+        apiKey:
+          options.includeApiKey !== false &&
+          apiKeyCredentialRef
+          ? await this.#secretVault.read(apiKeyCredentialRef)
+          : ""
+      };
+    });
   }
 
   async #load(): Promise<AppSettingsDocument> {
@@ -575,6 +588,7 @@ function createDefaultDocument(now: string): AppSettingsDocument {
     general: { ...defaults.general },
     appearance: { ...defaults.appearance },
     diff: { ...defaults.diff },
+    repositoryFileBrowsing: {},
     git: { ...defaults.git },
     ai: {
       enabled: defaults.ai.enabled,
@@ -616,6 +630,9 @@ function mergeSettings(
         diff.commitPanelHeight
       )
     },
+    repositoryFileBrowsing: mergeRepositoryFileBrowsing(
+      current, patch
+    ),
     git: {
       ...current.git,
       ...patch.git
@@ -650,6 +667,68 @@ function mergeStoredAiSettings(
   };
 }
 
+function mergeRepositoryFileBrowsing(
+  current: AppSettingsDocument,
+  patch: UpdateAppSettingsRequest
+): AppSettingsDto["repositoryFileBrowsing"] {
+  const preferences = cloneRepositoryFileBrowsing(
+    current.repositoryFileBrowsing
+  );
+  if (patch.repositoryFileBrowsing) {
+    const { repositoryId, ...changes } =
+      patch.repositoryFileBrowsing;
+    if (!isRepositoryPreferenceKey(repositoryId)) {
+      throw new WorkspaceError(
+        "INVALID_REQUEST",
+        "Invalid repository preference key."
+      );
+    }
+    preferences[repositoryId] = {
+      fileView: current.diff.fileView,
+      treeDirectoriesCollapsed:
+        current.diff.treeDirectoriesCollapsed,
+      ...preferences[repositoryId],
+      ...changes
+    };
+  }
+  return preferences;
+}
+
+function cloneRepositoryFileBrowsing(
+  preferences: AppSettingsDto["repositoryFileBrowsing"] = {}
+): AppSettingsDto["repositoryFileBrowsing"] {
+  return Object.fromEntries(
+    Object.entries(preferences).map(([id, preference]) => [
+      id, { ...preference }
+    ])
+  );
+}
+
+function isRepositoryPreferenceKey(
+  value: unknown
+): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    value.length <= 256 &&
+    !value.includes("\0") &&
+    !["__proto__", "prototype", "constructor"].includes(value)
+  );
+}
+
+function isRepositoryFileBrowsing(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Object.entries(value).every(([id, preference]) =>
+      isRepositoryPreferenceKey(id) &&
+      isRecord(preference) &&
+      (preference.fileView === "list" ||
+        preference.fileView === "tree") &&
+      typeof preference.treeDirectoriesCollapsed === "boolean"
+    )
+  );
+}
+
 function requestedApiKey(
   patch: UpdateAppSettingsRequest
 ): string | undefined {
@@ -682,6 +761,9 @@ function toPublicSettings(
   return {
     general: { ...document.general },
     appearance: { ...document.appearance },
+    repositoryFileBrowsing: cloneRepositoryFileBrowsing(
+      document.repositoryFileBrowsing
+    ),
     diff: {
       ...document.diff,
       commitPanelHeight: normalizeDiffCommitPanelHeight(
@@ -711,6 +793,9 @@ function cloneDocument(
 ): AppSettingsDocument {
   return {
     schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
+    repositoryFileBrowsing: cloneRepositoryFileBrowsing(
+      document.repositoryFileBrowsing
+    ),
     general: {
       restoreLastView: document.general.restoreLastView,
       defaultTerminalKind:
@@ -771,6 +856,8 @@ function isAppSettingsDocument(
     isGeneralSettings(value.general) &&
     isAppearanceSettings(value.appearance) &&
     isDiffSettings(value.diff) &&
+    (value.repositoryFileBrowsing === undefined ||
+      isRepositoryFileBrowsing(value.repositoryFileBrowsing)) &&
     isGitSettings(value.git) &&
     isAiSettings(value.ai) &&
     isCodeAnalysisSettings(value.codeAnalysis) &&
@@ -1641,6 +1728,7 @@ function migrateV2Document(
   } = document.ai;
   return {
     schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
+    repositoryFileBrowsing: {},
     general: {
       restoreLastView: document.general.restoreLastView,
       defaultTerminalKind:

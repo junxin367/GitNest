@@ -18,6 +18,10 @@ export type AppThemeDto = "dark" | "light";
 export type AppCloseBehaviorDto = "tray" | "quit";
 export type DiffFileViewDto = "list" | "tree";
 export type DiffLayoutDto = "split" | "unified";
+export interface RepositoryFileBrowsingDto {
+  fileView: DiffFileViewDto;
+  treeDirectoriesCollapsed: boolean;
+}
 export type GitFetchModeDto = "manual" | "startup";
 export type GitPushStrategyDto = "rebase" | "merge";
 export type LastContentViewDto = "workspace" | "repository";
@@ -43,12 +47,15 @@ export interface AppSettingsDto {
     theme: AppThemeDto;
   };
   diff: {
+    /** Legacy default for repositories without a saved browsing preference. */
     fileView: DiffFileViewDto;
     layout: DiffLayoutDto;
     wrap: boolean;
+    /** Legacy default for repositories without a saved browsing preference. */
     treeDirectoriesCollapsed: boolean;
     commitPanelHeight: number;
   };
+  repositoryFileBrowsing: Record<string, RepositoryFileBrowsingDto>;
   git: {
     fetchMode: GitFetchModeDto;
     pushStrategy: GitPushStrategyDto;
@@ -74,6 +81,9 @@ export interface AppSettingsLoadDto {
 }
 
 export interface UpdateAppSettingsRequest {
+  repositoryFileBrowsing?: Partial<RepositoryFileBrowsingDto> & {
+    repositoryId: string;
+  };
   general?: {
     restoreLastView?: boolean;
     defaultTerminalKind?: ExternalTerminalKindDto | null;
@@ -83,9 +93,11 @@ export interface UpdateAppSettingsRequest {
     theme?: AppThemeDto;
   };
   diff?: {
+    /** Legacy migration default; browsing controls use repositoryFileBrowsing. */
     fileView?: DiffFileViewDto;
     layout?: DiffLayoutDto;
     wrap?: boolean;
+    /** Legacy migration default; browsing controls use repositoryFileBrowsing. */
     treeDirectoriesCollapsed?: boolean;
     commitPanelHeight?: number;
   };
@@ -159,6 +171,7 @@ export function createDefaultAppSettings(): AppSettingsDto {
       treeDirectoriesCollapsed: false,
       commitPanelHeight: DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
     },
+    repositoryFileBrowsing: {},
     git: {
       fetchMode: "manual",
       pushStrategy: "rebase"

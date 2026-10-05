@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import {
   mkdir,
+  readFile,
   rm,
+  unlink,
   writeFile
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -292,6 +294,113 @@ describe("GitCliClient worktree operations integration", () => {
       1
     );
   });
+
+  it.each(["existing", "new", "detached"] as const)(
+    "reports the registered Worktree left by a post-checkout hook failure (%s)",
+    async (mode) => {
+      const head = await client.resolveRevision(repositoryPath, "HEAD");
+      const destination = join(fixture.path, `hook-failure-${mode}`);
+      await runGit(repositoryPath, [
+        "config", "core.hooksPath", join(repositoryPath, ".git", "hooks")
+      ]);
+      const hookPath = join(repositoryPath, ".git", "hooks", "post-checkout");
+      await writeFile(hookPath, "#!/bin/sh\nexit 1\n", {
+        encoding: "utf8",
+        mode: 0o755
+      });
+      const options = {
+        startPoint: head,
+        ...(mode === "detached"
+          ? {}
+          : { branch: mode === "new" ? "feature/hook-new" : "feature/existing" }),
+        createBranch: mode === "new",
+        detached: mode === "detached"
+      };
+
+      const failure = await client.createWorktree(
+        repositoryPath, destination, options
+      ).then(() => undefined, (error: unknown) => error);
+
+      const registered = (await client.readWorktrees(repositoryPath))
+        .find((worktree) => worktree.path === destination);
+      expect(registered).toMatchObject({
+        head,
+        detached: mode === "detached"
+      });
+      expect(await readFile(join(destination, "README.md"), "utf8"))
+        .toContain("Worktree operations");
+      expect(failure).toMatchObject({
+        code: "COMMAND_FAILED",
+        message: expect.stringContaining("不要直接重复创建"),
+        details: {
+          worktreeOutcome: "registered",
+          worktreePath: destination,
+          worktreeHead: head
+        }
+      });
+
+      await unlink(hookPath);
+      await client.removeWorktree(repositoryPath, destination);
+      await client.createWorktree(repositoryPath, destination, {
+        ...options,
+        createBranch: false
+      });
+      expect((await client.readWorktrees(repositoryPath))
+        .some((worktree) => worktree.path === destination)).toBe(true);
+    }
+  );
+});
+
+it("reads and inspects a linked worktree whose primary repository is bare", async () => {
+  const fixture = await createTemporaryDirectoryFixture("bare-linked-worktree");
+  const barePath = join(fixture.path, "bare & 裸仓库.git");
+  const linkedPath = join(fixture.path, "linked 测试");
+  const client = new GitCliClient();
+
+  try {
+    await runGit(fixture.path, [
+      "init",
+      "--bare",
+      "--initial-branch=main",
+      barePath
+    ]);
+    await runGit(barePath, [
+      "worktree",
+      "add",
+      "--orphan",
+      "-b",
+      "linked",
+      linkedPath
+    ]);
+
+    const worktrees = await client.readWorktrees(linkedPath);
+    expect(worktrees).toEqual([
+      expect.objectContaining({
+        path: barePath,
+        head: "",
+        bare: true,
+        primary: true
+      }),
+      expect.objectContaining({
+        path: linkedPath,
+        branch: "linked",
+        bare: false,
+        primary: false
+      })
+    ]);
+    await expect(
+      client.inspectRepository(linkedPath)
+    ).resolves.toMatchObject({
+      identity: {
+        worktreePath: linkedPath,
+        commonDir: barePath
+      },
+      snapshot: { branch: "linked", head: "" },
+      worktrees
+    });
+  } finally {
+    await fixture.dispose();
+  }
 });
 
 async function runGit(

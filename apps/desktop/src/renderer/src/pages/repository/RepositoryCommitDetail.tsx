@@ -35,19 +35,27 @@ export function RepositoryCommitDetail({
     target,
     commit.hash
   );
-  const selectedFile = commit.files.find(
-    (file) => file.path === commitDiff.selected?.path
-  );
+  const selectionPending = view === "files" && !commitDiff.selected;
+  const selectedFile = selectionPending
+    ? commit.files[0]
+    : commit.files.find(
+        (file) => file.path === commitDiff.selected?.path
+      );
 
   useEffect(() => {
     const firstFile = commit.files[0];
-    if (!commitDiff.selected && firstFile) {
+    if (
+      view === "files" &&
+      !commitDiff.selected &&
+      firstFile
+    ) {
       void commitDiff.selectFile(firstFile.path);
     }
   }, [
     commit.files,
     commitDiff.selected,
-    commitDiff.selectFile
+    commitDiff.selectFile,
+    view
   ]);
 
   return (
@@ -106,7 +114,12 @@ export function RepositoryCommitDetail({
                         }
                         className="history-commit-file"
                         onClick={() =>
-                          void commitDiff.selectFile(file.path)
+                          void commitDiff.selectFile(file.path, {
+                            preserveDiff: true,
+                            ...(commitDiff.selected?.path === file.path
+                              ? { contextLines: commitDiff.selected.contextLines }
+                              : {})
+                          })
                         }
                         title={file.path}
                         type="button"
@@ -137,6 +150,7 @@ export function RepositoryCommitDetail({
                 commitDiff={commitDiff}
                 commitHash={commit.hash}
                 file={selectedFile}
+                selectionPending={selectionPending}
               />
             </div>
           ) : (
@@ -155,11 +169,13 @@ export function RepositoryCommitDetail({
 function CommitFileDiffPreview({
   commitDiff,
   commitHash,
-  file
+  file,
+  selectionPending
 }: {
   commitDiff: RepositoryCommitDiffController;
   commitHash: string;
   file: RepositoryCommitDto["commit"]["files"][number] | undefined;
+  selectionPending: boolean;
 }) {
   if (!file) {
     return (
@@ -179,7 +195,7 @@ function CommitFileDiffPreview({
       ? commitDiff.diff.diff
       : null;
   const state: DiffPanelState | undefined =
-    commitDiff.loading && !diff
+    (commitDiff.loading || selectionPending) && !diff
       ? {
           busy: true,
           icon: "refresh",
@@ -226,7 +242,7 @@ function CommitFileDiffPreview({
           commitDiff.selected?.contextLines ??
           DEFAULT_DIFF_CONTEXT_LINES
         }
-        contextLoading={commitDiff.loading}
+        contextLoading={commitDiff.loading || selectionPending}
         deletions={diff?.deletions ?? file.deletions}
         headerActions={
           commitDiff.error && !diff ? (

@@ -375,6 +375,30 @@ describe("useWorkspace integration", () => {
     expect(controller?.busy).toBe(false);
   });
 
+  it("identifies available destination content before the switch command settles", async () => {
+    const pending = deferred<Awaited<ReturnType<GitNestBridge["workspace"]["switch"]>>>();
+    let emitState!: (state: WorkspaceRuntimeStateDto) => void;
+    installBridge({
+      switch: vi.fn(() => pending.promise),
+      onStateChanged: vi.fn((listener) => { emitState = listener; return vi.fn(); })
+    });
+    await renderHarness();
+    let switching!: Promise<boolean>;
+    act(() => { switching = controller!.switchWorkspace("workspace-second"); });
+    expect(controller?.switchingWorkspaceId).toBe("workspace-second");
+    expect(controller?.workspace?.id).not.toBe(controller?.switchingWorkspaceId);
+    act(() => { emitState(createRuntimeState()); });
+    expect(controller?.workspace?.id).not.toBe(controller?.switchingWorkspaceId);
+    const destination = createRuntimeState(workspaceWithIdentity("workspace-second", "Second Workspace"));
+    act(() => { emitState(destination); });
+    expect(controller?.workspace?.id).toBe(controller?.switchingWorkspaceId);
+    expect(controller?.busy).toBe(true);
+    expect(controller?.operation).toBe("switching");
+    await act(async () => { pending.resolve({ ok: true, value: destination }); await switching; });
+    expect(controller?.busy).toBe(false);
+    expect(controller?.switchingWorkspaceId).toBeNull();
+  });
+
   it("renames the active Workspace and updates its summary", async () => {
     const renamedWorkspace = {
       ...workspaceWithTarget(TARGET_A),

@@ -1,0 +1,198 @@
+GitNest deep audit validation
+Started: 2026-10-04T22:21:08.5794315+08:00
+Finished: 2026-10-04T14:55:01.133Z
+Elapsed wall clock minutes: 33.88
+Architecture boundaries passed.
+git diff --check: exit 0 (line-ending conversion warnings only).
+node --check scripts/gn-m3-01-electron-smoke.mjs: exit 0.
+All command results below exited with code 0.
+Only temporary fixture repositories were mutated during Electron checks.
+
+COMMAND: pnpm test
+$ vitest run
+
+ RUN  v5.0.0 E:/code/junes/github/GitNest
+
+
+ Test Files  119 passed (119)
+      Tests  1187 passed (1187)
+   Start at  22:47:15
+   Duration  46.56s (tests 74%, environment 19%, transform 3%, import 3%)
+
+    Isolate  119 workers spawned · ~402ms startup each (spawn + environment, per file)
+             at least ~11.55s faster with isolate: false — reuses workers across files instead of one per file
+
+
+
+COMMAND: pnpm typecheck
+$ tsc -p packages/contracts/tsconfig.json --noEmit && tsc -p packages/git-core/tsconfig.json --noEmit && tsc -p packages/git-cli/tsconfig.json --noEmit && tsc -p packages/workspace-core/tsconfig.json --noEmit && tsc -p packages/persistence-json/tsconfig.json --noEmit && tsc -p packages/code-analysis/tsconfig.json --noEmit && tsc -p packages/mcp-server/tsconfig.json --noEmit && tsc -p packages/application/tsconfig.json --noEmit && tsc -p packages/testkit/tsconfig.json --noEmit && tsc -p packages/design-system/tsconfig.json --noEmit && pnpm --filter @gitnest/desktop typecheck
+$ tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit
+
+
+COMMAND: pnpm build (after successful pnpm check:architecture)
+$ pnpm --filter @gitnest/desktop build
+$ electron-vite build && vite build --config mcp.vite.config.ts
+vite v7.3.6 building ssr environment for production...
+transforming...
+✓ 104 modules transformed.
+rendering chunks...
+out/main/chunks/icon-DWBJ9KvL.png                   5.54 kB
+out/main/code-analysis-process-entry-l6Hu4wRn.js  287.91 kB
+out/main/index.js                                 760.93 kB │ map: 1,635.26 kB
+✓ built in 1.83s
+vite v7.3.6 building ssr environment for production...
+transforming...
+✓ 7 modules transformed.
+rendering chunks...
+out/preload/index.js  12.73 kB │ map: 21.94 kB
+✓ built in 29ms
+vite v7.3.6 building client environment for production...
+transforming...
+✓ 129 modules transformed.
+rendering chunks...
+../../out/renderer/index.html                                      0.76 kB
+../../out/renderer/assets/git-bash-DTG40Ic_.ico                   89.75 kB
+../../out/renderer/assets/index-9qAwvI7-.css                     287.39 kB
+../../out/renderer/assets/OperationCenterPage-D26Ao7fK.js         21.10 kB │ map:    34.21 kB
+../../out/renderer/assets/ApplicationSettingsPage-D88R1cbv.js    123.72 kB │ map:   161.94 kB
+../../out/renderer/assets/CodeAnalysisPage-DNUSVuS3.js           162.36 kB │ map:   272.33 kB
+../../out/renderer/assets/index-Ba0zVHEZ.js                    1,351.43 kB │ map: 2,176.47 kB
+✓ built in 2.42s
+vite v7.3.6 building client environment for production...
+transforming...
+✓ 64 modules transformed.
+rendering chunks...
+computing gzip size...
+out/main/mcp/gitnest-mcp.mjs  114.14 kB │ gzip: 27.13 kB │ map: 277.34 kB
+✓ built in 449ms
+
+
+COMMAND: node scripts/gn-m3-01-electron-smoke.mjs
+{
+  "ok": true,
+  "fixtureRoot": "E:\\code\\junes\\github\\GitNest\\temp\\gitnest-e2e-m3-worktree-DsqsfF",
+  "screenshots": [
+    "gn-m3-01-1440-worktrees.png",
+    "gn-m3-01-1100-worktrees.png",
+    "gn-m3-01-1100-create-preflight.png",
+    "gn-m3-01-1100-remove-preflight.png",
+    "gn-m3-01-1100-operation-center.png"
+  ],
+  "operations": {
+    "create": "succeeded",
+    "lock": "succeeded",
+    "unlock": "succeeded",
+    "move": "succeeded",
+    "repair": "succeeded",
+    "remove": "succeeded",
+    "prune": "succeeded"
+  },
+  "interactionCoverage": {
+    "ui": [
+      "create",
+      "remove",
+      "prune"
+    ],
+    "publicBridge": [
+      "lock",
+      "unlock",
+      "move",
+      "repair"
+    ]
+  }
+}
+
+
+COMMAND: node scripts/gn-m3-02-electron-smoke.mjs --workflow-only
+{
+  "schemaVersion": 1,
+  "workflow": "startup-switch-watcher-search-diff-restart",
+  "startedAt": "2026-10-04T14:48:43.568Z",
+  "environment": {
+    "platform": "win32",
+    "arch": "x64",
+    "release": "10.0.26200",
+    "node": "v22.22.2",
+    "cpu": "13th Gen Intel(R) Core(TM) i5-13500",
+    "logicalCpus": 20,
+    "totalMemoryBytes": 68376403968,
+    "electron": "44.2.0",
+    "gitRevision": "54de447711c42d1aecd8abc1d9680cfe8992c5cc",
+    "buildModifiedAt": "2026-10-04T14:47:19.206Z"
+  },
+  "measurements": [
+    {
+      "name": "startup",
+      "durationMs": 667.86,
+      "ok": true
+    },
+    {
+      "name": "scan",
+      "durationMs": 641.9,
+      "ok": true
+    },
+    {
+      "name": "open-primary",
+      "durationMs": 154.38,
+      "ok": true
+    },
+    {
+      "name": "switch-secondary",
+      "durationMs": 584.77,
+      "ok": true
+    },
+    {
+      "name": "switch-primary",
+      "durationMs": 124.67,
+      "ok": true
+    },
+    {
+      "name": "watcher-update",
+      "durationMs": 881.04,
+      "ok": true
+    },
+    {
+      "name": "search-change",
+      "durationMs": 151.21,
+      "ok": true
+    },
+    {
+      "name": "open-diff",
+      "durationMs": 148.52,
+      "ok": true
+    },
+    {
+      "name": "search-diff",
+      "durationMs": 21.28,
+      "ok": true
+    },
+    {
+      "name": "restart-recovery",
+      "durationMs": 1478.84,
+      "ok": true
+    }
+  ],
+  "ok": true,
+  "fixture": {
+    "repositories": 2,
+    "filesPerRepository": 1
+  },
+  "finishedAt": "2026-10-04T14:48:49.951Z"
+}
+
+
+COMMAND: node scripts/gn-m3-02-electron-smoke.mjs
+{
+  "ok": true,
+  "fixtureRoot": "E:\\code\\junes\\github\\GitNest\\temp\\gitnest-e2e-m3-recovery-I2U3wD",
+  "screenshot": "gn-m3-02-1440-interrupted-operation.png",
+  "recoveredOperation": "interrupted",
+  "schemas": {
+    "workspace": 2,
+    "snapshots": 1,
+    "operations": 1,
+    "window": 1
+  },
+  "diagnosticsRecorded": true,
+  "corruptWorkspacePreserved": true
+}

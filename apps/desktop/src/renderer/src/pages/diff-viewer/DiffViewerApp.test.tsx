@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import React, { act } from "react";
+import React, { act, Profiler } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
   afterEach,
@@ -13,6 +13,7 @@ import {
 
 import {
   createDefaultAppSettings,
+  type AppSettingsDto,
   type RepositoryStatusSnapshotDto,
   type UpdateAppSettingsRequest
 } from "@gitnest/contracts";
@@ -29,6 +30,7 @@ let emitWorkspaceState:
 let emitWindowMaximized:
   | ((maximized: boolean) => void)
   | undefined;
+let emitSettings: ((settings: AppSettingsDto) => void) | undefined;
 
 describe("DiffViewerApp", () => {
   let container: HTMLDivElement;
@@ -37,6 +39,7 @@ describe("DiffViewerApp", () => {
   beforeEach(() => {
     emitWorkspaceState = undefined;
     emitWindowMaximized = undefined;
+    emitSettings = undefined;
     vi.stubGlobal("React", React);
     vi.stubGlobal(
       "requestAnimationFrame",
@@ -105,6 +108,39 @@ describe("DiffViewerApp", () => {
     expect(
       restoreButton?.querySelector("svg path")
     ).not.toBeNull();
+  });
+
+  it("loads repository browsing preferences and synchronizes changes from another window", async () => {
+    const settings = createDefaultAppSettings();
+    settings.repositoryFileBrowsing.repository = {
+      fileView: "tree", treeDirectoriesCollapsed: true
+    };
+    vi.mocked(window.gitnest.settings.get).mockResolvedValue({
+      ok: true, value: { settings, storageState: "persisted" }
+    });
+    await renderDiffViewer(root);
+    await vi.waitFor(() => {
+      expect(container.querySelector(".diff-workspace-tree-directory")?.getAttribute("aria-expanded")).toBe("false");
+    });
+    act(() => {
+      emitSettings?.({
+        ...settings,
+        repositoryFileBrowsing: {
+          repository: { fileView: "tree", treeDirectoriesCollapsed: false },
+          other: { fileView: "list", treeDirectoriesCollapsed: true }
+        }
+      });
+    });
+    expect(container.querySelector(".diff-workspace-tree-directory")?.getAttribute("aria-expanded")).toBe("true");
+    act(() => {
+      emitSettings?.({
+        ...settings,
+        repositoryFileBrowsing: {
+          repository: { fileView: "list", treeDirectoriesCollapsed: false }
+        }
+      });
+    });
+    expect(container.querySelector(".diff-workspace-tree-directory")).toBeNull();
   });
 
   it("uses the prototype layout, shared search, filter, and compact tree", async () => {
@@ -281,6 +317,9 @@ describe("DiffViewerApp", () => {
       treeViewButton.click();
       await Promise.resolve();
     });
+    expect(window.gitnest.settings.update).toHaveBeenLastCalledWith({
+      repositoryFileBrowsing: { repositoryId: "repository", fileView: "tree" }
+    });
 
     const directoryLabels = Array.from(
       container.querySelectorAll(
@@ -368,6 +407,126 @@ describe("DiffViewerApp", () => {
     expect(
       vi.mocked(bridge.repository.getDiff).mock.calls.length
     ).toBe(initialDiffCalls);
+  });
+
+  it("keeps the selected diff visible when a background refresh fails", async () => {
+    await renderDiffViewer(root);
+    expect(container.textContent).toContain("const newValue = true;");
+    const pending = deferred<Awaited<ReturnType<typeof window.gitnest.repository.getDiff>>>();
+    vi.mocked(window.gitnest.repository.getDiff).mockReturnValueOnce(pending.promise);
+    await refreshChanges(container);
+    expect(container.textContent).toContain("const newValue = true;");
+    expect(container.querySelector(".diff-content-skeleton")).toBeNull();
+    await act(async () => {
+      pending.resolve({ ok: false, error: {
+        code: "COMMAND_FAILED", message: "后台读取失败", details: {}
+      } });
+    });
+    expect(container.textContent).toContain("const newValue = true;");
+    expect(document.body.textContent).toContain("后台读取失败");
+    expect(container.querySelector(".diff-content-skeleton")).toBeNull();
+  });
+
+  it("uses a skeleton again while retrying the first unsuccessful changes read", async () => {
+    vi.mocked(window.gitnest.repository.getChanges).mockResolvedValueOnce({
+      ok: false, error: { code: "COMMAND_FAILED", message: "首次变更读取失败", details: {} }
+    });
+    vi.mocked(window.gitnest.repository.getDiff).mockResolvedValue({
+      ok: false, error: { code: "COMMAND_FAILED", message: "首次 Diff 读取失败", details: {} }
+    });
+    await renderDiffViewer(root);
+    expect(container.textContent).toContain("首次变更读取失败");
+    const pending = deferred<Awaited<ReturnType<typeof window.gitnest.repository.getChanges>>>();
+    vi.mocked(window.gitnest.repository.getChanges).mockReturnValueOnce(pending.promise);
+    await refreshChanges(container);
+    expect(container.querySelector(".diff-workspace-skeleton")).not.toBeNull();
+  });
+
+  it("shows an available diff while the initial changes list is still loading", async () => {
+    vi.mocked(window.gitnest.repository.getChanges).mockImplementation(
+      () => new Promise(() => undefined)
+    );
+    await renderDiffViewer(root);
+    expect(container.textContent).toContain("const newValue = true;");
+    expect(container.querySelector(".diff-workspace-skeleton")).toBeNull();
+  });
+
+  it("keeps a loaded single-file list visible when its refresh fails", async () => {
+    const initial = await window.gitnest.repository.getChanges({
+      queryId: "fixture",
+      target: { repositoryId: "repository", worktreeId: "worktree" }
+    });
+    if (!initial.ok) throw new Error("Expected successful fixture");
+    vi.mocked(window.gitnest.repository.getChanges).mockResolvedValue({
+      ...initial,
+      value: {
+        ...initial.value,
+        snapshot: {
+          ...initial.value.snapshot,
+          changes: initial.value.snapshot.changes.filter(change => change.path.endsWith("App.java"))
+        }
+      }
+    });
+    await renderDiffViewer(root);
+    expect(container.querySelectorAll(".diff-workspace-file")).toHaveLength(1);
+    vi.mocked(window.gitnest.repository.getChanges).mockResolvedValueOnce({
+      ok: false, error: { code: "COMMAND_FAILED", message: "变更刷新失败", details: {} }
+    });
+    await refreshChanges(container);
+    expect(container.querySelectorAll(".diff-workspace-file")).toHaveLength(1);
+    expect(document.body.textContent).toContain("变更刷新失败");
+  });
+
+  it("never paints the previous file's diff under the newly selected path", async () => {
+    const frames: Array<{ content: string; skeleton: boolean }> = [];
+    await act(async () => {
+      root.render(
+        <Profiler id="diff-viewer" onRender={() => {
+          frames.push({
+            content: container.querySelector(".diff-viewer-code")?.textContent ?? "",
+            skeleton: Boolean(container.querySelector(".diff-content-skeleton"))
+          });
+        }}>
+          <DiffViewerApp />
+        </Profiler>
+      );
+    });
+    expect(container.textContent).toContain("const newValue = true;");
+    vi.mocked(window.gitnest.repository.getDiff).mockImplementation(
+      () => new Promise(() => undefined)
+    );
+    frames.length = 0;
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".diff-workspace-file"))
+      .find(candidate => candidate.textContent?.includes("Config.java"));
+    expect(row).toBeDefined();
+    await act(async () => { row!.querySelector<HTMLButtonElement>(".diff-workspace-file-select")!.click(); });
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.every(frame => !frame.content.includes("const newValue = true;"))).toBe(true);
+    expect(frames[0]?.skeleton).toBe(true);
+  });
+
+  it("shows initial loading when an unavailable target reappears without cached files", async () => {
+    const frames: boolean[] = [];
+    await act(async () => {
+      root.render(
+        <Profiler id="restored-target" onRender={() => {
+          frames.push(Boolean(container.querySelector(".diff-workspace-skeleton")));
+        }}>
+          <DiffViewerApp />
+        </Profiler>
+      );
+    });
+    await act(async () => { emitWorkspaceState?.({ snapshots: [] }); });
+    expect(container.textContent).toContain("仓库或 Worktree 已不可用");
+    vi.mocked(window.gitnest.repository.getChanges).mockImplementation(
+      () => new Promise(() => undefined)
+    );
+    frames.length = 0;
+    await act(async () => { emitWorkspaceState?.({ snapshots: [workspaceSnapshot(5)] }); });
+    expect(container.querySelector(".diff-workspace-skeleton")).not.toBeNull();
+    expect(container.textContent).not.toContain("工作区干净");
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.every(Boolean)).toBe(true);
   });
 
   it("clears stale files and diff when the target snapshot disappears", async () => {
@@ -631,6 +790,15 @@ function findButton(
   return button;
 }
 
+async function refreshChanges(container: HTMLElement) {
+  await act(async () => {
+    const menu = container.querySelector<HTMLButtonElement>('button[title="变更文件视图"]');
+    expect(menu).not.toBeNull();
+    menu!.click();
+  });
+  await act(async () => { findButton(document.body, "重新读取变更").click(); });
+}
+
 function createBridge(): typeof window.gitnest {
   const appSettings = createDefaultAppSettings();
   const changes = [
@@ -662,6 +830,10 @@ function createBridge(): typeof window.gitnest {
 
   return {
     settings: {
+      onChanged: vi.fn((listener: (settings: AppSettingsDto) => void) => {
+        emitSettings = listener;
+        return () => { emitSettings = undefined; };
+      }),
       get: vi.fn().mockResolvedValue({
         ok: true,
         value: {
@@ -682,6 +854,15 @@ function createBridge(): typeof window.gitnest {
           }
           if (patch.diff) {
             Object.assign(appSettings.diff, patch.diff);
+          }
+          if (patch.repositoryFileBrowsing) {
+            const { repositoryId, ...preference } = patch.repositoryFileBrowsing;
+            appSettings.repositoryFileBrowsing[repositoryId] = {
+              fileView: appSettings.diff.fileView,
+              treeDirectoriesCollapsed: appSettings.diff.treeDirectoriesCollapsed,
+              ...appSettings.repositoryFileBrowsing[repositoryId],
+              ...preference
+            };
           }
           if (patch.git) {
             Object.assign(appSettings.git, patch.git);

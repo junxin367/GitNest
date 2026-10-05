@@ -75,6 +75,11 @@ export function WorkspaceOverviewPage({
     () => listWorkspaceTargets(workspace),
     [workspace]
   );
+  const historyTargetsKey = JSON.stringify(targets);
+  const historyTargets = useMemo<RepositoryTargetDto[]>(
+    () => JSON.parse(historyTargetsKey),
+    [historyTargetsKey]
+  );
   const scopedSnapshots = useMemo(
     () => filterSnapshotsToTargets(snapshots, targets),
     [snapshots, targets]
@@ -100,7 +105,7 @@ export function WorkspaceOverviewPage({
       scopedSnapshots
         .map(
           (snapshot) =>
-            `${targetKey(snapshot)}:${snapshot.head}`
+            `${targetKey(snapshot)}:${snapshot.head}:${snapshot.contentVersion ?? ""}`
         )
         .sort()
         .join("|"),
@@ -108,7 +113,7 @@ export function WorkspaceOverviewPage({
   );
   useEffect(() => {
     let active = true;
-    const queryIds = targets.map((target, index) => ({
+    const queryIds = historyTargets.map((target, index) => ({
       queryId: `workspace-overview-history-${
         ++workspaceOverviewHistorySequence
       }-${index}`,
@@ -169,7 +174,7 @@ export function WorkspaceOverviewPage({
         void repositoryBridge.cancelQuery({ queryId });
       }
     };
-  }, [historyRevision, targets]);
+  }, [historyRevision, historyTargets, workspace?.id]);
   const recentRows = useMemo(
     () =>
       [...statusRows]
@@ -650,7 +655,7 @@ function WorkspaceRecentCommitsPanel({
                     className={`workspace-activity-row${
                       index === rows.length - 1 ? " last" : ""
                     }`}
-                    disabled={!snapshot}
+                    disabled={!snapshot && !commit}
                     key={`${target.repositoryId}:${target.worktreeId}`}
                     onClick={() => onSelectTarget(target)}
                     type="button"

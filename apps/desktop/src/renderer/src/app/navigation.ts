@@ -23,3 +23,14 @@ export function repositoryTabForTargetSwitch(
 ): RepositoryTab {
   return currentTab ?? "overview";
 }
+
+export function shouldOpenGlobalSearch(
+  event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "defaultPrevented" | "isComposing">,
+  modalOpen: boolean
+): boolean {
+  return !modalOpen &&
+    !event.defaultPrevented &&
+    !event.isComposing &&
+    (event.ctrlKey || event.metaKey) &&
+    event.key.toLowerCase() === "k";
+}

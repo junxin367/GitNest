@@ -19,6 +19,7 @@ export interface CodeAnalysisController {
   state: CodeAnalysisStateDto;
   snapshot: CodeAnalysisSnapshotDto | null;
   snapshotDetail: CodeAnalysisSnapshotDetailDto | null;
+  loaded: boolean;
   loading: boolean;
   loadingFullSnapshot: boolean;
   action:
@@ -29,9 +30,10 @@ export interface CodeAnalysisController {
   installingLanguage: InstallableLanguageServerDto | null;
   error: GitReadErrorDto | null;
   start(scope: CodeAnalysisScopeDto): Promise<boolean>;
+  /** false 表示缓存未命中；失败或请求失效返回 null。 */
   restoreSnapshot(
     scope: CodeAnalysisScopeDto
-  ): Promise<boolean>;
+  ): Promise<boolean | null>;
   loadFullSnapshot(): Promise<boolean>;
   cancel(): Promise<boolean>;
   installLanguageServer(
@@ -54,16 +56,21 @@ export function useCodeAnalysis(
   const [snapshot, setSnapshot] =
     useState<CodeAnalysisSnapshotDto | null>(null);
   const [loading, setLoading] = useState(enabled);
+  const [loaded, setLoaded] = useState(false);
+  const [loadingSnapshot, setLoadingSnapshot] = useState(false);
   const [loadingFullSnapshot, setLoadingFullSnapshot] =
     useState(false);
   const [action, setAction] = useState<
     "starting" | "restoring" | "cancelling" | null
   >(null);
+  const [restorePending, setRestorePending] = useState(false);
   const [installingLanguage, setInstallingLanguage] =
     useState<InstallableLanguageServerDto | null>(null);
   const [error, setError] =
     useState<GitReadErrorDto | null>(null);
   const generationRef = useRef(0);
+  const restoreRequestRef = useRef(0);
+  const stateRequestRef = useRef(0);
   const stateRef = useRef<CodeAnalysisStateDto>(INITIAL_STATE);
   const snapshotRequestRef = useRef(0);
   const snapshotExpectationRef = useRef(
@@ -71,6 +78,7 @@ export function useCodeAnalysis(
   );
   const requestedSnapshotKeyRef = useRef("");
   const snapshotKeyRef = useRef("");
+  const snapshotErrorRef = useRef<GitReadErrorDto | null>(null);
 
   const loadSnapshot = useCallback(
     async (
@@ -86,6 +94,7 @@ export function useCodeAnalysis(
       );
       const requestId = ++snapshotRequestRef.current;
       requestedSnapshotKeyRef.current = requestKey;
+      setLoadingSnapshot(true);
       try {
         const result =
           await window.gitnest.codeAnalysis.getSnapshot({
@@ -103,6 +112,7 @@ export function useCodeAnalysis(
         }
         if (!result.ok) {
           requestedSnapshotKeyRef.current = "";
+          snapshotErrorRef.current = result.error;
           setError(result.error);
           return false;
         }
@@ -112,15 +122,16 @@ export function useCodeAnalysis(
             stateRef.current
           )
         ) {
-          setSnapshot(null);
           snapshotKeyRef.current = "";
           requestedSnapshotKeyRef.current = "";
-          setError({
+          const mismatchError: GitReadErrorDto = {
             code: "COMMAND_FAILED",
             message:
               "代码分析快照与当前 Workspace 状态不匹配。",
             details: {}
-          });
+          };
+          snapshotErrorRef.current = mismatchError;
+          setError(mismatchError);
           return false;
         }
         const nextSnapshot = result.value
@@ -135,6 +146,13 @@ export function useCodeAnalysis(
           ? `${expectationKey}\0${nextSnapshot.detailLevel}`
           : "";
         requestedSnapshotKeyRef.current = "";
+        const resolvedError = snapshotErrorRef.current;
+        snapshotErrorRef.current = null;
+        if (resolvedError) {
+          setError((current) =>
+            current === resolvedError ? stateRef.current.error ?? null : current
+          );
+        }
         return nextSnapshot !== null;
       } catch (reason) {
         if (
@@ -145,9 +163,18 @@ export function useCodeAnalysis(
             snapshotExpectationKey(stateRef.current)
         ) {
           requestedSnapshotKeyRef.current = "";
-          setError(unexpectedError(reason));
+          const readError = unexpectedError(reason);
+          snapshotErrorRef.current = readError;
+          setError(readError);
         }
         return false;
+      } finally {
+        if (
+          generation === generationRef.current &&
+          requestId === snapshotRequestRef.current
+        ) {
+          setLoadingSnapshot(false);
+        }
       }
     },
     []
@@ -160,6 +187,10 @@ export function useCodeAnalysis(
     ) => {
       const expectationKey =
         snapshotExpectationKey(nextState);
+      if (nextState.workspaceId !== stateRef.current.workspaceId) {
+        restoreRequestRef.current += 1;
+        setRestorePending(false);
+      }
       stateRef.current = nextState;
       if (
         snapshotExpectationRef.current !== expectationKey
@@ -168,8 +199,10 @@ export function useCodeAnalysis(
         snapshotRequestRef.current += 1;
         requestedSnapshotKeyRef.current = "";
         setLoadingFullSnapshot(false);
+        setLoadingSnapshot(false);
       }
       setState(nextState);
+      setLoaded(true);
       setAction(null);
       if (nextState.error) {
         setError(nextState.error);
@@ -217,12 +250,21 @@ export function useCodeAnalysis(
 
   const reload = useCallback(async () => {
     const generation = ++generationRef.current;
+    const requestId = ++stateRequestRef.current;
+    requestedSnapshotKeyRef.current = "";
+    setLoadingSnapshot(false);
+    setLoadingFullSnapshot(false);
+    setAction((current) => current === "restoring" ? null : current);
+    setRestorePending(false);
     setLoading(true);
     setError(null);
     try {
       const result =
         await window.gitnest.codeAnalysis.getState();
-      if (generation !== generationRef.current) {
+      if (
+        generation !== generationRef.current ||
+        requestId !== stateRequestRef.current
+      ) {
         return;
       }
       if (!result.ok) {
@@ -238,11 +280,17 @@ export function useCodeAnalysis(
         setLoadingFullSnapshot(false);
       }
     } catch (reason) {
-      if (generation === generationRef.current) {
+      if (
+        generation === generationRef.current &&
+        requestId === stateRequestRef.current
+      ) {
         setError(unexpectedError(reason));
       }
     } finally {
-      if (generation === generationRef.current) {
+      if (
+        generation === generationRef.current &&
+        requestId === stateRequestRef.current
+      ) {
         setLoading(false);
       }
     }
@@ -283,15 +331,22 @@ export function useCodeAnalysis(
   useEffect(() => {
     if (!enabled) {
       setLoading(false);
+      setLoadingSnapshot(false);
+      setRestorePending(false);
       return;
     }
     void reload();
     const unsubscribe =
       window.gitnest.codeAnalysis.onStateChanged(
-        applyState
+        (nextState) => {
+          stateRequestRef.current += 1;
+          setLoading(false);
+          applyState(nextState);
+        }
       );
     return () => {
       generationRef.current += 1;
+      stateRequestRef.current += 1;
       snapshotRequestRef.current += 1;
       unsubscribe();
     };
@@ -299,6 +354,8 @@ export function useCodeAnalysis(
 
   const start = useCallback(
     async (scope: CodeAnalysisScopeDto) => {
+      restoreRequestRef.current += 1;
+      setRestorePending(false);
       setAction("starting");
       setError(null);
       try {
@@ -325,48 +382,74 @@ export function useCodeAnalysis(
     if (!state.analysisId || state.state !== "running") {
       return false;
     }
+    const analysisId = state.analysisId;
     setAction("cancelling");
     setError(null);
     try {
       const result =
         await window.gitnest.codeAnalysis.cancel({
-          analysisId: state.analysisId
+          analysisId
         });
       if (!result.ok) {
-        setError(result.error);
-        setAction(null);
+        if (
+          stateRef.current.state === "running" &&
+          stateRef.current.analysisId === analysisId
+        ) {
+          setError(result.error);
+          setAction(null);
+        }
         return false;
       }
       return true;
     } catch (reason) {
-      setError(unexpectedError(reason));
-      setAction(null);
+      if (
+        stateRef.current.state === "running" &&
+        stateRef.current.analysisId === analysisId
+      ) {
+        setError(unexpectedError(reason));
+        setAction(null);
+      }
       return false;
     }
   }, [state.analysisId, state.state]);
 
   const restoreSnapshot = useCallback(
     async (scope: CodeAnalysisScopeDto) => {
+      const requestId = ++restoreRequestRef.current;
+      const generation = generationRef.current;
+      const isCurrent = () =>
+        requestId === restoreRequestRef.current &&
+        generation === generationRef.current;
       setAction("restoring");
+      setRestorePending(true);
       setError(null);
       try {
         const result =
           await window.gitnest.codeAnalysis.restoreSnapshot({
             scope
           });
+        if (!isCurrent()) {
+          return null;
+        }
         if (!result.ok) {
           setError(result.error);
           setAction(null);
-          return false;
+          return null;
         }
         if (!result.value) {
           setAction(null);
         }
         return result.value;
       } catch (reason) {
-        setError(unexpectedError(reason));
-        setAction(null);
-        return false;
+        if (isCurrent()) {
+          setError(unexpectedError(reason));
+          setAction(null);
+        }
+        return null;
+      } finally {
+        if (isCurrent()) {
+          setRestorePending(false);
+        }
       }
     },
     []
@@ -404,9 +487,10 @@ export function useCodeAnalysis(
     snapshotDetail: snapshot
       ? snapshot.detailLevel ?? "full"
       : null,
-    loading,
+    loaded,
+    loading: loading || loadingSnapshot || restorePending || action === "restoring",
     loadingFullSnapshot,
-    action,
+    action: restorePending ? "restoring" : action,
     installingLanguage,
     error,
     start,

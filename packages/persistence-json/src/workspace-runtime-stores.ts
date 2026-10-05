@@ -39,24 +39,31 @@ export class JsonWorkspaceSnapshotCollectionStore
   ): Promise<RepositoryStatusSnapshot[]> {
     assertWorkspaceId(workspaceId);
     const path = this.#path(workspaceId);
-    if (await fileExists(path)) {
-      return this.#store(workspaceId).load(workspaceId);
+    const snapshots = await this.#store(workspaceId).load(
+      workspaceId
+    );
+    if (snapshots.length > 0 || (await fileExists(path))) {
+      return snapshots;
     }
 
     if (
       this.#options.legacyFilePath &&
       workspaceId ===
-        (this.#options.legacyWorkspaceId ?? "default") &&
-      (await fileExists(this.#options.legacyFilePath))
+        (this.#options.legacyWorkspaceId ?? "default")
     ) {
       const snapshots = await new JsonRepositorySnapshotStore(
         this.#options.legacyFilePath,
         this.#options.clock
       ).load(workspaceId);
-      await this.#store(workspaceId).save(
-        workspaceId,
-        snapshots
-      );
+      if (
+        snapshots.length > 0 ||
+        (await fileExists(this.#options.legacyFilePath))
+      ) {
+        await this.#store(workspaceId).save(
+          workspaceId,
+          snapshots
+        );
+      }
       return snapshots;
     }
 
@@ -129,24 +136,31 @@ export class JsonWorkspaceOperationCollectionStore
   ): Promise<WorkspaceOperation[]> {
     assertWorkspaceId(workspaceId);
     const path = this.#path(workspaceId);
-    if (await fileExists(path)) {
-      return this.#store(workspaceId).load(workspaceId);
+    const operations = await this.#store(workspaceId).load(
+      workspaceId
+    );
+    if (operations.length > 0 || (await fileExists(path))) {
+      return operations;
     }
 
     if (
       this.#options.legacyFilePath &&
       workspaceId ===
-        (this.#options.legacyWorkspaceId ?? "default") &&
-      (await fileExists(this.#options.legacyFilePath))
+        (this.#options.legacyWorkspaceId ?? "default")
     ) {
       const operations = await new JsonWorkspaceOperationStore(
         this.#options.legacyFilePath,
         this.#options.clock
       ).load(workspaceId);
-      await this.#store(workspaceId).save(
-        workspaceId,
-        operations
-      );
+      if (
+        operations.length > 0 ||
+        (await fileExists(this.#options.legacyFilePath))
+      ) {
+        await this.#store(workspaceId).save(
+          workspaceId,
+          operations
+        );
+      }
       return operations;
     }
 

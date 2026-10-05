@@ -37,7 +37,7 @@ describe("DetailInspector Workspace details", () => {
     vi.unstubAllGlobals();
   });
 
-  it("shows root-level Workspace data and renames the Workspace", () => {
+  it("shows root-level Workspace data and renames the Workspace", async () => {
     const onRenameWorkspace = vi.fn(async () => true);
 
     act(() => {
@@ -88,7 +88,7 @@ describe("DetailInspector Workspace details", () => {
     const saveButton = [...container.querySelectorAll("button")].find(
       (button) => button.textContent?.trim() === "保存"
     );
-    act(() => {
+    await act(async () => {
       saveButton?.click();
     });
 
@@ -97,6 +97,85 @@ describe("DetailInspector Workspace details", () => {
       "Renamed Workspace"
     );
   });
+
+  it.each(["Newer draft", "Test Workspace"])(
+    "preserves the newer name %s when an earlier save finishes",
+    async (newerName) => {
+      let finishFirstSave!: (saved: boolean) => void;
+      const firstSave = new Promise<boolean>((resolve) => {
+        finishFirstSave = resolve;
+      });
+      const onRenameWorkspace = vi.fn()
+        .mockReturnValueOnce(firstSave)
+        .mockResolvedValueOnce(false)
+        .mockResolvedValue(true);
+      const original = createWorkspace();
+      const render = (workspace: WorkspaceDetailsDto, busy = false) =>
+        act(() => root.render(
+          <DetailInspector
+            busy={busy}
+            commit={null}
+            gitEnvironment={null}
+            gitError={null}
+            monitor={null}
+            onClose={() => undefined}
+            onOpenSettings={() => undefined}
+            onRenameWorkspace={onRenameWorkspace}
+            operations={[]}
+            runtimeInfo={null}
+            snapshots={[]}
+            workspace={workspace}
+          />
+        ));
+      const input = () => container.querySelector<HTMLInputElement>(
+        "#workspace-display-name"
+      )!;
+      const save = () => container.querySelector<HTMLButtonElement>(
+        ".workspace-settings-form button"
+      )!;
+      const edit = (value: string) => act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")
+          ?.set?.call(input(), value);
+        input().dispatchEvent(new Event("input", { bubbles: true }));
+      });
+
+      render(original);
+      edit("Earlier save");
+      act(() => save().click());
+      render(original, true);
+      expect(save().disabled).toBe(true);
+      edit(newerName);
+      render({ ...original, name: "Earlier save" });
+      await act(async () => finishFirstSave(true));
+
+      expect(input().value).toBe(newerName);
+      expect(save().disabled).toBe(false);
+      await act(async () => save().click());
+      expect(onRenameWorkspace).toHaveBeenLastCalledWith("workspace", newerName);
+      expect(input().value).toBe(newerName);
+      expect(save().disabled).toBe(false);
+      await act(async () => save().click());
+      render({ ...original, name: newerName });
+      expect(save().disabled).toBe(true);
+
+      edit("Unsubmitted name");
+      let finishOldWorkspaceSave!: (saved: boolean) => void;
+      onRenameWorkspace.mockReturnValueOnce(new Promise<boolean>((resolve) => {
+        finishOldWorkspaceSave = resolve;
+      }));
+      act(() => save().click());
+      render({ ...original, id: "another-workspace", name: "Other Workspace" });
+      expect(input().value).toBe("Other Workspace");
+      expect(save().disabled).toBe(true);
+      edit("Other workspace draft");
+      await act(async () => finishOldWorkspaceSave(true));
+      expect(input().value).toBe("Other workspace draft");
+      await act(async () => save().click());
+      expect(onRenameWorkspace).toHaveBeenLastCalledWith(
+        "another-workspace", "Other workspace draft"
+      );
+    }
+  );
 });
 
 function createWorkspace(): WorkspaceDetailsDto {

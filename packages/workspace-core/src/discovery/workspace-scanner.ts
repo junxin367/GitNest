@@ -84,6 +84,7 @@ export class WorkspaceScanner {
         normalizedDefinition.path
       );
     } catch (error) {
+      assertNotCancelled(options.signal);
       issues.push(
         createFileSystemIssue(normalizedDefinition.path, error)
       );
@@ -95,6 +96,7 @@ export class WorkspaceScanner {
           options.scannedAt ?? new Date().toISOString()
       };
     }
+    assertNotCancelled(options.signal);
 
     const normalizedRootRealPath =
       this.#fileSystem.normalizePath(rootRealPath);
@@ -123,9 +125,11 @@ export class WorkspaceScanner {
         resolvedPath =
           await this.#fileSystem.resolveRealPath(directoryPath);
       } catch (error) {
+        assertNotCancelled(options.signal);
         issues.push(createFileSystemIssue(directoryPath, error));
         return;
       }
+      assertNotCancelled(options.signal);
 
       const normalizedRealPath =
         this.#fileSystem.normalizePath(resolvedPath);
@@ -166,9 +170,11 @@ export class WorkspaceScanner {
           directoryPath
         );
       } catch (error) {
+        assertNotCancelled(options.signal);
         issues.push(createFileSystemIssue(directoryPath, error));
         return;
       }
+      assertNotCancelled(options.signal);
 
       const hasGitMarker = entries.some(
         (entry) => entry.name.toLocaleLowerCase() === ".git"
@@ -182,6 +188,7 @@ export class WorkspaceScanner {
               directoryPath,
               options.signal
             );
+          assertNotCancelled(options.signal);
           const normalizedDirectory =
             this.#fileSystem.normalizePath(directoryPath);
 
@@ -197,6 +204,7 @@ export class WorkspaceScanner {
           });
           repositoryFound = true;
         } catch (error) {
+          assertNotCancelled(options.signal);
           if (isCancellation(error)) {
             throw new WorkspaceError(
               "SCAN_CANCELLED",

@@ -9,7 +9,7 @@ import {
 
 import type { DiffFileViewDto } from "@gitnest/contracts";
 
-import type { DiffViewerFile } from "../../shared/model/diffViewModel";
+import type { DiffViewerFile, DiffViewerLayout } from "../../shared/model/diffViewModel";
 import { Button } from "../../shared/ui/Button";
 import { Icon } from "../../shared/ui/Icon";
 import {
@@ -51,6 +51,7 @@ export interface DiffWorkspaceSkeletonProps {
   className?: string | undefined;
   commitPanelHeight?: number | undefined;
   label?: string | undefined;
+  layout?: DiffViewerLayout | undefined;
   showCommit?: boolean | undefined;
 }
 
@@ -173,6 +174,17 @@ export function DiffWorkspace({
     useState<DiffFileContextMenuState | null>(null);
   const [discardRequest, setDiscardRequest] =
     useState<DiffDiscardRequest | null>(null);
+  const discardTargetsCurrent = discardRequest?.files.every((requested) => {
+    const current = files.find((file) => file.key === requested.key);
+    return current &&
+      (canDiscardFile?.(current) ?? true) &&
+      current.path === requested.path &&
+      current.mode === requested.mode &&
+      current.change.kind === requested.change.kind &&
+      current.change.originalPath === requested.change.originalPath &&
+      current.change.indexStatus === requested.change.indexStatus &&
+      current.change.worktreeStatus === requested.change.worktreeStatus;
+  }) ?? false;
   const selectedFile =
     files.find((file) => file.key === selectedFileKey) ??
     files[0];
@@ -247,7 +259,7 @@ export function DiffWorkspace({
     [closeFileContextMenu]
   );
   const confirmDiscard = useCallback(async () => {
-    if (!discardRequest) {
+    if (!discardRequest || !discardTargetsCurrent || mutationBusy) {
       return false;
     }
     if (discardRequest.kind === "file") {
@@ -261,7 +273,13 @@ export function DiffWorkspace({
       return false;
     }
     return await onDiscardFiles(discardRequest.files);
-  }, [discardRequest, onDiscardFile, onDiscardFiles]);
+  }, [discardRequest, discardTargetsCurrent, mutationBusy, onDiscardFile, onDiscardFiles]);
+
+  useEffect(() => {
+    if (!discardTargetsCurrent) {
+      closeDiscardConfirmation();
+    }
+  }, [closeDiscardConfirmation, discardTargetsCurrent]);
 
   useEffect(() => {
     closeFileContextMenu();
@@ -440,7 +458,7 @@ export function DiffWorkspace({
         contextMenu={fileContextMenu}
         onClose={closeFileContextMenu}
       />
-      {discardRequest ? (
+      {discardRequest && discardTargetsCurrent ? (
         <DiffDiscardConfirmationDialog
           files={discardRequest.files}
           mutationBusy={mutationBusy}
@@ -465,6 +483,7 @@ export function DiffWorkspaceSkeleton({
   className,
   commitPanelHeight,
   label = "正在读取工作区变更…",
+  layout = "unified",
   showCommit = false
 }: DiffWorkspaceSkeletonProps) {
   return (
@@ -534,7 +553,7 @@ export function DiffWorkspaceSkeleton({
           <Skeleton className="diff-workspace-skeleton-document-stat" />
           <Skeleton className="diff-workspace-skeleton-square" />
         </div>
-        <DiffContentSkeleton />
+        <DiffContentSkeleton layout={layout} />
       </div>
     </SkeletonSurface>
   );

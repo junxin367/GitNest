@@ -28,6 +28,12 @@ export interface GitRepositoryCommandClient {
     path: string,
     options?: GitReadOptions
   ): Promise<string[]>;
+  readRemoteUrls(
+    path: string,
+    remote: string,
+    direction: "fetch" | "push",
+    options?: GitReadOptions
+  ): Promise<string[]>;
   readRemoteBranches(
     path: string,
     remote: string,

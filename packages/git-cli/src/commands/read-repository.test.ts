@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BRANCH_ARGUMENTS,
   commitDiffArguments,
   commitMetadataArguments,
   commitNumstatArguments,
@@ -26,6 +27,12 @@ import {
 } from "./read-repository";
 
 describe("repository read commands", () => {
+  it("includes symbolic ref targets when listing branches", () => {
+    expect(BRANCH_ARGUMENTS[1]).toContain(
+      "%(authordate:iso-strict)%1f%(symref)%1e"
+    );
+  });
+
   it("bypasses stale fsmonitor state when reading repository status", () => {
     expect(STATUS_ARGUMENTS).toEqual([
       "-c",
@@ -39,6 +46,12 @@ describe("repository read commands", () => {
   });
 
   it("uses an explicit pathspec boundary for every diff mode", () => {
+    for (const mode of ["unstaged", "staged", "untracked"] as const) {
+      expect(diffArguments("file.ts", mode, 3).slice(0, 2)).toEqual([
+        "-c",
+        "core.fsmonitor=false"
+      ]);
+    }
     expect(
       diffArguments("-leading-dash.ts", "unstaged", 3)
     ).toEqual(
@@ -95,7 +108,7 @@ describe("repository read commands", () => {
       "--decorate=short"
     );
     expect(historyPageArguments(51, 50)).toContain(
-      "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P%x1f%D%x1e"
+      "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00"
     );
     expect(
       historyPageArguments(
@@ -116,7 +129,7 @@ describe("repository read commands", () => {
         "--left-right",
         "--boundary",
         "--topo-order",
-        "--format=%m%x1f%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P%x1f%D%x1e",
+        "--format=%m%x00%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00",
         "refs/heads/main...refs/heads/develop"
       ])
     );
@@ -263,6 +276,8 @@ describe("repository read commands", () => {
   it("reads all meaningful unstaged paths in one non-mutating command", () => {
     expect(UNSTAGED_DIFF_PATH_ARGUMENTS).toEqual([
       "-c",
+      "core.fsmonitor=false",
+      "-c",
       "diff.autoRefreshIndex=false",
       "--literal-pathspecs",
       "diff",
@@ -274,6 +289,8 @@ describe("repository read commands", () => {
       "--"
     ]);
     expect(STAGED_DIFF_STAT_ARGUMENTS).toEqual([
+      "-c",
+      "core.fsmonitor=false",
       "-c",
       "diff.autoRefreshIndex=false",
       "--literal-pathspecs",

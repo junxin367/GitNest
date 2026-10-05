@@ -146,6 +146,7 @@ export function CodeAnalysisPage({
   const availableSnapshot = analysis.snapshot;
   const snapshot =
     availableSnapshot?.scope === scope &&
+    availableSnapshot.workspaceId === scopeWorkspaceId &&
     availableSnapshot.workspaceId ===
       analysis.state.workspaceId
       ? availableSnapshot
@@ -244,7 +245,8 @@ export function CodeAnalysisPage({
             worktreeId: selectedNode.location.worktreeId
           }
         }
-      : undefined
+      : undefined,
+    workspace?.id
   );
   const editorProfile = useMemo(() => {
     const editors = externalApplications.profiles.filter(
@@ -284,6 +286,7 @@ export function CodeAnalysisPage({
   useEffect(() => {
     if (
       availableSnapshot &&
+      availableSnapshot.workspaceId === scopeWorkspaceId &&
       analysis.action === null &&
       analysis.state.state !== "running" &&
       availableSnapshot.workspaceId ===
@@ -307,6 +310,7 @@ export function CodeAnalysisPage({
     }
   }, [
     analysis.state.state,
+    scopeWorkspaceId,
     analysis.state.analysisId,
     analysis.state.generatedAt,
     analysis.state.scope,
@@ -547,7 +551,7 @@ export function CodeAnalysisPage({
     );
     const restored =
       await analysis.restoreSnapshot(nextScope);
-    if (restored) {
+    if (restored !== false) {
       return;
     }
     if (!startOnCacheMiss) {
@@ -1071,6 +1075,12 @@ export function CodeAnalysisPage({
                         }
                       : {})}
                     onKeyDown={(event) => {
+                      if (
+                        event.nativeEvent.isComposing ||
+                        event.nativeEvent.keyCode === 229
+                      ) {
+                        return;
+                      }
                       if (event.key === "Enter") {
                         const firstResult =
                           deferredNodeQuery === nodeQuery
@@ -1344,10 +1354,23 @@ export function CodeAnalysisPage({
             <Icon name="graph" size={24} />
           </span>
           <div>
-            <strong>尚未生成代码关系索引</strong>
+            <strong>
+              {analysis.error ? "代码分析操作未完成" : "尚未生成代码关系索引"}
+            </strong>
             <p>
-              先分析变动代码可快速查看本次修改影响；需要跨项目完整请求链时，再手动运行全部代码分析。
+              {analysis.error?.message ??
+                "先分析变动代码可快速查看本次修改影响；需要跨项目完整请求链时，再手动运行全部代码分析。"}
             </p>
+            {analysis.error && (
+              <Button
+                disabled={analysis.loading}
+                onClick={() => void analysis.reload()}
+                size="small"
+                type="button"
+              >
+                重新读取
+              </Button>
+            )}
           </div>
         </section>
       )}
@@ -1357,7 +1380,13 @@ export function CodeAnalysisPage({
   return (
     <SkeletonBoundary
       fallback={<CodeAnalysisSkeleton />}
-      hasContent={Boolean(availableSnapshot)}
+      hasContent={Boolean(snapshot || progressPresentation) || Boolean(
+        analysis.loaded &&
+        analysis.action !== "restoring" &&
+        !analysis.state.snapshotAvailable &&
+        (analysis.state.workspaceId ?? "") === scopeWorkspaceId &&
+        (analysis.state.scope === undefined || analysis.state.scope === scope)
+      )}
       label="正在读取代码分析"
       loading={analysis.loading}
       surfaceClassName="page-scroll code-analysis-page gn-page-skeleton analysis-page-skeleton"

@@ -242,6 +242,14 @@ export class GitCliClient
     GitWorktreeCommandClient
 {
   #executablePath: string | undefined;
+  readonly #executablePathDiscoveries = new Map<
+    GitReadPriority | undefined,
+    Promise<string>
+  >();
+  readonly #environmentReads = new Map<
+    string,
+    Promise<GitEnvironment>
+  >();
   readonly #remoteEnvironmentProvider:
     | GitRemoteCommandEnvironmentProvider
     | undefined;
@@ -254,11 +262,35 @@ export class GitCliClient
   async getEnvironment(
     options: GitReadOptions = {}
   ): Promise<GitEnvironment> {
-    const executablePath = await this.#getExecutablePath(
-      options.signal,
-      options.priority
-    );
-    return readGitEnvironment(executablePath, options);
+    if (options.signal) {
+      const executablePath = await this.#getExecutablePath(
+        options.signal,
+        options.priority
+      );
+      return readGitEnvironment(executablePath, options);
+    }
+
+    const key = JSON.stringify([
+      options.priority ?? null,
+      options.timeoutMs ?? null
+    ]);
+    let read = this.#environmentReads.get(key);
+    if (!read) {
+      read = this.#getExecutablePath(
+        undefined,
+        options.priority
+      ).then((executablePath) =>
+        readGitEnvironment(executablePath, options)
+      );
+      this.#environmentReads.set(key, read);
+    }
+    try {
+      return structuredClone(await read);
+    } finally {
+      if (this.#environmentReads.get(key) === read) {
+        this.#environmentReads.delete(key);
+      }
+    }
   }
 
   async testRemoteConnection(
@@ -369,7 +401,8 @@ export class GitCliClient
 
       if (
         options.mode === "untracked" &&
-        ![0, 1].includes(result.exitCode)
+        (![0, 1].includes(result.exitCode) ||
+          (result.exitCode === 1 && !result.stdout.trim()))
       ) {
         throw new GitError(
           "COMMAND_FAILED",
@@ -910,6 +943,34 @@ export class GitCliClient
     }
   }
 
+  async readRemoteUrls(
+    path: string,
+    remote: string,
+    direction: "fetch" | "push",
+    options: GitReadOptions = {}
+  ): Promise<string[]> {
+    const worktreePath = await validateDirectoryPath(path);
+    const remoteName = validateRemoteName(remote);
+    const executablePath = await this.#getExecutablePath(
+      options.signal
+    );
+    try {
+      const result = await runProcess({
+        executable: executablePath,
+        cwd: worktreePath,
+        args: readRemoteUrlArguments(remoteName, {
+          all: true,
+          push: direction === "push"
+        }),
+        signal: options.signal,
+        timeoutMs: options.timeoutMs
+      });
+      return result.stdout.split(/\r?\n/).filter(Boolean);
+    } catch (error) {
+      throw mapRepositoryError(error, worktreePath);
+    }
+  }
+
   async readRemoteBranches(
     path: string,
     remote: string,
@@ -1329,12 +1390,13 @@ export class GitCliClient
       signal: options.signal,
       timeoutMs: options.timeoutMs
     };
+    let requestedBranch: string | undefined;
 
     try {
-      await assertBranchName(commandOptions, branch);
+      requestedBranch = await assertBranchName(commandOptions, branch);
       await runProcess({
         ...commandOptions,
-        args: switchBranchArguments(branch),
+        args: switchBranchArguments(requestedBranch),
         timeoutMs:
           options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
         outputLimitBytes: WRITE_OUTPUT_LIMIT_BYTES,
@@ -1342,7 +1404,42 @@ export class GitCliClient
         writeIntent: true
       });
     } catch (error) {
-      throw mapRepositoryError(error, worktreePath);
+      const failure = mapRepositoryError(error, worktreePath);
+      if (requestedBranch && failure instanceof GitError) {
+        let currentRef: string | undefined;
+        try {
+          const observed = await runProcess({
+            executable: executablePath,
+            cwd: worktreePath,
+            args: ["symbolic-ref", "--quiet", "HEAD"],
+            timeoutMs: 5_000,
+            outputLimitBytes: 4_096,
+            allowFailure: true
+          });
+          if (observed.exitCode === 0) {
+            currentRef = trimSingleLine(observed.stdout);
+          }
+        } catch {
+          // The original checkout error remains authoritative.
+        }
+        if (currentRef === `refs/heads/${requestedBranch}`) {
+          const head = await readOutcomeRevision({
+            executable: executablePath,
+            cwd: worktreePath
+          });
+          throw new GitError(
+            failure.code,
+            `${failure.message} 当前已位于分支 ${requestedBranch}，请先核对工作区与钩子执行结果，不要直接重复切换。`,
+            {
+              ...failure.details,
+              branchOutcome: "selected",
+              branch: requestedBranch,
+              head: head ?? "unavailable"
+            }
+          );
+        }
+      }
+      throw failure;
     }
   }
 
@@ -1459,6 +1556,7 @@ export class GitCliClient
       signal: options.signal,
       timeoutMs: options.timeoutMs
     };
+    let creationStarted = false;
 
     try {
       const mode = validateCreateWorktreeMode(options);
@@ -1468,6 +1566,7 @@ export class GitCliClient
             mode.branch
           )
         : undefined;
+      creationStarted = true;
       await runProcess({
         ...commandOptions,
         args: createWorktreeArguments({
@@ -1484,7 +1583,33 @@ export class GitCliClient
         writeIntent: true
       });
     } catch (error) {
-      throw mapRepositoryError(error, repositoryPath);
+      const failure = mapRepositoryError(error, repositoryPath);
+      if (creationStarted && failure instanceof GitError) {
+        let registered: Worktree | undefined;
+        try {
+          registered = (await this.readWorktrees(repositoryPath, {
+            timeoutMs: 5_000
+          })).find((worktree) =>
+            relative(destinationPath, worktree.path) === ""
+          );
+        } catch {
+          // Keep the command failure when the resulting registration cannot be read.
+        }
+        if (registered) {
+          throw new GitError(
+            failure.code,
+            `${failure.message} 目标路径当前已有 Worktree 登记，请先检查目录与钩子执行结果，不要直接重复创建。`,
+            {
+              ...failure.details,
+              worktreeOutcome: "registered",
+              worktreePath: registered.path,
+              worktreeHead: registered.head,
+              worktreeBranch: registered.branch ?? ""
+            }
+          );
+        }
+      }
+      throw failure;
     }
   }
 
@@ -1733,17 +1858,79 @@ export class GitCliClient
     );
 
     try {
-      await runProcess({
+      const commandOptions = {
         executable: executablePath,
         cwd: worktreePath,
-        args: stageArguments(relativePaths),
         signal: options.signal,
         timeoutMs:
-          options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
-        outputLimitBytes: WRITE_OUTPUT_LIMIT_BYTES,
-        discardOutputAfterLimit: true,
-        writeIntent: true
+          options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS
+      };
+      const deletedResult = await runProcess({
+        ...commandOptions,
+        args: [
+          "-c",
+          "core.fsmonitor=false",
+          "-c",
+          "diff.autoRefreshIndex=false",
+          "--literal-pathspecs",
+          "diff",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--name-only",
+          "--diff-filter=D",
+          "-z",
+          "--",
+          ...relativePaths
+        ]
       });
+      const deletedPaths = new Set(
+        deletedResult.stdout.split("\0").filter(Boolean)
+      );
+      const requestedPaths = new Set(
+        relativePaths.map(normalizeMutationPath)
+      );
+      const unselectedDeletions = [...deletedPaths].filter(
+        (path) => !requestedPaths.has(path)
+      );
+      if (unselectedDeletions.length > 0) {
+        throw new GitError(
+          "INVALID_REQUEST",
+          "此文件会替换目录中的其他已跟踪路径，请一起选择这些删除项后再暂存。",
+          { unselectedCount: unselectedDeletions.length }
+        );
+      }
+      const isDeleted = (path: string) =>
+        deletedPaths.has(normalizeMutationPath(path));
+      const normalPaths = relativePaths.filter(
+        (path) => !isDeleted(path)
+      );
+      const removedPaths = relativePaths.filter(
+        (path) =>
+          isDeleted(path) &&
+          !normalPaths.some((parent) =>
+            normalizeMutationPath(path).startsWith(
+              `${normalizeMutationPath(parent)}/`
+            )
+          )
+      );
+
+      // Literal pathspecs still recurse into directories. A selected file
+      // deletion must not stage files from a directory that replaced it.
+      for (const [pathsToStage, trackedOnly] of [
+        [normalPaths, false],
+        [removedPaths, true]
+      ] as const) {
+        if (pathsToStage.length === 0) {
+          continue;
+        }
+        await runProcess({
+          ...commandOptions,
+          args: stageArguments(pathsToStage, trackedOnly),
+          outputLimitBytes: WRITE_OUTPUT_LIMIT_BYTES,
+          discardOutputAfterLimit: true,
+          writeIntent: true
+        });
+      }
     } catch (error) {
       throw mapRepositoryError(error, worktreePath);
     }
@@ -1787,6 +1974,49 @@ export class GitCliClient
     );
 
     try {
+      const stagedResult = await runProcess({
+        executable: executablePath,
+        cwd: worktreePath,
+        args: [
+          "-c",
+          "core.fsmonitor=false",
+          "-c",
+          "diff.autoRefreshIndex=false",
+          "--literal-pathspecs",
+          "diff",
+          "--cached",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--no-renames",
+          "--name-only",
+          "-z",
+          "--",
+          ...relativePaths
+        ],
+        signal: options.signal,
+        timeoutMs: options.timeoutMs
+      });
+      const requestedPaths = new Set(
+        relativePaths.map(normalizeMutationPath)
+      );
+      const unselectedPaths = stagedResult.stdout
+        .split("\0")
+        .filter((path) => path && !requestedPaths.has(path));
+      if (unselectedPaths.length > 0) {
+        throw new GitError(
+          "INVALID_REQUEST",
+          "此路径与目录内其他暂存变更关联，请一起选择这些变更后再取消暂存。",
+          { unselectedCount: unselectedPaths.length }
+        );
+      }
+      const pathspecs = relativePaths.filter((path) => {
+        const normalizedPath = normalizeMutationPath(path);
+        return ![...requestedPaths].some(
+          (parent) =>
+            parent !== normalizedPath &&
+            normalizedPath.startsWith(`${parent}/`)
+        );
+      });
       const hasHead = await repositoryHasHead({
         executable: executablePath,
         cwd: worktreePath,
@@ -1796,7 +2026,7 @@ export class GitCliClient
       await runProcess({
         executable: executablePath,
         cwd: worktreePath,
-        args: unstageArguments(relativePaths, hasHead),
+        args: unstageArguments(pathspecs, hasHead),
         signal: options.signal,
         timeoutMs:
           options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
@@ -1880,6 +2110,7 @@ export class GitCliClient
     );
     const timeoutMs =
       options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS;
+    let mutationStarted = false;
 
     try {
       const resolved = await runProcess({
@@ -1909,6 +2140,7 @@ export class GitCliClient
         );
       }
 
+      mutationStarted = true;
       await runProcess({
         executable: executablePath,
         cwd: worktreePath,
@@ -1924,7 +2156,55 @@ export class GitCliClient
         writeIntent: true
       });
     } catch (error) {
-      throw mapRepositoryError(error, worktreePath);
+      const failure = mapRepositoryError(error, worktreePath);
+      if (!(failure instanceof GitError)) {
+        throw failure;
+      }
+      if (mutationStarted && action !== "drop") {
+        const diagnosticOptions = {
+          executable: executablePath,
+          cwd: worktreePath
+        };
+        const conflictedPathCount =
+          await readUnmergedPathCount(diagnosticOptions);
+        if (
+          conflictedPathCount !== undefined &&
+          conflictedPathCount > 0
+        ) {
+          const currentRef = await readOutcomeRevision(
+            diagnosticOptions,
+            normalizedRef
+          );
+          const stashRefState =
+            currentRef === undefined
+              ? "unavailable"
+              : currentRef === expectedHash
+                ? "unchanged"
+                : "changed";
+          const referenceMessage =
+            stashRefState === "unchanged"
+              ? "所选 Stash 引用仍保留。"
+              : stashRefState === "changed"
+                ? "所选 Stash 引用已变化，请重新检查。"
+                : "无法核验所选 Stash 引用，请重新检查。";
+          throw new GitError(
+            failure.code,
+            `${failure.message} 工作区存在 ${conflictedPathCount} 个冲突文件，Stash 可能已部分应用。${referenceMessage} 请先检查并解决冲突，不要直接重复应用。`,
+            {
+              ...failure.details,
+              stashOutcome: "conflicted",
+              conflictedPathCount,
+              stashRefState,
+              ...(currentRef !== undefined
+                ? {
+                    stashRefUnchanged: currentRef === expectedHash
+                  }
+                : {})
+            }
+          );
+        }
+      }
+      throw failure;
     }
   }
 
@@ -1939,6 +2219,11 @@ export class GitCliClient
     );
     const timeoutMs =
       options.timeoutMs ?? DEFAULT_COMMIT_TIMEOUT_MS;
+    const headBefore = await readOutcomeRevision({
+      executable: executablePath,
+      cwd: worktreePath,
+      signal: options.signal
+    });
 
     try {
       await runProcess({
@@ -1955,7 +2240,42 @@ export class GitCliClient
         writeIntent: true
       });
     } catch (error) {
-      throw mapRepositoryError(error, worktreePath);
+      const failure = mapRepositoryError(error, worktreePath);
+      if (!(failure instanceof GitError)) {
+        throw failure;
+      }
+      const headAfter = await readOutcomeRevision({
+        executable: executablePath,
+        cwd: worktreePath
+      });
+      const headChanged =
+        headBefore !== undefined &&
+        headAfter !== undefined &&
+        headBefore !== headAfter;
+      if (
+        failure.code === "COMMAND_CANCELLED" ||
+        failure.code === "COMMAND_TIMEOUT" ||
+        headChanged ||
+        headBefore === undefined ||
+        headAfter === undefined
+      ) {
+        const observation = headChanged
+          ? "检测到 HEAD 已变化，无法确认是否完全来自本次提交。"
+          : headBefore !== undefined && headAfter !== undefined
+            ? "检查时 HEAD 未变化。"
+            : "无法完整读取提交前后的 HEAD。";
+        throw new GitError(
+          failure.code,
+          `${failure.message} ${observation} 提交结果尚未确认，请先刷新并核对提交历史与暂存区，不要直接重试。`,
+          {
+            ...failure.details,
+            commitOutcome: "unknown",
+            headBefore: headBefore ?? "unavailable",
+            headAfter: headAfter ?? "unavailable"
+          }
+        );
+      }
+      throw failure;
     }
 
     try {
@@ -2082,7 +2402,9 @@ export class GitCliClient
     try {
       return await action(lease?.environment);
     } finally {
-      await lease?.dispose().catch(() => undefined);
+      await Promise.resolve()
+        .then(() => lease?.dispose())
+        .catch(() => undefined);
     }
   }
 
@@ -2122,10 +2444,32 @@ export class GitCliClient
     priority?: GitReadPriority
   ): Promise<string> {
     if (!this.#executablePath) {
-      this.#executablePath = await findGitExecutable(
-        signal,
-        priority
-      );
+      if (signal) {
+        this.#executablePath = await findGitExecutable(
+          signal,
+          priority
+        );
+      } else {
+        let discovery =
+          this.#executablePathDiscoveries.get(priority);
+        if (!discovery) {
+          discovery = findGitExecutable(undefined, priority);
+          this.#executablePathDiscoveries.set(
+            priority,
+            discovery
+          );
+        }
+        try {
+          this.#executablePath = await discovery;
+        } finally {
+          if (
+            this.#executablePathDiscoveries.get(priority) ===
+            discovery
+          ) {
+            this.#executablePathDiscoveries.delete(priority);
+          }
+        }
+      }
     }
 
     return this.#executablePath;
@@ -2670,6 +3014,56 @@ async function repositoryHasHead(
   );
 }
 
+async function readOutcomeRevision(
+  options: CommandOptions,
+  revision = "HEAD"
+): Promise<string | undefined> {
+  try {
+    const result = await runProcess({
+      ...options,
+      args: [
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "--end-of-options",
+        revision
+      ],
+      allowFailure: true,
+      timeoutMs: 5_000,
+      outputLimitBytes: 4_096
+    });
+    if (result.exitCode === 0) {
+      return validateFullObjectId(trimSingleLine(result.stdout));
+    }
+    if (result.exitCode === 1 && !result.stderr.trim()) {
+      return "";
+    }
+  } catch {
+    // Failure diagnostics must preserve the original command error.
+  }
+  return undefined;
+}
+
+async function readUnmergedPathCount(
+  options: CommandOptions
+): Promise<number | undefined> {
+  try {
+    const result = await runProcess({
+      ...options,
+      args: ["ls-files", "--unmerged", "-z"],
+      timeoutMs: 5_000,
+      outputLimitBytes: WRITE_OUTPUT_LIMIT_BYTES
+    });
+    return new Set(
+      result.stdout.split("\0").filter(Boolean).map(
+        (entry) => entry.slice(entry.indexOf("\t") + 1)
+      )
+    ).size;
+  } catch {
+    return undefined;
+  }
+}
+
 async function validateBranchNameWithGit(
   options: CommandOptions,
   branch: string
@@ -3087,6 +3481,10 @@ function validateStashRef(stashRef: string): string {
   }
 
   return normalized;
+}
+
+function normalizeMutationPath(path: string): string {
+  return sep === "\\" ? path.replaceAll("\\", "/") : path;
 }
 
 function validateRelativePathspec(path: string): string {

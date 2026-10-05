@@ -16,7 +16,7 @@ export const SUPPORTED_PROTOCOL_VERSIONS = [
 
 export interface JsonRpcRequest {
   jsonrpc: "2.0";
-  id: string | number | null;
+  id: string | number;
   method: string;
   params?: unknown;
 }
@@ -62,6 +62,8 @@ export interface McpToolResult {
 
 export interface McpToolContext {
   signal?: AbortSignal;
+  /** JSON-RPC wrapper plus the stdio newline, excluding the tool result. */
+  responseEnvelopeBytes?: number;
 }
 
 export interface McpToolHandler {
@@ -117,14 +119,23 @@ export class McpProtocolServer {
     }
     const method = message.method;
     const id = normalizeId(message.id);
-    if (typeof method !== "string" || id === undefined) {
-      if (typeof method !== "string") {
-        return failure(
-          id ?? null,
-          JSON_RPC_ERRORS.invalidRequest,
-          "Missing JSON-RPC method."
-        );
-      }
+    const hasId = Object.hasOwn(message, "id");
+    // A missing ID denotes a notification; an invalid present ID does
+    // not. MCP narrows JSON-RPC IDs to strings or integers (never null)
+    // and requires object params even for one-way notifications.
+    if (
+      message.jsonrpc !== "2.0" ||
+      typeof method !== "string" ||
+      (hasId && id === undefined) ||
+      (message.params !== undefined && !isRecord(message.params))
+    ) {
+      return failure(
+        id ?? null,
+        JSON_RPC_ERRORS.invalidRequest,
+        "Invalid JSON-RPC request."
+      );
+    }
+    if (id === undefined) {
       this.#options.onNotification?.(
         method,
         message.params
@@ -134,7 +145,7 @@ export class McpProtocolServer {
     const params = message.params;
 
     try {
-      const result = await this.#dispatch(method, params);
+      const result = await this.#dispatch(method, params, id);
       if (result === NOT_HANDLED) {
         return failure(
           id,
@@ -165,7 +176,8 @@ export class McpProtocolServer {
 
   async #dispatch(
     method: string,
-    params: unknown
+    params: unknown,
+    id: string | number
   ): Promise<unknown> {
     switch (method) {
       case "initialize":
@@ -182,7 +194,7 @@ export class McpProtocolServer {
           }))
         };
       case "tools/call":
-        return this.#callTool(params);
+        return this.#callTool(params, id);
       default: {
         const custom = await this.#options.onRequest?.(
           method,
@@ -216,7 +228,10 @@ export class McpProtocolServer {
     };
   }
 
-  async #callTool(params: unknown): Promise<McpToolResult> {
+  async #callTool(
+    params: unknown,
+    id: string | number
+  ): Promise<McpToolResult> {
     if (!isRecord(params) || typeof params.name !== "string") {
       throw new ToolFailure("tools/call 需要 name 参数。");
     }
@@ -227,7 +242,12 @@ export class McpProtocolServer {
     const args = isRecord(params.arguments)
       ? params.arguments
       : {};
-    return tool.handle(args, {});
+    return tool.handle(args, {
+      responseEnvelopeBytes: Buffer.byteLength(
+        JSON.stringify({ jsonrpc: "2.0", id, result: null }),
+        "utf8"
+      ) - "null".length + 1
+    });
   }
 }
 
@@ -276,14 +296,11 @@ export function failure(
 
 export function normalizeId(
   value: unknown
-): string | number | null | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value === null) {
-    return null;
-  }
-  if (typeof value === "string" || typeof value === "number") {
+): string | number | undefined {
+  if (
+    typeof value === "string" ||
+    (typeof value === "number" && Number.isInteger(value))
+  ) {
     return value;
   }
   return undefined;
@@ -292,5 +309,5 @@ export function normalizeId(
 export function isRecord(
   value: unknown
 ): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

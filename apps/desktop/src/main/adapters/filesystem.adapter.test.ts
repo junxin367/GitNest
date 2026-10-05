@@ -18,7 +18,10 @@ import {
   type TemporaryDirectoryFixture
 } from "@gitnest/testkit";
 
-import { NodeWorktreePathPolicy } from "./filesystem.adapter";
+import {
+  NodeWorkspaceFileSystem,
+  NodeWorktreePathPolicy
+} from "./filesystem.adapter";
 
 describe("NodeWorktreePathPolicy", () => {
   let fixture: TemporaryDirectoryFixture;
@@ -31,6 +34,37 @@ describe("NodeWorktreePathPolicy", () => {
 
   afterEach(async () => {
     await fixture.dispose();
+  });
+
+  it("accepts dot-prefixed descendants while rejecting parent and sibling paths", async () => {
+    const policy = new NodeWorktreePathPolicy();
+    const fileSystem = new NodeWorkspaceFileSystem();
+    const selected = join(fixture.path, "selected");
+    const child = join(selected, "..项目");
+    await mkdir(child, { recursive: true });
+
+    for (const boundary of [policy, fileSystem]) {
+      expect(boundary.isWithin(selected, child)).toBe(true);
+      expect(
+        boundary.isWithin(selected, selected)
+      ).toBe(true);
+      expect(
+        boundary.isWithin(selected, fixture.path)
+      ).toBe(false);
+      expect(
+        boundary.isWithin(
+          selected,
+          join(fixture.path, "selected-other")
+        )
+      ).toBe(false);
+    }
+
+    await policy.grantSelection(selected);
+    expect(
+      policy.isExplicitlySelected(
+        (await policy.inspectPath(child)).canonicalPath
+      )
+    ).toBe(true);
   });
 
   it("distinguishes missing, empty, non-empty, file, and symbolic-link paths", async () => {
