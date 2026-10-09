@@ -256,6 +256,26 @@
   border-bottom: 1px solid var(--border-soft);
 }
 
+/* The fixed 14px status badge can overflow at custom font sizes. Keep ordinary
+   layout there; only skip offscreen contents for the standard typography. */
+@container style(--font-size-caption: 12px) and style(--line-height-body: 1.5) {
+  .diff-workspace-file {
+    --diff-workspace-file-meta-height: 14px;
+    content-visibility: auto;
+    /* Content height excludes the row's padding/border and 44px minimum. */
+    contain-intrinsic-block-size:
+      calc(var(--font-size-caption) * var(--line-height-body) + 2px + var(--diff-workspace-file-meta-height));
+  }
+
+  .diff-workspace-file:has(.diff-workspace-file-stats),
+  .diff-workspace-file:has(.diff-workspace-file-meta small) {
+    --diff-workspace-file-meta-height: max(
+      14px,
+      (var(--font-size-caption) - 1px) * var(--line-height-body)
+    );
+  }
+}
+
 .diff-workspace-file:hover,
 .diff-workspace-file:focus-within {
   --diff-workspace-file-backdrop: var(--surface-hover);
@@ -270,7 +290,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 2px;
+  gap: 6px;
   padding-left: var(--space-5);
   visibility: hidden;
   pointer-events: none;
@@ -1247,8 +1267,43 @@
 
 .diff-workspace-skeleton-content {
   display: grid;
-  grid-template-rows: 48px minmax(0, 1fr);
-  background: var(--canvas);
+  grid-template-rows: 44px minmax(0, 1fr);
+  background: var(--color-code-bg);
+}
+
+.diff-workspace-skeleton-content.with-toolbar {
+  grid-template-rows: 48px 44px minmax(0, 1fr);
+}
+
+.diff-workspace-skeleton-content > .diff-content-skeleton {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.diff-workspace-skeleton-toolbar .gn-button.gn-skeleton {
+  display: inline-flex;
+  color: transparent;
+  background: color-mix(
+    in srgb,
+    var(--surface-3) 82%,
+    var(--surface)
+  );
+  border-color: transparent;
+  opacity: 1;
+}
+
+.diff-workspace-skeleton-toolbar .gn-button > span {
+  visibility: hidden;
+}
+
+.diff-workspace-skeleton-toolbar .diff-viewer-hunk-count {
+  color: transparent;
+}
+
+.diff-workspace-skeleton-auxiliary {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-3);
 }
 
 .diff-content-skeleton {
@@ -1259,7 +1314,7 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--canvas);
+  background: var(--color-code-bg);
   pointer-events: none;
 }
 
@@ -1267,12 +1322,18 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.diff-content-skeleton[data-layout="split"][data-wrap="false"] {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
 .diff-content-skeleton-pane {
   display: grid;
-  grid-template-rows: 32px minmax(0, 1fr);
+  grid-template-rows: 30px minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  padding-top: var(--space-2);
 }
 
 .diff-content-skeleton-pane + .diff-content-skeleton-pane {
@@ -1316,7 +1377,7 @@
 .diff-workspace-skeleton-code {
   min-height: 0;
   overflow: hidden;
-  padding-top: var(--space-2);
+  padding-top: 3px;
 }
 
 .diff-workspace-skeleton-code-row {
@@ -1324,7 +1385,7 @@
   grid-template-columns: 64px minmax(0, 1fr);
   align-items: center;
   gap: var(--space-3);
-  min-height: 24px;
+  min-height: 20px;
   padding: 0 var(--space-4) 0 var(--space-2);
 }
 
@@ -1534,4 +1595,11 @@
   .diff-workspace {
     grid-template-columns: 240px minmax(0, 1fr);
   }
+}
+.diff-viewer-unified-line,
+.diff-viewer-split-row.content,
+.diff-viewer-split-pane-row.content {
+  /* Code rows do not draw outside their bounds. Limit repaint after moving a
+     search highlight or scrolling either pane without changing intrinsic size. */
+  contain: paint;
 }

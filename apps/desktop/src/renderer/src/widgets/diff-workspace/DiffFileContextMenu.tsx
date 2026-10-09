@@ -1,13 +1,13 @@
 import {
   useCallback,
   useEffect,
-  useRef,
-  useState
+  useRef
 } from "react";
 
 import type {
   ExternalApplicationKindDto,
-  ExternalApplicationProfileDto
+  ExternalApplicationProfileDto,
+  RepositoryIgnoreScopeDto
 } from "@gitnest/contracts";
 
 import type { DiffViewerFile } from "../../shared/model/diffViewModel";
@@ -16,11 +16,9 @@ import { LayerPortal } from "../../shared/ui/LayerPortal";
 import {
   isEventInsideMenu,
   Menu,
-  MenuHeading,
-  MenuItem,
-  MenuPopover
+  MenuItem
 } from "../../shared/ui/Menu";
-import { ApplicationIcon } from "../repository-header/OpenInControl";
+import { OpenInSubmenu } from "../repository-header/OpenInSubmenu";
 
 const CONTEXT_MENU_WIDTH = 222;
 const CONTEXT_MENU_HEIGHT = 52;
@@ -45,7 +43,8 @@ export interface DiffFileContextMenuState {
 export function createDiffFileContextMenuState(
   file: DiffViewerFile,
   clientX: number,
-  clientY: number
+  clientY: number,
+  menuHeight = CONTEXT_MENU_HEIGHT
 ): DiffFileContextMenuState {
   const maxX = Math.max(
     VIEWPORT_PADDING,
@@ -53,7 +52,7 @@ export function createDiffFileContextMenuState(
   );
   const maxY = Math.max(
     VIEWPORT_PADDING,
-    window.innerHeight - CONTEXT_MENU_HEIGHT - VIEWPORT_PADDING
+    window.innerHeight - menuHeight - VIEWPORT_PADDING
   );
 
   return {
@@ -66,82 +65,21 @@ export function createDiffFileContextMenuState(
 export function DiffFileContextMenu({
   applications,
   contextMenu,
+  onFileHistory,
+  onIgnoreFile,
+  mutationBusy,
   onClose
 }: {
   applications: DiffWorkspaceExternalApplications;
   contextMenu: DiffFileContextMenuState | null;
+  onFileHistory?: ((file: DiffViewerFile) => void) | undefined;
+  onIgnoreFile?: ((file: DiffViewerFile, scope: RepositoryIgnoreScopeDto) => void) | undefined;
+  mutationBusy?: boolean | undefined;
   onClose(): void;
 }) {
-  const [openInMenuOpen, setOpenInMenuOpen] = useState(false);
-  const [focusOpenInMenu, setFocusOpenInMenu] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
-  const openInTriggerRef = useRef<HTMLButtonElement>(null);
   const openInMenuRef = useRef<HTMLDivElement>(null);
-  const restoringTriggerFocusRef = useRef(false);
-  const openInCloseTimerRef = useRef<number | null>(null);
-
-  const cancelOpenInMenuClose = useCallback(() => {
-    if (openInCloseTimerRef.current !== null) {
-      window.clearTimeout(openInCloseTimerRef.current);
-      openInCloseTimerRef.current = null;
-    }
-  }, []);
-
-  const closeContextMenu = useCallback(() => {
-    cancelOpenInMenuClose();
-    setOpenInMenuOpen(false);
-    setFocusOpenInMenu(false);
-    onClose();
-  }, [cancelOpenInMenuClose, onClose]);
-
-  const openOpenInMenu = useCallback(() => {
-    cancelOpenInMenuClose();
-    setOpenInMenuOpen(true);
-  }, [cancelOpenInMenuClose]);
-
-  const enterOpenInMenu = useCallback(() => {
-    setFocusOpenInMenu(true);
-    openOpenInMenu();
-    openInMenuRef.current
-      ?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')
-      ?.focus();
-  }, [openOpenInMenu]);
-
-  const returnToOpenInTrigger = useCallback(() => {
-    cancelOpenInMenuClose();
-    setOpenInMenuOpen(false);
-    setFocusOpenInMenu(false);
-    restoringTriggerFocusRef.current = true;
-    openInTriggerRef.current?.focus();
-    restoringTriggerFocusRef.current = false;
-  }, [cancelOpenInMenuClose]);
-
-  const scheduleOpenInMenuClose = useCallback(() => {
-    cancelOpenInMenuClose();
-    openInCloseTimerRef.current = window.setTimeout(() => {
-      openInCloseTimerRef.current = null;
-      setOpenInMenuOpen(false);
-      setFocusOpenInMenu(false);
-    }, 120);
-  }, [cancelOpenInMenuClose]);
-
-  useEffect(() => {
-    cancelOpenInMenuClose();
-    setOpenInMenuOpen(false);
-    setFocusOpenInMenu(false);
-  }, [
-    cancelOpenInMenuClose,
-    contextMenu?.file.key,
-    contextMenu?.x,
-    contextMenu?.y
-  ]);
-
-  useEffect(
-    () => () => {
-      cancelOpenInMenuClose();
-    },
-    [cancelOpenInMenuClose]
-  );
+  const closeContextMenu = useCallback(() => { onClose(); }, [onClose]);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -237,97 +175,44 @@ export function DiffFileContextMenu({
         ref={contextMenuRef}
         style={{
           left: contextMenu.x,
-          top: contextMenu.y
+          top: contextMenu.y,
+          maxHeight: "calc(100vh - 16px)",
+          overflowY: "auto"
         }}
       >
-        <div
-          className="workspace-context-open-in"
-          onBlurCapture={scheduleOpenInMenuClose}
-          onFocusCapture={() => {
-            if (!restoringTriggerFocusRef.current) {
-              openOpenInMenu();
-            }
+        {onFileHistory && <MenuItem leading={<Icon name="history" size={14} />} onClick={() => {
+          const file = contextMenu.file;
+          closeContextMenu();
+          onFileHistory(file);
+        }}>文件历史</MenuItem>}
+        {onIgnoreFile && contextMenu.file.mode === "untracked" && <>
+          {([
+            ["file", "忽略此文件"],
+            ["directory", "忽略所在目录"],
+            ["extension", "忽略同扩展名文件"]
+          ] as const).map(([scope, label]) => {
+            const file = contextMenu.file;
+            const name = file.path.split("/").at(-1) ?? "";
+            const unavailable = scope === "directory" ? !file.path.includes("/")
+              : scope === "extension" ? name.lastIndexOf(".") <= 0 || name.endsWith(".") : false;
+            return <MenuItem key={scope} disabled={mutationBusy || unavailable}
+              title={unavailable ? scope === "directory" ? "根目录文件没有可忽略的父目录" : "此文件没有扩展名" : undefined}
+              onClick={() => { closeContextMenu(); onIgnoreFile(file, scope); }}>{label}</MenuItem>;
+          })}
+        </>}
+        <OpenInSubmenu
+          profiles={applications.profiles}
+          loading={applications.loading}
+          active={applications.active}
+          label="选择用于打开此文件的应用"
+          resetKey={contextMenu}
+          menuRef={openInMenuRef}
+          onOpen={kind => {
+            const path = contextMenu.file.path;
+            closeContextMenu();
+            void applications.openFile(kind, path);
           }}
-          onPointerEnter={openOpenInMenu}
-          onPointerLeave={scheduleOpenInMenuClose}
-        >
-          <MenuItem
-            aria-expanded={openInMenuOpen}
-            aria-haspopup="menu"
-            className="workspace-context-open-in-trigger"
-            leading={<Icon name="external" size={14} />}
-            onClick={enterOpenInMenu}
-            onKeyDown={(event) => {
-              if (
-                event.key === "ArrowRight" &&
-                !event.nativeEvent.isComposing &&
-                event.keyCode !== 229
-              ) {
-                event.preventDefault();
-                enterOpenInMenu();
-              }
-            }}
-            ref={openInTriggerRef}
-            title="选择用于打开此文件的应用"
-            trailing={<Icon name="collapse" size={14} />}
-          >
-            打开方式
-          </MenuItem>
-          {openInMenuOpen && (
-            <MenuPopover
-              align="start"
-              anchor={contextMenuRef.current}
-              aria-label="选择用于打开此文件的应用"
-              autoFocus={focusOpenInMenu && !applications.loading}
-              className="workspace-context-open-in-submenu"
-              onBlurCapture={scheduleOpenInMenuClose}
-              onFocusCapture={openOpenInMenu}
-              onKeyDown={(event) => {
-                if (event.nativeEvent.isComposing || event.keyCode === 229) {
-                  return;
-                }
-                if (event.key === "Escape" || event.key === "ArrowLeft") {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  returnToOpenInTrigger();
-                }
-              }}
-              onPointerEnter={openOpenInMenu}
-              onPointerLeave={scheduleOpenInMenuClose}
-              ref={openInMenuRef}
-              side="right"
-            >
-              <MenuHeading>Open in</MenuHeading>
-              {applications.profiles.length > 0 ? (
-                applications.profiles.map((profile) => (
-                  <MenuItem
-                    disabled={applications.active !== null}
-                    key={profile.kind}
-                    leading={
-                      <ApplicationIcon profile={profile} />
-                    }
-                    onClick={() => {
-                      const path = contextMenu.file.path;
-                      closeContextMenu();
-                      void applications.openFile(
-                        profile.kind,
-                        path
-                      );
-                    }}
-                  >
-                    {profile.label}
-                  </MenuItem>
-                ))
-              ) : (
-                <span className="workspace-context-open-in-empty">
-                  {applications.loading
-                    ? "正在检测可用应用…"
-                    : "未检测到可用应用"}
-                </span>
-              )}
-            </MenuPopover>
-          )}
-        </div>
+        />
       </Menu>
     </LayerPortal>
   );

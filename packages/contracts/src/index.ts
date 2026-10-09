@@ -140,6 +140,7 @@ export type {
   RepositoryDiffRequest,
   RepositoryHistoryPageDto,
   RepositoryHistoryRequest,
+  RepositoryHistoryFilterDto,
   RepositoryHistoryScopeDto,
   RepositoryStashDiffDto,
   RepositoryStashDiffRequest,
@@ -259,3 +260,17 @@ export type {
   ApplicationUpdateStateDto
 } from "./update.contracts";
 export { GITNEST_PROJECT_URL } from "./update.contracts";
+export type * from "./repository-management.contracts";
+export type * from "./repository-ignore.contracts";
+export type * from "./file-history.contracts";
+export type {
+  RepositoryWorkflowOperationDto,
+  RepositoryWorkflowActionDto,
+  RepositoryWorkflowCommandDto,
+  RepositoryWorkflowStateDto,
+  RepositoryWorkflowPreflightDto,
+  RepositoryWorkflowInspectRequest,
+  RepositoryWorkflowPreflightRequest,
+  RepositoryWorkflowExecuteRequest,
+  RepositoryWorkflowExecutionDto
+} from "./workflow.contracts";

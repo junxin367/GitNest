@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -9,6 +10,7 @@ import {
 } from "react";
 
 import { copyTextToClipboard } from "../../shared/lib/copyTextToClipboard";
+import { scrollWithinContainer } from "../../shared/lib/scrollWithinContainer";
 import {
   buildLocalizedDiffContent,
   collectDiffViewerSearchHits,
@@ -97,6 +99,7 @@ export function DiffPanel({
   emptyPathLabel = "没有匹配的文件",
   emptyStatsLabel = "筛选结果为空",
   state,
+  immediateLoadingSkeleton = false,
   focusLine,
   headerActions,
   className,
@@ -152,6 +155,8 @@ export function DiffPanel({
     searchQueries.get(resolvedSearchScopeKey) ??
     searchQueriesByScope.get(resolvedSearchScopeKey) ??
     "";
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const searchPending = searchQuery !== deferredSearchQuery;
   const setSearchQuery = useCallback(
     (value: string) => {
       setSearchQueries((current) => {
@@ -307,8 +312,8 @@ export function DiffPanel({
   }, [focusLine, model.unifiedLines]);
   const searchHits = useMemo(
     () =>
-      collectDiffViewerSearchHits(model, layout, searchQuery),
-    [layout, model, searchQuery]
+      collectDiffViewerSearchHits(model, layout, deferredSearchQuery),
+    [layout, model, deferredSearchQuery]
   );
   const searchHitsBySegment = useMemo(
     () => groupSearchHits(searchHits),
@@ -729,7 +734,7 @@ export function DiffPanel({
   }, [setSearchOpen, setSearchQuery]);
   const moveSearchHit = useCallback(
     (direction: -1 | 1) => {
-      if (searchHits.length === 0) {
+      if (searchPending || searchHits.length === 0) {
         return;
       }
       setActiveSearchHit((current) => {
@@ -742,7 +747,7 @@ export function DiffPanel({
         );
       });
     },
-    [searchHits.length]
+    [searchHits.length, searchPending]
   );
   const moveHunk = (direction: -1 | 1) => {
     if (model.hunkCount === 0) {
@@ -752,14 +757,12 @@ export function DiffPanel({
       (activeHunk + direction + model.hunkCount) %
       model.hunkCount;
     setActiveHunk(next);
-    contentRef.current
-      ?.querySelector<HTMLElement>(
+    scrollWithinContainer(contentRef.current,
+      contentRef.current?.querySelector<HTMLElement>(
         `[data-diff-viewer-hunk="${next}"]`
-      )
-      ?.scrollIntoView({
-        block: "start",
-        inline: "nearest"
-      });
+      ),
+      "start"
+    );
   };
   const copyPath = async () => {
     if (!path) {
@@ -865,19 +868,36 @@ export function DiffPanel({
     return () => window.cancelAnimationFrame(frame);
   }, [searchOpen]);
 
+  // The code tree owns the static classes; this effect owns only `current`.
+  // Moving between hits/hunks must not reconcile every rendered code line.
+  // Re-run after content/layout changes too, since those can replace the nodes.
+  useLayoutEffect(() => {
+    const viewport = contentRef.current;
+    const marks = viewport?.querySelectorAll<HTMLElement>(
+      `[data-diff-viewer-search-hit="${normalizedActiveSearchHit}"]`
+    );
+    marks?.forEach((mark) => mark.classList.add("current"));
+    return () => marks?.forEach((mark) => mark.classList.remove("current"));
+  }, [normalizedActiveSearchHit, searchHits, layout, wrap, state]);
+
+  useLayoutEffect(() => {
+    const hunks = contentRef.current?.querySelectorAll<HTMLElement>(
+      `[data-diff-viewer-hunk="${normalizedActiveHunk}"]`
+    );
+    hunks?.forEach((hunk) => hunk.classList.add("current"));
+    return () => hunks?.forEach((hunk) => hunk.classList.remove("current"));
+  }, [normalizedActiveHunk, model, layout, wrap, state]);
+
   useEffect(() => {
     if (normalizedActiveSearchHit < 0) {
       return;
     }
     const frame = window.requestAnimationFrame(() => {
-      contentRef.current
-        ?.querySelector<HTMLElement>(
+      scrollWithinContainer(contentRef.current,
+        contentRef.current?.querySelector<HTMLElement>(
           `[data-diff-viewer-search-hit="${normalizedActiveSearchHit}"]`
         )
-        ?.scrollIntoView({
-          block: "center",
-          inline: "nearest"
-        });
+      );
     });
     return () => window.cancelAnimationFrame(frame);
   }, [normalizedActiveSearchHit, searchHits]);
@@ -891,14 +911,11 @@ export function DiffPanel({
       return;
     }
     const frame = window.requestAnimationFrame(() => {
-      contentRef.current
-        ?.querySelector<HTMLElement>(
+      scrollWithinContainer(contentRef.current,
+        contentRef.current?.querySelector<HTMLElement>(
           '[data-diff-viewer-focus-line="true"]'
         )
-        ?.scrollIntoView({
-          block: "center",
-          inline: "nearest"
-        });
+      );
     });
     return () => window.cancelAnimationFrame(frame);
   }, [
@@ -953,7 +970,7 @@ export function DiffPanel({
     searchOpen
   ]);
 
-  const searchCountLabel = searchQuery.trim()
+  const searchCountLabel = searchPending ? "…" : searchQuery.trim()
     ? `${normalizedActiveSearchHit >= 0 ? normalizedActiveSearchHit + 1 : 0} / ${searchHits.length}`
     : "0 / 0";
   const hunkCountLabel = `${normalizedActiveHunk >= 0 ? normalizedActiveHunk + 1 : 0} / ${model.hunkCount}`;
@@ -1127,12 +1144,13 @@ export function DiffPanel({
               <span
                 aria-label={`新增 ${additions} 行，删除 ${deletions} 行`}
                 className="diff-viewer-stats"
+                title={`新增 ${additions} 行，删除 ${deletions} 行`}
               >
                 <strong>+{additions}</strong>
                 <em>-{deletions}</em>
               </span>
             ) : showEmptyStatsLabel ? (
-              <span className="diff-viewer-stats muted">
+              <span className="diff-viewer-stats muted" title={emptyStatsLabel}>
                 {emptyStatsLabel}
               </span>
             ) : null}
@@ -1155,7 +1173,7 @@ export function DiffPanel({
         <DiffSearchPopover
           className="diff-viewer-search"
           countLabel={searchCountLabel}
-          hasMatches={searchHits.length > 0}
+          hasMatches={!searchPending && searchHits.length > 0}
           onChange={(event) => {
             setSearchQuery(event.target.value);
             setActiveSearchHit(0);
@@ -1185,7 +1203,7 @@ export function DiffPanel({
           tabIndex={0}
         >
           {state?.busy ? (
-            <DiffContentSkeleton layout={layout} />
+            <DiffContentSkeleton immediate={immediateLoadingSkeleton} layout={layout} wrap={wrap} />
           ) : state ? (
             <DiffViewerState {...state} />
           ) : media ? (
@@ -1208,8 +1226,6 @@ export function DiffPanel({
             />
           ) : layout === "split" ? (
             <SplitDiff
-              activeHunk={normalizedActiveHunk}
-              activeSearchHit={normalizedActiveSearchHit}
               contextControls={contextControls}
               hits={searchHitsBySegment}
               rows={model.splitRows}
@@ -1217,8 +1233,6 @@ export function DiffPanel({
             />
           ) : (
             <UnifiedDiff
-              activeHunk={normalizedActiveHunk}
-              activeSearchHit={normalizedActiveSearchHit}
               contextControls={contextControls}
               focusedLineKey={focusedUnifiedLineKey}
               hits={searchHitsBySegment}

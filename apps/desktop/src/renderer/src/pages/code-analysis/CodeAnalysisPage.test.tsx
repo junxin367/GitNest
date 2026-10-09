@@ -26,6 +26,8 @@ import {
 
 import type { CodeAnalysisController } from "../../entities/code-analysis/useCodeAnalysis";
 import { CodeAnalysisPage } from "./CodeAnalysisPage";
+import { NodeSourceViewer } from "./NodeSourceViewer";
+import { AnalysisPageHost } from "../../app/AnalysisPageHost";
 
 const analysisMock = vi.hoisted(() => ({
   controller: null as CodeAnalysisController | null
@@ -112,6 +114,119 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     analysisMock.controller = null;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("shows retained content immediately on return and preserves filters, scroll and graph zoom", async () => {
+    const workspace = createWorkspaceDetailsWithAnalysisTarget();
+    const controller = createController();
+    analysisMock.controller = controller;
+    const render = async (active: boolean, currentWorkspace = workspace) => {
+      await act(async () => {
+        root.render(<AnalysisPageHost active={active} workspace={currentWorkspace}>
+          <CodeAnalysisPage workspace={currentWorkspace} settings={createDefaultAppSettings()}
+            onOpenSettings={vi.fn()} onReloadSettings={vi.fn(async () => undefined)} />
+        </AnalysisPageHost>);
+        await flushAsyncWork();
+      });
+    };
+    await render(true);
+    const page = container.querySelector<HTMLElement>(".code-analysis-page")!;
+    const search = container.querySelector<HTMLInputElement>('input[placeholder="搜索节点名称、限定名或文件路径"]')!;
+    act(() => setInputValue(search, "caller"));
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="放大关系图"]')!.click());
+    const zoom = container.querySelector<HTMLInputElement>('[aria-label="调整关系图缩放"]')!.value;
+    expect(zoom).not.toBe("100");
+    page.scrollTop = 123;
+    await render(false);
+    expect(page.style.display).toBe("none");
+    controller.loading = true;
+    await render(true);
+    expect(container.querySelector(".code-analysis-page")).toBe(page);
+    expect(page.style.display).not.toBe("none");
+    expect(container.querySelector(".analysis-summary-grid")).not.toBeNull();
+    expect(container.querySelector('[data-skeleton-phase]')).toBeNull();
+    expect(search.value).toBe("caller");
+    expect(page.scrollTop).toBe(123);
+    expect(container.querySelector<HTMLInputElement>('[aria-label="调整关系图缩放"]')!.value).toBe(zoom);
+  });
+
+  it.each(["workspace", "roots"] as const)("discards a retained page when its %s context changes while hidden", async change => {
+    const workspace = createWorkspaceDetailsWithAnalysisTarget();
+    let currentWorkspace = workspace;
+    const render = async (active: boolean) => {
+      await act(async () => {
+        root.render(<AnalysisPageHost active={active} workspace={currentWorkspace}>
+          <CodeAnalysisPage workspace={currentWorkspace} settings={createDefaultAppSettings()}
+            onOpenSettings={vi.fn()} onReloadSettings={vi.fn(async () => undefined)} />
+        </AnalysisPageHost>);
+        await flushAsyncWork();
+      });
+    };
+    await render(true);
+    const previous = container.querySelector(".code-analysis-page");
+    await render(false);
+    currentWorkspace = change === "workspace"
+      ? { ...workspace, id: "other-workspace" }
+      : { ...workspace, worktrees: workspace.worktrees.map(tree => ({
+          ...tree, path: "C:\\other\\repo", canonicalPath: "c:\\other\\repo"
+        })) };
+    analysisMock.controller = {
+      ...createController(), snapshot: null, loaded: false, loading: true,
+      state: { state: "idle", workspaceId: currentWorkspace.id, snapshotAvailable: false }
+    };
+    await render(false);
+    await render(true);
+    expect(container.querySelector(".code-analysis-page")).not.toBe(previous);
+    expect(container.querySelector('[aria-label="代码分析摘要"]')).toBeNull();
+  });
+
+  it("shows the source skeleton on its first loading frame", () => {
+    vi.mocked(window.gitnest.codeAnalysis.readFile).mockReturnValue(new Promise(() => {}));
+    act(() => root.render(<NodeSourceViewer node={createSnapshot().nodes[1]!} onClose={vi.fn()} />));
+    const skeleton = container.querySelector(".diff-content-skeleton");
+    expect(skeleton?.getAttribute("data-skeleton-phase")).toBe("visible");
+    expect(skeleton?.getAttribute("aria-hidden")).not.toBe("true");
+    expect(container.querySelector(".analysis-node-source-code")?.getAttribute("aria-busy")).toBe("true");
+  });
+
+  it("updates only the previous and next source search rows when navigating matches", async () => {
+    const content = Array.from({ length: 500 }, (_, index) =>
+      `const latencyLine${index} = "${index === 0 || index === 499 ? "needle" : "other"}";`
+    ).join("\n");
+    vi.mocked(window.gitnest.codeAnalysis.readFile).mockResolvedValue({
+      ok: true,
+      value: {
+        nodeId: "caller",
+        path: "src/caller.ts",
+        language: "typescript",
+        content,
+        startLine: 1,
+        endLine: 500,
+        totalLines: 500,
+        truncated: false
+      }
+    });
+    await act(async () => {
+      root.render(<NodeSourceViewer node={createSnapshot().nodes[0]!} onClose={vi.fn()} />);
+      await flushAsyncWork();
+    });
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="搜索节点代码"]')!.click());
+    act(() => setInputValue(container.querySelector<HTMLInputElement>(".analysis-node-source-search input")!, "needle"));
+    const touchedLines = new Set<string>();
+    const originalSlice = String.prototype.slice;
+    const slice = vi.spyOn(String.prototype, "slice").mockImplementation(function (
+      this: string, start?: number, end?: number
+    ) {
+      if (String(this).startsWith("const latencyLine")) {
+        touchedLines.add(String(this));
+      }
+      return originalSlice.call(this, start, end);
+    });
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="下一个匹配"]')!.click());
+    slice.mockRestore();
+    expect(container.querySelector(".diff-viewer-search-hit.current")?.getAttribute("data-source-search-hit")).toBe("1");
+    expect(touchedLines.size).toBe(2);
   });
 
   it("keeps actions on the title row and reuses shared page margins", async () => {
@@ -227,7 +342,7 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     ).toBe("3");
   });
 
-  it("loads the full node index only after opening the code-node tab", async () => {
+  it("shows initial nodes immediately and queries only visible data after opening the node tab", async () => {
     const base = createSnapshot();
     const navigationSnapshot: CodeAnalysisSnapshotDto = {
       ...base,
@@ -256,17 +371,11 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
         requestChainCount: 1
       }
     };
-    let finishLoading!: (loaded: boolean) => void;
     const controller = createController(
       navigationSnapshot
     );
     controller.snapshotDetail = "navigation";
-    controller.loadFullSnapshot = vi.fn(
-      () =>
-        new Promise<boolean>((resolve) => {
-          finishLoading = resolve;
-        })
-    );
+    controller.loadNodeView = vi.fn(() => new Promise<boolean>(() => {}));
     analysisMock.controller = controller;
 
     await act(async () => {
@@ -292,8 +401,15 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       await flushAsyncWork();
     });
 
-    expect(controller.loadFullSnapshot).toHaveBeenCalledTimes(1);
-    controller.loadingFullSnapshot = true;
+    expect(controller.loadFullSnapshot).not.toHaveBeenCalled();
+    expect(container.querySelectorAll(".analysis-symbol-result")).toHaveLength(2);
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="搜索代码节点"]')?.disabled).toBe(false);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 180)); });
+    expect(controller.loadNodeView).toHaveBeenCalledWith({ query: "" });
+    const navigationCount = container.querySelector(".analysis-navigation-count")!;
+    const navigationSpinner = container.querySelector(".analysis-navigation-spinner")!;
+    expect(navigationCount.textContent).toBe("2/2 个节点");
+    controller.loadingNodes = true;
     await act(async () => {
       root.render(
         <CodeAnalysisPage
@@ -306,17 +422,25 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       await flushAsyncWork();
     });
     expect(container.textContent).toContain(
-      "正在加载完整代码节点"
+      "正在查询代码节点"
     );
+    expect(container.querySelector(".analysis-chain-panel > header")?.textContent).toContain("正在查询代码节点");
+    expect(container.querySelector(".analysis-chain-list")?.textContent).not.toContain("正在查询代码节点");
+    expect(container.querySelector(".analysis-navigation-count")).toBe(navigationCount);
+    expect(navigationCount.textContent).toBe("2/2 个节点");
+    expect(navigationSpinner.classList.contains("is-loading")).toBe(true);
 
-    controller.snapshot = {
+    controller.nodeView = {
       ...navigationSnapshot,
-      detailLevel: "full"
+      detailLevel: "nodes",
+      requestChains: [],
+      nodePage: {
+        query: "", nodeIds: ["caller", "callee"], totalMatches: 78_727,
+        graphTruncated: false
+      }
     };
-    controller.snapshotDetail = "full";
-    controller.loadingFullSnapshot = false;
+    controller.loadingNodes = false;
     await act(async () => {
-      finishLoading(true);
       root.render(
         <CodeAnalysisPage
           onOpenSettings={vi.fn()}
@@ -331,7 +455,138 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(
       container.querySelectorAll(".analysis-symbol-result")
     ).toHaveLength(2);
+    expect(container.textContent).toContain("可搜索完整分析结果");
+    expect(controller.loadFullSnapshot).not.toHaveBeenCalled();
+    expect(container.querySelector(".analysis-navigation-count")).toBe(navigationCount);
+    expect(navigationCount.textContent).toBe("2/2 个节点");
+    expect(container.querySelector(".analysis-navigation-spinner")).toBe(navigationSpinner);
+    expect(navigationSpinner.classList.contains("is-loading")).toBe(false);
   });
+
+  it("loads a clicked node immediately and hides partial or stale graphs until its neighborhood is ready", async () => {
+    const base = createSnapshot();
+    const controller = createController({ ...base, detailLevel: "navigation", edges: [] });
+    controller.loadNodeView = vi.fn(() => new Promise<boolean>(() => {}));
+    analysisMock.controller = controller;
+    const render = () => root.render(
+      <CodeAnalysisPage
+        onOpenSettings={vi.fn()}
+        onReloadSettings={vi.fn(async () => undefined)}
+        settings={createDefaultAppSettings()}
+        workspace={null}
+      />
+    );
+    await act(async () => { render(); await flushAsyncWork(); });
+    const panel = container.querySelector(".analysis-graph-panel")!;
+    expect(panel.querySelector('[role="status"]')?.textContent).toContain("正在加载节点关系");
+    expect(panel.querySelector(".analysis-graph-svg")).toBeNull();
+    const callee = Array.from(container.querySelectorAll<HTMLButtonElement>(".analysis-symbol-result"))
+      .find(button => button.textContent?.includes("callee"))!;
+    act(() => callee.click());
+    // Selection bypasses the search debounce.
+    expect(controller.loadNodeView).toHaveBeenLastCalledWith({
+      query: "", focusNodeId: "callee", inspectedNodeId: "callee"
+    });
+    expect(container.querySelector(".analysis-node-title strong")?.textContent).toBe("callee");
+    expect(panel.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(panel.querySelector(".analysis-graph-svg")).toBeNull();
+
+    controller.nodeView = {
+      ...base, detailLevel: "nodes",
+      nodePage: { query: "", nodeIds: ["caller", "callee"], totalMatches: 2, focusNodeId: "caller", graphTruncated: false }
+    };
+    act(render);
+    expect(panel.querySelector(".analysis-graph-svg")).toBeNull();
+    expect(panel.querySelector('[role="status"]')?.textContent).toContain("正在加载节点关系");
+
+    controller.nodeView = {
+      ...controller.nodeView,
+      nodePage: { ...controller.nodeView.nodePage!, focusNodeId: "callee" }
+    };
+    act(render);
+    expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(panel.querySelector(".analysis-graph-state")).toBeNull();
+    expect(panel.querySelectorAll(".analysis-graph-node")).toHaveLength(2);
+    expect(container.querySelector(".analysis-graph-panel")).toBe(panel);
+  });
+
+  it.each(["full", "navigation"] as const)(
+    "keeps the selected node and search across %s snapshot refreshes",
+    async (detailLevel) => {
+      const base = createSnapshot();
+      const controller = createController({
+        ...base, detailLevel,
+        requestChains: [{
+          id: "users", profileId: "web-http", transport: "http",
+          operationKey: "GET /users", method: "GET", route: "/users", title: "Users",
+          clientNodeId: "caller", endpointNodeId: "callee",
+          nodeIds: ["caller", "callee"], edgeIds: ["caller-callee"],
+          changed: true, ambiguous: false, confidence: "exact"
+        }]
+      });
+      analysisMock.controller = controller;
+      const render = async () => {
+        await act(async () => {
+          root.render(<CodeAnalysisPage settings={createDefaultAppSettings()} workspace={null}
+            onOpenSettings={vi.fn()} onReloadSettings={vi.fn(async () => undefined)} />);
+          await flushAsyncWork();
+        });
+      };
+      await render();
+      act(() => Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+        .find(button => button.textContent?.includes("代码节点"))!.click());
+      act(() => setInputValue(container.querySelector<HTMLInputElement>('[aria-label="搜索代码节点"]')!, "callee"));
+      act(() => Array.from(container.querySelectorAll<HTMLButtonElement>(".analysis-symbol-result"))
+        .find(button => button.textContent?.includes("callee"))!.click());
+
+      for (const analysisId of ["analysis", "analysis-next"]) {
+        controller.snapshot = {
+          ...controller.snapshot!,
+          analysisId,
+          generatedAt: "2026-10-09T04:12:00.000Z",
+          // The selected node may be absent from the new navigation preview.
+          nodes: detailLevel === "navigation" ? [base.nodes[0]!] : base.nodes
+        };
+        controller.state = { ...controller.state, analysisId, generatedAt: controller.snapshot.generatedAt };
+        controller.nodeView = null;
+        await render();
+        expect(container.querySelector('[aria-label="筛选请求链"]')).toBeNull();
+        if (detailLevel === "navigation") {
+          expect(container.querySelector(".analysis-node-title strong")?.textContent).toBe("callee");
+          expect(container.querySelector('[aria-label="搜索代码节点"]')).toBeNull();
+          expect(controller.loadNodeView).toHaveBeenLastCalledWith({
+            query: "callee", focusNodeId: "callee", inspectedNodeId: "callee"
+          });
+          expect(container.querySelector(".analysis-graph-panel [role=status]")?.textContent)
+            .toContain("正在加载节点关系");
+          controller.nodeView = {
+            ...controller.snapshot, nodes: base.nodes, edges: base.edges, detailLevel: "nodes",
+            nodePage: { query: "callee", nodeIds: ["callee"], totalMatches: 1,
+              focusNodeId: "callee", graphTruncated: false }
+          };
+          await render();
+        }
+        expect(container.querySelector(".analysis-node-title strong")?.textContent).toBe("callee");
+        expect(container.querySelector('.analysis-graph-node.selected[aria-label="function callee"]')).not.toBeNull();
+      }
+
+      const refreshed = controller.snapshot;
+      controller.snapshot = null;
+      await render();
+      controller.snapshot = refreshed;
+      await render();
+      expect(container.querySelector(".analysis-node-title strong")?.textContent).toBe("callee");
+      act(() => container.querySelector<HTMLButtonElement>('[aria-label="返回代码导航"]')!.click());
+      expect(container.querySelector<HTMLInputElement>('[aria-label="搜索代码节点"]')?.value).toBe("callee");
+
+      controller.snapshot = { ...refreshed!, workspaceId: "other-workspace" };
+      controller.nodeView = null;
+      controller.state = { ...controller.state, workspaceId: "other-workspace" };
+      await render();
+      expect(container.querySelector<HTMLInputElement>('[aria-label="筛选请求链"]')?.value).toBe("");
+      expect(container.querySelector('[aria-label="搜索代码节点"]')).toBeNull();
+    }
+  );
 
   it("limits code-node results without rendering a truncation notice", async () => {
     const base = createSnapshot();
@@ -389,6 +644,47 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(
       container.querySelectorAll(".analysis-symbol-result")
     ).toHaveLength(1);
+  });
+
+  it("does not rebuild unrelated graph nodes when the page changes inspected node", async () => {
+    const base = createSnapshot();
+    const reads = vi.fn(() => "Unselected node documentation");
+    const unrelated = {
+      ...base.nodes[1]!,
+      id: "unselected",
+      name: "unselected",
+      qualifiedName: "unselected",
+      metadata: {}
+    };
+    Object.defineProperty(unrelated.metadata, "documentation", { get: reads });
+    analysisMock.controller = createController({
+      ...base,
+      nodes: [...base.nodes, unrelated],
+      edges: [...base.edges, {
+        id: "caller-unselected", from: "caller", to: "unselected",
+        kind: "calls", confidence: "exact"
+      }]
+    });
+    await act(async () => {
+      root.render(<CodeAnalysisPage
+        onOpenSettings={vi.fn()}
+        onReloadSettings={vi.fn(async () => undefined)}
+        settings={createDefaultAppSettings()}
+        workspace={null}
+      />);
+      await flushAsyncWork();
+    });
+    expect(container.querySelector('[aria-label="function unselected"]')).not.toBeNull();
+    reads.mockClear();
+    for (const id of ["callee", "caller"]) {
+      await act(async () => {
+        container.querySelector(`[aria-label="function ${id}"]`)!
+          .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        await flushAsyncWork();
+      });
+      expect(container.querySelector(".analysis-node-title")?.textContent).toContain(id);
+    }
+    expect(reads).not.toHaveBeenCalled();
   });
 
   it("does not rerender the relation graph while the node query changes", async () => {
@@ -749,15 +1045,16 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     ).toHaveLength(5);
     expect(
       skeleton?.querySelectorAll(
-        ".analysis-skeleton-graph-node"
+        ".analysis-skeleton-canvas"
       )
-    ).toHaveLength(7);
+    ).toHaveLength(1);
     expect(
       container.querySelector(".analysis-empty-state")
     ).toBeNull();
     expect(container.textContent).not.toContain(
       "正在读取代码分析状态"
     );
+
   });
 
   it("does not reuse another Workspace snapshot while the selected Workspace loads", async () => {
@@ -1024,6 +1321,66 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(progressPanel?.textContent).toContain(
       "正在解析调用关系"
     );
+    expect(progressPanel?.parentElement?.className).toBe("analysis-runtime-region");
+    expect(container.querySelector(".analysis-runtime-strip")?.getAttribute("aria-hidden")).toBe("true");
+    expect(container.querySelector(".analysis-header-actions .analysis-run-action")?.textContent).toContain("取消分析");
+    const workbench = container.querySelector(".analysis-workbench");
+    controller.state = { ...controller.state, state: "ready" };
+    await act(async () => {
+      root.render(<CodeAnalysisPage settings={createDefaultAppSettings()} workspace={null}
+        onOpenSettings={vi.fn()} onReloadSettings={vi.fn(async () => undefined)} />);
+      await flushAsyncWork();
+    });
+    expect(container.querySelector(".analysis-workbench")).toBe(workbench);
+    expect(container.querySelector('[aria-label="代码分析进度"]')).toBeNull();
+    expect(container.querySelector(".analysis-runtime-strip")?.getAttribute("aria-hidden")).toBe("false");
+    expect(container.querySelector(".analysis-header-actions .analysis-run-action")?.textContent).toContain("重新分析");
+  });
+
+  it("keeps elapsed time steady across wall-clock changes and resets it for a new task", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let wallTime = Date.parse("2026-10-09T08:00:05.000Z");
+    let monotonicTime = 100;
+    vi.spyOn(Date, "now").mockImplementation(() => wallTime);
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicTime);
+    const controller = createController();
+    controller.snapshot = null;
+    controller.state = {
+      state: "running", snapshotAvailable: false, analysisId: "first",
+      startedAt: "2026-10-09T08:00:00.000Z"
+    };
+    analysisMock.controller = controller;
+    const render = async () => {
+      await act(async () => {
+        root.render(<CodeAnalysisPage settings={createDefaultAppSettings()} workspace={null}
+          onOpenSettings={vi.fn()} onReloadSettings={vi.fn(async () => undefined)} />);
+        await flushAsyncWork();
+      });
+    };
+    try {
+      await render();
+      expect(container.textContent).toContain("执行时间 00:05");
+      wallTime += 3_600_000;
+      monotonicTime += 1_000;
+      act(() => vi.advanceTimersByTime(1_000));
+      expect(container.textContent).toContain("执行时间 00:06");
+      wallTime -= 7_200_000;
+      monotonicTime += 1_000;
+      act(() => vi.advanceTimersByTime(1_000));
+      expect(container.textContent).toContain("执行时间 00:07");
+
+      controller.state = {
+        ...controller.state, analysisId: "second",
+        startedAt: new Date(wallTime).toISOString()
+      };
+      await render();
+      expect(container.textContent).toContain("执行时间 00:00");
+      monotonicTime += 1_000;
+      act(() => vi.advanceTimersByTime(1_000));
+      expect(container.textContent).toContain("执行时间 00:01");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows analysis time and duration without repeating the selected scope", async () => {
@@ -2172,6 +2529,30 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(focusedRows).toHaveLength(1);
     expect(focusedRows[0]?.textContent).toContain("newValue");
 
+    for (const modifier of ["ctrlKey", "metaKey"] as const) {
+      const diffRegion = container.querySelector<HTMLElement>(
+        '.analysis-node-diff-panel [role="region"][aria-label="文件 Diff"]'
+      )!;
+      const findShortcut = new KeyboardEvent("keydown", {
+        bubbles: true, cancelable: true, key: "f", [modifier]: true
+      });
+      act(() => {
+        diffRegion.focus();
+        diffRegion.dispatchEvent(findShortcut);
+      });
+      expect(findShortcut.defaultPrevented).toBe(true);
+      const input = container.querySelector<HTMLInputElement>('input[aria-label="搜索文本"]');
+      expect(input).not.toBeNull();
+      expect(document.activeElement).toBe(input);
+      act(() => {
+        input!.dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true, cancelable: true, key: "Escape"
+        }));
+      });
+      expect(container.querySelector('input[aria-label="搜索文本"]')).toBeNull();
+      expect(container.querySelector(".analysis-node-diff-drawer")).not.toBeNull();
+    }
+
     const searchButton =
       container.querySelector<HTMLButtonElement>(
         '[aria-label="搜索节点文件 Diff"]'
@@ -2277,6 +2658,72 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       container.querySelector(".analysis-node-diff-drawer")
     ).toBeNull();
     expect(container.textContent).toContain("代码导航");
+    const findAfterClose = new KeyboardEvent("keydown", {
+      bubbles: true, cancelable: true, key: "f", ctrlKey: true
+    });
+    act(() => document.dispatchEvent(findAfterClose));
+    expect(findAfterClose.defaultPrevented).toBe(false);
+  });
+
+  it("shows a visible Diff skeleton immediately through both changes and content reads", async () => {
+    const getChanges = vi.mocked(window.gitnest.repository.getChanges);
+    const getDiff = vi.mocked(window.gitnest.repository.getDiff);
+    const originalChanges = getChanges.getMockImplementation()!;
+    const originalDiff = getDiff.getMockImplementation()!;
+    let finishChanges!: () => void;
+    let finishDiff!: () => void;
+    getChanges.mockImplementationOnce(request => new Promise(resolve => {
+      finishChanges = () => resolve(originalChanges(request));
+    }));
+    getDiff.mockImplementationOnce(request => new Promise(resolve => {
+      finishDiff = () => resolve(originalDiff(request));
+    }));
+    await act(async () => {
+      root.render(
+        <CodeAnalysisPage
+          onOpenSettings={vi.fn()}
+          onReloadSettings={vi.fn(async () => undefined)}
+          settings={createDefaultAppSettings()}
+          workspace={null}
+        />
+      );
+      await flushAsyncWork();
+    });
+    act(() => container.querySelector('[aria-label="function caller"]')!.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })
+    ));
+    act(() => container.querySelector<HTMLButtonElement>(
+      '[aria-controls="analysis-node-diff-drawer"]'
+    )!.click());
+
+    const drawer = container.querySelector(".analysis-node-diff-drawer")!;
+    const skeleton = drawer.querySelector(".diff-content-skeleton")!;
+    // No timer advancement: the drawer must be visible on its first render.
+    expect(skeleton.getAttribute("data-skeleton-phase")).toBe("visible");
+    expect(skeleton.getAttribute("aria-hidden")).not.toBe("true");
+    expect(skeleton.getAttribute("data-layout")).toBe("unified");
+    expect(skeleton.getAttribute("data-wrap")).toBe("true");
+    expect(skeleton.querySelectorAll(".diff-workspace-skeleton-code-row")).toHaveLength(10);
+    expect(drawer.querySelector('[aria-label="文件 Diff"]')?.getAttribute("aria-busy")).toBe("true");
+    expect(drawer.textContent).not.toContain("筛选结果为空");
+    expect(drawer.textContent).not.toContain("当前文件没有未提交差异");
+    expect(drawer.querySelector<HTMLButtonElement>('[aria-label="搜索节点文件 Diff"]')?.disabled).toBe(true);
+
+    await act(async () => {
+      finishChanges();
+      await flushAsyncWork();
+    });
+    expect(getDiff).toHaveBeenCalledOnce();
+    expect(drawer.querySelector(".diff-content-skeleton")).toBe(skeleton);
+    expect(skeleton.getAttribute("data-skeleton-phase")).toBe("visible");
+    await act(async () => {
+      finishDiff();
+      await flushAsyncWork();
+    });
+    expect(drawer.querySelector(".diff-content-skeleton")).toBeNull();
+    expect(drawer.textContent).toContain("newValue");
+    expect(drawer.textContent).not.toContain("筛选结果为空");
+    expect(drawer.querySelector<HTMLButtonElement>('[aria-label="搜索节点文件 Diff"]')?.disabled).toBe(false);
   });
 
   it("shows Diff for changed nodes and actual code for unchanged nodes", async () => {
@@ -2467,9 +2914,7 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
         ".analysis-source-token.is-function"
       )?.textContent
     ).toBe("callee");
-    const sourceScroll = vi.mocked(
-      Element.prototype.scrollIntoView
-    );
+    const sourceScroll = vi.mocked(Element.prototype.scrollTo);
     sourceScroll.mockClear();
     act(() => {
       setInputValue(
@@ -2482,9 +2927,10 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     );
     expect(replacementHit?.textContent).toBe("actual");
     expect(sourceScroll).toHaveBeenCalledExactlyOnceWith({
-      block: "center"
+      top: 0, left: 0, behavior: "instant"
     });
-    expect(sourceScroll.mock.instances[0]).toBe(replacementHit);
+    expect(sourceScroll.mock.instances[0]).toBe(container.querySelector(".analysis-node-source-code"));
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
 
     sourceScroll.mockClear();
     act(() => {
@@ -2839,6 +3285,10 @@ function createController(
     loaded: true,
     loading: false,
     loadingFullSnapshot: false,
+    nodeView: null,
+    loadingNodes: false,
+    nodeViewError: null,
+    loadNodeView: vi.fn(async () => true),
     action: null,
     installingLanguage: null,
     error: null,

@@ -1,5 +1,8 @@
 import {
+  memo,
+  useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent
@@ -173,6 +176,21 @@ function RepositoryBranchesContent({
       });
   };
 
+  const toggleBranchMenu = useCallback((anchor: HTMLButtonElement, branchName: string) => {
+    setBranchMenu((current) => current?.branchName === branchName
+      ? null
+      : { anchor, branchName });
+  }, []);
+  const changeRenameDraft = (value: string) => {
+    renameDraftRevision.current += 1;
+    setRenamedBranch(value);
+  };
+  const cancelRename = () => {
+    renameDraftRevision.current += 1;
+    setRenamingBranch(null);
+    setRenamedBranch("");
+  };
+
   if (
     !controller.loading.branches &&
     !controller.branches &&
@@ -287,143 +305,23 @@ function RepositoryBranchesContent({
           </span>
         </div>
         {branches.map((branch) => {
-          const editing =
-            renamingBranch === branch.name &&
-            !branch.remote;
-
+          const editing = renamingBranch === branch.name && !branch.remote;
           return (
-            <div
-              className={`branches-row${
-                branch.current ? " current" : ""
-              }`}
+            <BranchRow
               key={branch.fullName}
-              role="row"
-              >
-              <span className="branch-name-column" role="cell">
-                <span
-                  className={`branch-name-cell${
-                    branch.current ? " current" : ""
-                  }`}
-                >
-                  {branch.current ? (
-                    <span
-                      aria-hidden="true"
-                      className="branch-current-dot"
-                    />
-                  ) : (
-                    <Icon name="branch" size={14} />
-                  )}
-                  <span title={branch.name}>{branch.name}</span>
-                </span>
-              </span>
-              <span role="cell">
-                <span
-                  className={`status-pill ${
-                    branch.remote ? "blue" : "neutral"
-                  }`}
-                >
-                  {branch.remote ? "远程" : "本地"}
-                </span>
-              </span>
-              <span
-                role="cell"
-                title={branch.upstream ?? undefined}
-              >
-                {branch.upstream ?? "—"}
-              </span>
-              <span
-                className="branch-sync"
-                role="cell"
-                title={
-                  branch.current && snapshot?.upstream
-                    ? `领先 ${snapshot.ahead}，落后 ${snapshot.behind}`
-                    : undefined
-                }
-              >
-                {branchSyncLabel(branch.current, snapshot)}
-              </span>
-              <span
-                className="branch-updated"
-                role="cell"
-                title={branch.updatedAt}
-              >
-                {formatBranchUpdatedAt(branch.updatedAt)}
-              </span>
-              <span className="branch-row-actions" role="cell">
-                {branch.remote ? (
-                  "—"
-                ) : editing ? (
-                  <form
-                    className="branch-rename-form"
-                    onSubmit={(event) =>
-                      renameBranch(event, branch.name)
-                    }
-                  >
-                    <Input
-                      appearance="unstyled"
-                      aria-label={`重命名 ${branch.name}`}
-                      autoFocus
-                      maxLength={255}
-                      onChange={(event) => {
-                        renameDraftRevision.current += 1;
-                        setRenamedBranch(event.target.value);
-                      }}
-                      spellCheck={false}
-                      value={renamedBranch}
-                    />
-                    <Button variant="unstyled"
-                      className="mini-action"
-                      disabled={
-                        commands.busy ||
-                        !renamedBranch.trim() ||
-                        renamedBranch.trim() === branch.name
-                      }
-                      type="submit"
-                    >
-                      保存
-                    </Button>
-                    <Button variant="unstyled"
-                      className="mini-action"
-                      disabled={commands.busy}
-                      onClick={() => {
-                        renameDraftRevision.current += 1;
-                        setRenamingBranch(null);
-                        setRenamedBranch("");
-                      }}
-                      type="button"
-                    >
-                      取消
-                    </Button>
-                    </form>
-                  ) : (
-                    <Button variant="unstyled"
-                      aria-expanded={
-                        branchMenu?.branchName === branch.name
-                      }
-                      aria-haspopup="menu"
-                      aria-label={`打开 ${branch.name} 操作`}
-                      className="icon-button branch-row-menu-trigger"
-                      data-branch-menu-trigger
-                      onClick={(event) => {
-                        if (
-                          branchMenu?.branchName === branch.name
-                        ) {
-                          setBranchMenu(null);
-                          return;
-                        }
-                        setBranchMenu({
-                          anchor: event.currentTarget,
-                          branchName: branch.name,
-                        });
-                      }}
-                      title="分支操作"
-                      type="button"
-                    >
-                      <Icon name="more" size={14} />
-                    </Button>
-                  )}
-              </span>
-            </div>
+              branch={branch}
+              busy={commands.busy}
+              editing={editing}
+              menuOpen={branchMenu?.branchName === branch.name}
+              renamedBranch={editing ? renamedBranch : ""}
+              snapshot={branch.current ? snapshot : undefined}
+              onToggleMenu={toggleBranchMenu}
+              {...(editing ? {
+                onRename: renameBranch,
+                onRenameChange: changeRenameDraft,
+                onCancelRename: cancelRename
+              } : {})}
+            />
           );
         })}
         {branches.length === 0 && (
@@ -521,6 +419,158 @@ function RepositoryBranchesContent({
     </SkeletonBoundary>
   );
 }
+
+type BranchRowData = NonNullable<
+  RepositoryBranchesProps["controller"]["branches"]
+>["branches"][number];
+
+const BranchRow = memo(function BranchRow({
+  branch,
+  busy,
+  editing,
+  menuOpen,
+  renamedBranch,
+  snapshot,
+  onToggleMenu,
+  onRename,
+  onRenameChange,
+  onCancelRename
+}: {
+  branch: BranchRowData;
+  busy: boolean;
+  editing: boolean;
+  menuOpen: boolean;
+  renamedBranch: string;
+  snapshot: RepositoryStatusSnapshotDto | undefined;
+  onToggleMenu(anchor: HTMLButtonElement, branchName: string): void;
+  onRename?(event: FormEvent, branchName: string): void;
+  onRenameChange?(value: string): void;
+  onCancelRename?(): void;
+}) {
+  const updatedAtLabel = useMemo(
+    () => formatBranchUpdatedAt(branch.updatedAt),
+    [branch.updatedAt]
+  );
+  return (
+    <div
+      className={`branches-row${
+        branch.current ? " current" : ""
+      }`}
+      role="row"
+    >
+      <span className="branch-name-column" role="cell">
+        <span
+          className={`branch-name-cell${
+            branch.current ? " current" : ""
+          }`}
+        >
+          {branch.current ? (
+            <span
+              aria-hidden="true"
+              className="branch-current-dot"
+            />
+          ) : (
+            <Icon name="branch" size={14} />
+          )}
+          <span title={branch.name}>{branch.name}</span>
+        </span>
+      </span>
+      <span role="cell">
+        <span
+          className={`status-pill ${
+            branch.remote ? "blue" : "neutral"
+          }`}
+        >
+          {branch.remote ? "远程" : "本地"}
+        </span>
+      </span>
+      <span
+        role="cell"
+        title={branch.upstream ?? undefined}
+      >
+        {branch.upstream ?? "—"}
+      </span>
+      <span
+        className="branch-sync"
+        role="cell"
+        title={
+          branch.current && snapshot?.upstream
+            ? `领先 ${snapshot.ahead}，落后 ${snapshot.behind}`
+            : undefined
+        }
+      >
+        {branchSyncLabel(branch.current, snapshot)}
+      </span>
+      <span
+        className="branch-updated"
+        role="cell"
+        title={branch.updatedAt}
+      >
+        {updatedAtLabel}
+      </span>
+      <span className="branch-row-actions" role="cell">
+        {branch.remote ? (
+          "—"
+        ) : editing ? (
+          <form
+            className="branch-rename-form"
+            onSubmit={(event) =>
+              onRename?.(event, branch.name)
+            }
+          >
+            <Input
+              appearance="unstyled"
+              aria-label={`重命名 ${branch.name}`}
+              autoFocus
+              maxLength={255}
+              onChange={(event) => {
+                onRenameChange?.(event.target.value);
+              }}
+              spellCheck={false}
+              value={renamedBranch}
+            />
+            <Button variant="unstyled"
+              className="mini-action"
+              disabled={
+                busy ||
+                !renamedBranch.trim() ||
+                renamedBranch.trim() === branch.name
+              }
+              type="submit"
+            >
+              保存
+            </Button>
+            <Button variant="unstyled"
+              className="mini-action"
+              disabled={busy}
+              onClick={() => {
+                onCancelRename?.();
+              }}
+              type="button"
+            >
+              取消
+            </Button>
+          </form>
+        ) : (
+          <Button variant="unstyled"
+            aria-expanded={menuOpen}
+            aria-haspopup="menu"
+            aria-label={`打开 ${branch.name} 操作`}
+            className="icon-button branch-row-menu-trigger"
+            data-branch-menu-trigger
+            onClick={(event) =>
+              onToggleMenu(event.currentTarget, branch.name)
+            }
+            title="分支操作"
+            type="button"
+          >
+            <Icon name="more" size={14} />
+          </Button>
+        )}
+      </span>
+    </div>
+  );
+});
 
 function branchSyncLabel(
   current: boolean,

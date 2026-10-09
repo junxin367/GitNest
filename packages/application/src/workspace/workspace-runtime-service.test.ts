@@ -34,6 +34,162 @@ import {
 import { WorkspaceRefreshScheduler } from "./workspace-refresh-scheduler";
 
 describe("WorkspaceRuntimeService", () => {
+  it.each(["queued", "completed"])("does not register a newly created directory after its Workspace switch is %s", async (switchState) => {
+    const first = { ...createWorkspace(1), id: "workspace-original" };
+    const second = { ...createWorkspace(1), id: "workspace-other" };
+    const configuration = Object.assign(new SwitchingConfiguration([first, second]), {
+      addDirectory: vi.fn(async () => ({ workspace: await configuration.getCurrent(), duplicate: false }))
+    });
+    const runtime = new WorkspaceRuntimeService(
+      configuration, new TrackingGitClient(), new MemorySnapshotStore(), new FakeWatcher(),
+      { autoRefresh: false, selectedTargetPollingIntervalMs: 0 }
+    );
+    try {
+      await runtime.getState();
+      const switching = runtime.switchWorkspace(second.id);
+      if (switchState === "completed") await switching;
+      await expect(runtime.addDirectory({
+        path: "D:\\new-repository", expectedWorkspaceId: first.id
+      })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+      await switching;
+      expect(configuration.addDirectory).not.toHaveBeenCalled();
+      expect((await runtime.getCurrent()).id).toBe(second.id);
+    } finally { await runtime.dispose(); }
+  });
+
+  it("accepts the matching Workspace binding and preserves legacy directory registration", async () => {
+    const workspace = { ...createWorkspace(1), id: "workspace-original" };
+    const configuration = Object.assign(new SwitchingConfiguration([workspace]), {
+      addDirectory: vi.fn(async () => ({ workspace, duplicate: true }))
+    });
+    const runtime = new WorkspaceRuntimeService(
+      configuration, new TrackingGitClient(), new MemorySnapshotStore(), new FakeWatcher(),
+      { autoRefresh: false, selectedTargetPollingIntervalMs: 0 }
+    );
+    try {
+      await expect(runtime.addDirectory({
+        path: "D:\\new-repository", expectedWorkspaceId: workspace.id
+      })).resolves.toMatchObject({ workspace: { id: workspace.id }, duplicate: true });
+      await expect(runtime.addDirectory({ path: "D:\\legacy-repository" }))
+        .resolves.toMatchObject({ workspace: { id: workspace.id } });
+      expect(configuration.addDirectory.mock.calls).toEqual([
+        [{ path: "D:\\new-repository", expectedWorkspaceId: workspace.id }],
+        [{ path: "D:\\legacy-repository" }]
+      ]);
+    } finally { await runtime.dispose(); }
+  });
+
+  it("publishes persisted group preferences without rebuilding unchanged refresh targets or listing workspaces", async () => {
+    let workspace = createWorkspace(96);
+    const listWorkspaces = vi.fn(async () => [{
+      id: workspace.id,
+      name: workspace.name,
+      updatedAt: workspace.updatedAt
+    }]);
+    const persist = vi.fn(async (input: { groupId: string; collapsed: boolean }) => {
+      workspace = {
+        ...workspace,
+        groups: workspace.groups.map((group) =>
+          group.id === input.groupId ? { ...group, collapsed: input.collapsed } : group
+        ),
+        updatedAt: "2026-10-06T00:00:00.000Z"
+      };
+      return workspace;
+    });
+    const configuration: WorkspaceConfigurationService = {
+      getCurrent: async () => workspace,
+      listWorkspaces,
+      rescan: async () => workspace,
+      excludeRepository: async () => workspace,
+      setGroupCollapsed: persist,
+      selectTarget: async () => workspace
+    };
+    const gitClient = new TrackingGitClient();
+    const runtime = new WorkspaceRuntimeService(
+      configuration,
+      gitClient,
+      new MemorySnapshotStore([createCachedSnapshot(workspace.selectedTarget as RepositoryTarget)]),
+      new FakeWatcher(),
+      { autoRefresh: false, selectedTargetPollingIntervalMs: 0 }
+    );
+    const published = vi.fn();
+    const unsubscribe = runtime.subscribe(published);
+    const updateTargets = vi.spyOn(WorkspaceRefreshScheduler.prototype, "updateWorkspace");
+    try {
+      const initial = await runtime.getState();
+      expect(initial.snapshots).toHaveLength(1);
+      updateTargets.mockClear();
+      listWorkspaces.mockClear();
+      published.mockClear();
+
+      const collapsed = await runtime.setGroupCollapsed({ groupId: "group", collapsed: true });
+      expect(collapsed.groups[0]?.collapsed).toBe(true);
+      expect(persist).toHaveBeenCalledOnce();
+      expect(listWorkspaces).not.toHaveBeenCalled();
+      expect(updateTargets).not.toHaveBeenCalled();
+      expect(gitClient.calls).toEqual([]);
+      expect(published).toHaveBeenCalledOnce();
+      const state = published.mock.calls[0]?.[0] as WorkspaceRuntimeState;
+      expect(state.snapshots).toEqual(initial.snapshots);
+      expect(state.workspaces[0]?.updatedAt).toBe(workspace.updatedAt);
+
+      const expanded = await runtime.setGroupCollapsed({ groupId: "group", collapsed: false });
+      expect(expanded.groups[0]?.collapsed).toBe(false);
+      expect(persist).toHaveBeenCalledTimes(2);
+      expect(updateTargets).not.toHaveBeenCalled();
+    } finally {
+      updateTargets.mockRestore();
+      unsubscribe();
+      await runtime.dispose();
+    }
+  });
+
+  it("re-reads current topology before publishing a group preference and reconciles removed targets", async () => {
+    let workspace = createWorkspace(2);
+    const configuration: WorkspaceConfigurationService = {
+      getCurrent: async () => workspace,
+      rescan: async () => workspace,
+      excludeRepository: async () => workspace,
+      selectTarget: async () => workspace,
+      setGroupCollapsed: async () => {
+        const persisted = {
+          ...workspace,
+          groups: workspace.groups.map((group) => ({ ...group, collapsed: true }))
+        };
+        // A background rescan can finish after persistence, before publication.
+        workspace = {
+          ...persisted,
+          groups: persisted.groups.map((group) => ({ ...group, targets: group.targets.slice(1) })),
+          repositories: persisted.repositories.slice(1),
+          worktrees: persisted.worktrees.slice(1),
+          selectedTarget: persisted.groups[0]?.targets[1] as RepositoryTarget,
+          updatedAt: "2026-10-06T00:00:01.000Z"
+        };
+        return persisted;
+      }
+    };
+    const runtime = new WorkspaceRuntimeService(
+      configuration,
+      new TrackingGitClient(),
+      new MemorySnapshotStore([createCachedSnapshot(workspace.selectedTarget as RepositoryTarget)]),
+      new FakeWatcher(),
+      { autoRefresh: false, selectedTargetPollingIntervalMs: 0 }
+    );
+    const updateTargets = vi.spyOn(WorkspaceRefreshScheduler.prototype, "updateWorkspace");
+    try {
+      expect((await runtime.getState()).snapshots).toHaveLength(1);
+      updateTargets.mockClear();
+      const published = await runtime.setGroupCollapsed({ groupId: "group", collapsed: true });
+      expect(published).toEqual(workspace);
+      expect(published.repositories).toHaveLength(1);
+      expect(updateTargets).toHaveBeenCalledOnce();
+      expect((await runtime.getState()).snapshots).toEqual([]);
+    } finally {
+      updateTargets.mockRestore();
+      await runtime.dispose();
+    }
+  });
+
   it("discards queued snapshot publications and late reads after switching workspaces", async () => {
     vi.useFakeTimers();
     const first = createWorkspace(3);

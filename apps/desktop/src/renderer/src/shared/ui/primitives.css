@@ -265,7 +265,25 @@
 }
 
 .gn-skeleton-surface {
+  pointer-events: none;
   user-select: none;
+  transition: opacity var(--motion-micro) ease-out;
+}
+
+.gn-skeleton-surface[data-skeleton-phase="pending"] {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.gn-skeleton-surface[data-skeleton-phase="visible"] {
+  opacity: 1;
+  visibility: visible;
+}
+
+.gn-skeleton-surface[data-skeleton-nested] {
+  opacity: 1;
+  visibility: inherit;
+  transition: none;
 }
 
 .gn-skeleton {
@@ -281,6 +299,47 @@
     var(--surface)
   );
   border-radius: var(--radius-small);
+}
+
+.gn-auto-skeleton,
+.gn-auto-skeleton-content {
+  min-width: 0;
+  min-height: 0;
+}
+
+.gn-auto-skeleton {
+  position: relative;
+}
+
+.gn-auto-skeleton-content {
+  display: flow-root;
+}
+
+.gn-auto-skeleton[data-loading] > .gn-auto-skeleton-content {
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.gn-auto-skeleton-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.gn-auto-skeleton-shape,
+.gn-auto-skeleton-frame,
+.gn-auto-skeleton-clip {
+  position: absolute;
+}
+
+.gn-auto-skeleton-clip {
+  overflow: hidden;
+}
+
+.gn-auto-skeleton-frame {
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
 }
 
 .gn-skeleton[data-variant="text"] {
@@ -310,19 +369,6 @@
   display: grid;
   min-width: 0;
   gap: var(--space-4);
-}
-
-.app-skeleton-analysis-panel {
-  min-height: 340px;
-}
-
-.app-skeleton-graph {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-content: center;
-  gap: var(--space-5);
-  min-height: 290px;
-  padding: var(--space-5);
 }
 
 .gn-skeleton-heading {
@@ -432,6 +478,11 @@
   );
   transform: translateX(-100%);
   animation: gn-skeleton-shimmer 1.35s ease-in-out infinite;
+  animation-delay: 420ms;
+}
+
+.gn-skeleton-surface[data-skeleton-phase="pending"] .gn-skeleton::after {
+  animation-play-state: paused;
 }
 
 @keyframes gn-skeleton-shimmer {
@@ -441,6 +492,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .gn-skeleton-surface {
+    transition: none;
+  }
+
   .gn-skeleton::after {
     animation: none;
     opacity: 0.28;

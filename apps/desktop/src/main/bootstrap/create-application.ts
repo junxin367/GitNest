@@ -156,10 +156,11 @@ export async function createApplication(): Promise<void> {
     services.codeAnalysisRefresh.dispose();
     void (async () => {
       try {
-        const [codeAnalysisResult, workspaceResult] =
+        const [codeAnalysisResult, workspaceResult, repositoryCreationResult] =
           await Promise.allSettled([
             services.codeAnalysis.dispose(),
-            services.workspace.dispose()
+            services.workspace.dispose(),
+            services.repositoryManagement.dispose()
           ]);
         if (codeAnalysisResult.status === "rejected") {
           await services.diagnostics
@@ -174,6 +175,11 @@ export async function createApplication(): Promise<void> {
               error: workspaceResult.reason
             })
             .catch(() => undefined);
+        }
+        if (repositoryCreationResult.status === "rejected") {
+          await services.diagnostics.warning("repository-creation.dispose-failed", {
+            error: repositoryCreationResult.reason
+          }).catch(() => undefined);
         }
         await services.diagnostics
           .info("application.before-quit", {

@@ -77,6 +77,14 @@ export interface WorkspaceOperation {
     | "worktree-move"
     | "worktree-repair"
     | "worktree-prune"
+    | "workflow"
+    | "ignore-file"
+    | "remote-add"
+    | "remote-set-url"
+    | "remote-remove"
+    | "tag-create"
+    | "tag-delete"
+    | "tag-push"
     | "worktree-remove";
   scope: "workspace" | "repository" | "worktree";
   targetIds: string[];
@@ -146,6 +154,14 @@ export type RepositoryOperationKind =
   | "worktree-move"
   | "worktree-repair"
   | "worktree-prune"
+  | "workflow"
+  | "ignore-file"
+  | "remote-add"
+  | "remote-set-url"
+  | "remote-remove"
+  | "tag-create"
+  | "tag-delete"
+  | "tag-push"
   | "worktree-remove";
 
 export interface RepositoryOperationAccepted {
@@ -458,6 +474,13 @@ export class WorkspaceRuntimeService {
     input: AddWorkspaceDirectoryInput
   ): Promise<AddWorkspaceDirectoryResult> {
     return this.#queueWorkspaceUpdate(async () => {
+      if (input.expectedWorkspaceId !== undefined &&
+        this.#workspace?.id !== input.expectedWorkspaceId) {
+        throw new WorkspaceError(
+          "INVALID_REQUEST",
+          "创建仓库时的 Workspace 已切换，请在目标 Workspace 中重新添加该目录。"
+        );
+      }
       if (!this.#configuration.addDirectory) {
         throw new WorkspaceError(
           "INVALID_REQUEST",
@@ -497,7 +520,9 @@ export class WorkspaceRuntimeService {
     return this.#queueWorkspaceUpdate(async () => {
       const workspace =
         await this.#configuration.setGroupCollapsed(input);
-      return this.#publishRequiredWorkspace(workspace);
+      // The collection and its other summaries are unchanged by a display
+      // preference. Still re-read the current document before publishing.
+      return this.#publishRequiredWorkspace(workspace, false);
     });
   }
 
@@ -1190,11 +1215,14 @@ export class WorkspaceRuntimeService {
   }
 
   async #publishRequiredWorkspace(
-    candidate: Workspace
+    candidate: Workspace,
+    refreshSummaries = true
   ): Promise<Workspace> {
     const published = await this.#publishCurrentWorkspace(
       candidate,
-      this.#workspaceGeneration
+      this.#workspaceGeneration,
+      undefined,
+      refreshSummaries
     );
     if (published) {
       return published;
@@ -1208,9 +1236,12 @@ export class WorkspaceRuntimeService {
   async #publishCurrentWorkspace(
     candidate: Workspace,
     generation: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    refreshSummaries = true
   ): Promise<Workspace | undefined> {
-    await this.#refreshWorkspaceSummaries(candidate);
+    if (refreshSummaries) {
+      await this.#refreshWorkspaceSummaries(candidate);
+    }
     if (
       signal?.aborted ||
       generation !== this.#workspaceGeneration ||
@@ -2271,17 +2302,36 @@ export class WorkspaceRuntimeService {
   }
 
   #acceptWorkspace(workspace: Workspace): void {
-    this.#workspace = workspace;
-    this.#refreshScheduler.updateWorkspace(workspace);
-    const available = new Set(
-      listWorkspaceTargets(workspace).map(repositoryTargetKey)
+    const previous = this.#workspace;
+    // Configuration updates preserve immutable topology references when only
+    // display preferences change. Avoid rebuilding scheduler targets and
+    // reconciling every snapshot, but fall back for a concurrently updated
+    // topology or selection. The scheduler only reads groups and selection.
+    const targetsUnchanged = Boolean(
+      previous &&
+        previous.id === workspace.id &&
+        previous.selectedTarget === workspace.selectedTarget &&
+        previous.repositories === workspace.repositories &&
+        previous.worktrees === workspace.worktrees &&
+        previous.groups.length === workspace.groups.length &&
+        previous.groups.every(
+          (group, index) =>
+            group.targets === workspace.groups[index]?.targets
+        )
     );
+    this.#workspace = workspace;
+    if (!targetsUnchanged) {
+      this.#refreshScheduler.updateWorkspace(workspace);
+      const available = new Set(
+        listWorkspaceTargets(workspace).map(repositoryTargetKey)
+      );
 
-    for (const key of this.#snapshots.keys()) {
-      if (!available.has(key)) {
-        this.#snapshots.delete(key);
-        this.#snapshotContentSignatures.delete(key);
-        this.#snapshotChangedPaths.delete(key);
+      for (const key of this.#snapshots.keys()) {
+        if (!available.has(key)) {
+          this.#snapshots.delete(key);
+          this.#snapshotContentSignatures.delete(key);
+          this.#snapshotChangedPaths.delete(key);
+        }
       }
     }
 
@@ -3497,6 +3547,14 @@ function repositoryOperationLabel(
   kind: RepositoryOperationKind
 ): string {
   return {
+    workflow: "Git 工作流",
+    "ignore-file": "忽略文件",
+    "remote-add": "添加远程",
+    "remote-set-url": "修改远程地址",
+    "remote-remove": "移除远程",
+    "tag-create": "创建标签",
+    "tag-delete": "删除标签",
+    "tag-push": "推送标签",
     fetch: "Fetch",
     pull: "Pull",
     push: "Push",
@@ -3518,6 +3576,14 @@ function workspaceOperationLabel(
   kind: WorkspaceOperation["kind"]
 ): string {
   return {
+    workflow: "Git 工作流",
+    "ignore-file": "忽略文件",
+    "remote-add": "添加远程",
+    "remote-set-url": "修改远程地址",
+    "remote-remove": "移除远程",
+    "tag-create": "创建标签",
+    "tag-delete": "删除标签",
+    "tag-push": "推送标签",
     scan: "Workspace 扫描",
     status: "仓库状态刷新",
     stage: "暂存",

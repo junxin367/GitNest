@@ -26,6 +26,7 @@ import { copyTextToClipboard } from "../../shared/lib/copyTextToClipboard";
 import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
+import type { RepositoryCommitActionHandler } from "../../features/repository-workflow/RepositoryCommitActions";
 
 interface DetailInspectorProps {
   commit: RepositoryCommitDto["commit"] | null;
@@ -37,6 +38,8 @@ interface DetailInspectorProps {
   operations: WorkspaceOperationDto[];
   monitor: WorkspaceMonitorStateDto | null;
   busy: boolean;
+  onCommitAction?: RepositoryCommitActionHandler;
+  actionBusy?: boolean;
   onClose(): void;
   onOpenSettings(): void;
   onRenameWorkspace(
@@ -55,6 +58,8 @@ export function DetailInspector({
   operations,
   monitor,
   busy,
+  onCommitAction,
+  actionBusy,
   onClose,
   onOpenSettings,
   onRenameWorkspace
@@ -235,11 +240,8 @@ export function DetailInspector({
             </Button>
             <Button variant="unstyled"
               className="quick-button"
-              onClick={() =>
-                setCommitNotice(
-                  "远程查看暂未接入，当前仅展示本地提交快照。"
-                )
-              }
+              disabled={!onCommitAction || (actionBusy ?? busy)}
+              onClick={() => void onCommitAction?.("remote", commit)}
               type="button"
             >
               <Icon name="external" />
@@ -247,11 +249,8 @@ export function DetailInspector({
             </Button>
             <Button variant="unstyled"
               className="quick-button"
-              onClick={() =>
-                setCommitNotice(
-                  "Cherry-pick 暂未接入，当前不会修改仓库。"
-                )
-              }
+              disabled={!onCommitAction || (actionBusy ?? busy)}
+              onClick={() => void onCommitAction?.("cherry-pick", commit)}
               type="button"
             >
               <Icon name="commit" />
@@ -259,11 +258,8 @@ export function DetailInspector({
             </Button>
             <Button variant="unstyled"
               className="quick-button"
-              onClick={() =>
-                setCommitNotice(
-                  "创建分支入口已保留，请从分支页面选择提交起点。"
-                )
-              }
+              disabled={!onCommitAction || (actionBusy ?? busy)}
+              onClick={() => void onCommitAction?.("create-branch", commit)}
               type="button"
             >
               <Icon name="branch" />

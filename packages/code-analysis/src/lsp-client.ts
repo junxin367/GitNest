@@ -82,6 +82,7 @@ interface PooledSession {
   opened: Map<string, { version: number; hash: string }>;
   recoveredJavaWorkspace: boolean;
   hoverSupported: boolean;
+  callHierarchySupported: boolean;
   incomingCallHierarchySupported: boolean;
   referencesSupported: boolean;
   typeHierarchySupported: boolean;
@@ -630,17 +631,27 @@ export class ExternalLanguageServerPool {
           : emptyDocumentationResult();
         session.hoverSupported = documentation.supported;
 
-        const hierarchy = await enrichCallHierarchy({
-          session,
-          documents: preparedDocuments,
-          budget:
-            commandSettings.maxCallHierarchyRequests,
-          concurrency: input.settings.readConcurrency,
-          timeoutMs: requestTimeoutMs,
-          ...(input.signal
-            ? { signal: input.signal }
-            : {})
-        });
+        const hierarchy = session.callHierarchySupported
+          ? await enrichCallHierarchy({
+              session,
+              documents: preparedDocuments,
+              budget:
+                commandSettings.maxCallHierarchyRequests,
+              concurrency: input.settings.readConcurrency,
+              timeoutMs: requestTimeoutMs,
+              ...(input.signal
+                ? { signal: input.signal }
+                : {})
+            })
+          : {
+              attempted: 0,
+              callCount: 0,
+              incomplete: false,
+              supported: false,
+              budgetExhausted: false,
+              stoppedEarly: false
+            };
+        session.callHierarchySupported = hierarchy.supported;
 
         const references = session.referencesSupported
           ? await enrichReferences({
@@ -1151,6 +1162,9 @@ export class ExternalLanguageServerPool {
       opened: new Map(),
       recoveredJavaWorkspace,
       hoverSupported,
+      // Some servers omit this capability but implement the method.
+      // Probe once and retain an explicit unsupported response.
+      callHierarchySupported: true,
       incomingCallHierarchySupported: true,
       referencesSupported,
       typeHierarchySupported,
@@ -2791,6 +2805,10 @@ export class JsonRpcClient {
   readonly #cwd: string;
   #process: ChildProcessWithoutNullStreams | undefined;
   #buffer = Buffer.alloc(0);
+  #bufferOffset = 0;
+  #bufferLength = 0;
+  #messageBodyLength: number | undefined;
+  #messageHeaderLength = 0;
   #nextId = 0;
   #pending = new Map<
     number,
@@ -3136,65 +3154,113 @@ export class JsonRpcClient {
   }
 
   #consume(chunk: Buffer): void {
+    const retainedLength =
+      this.#bufferLength - this.#bufferOffset;
     if (
       chunk.byteLength >
-      MAX_LSP_BUFFER_BYTES - this.#buffer.byteLength
+      MAX_LSP_BUFFER_BYTES - retainedLength
     ) {
       this.#failProtocol(
         new Error("LSP 输入缓冲区超过安全上限。")
       );
       return;
     }
-    this.#buffer = Buffer.concat([this.#buffer, chunk]);
+    if (
+      this.#bufferLength + chunk.byteLength >
+      this.#buffer.byteLength
+    ) {
+      const requiredLength = retainedLength + chunk.byteLength;
+      const nextBuffer =
+        requiredLength <= this.#buffer.byteLength
+          ? this.#buffer
+          : Buffer.allocUnsafe(
+              Math.min(
+                MAX_LSP_BUFFER_BYTES,
+                Math.max(
+                  requiredLength,
+                  this.#buffer.byteLength * 2,
+                  8 * 1_024
+                )
+              )
+            );
+      this.#buffer.copy(
+        nextBuffer,
+        0,
+        this.#bufferOffset,
+        this.#bufferLength
+      );
+      this.#buffer = nextBuffer;
+      this.#bufferOffset = 0;
+      this.#bufferLength = retainedLength;
+    }
+    chunk.copy(this.#buffer, this.#bufferLength);
+    this.#bufferLength += chunk.byteLength;
     while (true) {
-      const headerEnd = this.#buffer.indexOf("\r\n\r\n");
-      if (headerEnd < 0) {
-        if (this.#buffer.byteLength > MAX_LSP_HEADER_BYTES) {
+      const buffered = this.#buffer.subarray(
+        this.#bufferOffset,
+        this.#bufferLength
+      );
+      if (this.#messageBodyLength === undefined) {
+        const headerEnd = buffered.indexOf("\r\n\r\n");
+        if (headerEnd < 0) {
+          if (buffered.byteLength > MAX_LSP_HEADER_BYTES) {
+            this.#failProtocol(
+              new Error("LSP 消息头超过安全上限。")
+            );
+          }
+          return;
+        }
+        if (headerEnd > MAX_LSP_HEADER_BYTES) {
           this.#failProtocol(
             new Error("LSP 消息头超过安全上限。")
           );
+          return;
         }
-        return;
-      }
-      if (headerEnd > MAX_LSP_HEADER_BYTES) {
-        this.#failProtocol(
-          new Error("LSP 消息头超过安全上限。")
+        const header = buffered
+          .subarray(0, headerEnd)
+          .toString("ascii");
+        const lengthMatch = /Content-Length:\s*(\d+)/i.exec(
+          header
         );
+        if (!lengthMatch?.[1]) {
+          this.#failProtocol(
+            new Error("LSP 消息缺少有效的 Content-Length。")
+          );
+          return;
+        }
+        const length = Number(lengthMatch[1]);
+        if (
+          !Number.isSafeInteger(length) ||
+          length < 0 ||
+          length > MAX_LSP_MESSAGE_BYTES
+        ) {
+          this.#failProtocol(
+            new Error("LSP 消息长度超过安全上限。")
+          );
+          return;
+        }
+        this.#messageBodyLength = length;
+        this.#messageHeaderLength = headerEnd + 4;
+      }
+      const frameLength =
+        this.#messageHeaderLength + this.#messageBodyLength;
+      if (buffered.byteLength < frameLength) {
         return;
       }
-      const header = this.#buffer
-        .subarray(0, headerEnd)
-        .toString("ascii");
-      const lengthMatch = /Content-Length:\s*(\d+)/i.exec(
-        header
-      );
-      if (!lengthMatch?.[1]) {
-        this.#failProtocol(
-          new Error("LSP 消息缺少有效的 Content-Length。")
-        );
-        return;
-      }
-      const length = Number(lengthMatch[1]);
-      if (
-        !Number.isSafeInteger(length) ||
-        length < 0 ||
-        length > MAX_LSP_MESSAGE_BYTES
-      ) {
-        this.#failProtocol(
-          new Error("LSP 消息长度超过安全上限。")
-        );
-        return;
-      }
-      const bodyStart = headerEnd + 4;
-      if (this.#buffer.length < bodyStart + length) {
-        return;
-      }
-      const body = this.#buffer
-        .subarray(bodyStart, bodyStart + length)
+      const body = buffered
+        .subarray(this.#messageHeaderLength, frameLength)
         .toString("utf8");
-      this.#buffer = this.#buffer.subarray(
-        bodyStart + length
-      );
+      this.#bufferOffset += frameLength;
+      this.#messageBodyLength = undefined;
+      this.#messageHeaderLength = 0;
+      if (this.#bufferOffset === this.#bufferLength) {
+        this.#bufferOffset = 0;
+        this.#bufferLength = 0;
+        // Do not retain a large symbol response for an idle session.
+        if (this.#buffer.byteLength > MAX_LSP_HEADER_BYTES) {
+          this.#buffer = Buffer.alloc(0);
+        }
+      }
       this.#handleMessage(body);
     }
   }
@@ -3204,6 +3270,10 @@ export class JsonRpcClient {
       this.#exitError = error;
     }
     this.#buffer = Buffer.alloc(0);
+    this.#bufferOffset = 0;
+    this.#bufferLength = 0;
+    this.#messageBodyLength = undefined;
+    this.#messageHeaderLength = 0;
     this.#rejectOutstanding(this.#exitError);
     const child = this.#process;
     if (

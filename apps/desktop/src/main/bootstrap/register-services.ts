@@ -19,6 +19,10 @@ import {
   GitInspectionService,
   RepositoryCommandService,
   RepositoryMutationService,
+  RepositoryManagementService,
+  RepositoryWorkflowService,
+  RepositoryIgnoreService,
+  FileHistoryService,
   RepositoryQueryService,
   WorktreeCommandService,
   WorkspaceCollectionService,
@@ -29,7 +33,7 @@ import {
   DEFAULT_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,
   IPC_EVENTS
 } from "@gitnest/contracts";
-import { GitCliClient } from "@gitnest/git-cli";
+import { GitCliClient, GitCliWorkflowClient, GitCliIgnoreClient, GitCliFileHistoryClient, GitRepositoryManagementAdapter } from "@gitnest/git-cli";
 import {
   JsonWorkspaceCollectionStore,
   JsonWorkspaceOperationCollectionStore,
@@ -85,6 +89,10 @@ export interface ApplicationServices {
   mcpRegistration: McpRegistrationService;
   repositoryCommands: RepositoryCommandService;
   repositoryMutations: RepositoryMutationService;
+  repositoryManagement: RepositoryManagementService;
+  repositoryWorkflow: RepositoryWorkflowService;
+  repositoryIgnore: RepositoryIgnoreService;
+  fileHistory: FileHistoryService;
   repositoryQueries: RepositoryQueryService;
   settings: AppSettingsService;
   worktreeCommands: WorktreeCommandService;
@@ -577,6 +585,10 @@ export function registerServices(): ApplicationServices {
       gitClient,
       gitClient
     ),
+    repositoryManagement: new RepositoryManagementService(workspace, new GitRepositoryManagementAdapter()),
+    repositoryWorkflow: new RepositoryWorkflowService(workspace, new GitCliWorkflowClient(), { idFactory: randomUUID }),
+    repositoryIgnore: new RepositoryIgnoreService(workspace, new GitCliIgnoreClient(), { idFactory: randomUUID }),
+    fileHistory: new FileHistoryService(workspace, new GitCliFileHistoryClient()),
     repositoryQueries: new RepositoryQueryService(
       workspace,
       gitClient,

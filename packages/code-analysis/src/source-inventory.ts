@@ -45,6 +45,7 @@ const SUPPORTED_EXTENSIONS = new Map<
 export const DEFAULT_MAX_TOTAL_SOURCE_BYTES =
   128 * 1_024 * 1_024;
 const FINGERPRINT_READ_CHUNK_BYTES = 64 * 1_024;
+const MAX_RETAINED_SOURCE_BATCH_BYTES = 8 * 1_024 * 1_024;
 
 export async function discoverSourceFiles(input: {
   roots: AnalysisRoot[];
@@ -53,6 +54,11 @@ export async function discoverSourceFiles(input: {
   settings: CodeAnalysisSettings;
   maxTotalSizeBytes?: number;
   signal?: AbortSignal;
+  /** Consumes the same verified bytes used for the fingerprint, once admitted. */
+  onSourceFile?: (
+    file: AnalysisSourceFile,
+    content: Buffer
+  ) => void | Promise<void>;
 }): Promise<SourceInventoryResult> {
   const warnings: string[] = [];
   const files: AnalysisSourceFile[] = [];
@@ -66,6 +72,81 @@ export async function discoverSourceFiles(input: {
   const maxTotalSizeBytes =
     input.maxTotalSizeBytes ??
     input.settings.maxTotalSourceBytes;
+  const pending: Promise<PromiseSettledResult<SourceInspectionResult>>[] = [];
+  const concurrency = Math.max(
+    1,
+    Math.min(32, Math.floor(input.settings.readConcurrency) || 1)
+  );
+
+  const flush = async (): Promise<void> => {
+    // Settle the whole bounded batch before exposing an error or returning,
+    // so cancellation cannot leave reads or rejected promises behind.
+    const results = await Promise.all(pending.splice(0));
+    for (const result of results) {
+      throwIfAborted(input.signal);
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+      const inspection = result.value;
+      if (inspection.kind !== "included") {
+        skippedFiles += 1;
+        if (inspection.kind === "configured-skip") {
+          configuredSkippedFiles += 1;
+          warnings.push(inspection.warning);
+        } else if (inspection.kind === "failure") {
+          inspectionFailureCount += 1;
+          warnings.push(inspection.warning);
+        }
+        continue;
+      }
+      const descriptor = inspection.file;
+      if (seen.has(descriptor.canonicalPath)) {
+        continue;
+      }
+      if (!addFile(descriptor)) {
+        break;
+      }
+      if (input.onSourceFile && inspection.content !== undefined) {
+        await input.onSourceFile(descriptor, inspection.content);
+        throwIfAborted(input.signal);
+      }
+    }
+  };
+
+  const enqueue = async (
+    root: AnalysisRoot,
+    absolutePath: string,
+    changed: boolean
+  ): Promise<void> => {
+    pending.push(inspectSourceFile(
+      root,
+      absolutePath,
+      changed,
+      input.settings.maxFileSizeBytes,
+      input.signal,
+      Boolean(input.onSourceFile)
+    ).then(
+      (value) => ({ status: "fulfilled" as const, value }),
+      (reason: unknown) => ({ status: "rejected" as const, reason })
+    ));
+    // Reserve the maximum possible size of each in-flight read. Close to a
+    // budget, use the original serial admission order instead of reading ahead.
+    const batchLimit = Math.max(1, Math.min(
+      concurrency,
+      Math.floor(
+        MAX_RETAINED_SOURCE_BATCH_BYTES /
+          Math.max(1, input.settings.maxFileSizeBytes)
+      ),
+      input.settings.maxFiles - files.length,
+      Math.floor(
+        (maxTotalSizeBytes - totalBytes) /
+          Math.max(1, input.settings.maxFileSizeBytes)
+      )
+    ));
+    if (pending.length >= batchLimit) {
+      await flush();
+    }
+  };
 
   const addFile = (
     descriptor: AnalysisSourceFile
@@ -89,57 +170,130 @@ export async function discoverSourceFiles(input: {
     return true;
   };
 
-  if (input.scope === "changed") {
-    const rootsByTarget = new Map(
-      input.roots.map((root) => [targetKey(root), root])
-    );
-    for (const changedPath of input.changedPaths) {
-      throwIfAborted(input.signal);
-      const root = rootsByTarget.get(targetKey(changedPath));
-      if (!root) {
-        continue;
-      }
-      const absolutePath = resolve(root.path, changedPath.path);
-      if (!isWithin(root.path, absolutePath)) {
-        skippedFiles += 1;
-        inspectionFailureCount += 1;
-        warnings.push(
-          `已跳过超出 Worktree 的变动路径：${changedPath.path}`
-        );
-        continue;
-      }
-      const inspection = await inspectSourceFile(
-        root,
-        absolutePath,
-        true,
-        input.settings.maxFileSizeBytes,
-        input.signal
+  try {
+    if (input.scope === "changed") {
+      const rootsByTarget = new Map(
+        input.roots.map((root) => [targetKey(root), root])
       );
-      if (inspection.kind !== "included") {
-        skippedFiles += 1;
-        if (inspection.kind === "configured-skip") {
-          configuredSkippedFiles += 1;
-          warnings.push(inspection.warning);
-        } else if (inspection.kind === "failure") {
-          inspectionFailureCount += 1;
-          warnings.push(inspection.warning);
+      for (const changedPath of input.changedPaths) {
+        throwIfAborted(input.signal);
+        const root = rootsByTarget.get(targetKey(changedPath));
+        if (!root) {
+          continue;
         }
-        continue;
+        const absolutePath = resolve(root.path, changedPath.path);
+        if (!isWithin(root.path, absolutePath)) {
+          await flush();
+          skippedFiles += 1;
+          inspectionFailureCount += 1;
+          warnings.push(
+            `已跳过超出 Worktree 的变动路径：${changedPath.path}`
+          );
+          continue;
+        }
+        await enqueue(root, absolutePath, true);
+        if (truncated) {
+          break;
+        }
       }
-      const descriptor = inspection.file;
-      if (seen.has(descriptor.canonicalPath)) {
-        continue;
+      await flush();
+      appendTruncationWarning(
+        warnings,
+        truncationReason,
+        input.settings.maxFiles,
+        maxTotalSizeBytes
+      );
+      return {
+        files,
+        totalBytes,
+        skippedFiles,
+        configuredSkippedFiles,
+        inspectionFailureCount,
+        truncated,
+        warnings
+      };
+    }
+
+    const ignored = new Set(
+      input.settings.ignoreDirectories.map((value) =>
+        value.trim().toLocaleLowerCase("en-US")
+      )
+    );
+    let visitedEntries = 0;
+
+    for (const root of input.roots) {
+      const directories = [resolve(root.path)];
+      while (directories.length > 0) {
+        throwIfAborted(input.signal);
+        const directory = directories.pop();
+        if (!directory) {
+          break;
+        }
+
+        let handle;
+        try {
+          handle = await opendir(directory);
+        } catch (error) {
+          inspectionFailureCount += 1;
+          warnings.push(
+            `无法读取目录 ${displayRelative(root.path, directory)}：${errorMessage(error)}`
+          );
+          continue;
+        }
+
+        for await (const entry of handle) {
+          throwIfAborted(input.signal);
+          visitedEntries += 1;
+          if (visitedEntries % 80 === 0) {
+            await yieldToEventLoop();
+          }
+          if (entry.isSymbolicLink()) {
+            continue;
+          }
+
+          const absolutePath = resolve(directory, entry.name);
+          if (entry.isDirectory()) {
+            if (
+              ignored.has(
+                entry.name.toLocaleLowerCase("en-US")
+              )
+            ) {
+              continue;
+            }
+            directories.push(absolutePath);
+            continue;
+          }
+          if (!entry.isFile()) {
+            continue;
+          }
+
+          const language = languageForPath(absolutePath);
+          if (!language) {
+            continue;
+          }
+          await enqueue(root, absolutePath, false);
+          if (truncated) {
+            break;
+          }
+        }
+
+        await flush();
+        if (truncated) {
+          break;
+        }
       }
-      if (!addFile(descriptor)) {
+      if (truncated) {
         break;
       }
     }
+
     appendTruncationWarning(
       warnings,
       truncationReason,
       input.settings.maxFiles,
       maxTotalSizeBytes
     );
+
     return {
       files,
       totalBytes,
@@ -149,117 +303,9 @@ export async function discoverSourceFiles(input: {
       truncated,
       warnings
     };
+  } finally {
+    await Promise.all(pending.splice(0));
   }
-
-  const ignored = new Set(
-    input.settings.ignoreDirectories.map((value) =>
-      value.trim().toLocaleLowerCase("en-US")
-    )
-  );
-  let visitedEntries = 0;
-
-  for (const root of input.roots) {
-    const directories = [resolve(root.path)];
-    while (directories.length > 0) {
-      throwIfAborted(input.signal);
-      const directory = directories.pop();
-      if (!directory) {
-        break;
-      }
-
-      let handle;
-      try {
-        handle = await opendir(directory);
-      } catch (error) {
-        inspectionFailureCount += 1;
-        warnings.push(
-          `无法读取目录 ${displayRelative(root.path, directory)}：${errorMessage(error)}`
-        );
-        continue;
-      }
-
-      for await (const entry of handle) {
-        throwIfAborted(input.signal);
-        visitedEntries += 1;
-        if (visitedEntries % 80 === 0) {
-          await yieldToEventLoop();
-        }
-        if (entry.isSymbolicLink()) {
-          continue;
-        }
-
-        const absolutePath = resolve(directory, entry.name);
-        if (entry.isDirectory()) {
-          if (
-            ignored.has(
-              entry.name.toLocaleLowerCase("en-US")
-            )
-          ) {
-            continue;
-          }
-          directories.push(absolutePath);
-          continue;
-        }
-        if (!entry.isFile()) {
-          continue;
-        }
-
-        const language = languageForPath(absolutePath);
-        if (!language) {
-          continue;
-        }
-        const inspection = await inspectSourceFile(
-          root,
-          absolutePath,
-          false,
-          input.settings.maxFileSizeBytes,
-          input.signal
-        );
-        if (inspection.kind !== "included") {
-          skippedFiles += 1;
-          if (inspection.kind === "configured-skip") {
-            configuredSkippedFiles += 1;
-            warnings.push(inspection.warning);
-          } else if (inspection.kind === "failure") {
-            inspectionFailureCount += 1;
-            warnings.push(inspection.warning);
-          }
-          continue;
-        }
-        const descriptor = inspection.file;
-        if (seen.has(descriptor.canonicalPath)) {
-          continue;
-        }
-        if (!addFile(descriptor)) {
-          break;
-        }
-      }
-
-      if (truncated) {
-        break;
-      }
-    }
-    if (truncated) {
-      break;
-    }
-  }
-
-  appendTruncationWarning(
-    warnings,
-    truncationReason,
-    input.settings.maxFiles,
-    maxTotalSizeBytes
-  );
-
-  return {
-    files,
-    totalBytes,
-    skippedFiles,
-    configuredSkippedFiles,
-    inspectionFailureCount,
-    truncated,
-    warnings
-  };
 }
 
 function appendTruncationWarning(
@@ -294,7 +340,8 @@ async function inspectSourceFile(
   absolutePath: string,
   changed: boolean,
   maxFileSizeBytes: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  captureContent = false
 ): Promise<SourceInspectionResult> {
   const language = languageForPath(absolutePath);
   if (!language) {
@@ -322,15 +369,19 @@ async function inspectSourceFile(
       warning: `已跳过超过单文件大小限制的源文件 ${displayRelative(root.path, absolutePath)}。`
     };
   }
-  let fingerprint: string;
+  let source: { fingerprint: string; content?: Buffer };
   try {
-    fingerprint = await fingerprintSourceFile(
+    source = await fingerprintSourceFile(
       absolutePath,
       {
         size: details.size,
-        modifiedAtMs: details.mtimeMs
+        modifiedAtMs: details.mtimeMs,
+        changedAtMs: details.ctimeMs,
+        device: details.dev,
+        inode: details.ino
       },
-      signal
+      signal,
+      captureContent
     );
   } catch (error) {
     throwIfAborted(signal);
@@ -346,6 +397,7 @@ async function inspectSourceFile(
   const resolvedPath = resolve(absolutePath);
   return {
     kind: "included",
+    ...(source.content !== undefined ? { content: source.content } : {}),
     file: {
       absolutePath: resolvedPath,
       canonicalPath: canonicalPath(resolvedPath),
@@ -356,7 +408,7 @@ async function inspectSourceFile(
       language,
       size: details.size,
       modifiedAtMs: details.mtimeMs,
-      fingerprint,
+      fingerprint: source.fingerprint,
       changed
     }
   };
@@ -366,6 +418,7 @@ type SourceInspectionResult =
   | {
       kind: "included";
       file: AnalysisSourceFile;
+      content?: Buffer;
     }
   | {
       kind: "excluded";
@@ -384,44 +437,57 @@ async function fingerprintSourceFile(
   expected: {
     size: number;
     modifiedAtMs: number;
+    changedAtMs: number;
+    device: number;
+    inode: number;
   },
-  signal?: AbortSignal
-): Promise<string> {
+  signal?: AbortSignal,
+  captureContent = false
+): Promise<{ fingerprint: string; content?: Buffer }> {
   const handle = await open(filePath, "r");
   const hash = createHash("sha256");
-  const chunk = Buffer.allocUnsafe(
-    FINGERPRINT_READ_CHUNK_BYTES
+  const content = captureContent ? Buffer.allocUnsafe(expected.size) : undefined;
+  const chunk = content ?? Buffer.allocUnsafe(
+    Math.min(expected.size, FINGERPRINT_READ_CHUNK_BYTES)
   );
   try {
     const before = await handle.stat();
     if (
       !before.isFile() ||
       before.size !== expected.size ||
-      Math.trunc(before.mtimeMs) !==
-        Math.trunc(expected.modifiedAtMs)
+      before.mtimeMs !== expected.modifiedAtMs ||
+      before.ctimeMs !== expected.changedAtMs ||
+      before.dev !== expected.device ||
+      before.ino !== expected.inode
     ) {
       throw new Error(
         "Source file changed while its fingerprint was being calculated."
       );
     }
-    while (true) {
+    let offset = 0;
+    while (offset < expected.size) {
       throwIfAborted(signal);
       const { bytesRead } = await handle.read(
         chunk,
-        0,
-        chunk.length,
-        null
+        content ? offset : 0,
+        Math.min(FINGERPRINT_READ_CHUNK_BYTES, expected.size - offset),
+        offset
       );
       if (bytesRead === 0) {
         break;
       }
-      hash.update(chunk.subarray(0, bytesRead));
+      hash.update(chunk.subarray(
+        content ? offset : 0,
+        (content ? offset : 0) + bytesRead
+      ));
+      offset += bytesRead;
     }
     const after = await handle.stat();
     if (
+      offset !== expected.size ||
       after.size !== before.size ||
-      Math.trunc(after.mtimeMs) !==
-        Math.trunc(before.mtimeMs)
+      after.mtimeMs !== before.mtimeMs ||
+      after.ctimeMs !== before.ctimeMs
     ) {
       throw new Error(
         "Source file changed while its fingerprint was being calculated."
@@ -430,7 +496,10 @@ async function fingerprintSourceFile(
   } finally {
     await handle.close().catch(() => undefined);
   }
-  return `sha256:${hash.digest("hex")}`;
+  return {
+    fingerprint: `sha256:${hash.digest("hex")}`,
+    ...(content ? { content } : {})
+  };
 }
 
 function languageForPath(

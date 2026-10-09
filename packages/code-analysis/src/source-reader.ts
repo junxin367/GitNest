@@ -5,8 +5,10 @@ import type { AnalysisSourceFile } from "./model";
 
 export async function readBoundedSourceFile(
   file: AnalysisSourceFile,
-  maximumBytes: number
+  maximumBytes: number,
+  signal?: AbortSignal
 ): Promise<string> {
+  signal?.throwIfAborted();
   if (
     !Number.isSafeInteger(maximumBytes) ||
     maximumBytes < 0
@@ -22,10 +24,11 @@ export async function readBoundedSourceFile(
     const content = Buffer.alloc(before.size);
     let offset = 0;
     while (offset < content.byteLength) {
+      signal?.throwIfAborted();
       const { bytesRead } = await handle.read(
         content,
         offset,
-        content.byteLength - offset,
+        Math.min(64 * 1_024, content.byteLength - offset),
         offset
       );
       if (bytesRead === 0) {
@@ -35,10 +38,12 @@ export async function readBoundedSourceFile(
     }
 
     const after = await handle.stat();
+    signal?.throwIfAborted();
     if (
       offset !== before.size ||
-      versionFingerprint(after.size, after.mtimeMs) !==
-        versionFingerprint(before.size, before.mtimeMs)
+      after.size !== before.size ||
+      after.mtimeMs !== before.mtimeMs ||
+      after.ctimeMs !== before.ctimeMs
     ) {
       throw new Error(
         `Source file changed while it was being read: ${file.relativePath}`
@@ -88,13 +93,6 @@ function assertReadableVersion(
       `Source file changed after discovery: ${file.relativePath}`
     );
   }
-}
-
-function versionFingerprint(
-  size: number,
-  mtimeMs: number
-): string {
-  return `${size}:${Math.trunc(mtimeMs)}`;
 }
 
 function contentFingerprint(content: Uint8Array): string {

@@ -9,6 +9,7 @@ export type CodeAnalysisScopeDto =
 
 export type CodeAnalysisSnapshotDetailDto =
   | "navigation"
+  | "nodes"
   | "full";
 
 export const LANGUAGE_SERVER_LANGUAGES = [
@@ -258,6 +259,7 @@ export interface CodeAnalysisStatsDto {
   edgeCount: number;
   requestChainCount: number;
   truncated: boolean;
+  /** Completed task duration, including queue wait, preparation and snapshot persistence. */
   durationMs: number;
 }
 
@@ -269,6 +271,13 @@ export interface CodeAnalysisSnapshotDto {
   generatedAt: string;
   detailLevel?: CodeAnalysisSnapshotDetailDto;
   totalNodeCount?: number;
+  nodePage?: {
+    query: string;
+    nodeIds: string[];
+    totalMatches: number;
+    focusNodeId?: string;
+    graphTruncated: boolean;
+  };
   roots: CodeAnalysisRootDto[];
   nodes: CodeGraphNodeDto[];
   edges: CodeGraphEdgeDto[];
@@ -325,6 +334,9 @@ export interface RestoreCodeAnalysisSnapshotRequest {
 
 export interface GetCodeAnalysisSnapshotRequest {
   detail: CodeAnalysisSnapshotDetailDto;
+  query?: string;
+  focusNodeId?: string;
+  inspectedNodeId?: string;
 }
 
 export interface CodeAnalysisAcceptedDto {

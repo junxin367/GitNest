@@ -177,7 +177,7 @@ describe("CodeAnalysisService snapshot persistence", () => {
     await service.dispose();
   });
 
-  it("returns only request-chain graph data for navigation snapshots", async () => {
+  it("returns request-chain edges and a node preview for navigation snapshots", async () => {
     const workspace = createWorkspace();
     const snapshot = createRefreshSnapshot(
       "persisted",
@@ -246,12 +246,96 @@ describe("CodeAnalysisService snapshot persistence", () => {
     expect(navigation?.totalNodeCount).toBe(3);
     expect(
       navigation?.nodes.map((node) => node.id)
-    ).toEqual(["changed-node", "unrelated-node"]);
+    ).toEqual(["changed-node", "unrelated-node", "omitted-node"]);
     expect(
       navigation?.edges.map((edge) => edge.id)
     ).toEqual(["chain-edge"]);
     expect(navigation?.stats).toEqual(snapshot.stats);
     await service.dispose();
+  });
+
+  it("bounds node previews and searches the entire graph without returning it", async () => {
+    const snapshot = createRefreshSnapshot("large", true);
+    const template = snapshot.nodes[0]!;
+    snapshot.nodes = Array.from({ length: 78_727 }, (_, index) => ({
+      ...template, id: `node-${index}`, name: `symbol${index}`,
+      qualifiedName: `symbol${index}`, changed: false
+    }));
+    snapshot.nodes[78_726] = {
+      ...snapshot.nodes[78_726]!, name: "hiddenTarget", qualifiedName: "hiddenTarget"
+    };
+    snapshot.edges = [{
+      id: "far-call", from: "node-78726", to: "node-78725",
+      kind: "calls", confidence: "exact"
+    }];
+    snapshot.requestChains = [];
+    const service = createService(createWorkspace(), createSnapshotStore(snapshot), createEngine());
+    try {
+      const preview = await service.getSnapshot("navigation");
+      expect(preview?.nodes).toHaveLength(120);
+      expect(preview?.totalNodeCount).toBe(78_727);
+      expect(preview?.nodePage?.nodeIds).toHaveLength(120);
+      expect(preview?.nodes.some(node => node.name === "hiddenTarget")).toBe(false);
+      const pending = service.getSnapshot("nodes", { query: "hiddenTarget", focusNodeId: "node-78726" });
+      let responded = false;
+      void pending.then(() => { responded = true; });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(responded).toBe(false);
+      const result = await pending;
+      expect(result?.nodePage).toEqual({
+        query: "hiddenTarget", nodeIds: ["node-78726"], totalMatches: 1,
+        focusNodeId: "node-78726", graphTruncated: false
+      });
+      expect(result?.nodes.map(node => node.id)).toEqual(["node-78726", "node-78725"]);
+      expect(result?.edges.map(edge => edge.id)).toEqual(["far-call"]);
+      expect(result?.requestChains).toEqual([]);
+      const all = await service.getSnapshot("nodes", { query: "symbol" });
+      expect(all?.nodes).toHaveLength(120);
+      expect(all?.nodePage?.totalMatches).toBe(78_726);
+      const none = await service.getSnapshot("nodes", { query: "not-in-graph" });
+      expect(none?.nodePage?.totalMatches).toBe(0);
+      expect(none?.nodes).toEqual([]);
+      expect((await service.getSnapshot())?.nodes).toHaveLength(78_727);
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("bounds dense neighborhoods and retains an inspected node outside the result page", async () => {
+    const snapshot = createRefreshSnapshot("dense", true);
+    const template = snapshot.nodes[0]!;
+    snapshot.nodes = Array.from({ length: 1_000 }, (_, index) => ({
+      ...template, id: `node-${index}`, name: `symbol${index}`, qualifiedName: `symbol${index}`
+    }));
+    snapshot.nodes.push({ ...template, id: "file", name: "file", kind: "file" });
+    snapshot.edges = [
+      ...snapshot.nodes.slice(0, 1000).map(node => ({
+        id: `ownership-${node.id}`, from: "file", to: node.id,
+        kind: "contains" as const, confidence: "exact" as const
+      })),
+      ...snapshot.nodes.slice(1, 1000).map(node => ({
+        id: `call-${node.id}`, from: "node-0", to: node.id,
+        kind: "calls" as const, confidence: "exact" as const
+      }))
+    ];
+    snapshot.stats.analyzedFiles = 1;
+    const service = createService(createWorkspace(), createSnapshotStore(snapshot), createEngine());
+    try {
+      const view = await service.getSnapshot("nodes", {
+        query: "symbol0", focusNodeId: "node-0", inspectedNodeId: "node-999"
+      });
+      expect(view?.nodePage?.graphTruncated).toBe(true);
+      expect(view?.nodePage?.nodeIds).toEqual(["node-0"]);
+      expect(view?.nodes.length).toBeLessThanOrEqual(401);
+      expect(view?.edges.length).toBeLessThanOrEqual(800);
+      expect(view?.edges.every(edge => edge.kind === "calls")).toBe(true);
+      expect(view?.nodes.some(node => node.id === "node-999")).toBe(true);
+      expect(view?.nodes.some(node => node.id === "file")).toBe(false);
+      const nodeIds = new Set(view?.nodes.map(node => node.id));
+      expect(view?.edges.every(edge => nodeIds.has(edge.from) && nodeIds.has(edge.to))).toBe(true);
+    } finally {
+      await service.dispose();
+    }
   });
 
   it("restores a completed analysis after the service is recreated", async () => {
@@ -795,6 +879,128 @@ describe("CodeAnalysisService snapshot persistence", () => {
 });
 
 describe("CodeAnalysisService launch validation", () => {
+  it("bounds concurrent root reads and preserves root order when Git finishes out of order", async () => {
+    const workspace = createMultiRootWorkspace(6);
+    const git = createGitClient();
+    const baseline = await git.readRepositorySnapshot("baseline");
+    const pending = Array.from({ length: 6 }, () =>
+      deferred<typeof baseline>()
+    );
+    const started: number[] = [];
+    vi.mocked(git.readRepositorySnapshot).mockImplementation(async (path) => {
+      const index = workspace.worktrees.findIndex((root) => root.path === path);
+      started.push(index);
+      return pending[index]!.promise;
+    });
+    const engine = createEngine();
+    const service = new CodeAnalysisService(
+      { getCurrent: async () => workspace }, git,
+      {
+        cacheDirectory: "C:\\cache", lspDataDirectory: "C:\\lsp",
+        settingsProvider: async () => createSettings(),
+        snapshotStore: createSnapshotStore(null), runner: engine
+      }
+    );
+    const resultFor = (index: number) => ({
+      ...baseline,
+      head: `head-${index}`,
+      changes: [{
+        path: `source-${index}.ts`, originalPath: `old-${index}.ts`,
+        indexStatus: "R", worktreeStatus: " ", kind: "renamed" as const
+      }]
+    });
+    try {
+      const ready = waitForState(service, (state) => state.state === "ready");
+      await service.start("changed");
+      await vi.waitFor(() => expect(started).toEqual([0, 1, 2, 3]));
+      pending[3]!.resolve(resultFor(3));
+      await vi.waitFor(() => expect(started).toEqual([0, 1, 2, 3, 4]));
+      pending[4]!.resolve(resultFor(4));
+      await vi.waitFor(() => expect(started).toEqual([0, 1, 2, 3, 4, 5]));
+      for (const index of [5, 2, 1, 0]) {
+        pending[index]!.resolve(resultFor(index));
+      }
+      await ready;
+      const input = engine.analyze.mock.calls[0]![0];
+      expect(input.roots.map((root) => root.revision)).toEqual(
+        Array.from({ length: 6 }, (_, index) => `head-${index}`)
+      );
+      expect(input.changedPaths.map((entry) => entry.path)).toEqual(
+        Array.from({ length: 6 }, (_, index) =>
+          [`source-${index}.ts`, `old-${index}.ts`]
+        ).flat()
+      );
+      expect(input.freshnessChangedPaths).toEqual(input.changedPaths);
+      expect(input.worktreeStatuses?.map((root) => root.worktreeId)).toEqual(
+        workspace.worktrees.map((root) => root.id)
+      );
+      expect(vi.mocked(git.readRepositorySnapshot).mock.calls.slice(1).every(
+        ([, options]) => options?.includeChangeStats === false &&
+          options.signal instanceof AbortSignal
+      )).toBe(true);
+    } finally {
+      pending.forEach((task, index) => task.resolve(resultFor(index)));
+      await service.dispose();
+    }
+  });
+
+  it.each(["cancel", "failure"] as const)(
+    "stops scheduling roots and drains active reads after %s",
+    async (outcome) => {
+      const workspace = createMultiRootWorkspace(6);
+      const git = createGitClient();
+      const baseline = await git.readRepositorySnapshot("baseline");
+      const pending = Array.from({ length: 6 }, () => deferred<typeof baseline>());
+      const started: number[] = [];
+      vi.mocked(git.readRepositorySnapshot).mockImplementation(async (path) => {
+        const index = workspace.worktrees.findIndex((root) => root.path === path);
+        started.push(index);
+        const snapshot = await pending[index]!.promise;
+        if (index === 0 && outcome === "failure") {
+          throw new Error("Git read failed");
+        }
+        return snapshot;
+      });
+      const engine = createEngine();
+      const service = new CodeAnalysisService(
+        { getCurrent: async () => workspace }, git,
+        {
+          cacheDirectory: "C:\\cache", lspDataDirectory: "C:\\lsp",
+          settingsProvider: async () => createSettings(),
+          snapshotStore: createSnapshotStore(null), runner: engine
+        }
+      );
+      try {
+        const terminal = waitForState(service, (state) =>
+          state.state === (outcome === "cancel" ? "cancelled" : "failed")
+        );
+        const accepted = await service.start("workspace");
+        await vi.waitFor(() => expect(started).toHaveLength(4));
+        if (outcome === "cancel") {
+          service.cancel(accepted.analysisId);
+        }
+        pending[0]!.resolve(baseline);
+        await vi.waitFor(() =>
+          expect(vi.mocked(git.readRepositorySnapshot).mock.calls.slice(1).every(
+            ([, options]) => options?.signal?.aborted
+          )).toBe(true)
+        );
+        // The outstanding reads still belong to this run, so its terminal
+        // state must wait for them instead of overlapping the next run.
+        expect((await service.getState()).state).toBe("running");
+        for (const index of [1, 2, 3]) {
+          pending[index]!.resolve(baseline);
+        }
+        await terminal;
+        expect(started).toEqual([0, 1, 2, 3]);
+        expect(engine.analyze).not.toHaveBeenCalled();
+      } finally {
+        pending.forEach((task) => task.resolve(baseline));
+        await service.dispose();
+      }
+    }
+  );
+
   it("rejects unapproved Language Server settings before starting the runner", async () => {
     const workspace = createWorkspace();
     const engine = createEngine();
@@ -1220,6 +1426,158 @@ describe("CodeAnalysisService lifecycle", () => {
     await service.dispose();
   });
 
+  it("reports the complete task duration including repository reads and snapshot persistence", async () => {
+    const directory = await createTemporaryWorktree();
+    let elapsed = 100;
+    const timer = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    const git = createGitClient();
+    const repository = await git.readRepositorySnapshot("C:\\workspace\\worktree");
+    vi.mocked(git.readRepositorySnapshot).mockImplementation(async () => {
+      elapsed += 1_000;
+      return repository;
+    });
+    const store = new AnalysisSnapshotCache(join(directory, "cache"));
+    const save = store.save.bind(store);
+    vi.spyOn(store, "save").mockImplementation(async (snapshot, settings) => {
+      await save(snapshot, settings);
+      elapsed += 3_000;
+    });
+    const service = new CodeAnalysisService(
+      { getCurrent: async () => structuredClone(createWorkspace()) },
+      git,
+      {
+        cacheDirectory: "C:\\cache",
+        lspDataDirectory: "C:\\lsp",
+        settingsProvider: async () => createSettings(),
+        snapshotStore: store,
+        runner: createEngine(async () => {
+          elapsed += 2_000;
+          return createSnapshot("timed");
+        }),
+        idFactory: () => "timed"
+      }
+    );
+    try {
+      const ready = waitForState(service, state => state.state === "ready");
+      await service.start("workspace");
+      expect((await ready).stats?.durationMs).toBe(6_000);
+      expect((await service.getSnapshot())?.stats.durationMs).toBe(6_000);
+      const restored = await new AnalysisSnapshotCache(join(directory, "cache")).load(
+        "workspace", createSettings(), createSnapshot("timed").roots
+      );
+      expect(restored?.stats.durationMs).toBe(6_000);
+    } finally {
+      await service.dispose();
+      timer.mockRestore();
+    }
+  });
+
+  it("includes queue wait in the new task's duration without inheriting the cancelled task's time", async () => {
+    let elapsed = 0;
+    let nextId = 0;
+    const timer = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    const started = deferred<void>();
+    const first = deferred<CodeAnalysisSnapshot>();
+    const store = createSnapshotStore(null);
+    store.save.mockImplementation(async () => { elapsed += 3_000; });
+    const service = new CodeAnalysisService(
+      { getCurrent: async () => structuredClone(createWorkspace()) },
+      createGitClient(),
+      {
+        cacheDirectory: "C:\\cache", lspDataDirectory: "C:\\lsp",
+        settingsProvider: async () => createSettings(), snapshotStore: store,
+        runner: createEngine(async input => {
+          if (input.analysisId === "task-1") {
+            started.resolve();
+            return first.promise;
+          }
+          elapsed += 2_000;
+          return createSnapshot(input.analysisId);
+        }),
+        idFactory: () => `task-${++nextId}`
+      }
+    );
+    try {
+      await service.start("workspace");
+      await started.promise;
+      elapsed = 10_000;
+      await service.start("workspace");
+      const ready = waitForState(service, state => state.state === "ready");
+      elapsed += 2_000;
+      first.resolve(createSnapshot("task-1"));
+      expect(await ready).toMatchObject({ analysisId: "task-2", stats: { durationMs: 7_000 } });
+      expect(store.save).toHaveBeenCalledOnce();
+    } finally {
+      first.resolve(createSnapshot("task-1"));
+      await service.dispose();
+      timer.mockRestore();
+    }
+  });
+
+  it.each(["workspace", "changed"] as const)(
+    "records the entire background %s refresh duration for every saved scope",
+    async scope => {
+      let elapsed = 0;
+      const timer = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+      const git = createGitClient();
+      const repository = await git.readRepositorySnapshot("C:\\workspace\\worktree");
+      vi.mocked(git.readRepositorySnapshot).mockImplementation(async () => {
+        elapsed += 1_000;
+        return repository;
+      });
+      const store = {
+        ...createSnapshotStore(createSnapshot("previous")),
+        saveDuration: vi.fn(async (_snapshot: CodeAnalysisSnapshot) => undefined)
+      };
+      store.save.mockImplementation(async () => { elapsed += 3_000; });
+      const service = new CodeAnalysisService(
+        { getCurrent: async () => structuredClone(createWorkspace()) }, git,
+        {
+          cacheDirectory: "C:\\cache", lspDataDirectory: "C:\\lsp",
+          settingsProvider: async () => createSettings(), snapshotStore: store,
+          runner: createEngine(async () => {
+            elapsed += 2_000;
+            return createRefreshSnapshot("refreshed", true);
+          }),
+          idFactory: () => "refreshed"
+        }
+      );
+      try {
+        await service.getState();
+        await service.refresh(scope);
+        const count = scope === "changed" ? 2 : 1;
+        const durationMs = 3_000 + count * 3_000;
+        expect(store.saveDuration).toHaveBeenCalledTimes(count);
+        expect(store.saveDuration.mock.calls.map(([snapshot]) => snapshot.stats.durationMs))
+          .toEqual(Array(count).fill(durationMs));
+        expect((await service.getState()).stats?.durationMs).toBe(durationMs);
+        expect((await service.getSnapshot())?.stats.durationMs).toBe(durationMs);
+      } finally {
+        await service.dispose();
+        timer.mockRestore();
+      }
+    }
+  );
+
+  it("keeps completed timing and usable results when persisting timing fails", async () => {
+    const store = {
+      ...createSnapshotStore(null),
+      saveDuration: vi.fn(async () => { throw new Error("timing disk unavailable"); })
+    };
+    const service = createService(createWorkspace(), store, createEngine());
+    try {
+      const ready = waitForState(service, state => state.state === "ready");
+      await service.start("workspace");
+      const state = await ready;
+      const snapshot = await service.getSnapshot();
+      expect(snapshot?.stats.durationMs).toBe(state.stats?.durationMs);
+      expect(snapshot?.stats.durationMs).toBeGreaterThanOrEqual(0);
+      expect(snapshot?.warnings).toContain("无法保存分析耗时：timing disk unavailable");
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("rejects a new analysis after disposal", async () => {
     const service = createService(
       createWorkspace(),
@@ -1407,6 +1765,24 @@ function createWorkspaceAt(rootPath: string): Workspace {
   worktree.path = rootPath;
   worktree.canonicalPath = rootPath;
   worktree.gitDir = join(rootPath, ".git");
+  return workspace;
+}
+
+function createMultiRootWorkspace(count: number): Workspace {
+  const workspace = createWorkspace();
+  workspace.worktrees = Array.from({ length: count }, (_, index) => ({
+    ...workspace.worktrees[0]!,
+    id: `worktree-${index}`,
+    path: `C:\\workspace\\repository-${index}`,
+    canonicalPath: `c:\\workspace\\repository-${index}`
+  }));
+  workspace.repositories[0]!.worktreeIds =
+    workspace.worktrees.map((root) => root.id);
+  workspace.groups[0]!.targets = workspace.worktrees.map((root) => ({
+    repositoryId: root.repositoryId,
+    worktreeId: root.id
+  }));
+  workspace.selectedTarget = workspace.groups[0]!.targets[0]!;
   return workspace;
 }
 

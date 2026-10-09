@@ -56,6 +56,7 @@ interface RepositoryHeaderProps {
   onRepositoryTabChange(tab: RepositoryTab): void;
   onWorkspaceTabChange(tab: WorkspaceTab): void;
   onToggleInspector(): void;
+  onOpenManagement?(): void;
 }
 
 const workspaceTabs: Array<{

@@ -62,6 +62,182 @@ describe("RepositoryWorktrees registered cards", () => {
     vi.unstubAllGlobals();
   });
 
+  it("updates delete eligibility from fresh snapshots and registration changes", () => {
+    const onOpenDirectory = vi.fn();
+    const render = (
+      snapshot: RepositoryStatusSnapshotDto,
+      currentWorkspace = workspaceWithTwoWorktrees,
+      busy = false
+    ) => act(() => root.render(
+      <RepositoryWorktreesView
+        batchCommands={{ ...batchCommands, busy }}
+        commands={commands}
+        directoryOpening={false}
+        onOpenDirectory={onOpenDirectory}
+        repositoryId="repository"
+        snapshots={[snapshot]}
+        worktreeId="worktree"
+        workspace={currentWorkspace}
+      />
+    ));
+    const deleteButton = () => container.querySelector<HTMLButtonElement>(
+      ".worktree-delete-action"
+    )!;
+    render(createSnapshot("linked"));
+    act(() => [...container.querySelectorAll<HTMLButtonElement>(".worktree-filter-chip")]
+      .find((chip) => chip.textContent === "已登记1")!.click());
+    expect(deleteButton().disabled).toBe(false);
+    act(() => deleteButton().click());
+    render(createSnapshot("linked", { unstaged: 1 }));
+    expect(deleteButton().disabled).toBe(true);
+    expect(container.querySelector(".worktree-change-count")?.textContent).toBe("1 项变更");
+    render(createSnapshot("linked", { stale: true }));
+    expect(deleteButton().disabled).toBe(true);
+    expect(deleteButton().title).toContain("状态未就绪");
+    render(createSnapshot("linked"), workspaceWithTwoWorktrees, true);
+    expect(deleteButton().disabled).toBe(true);
+    render(createSnapshot("linked"), {
+      ...workspaceWithTwoWorktrees,
+      worktrees: workspaceWithTwoWorktrees.worktrees.map((worktree) => (
+        worktree.id === "linked" ? { ...worktree, isLocked: true } : worktree
+      ))
+    });
+    expect(deleteButton().disabled).toBe(true);
+    expect(container.querySelector(".worktree-card-status")?.textContent).toBe("已锁定");
+    render(createSnapshot("linked"));
+    expect(deleteButton().disabled).toBe(false);
+    act(() => deleteButton().click());
+    expect(batchCommands.request).toHaveBeenCalledTimes(2);
+    expect(batchCommands.request).toHaveBeenLastCalledWith([
+      { type: "remove", worktreeId: "linked" }
+    ]);
+  });
+
+  it("updates memoized cards when selection, busy state, and opening callback change", () => {
+    const initialOpen = vi.fn();
+    const nextOpen = vi.fn();
+    const snapshots: RepositoryStatusSnapshotDto[] = [];
+    const render = (current: string, busy: boolean, onOpenDirectory = initialOpen) =>
+      act(() => root.render(
+        <RepositoryWorktrees
+          commands={commands}
+          directoryOpening={busy}
+          onOpenDirectory={onOpenDirectory}
+          repositoryId="repository"
+          snapshots={snapshots}
+          worktreeId={current}
+          workspace={workspaceWithTwoWorktrees}
+        />
+      ));
+    render("worktree", false);
+    const cards = [...container.querySelectorAll<HTMLElement>(".worktree-summary-card")];
+    expect(cards[0]?.getAttribute("aria-current")).toBe("location");
+    render("linked", true, nextOpen);
+    expect(cards[0]?.getAttribute("aria-current")).toBeNull();
+    expect(cards[1]?.getAttribute("aria-current")).toBe("location");
+    expect(cards[1]?.getAttribute("aria-disabled")).toBe("true");
+    act(() => cards[1]!.click());
+    expect(initialOpen).not.toHaveBeenCalled();
+    expect(nextOpen).not.toHaveBeenCalled();
+    render("linked", false, nextOpen);
+    act(() => cards[1]!.click());
+    expect(nextOpen).toHaveBeenCalledWith("linked");
+  });
+
+  it("ignores an old repository directory picker after switching targets", async () => {
+    let resolveDirectory!: (path: string | null) => void;
+    const chooseDirectory = vi.fn(() => new Promise<string | null>((resolve) => {
+      resolveDirectory = resolve;
+    }));
+    const currentCommands = { ...commands, chooseDirectory };
+    const otherWorkspace = {
+      ...workspace,
+      repositories: workspace.repositories.map((repository) => ({
+        ...repository, id: "other"
+      })),
+      worktrees: workspace.worktrees.map((worktree) => ({
+        ...worktree, repositoryId: "other"
+      }))
+    };
+    const render = (repositoryId: string, currentWorkspace = workspace) =>
+      act(() => root.render(
+        <RepositoryWorktrees
+          commands={currentCommands}
+          directoryOpening={false}
+          onOpenDirectory={vi.fn()}
+          repositoryId={repositoryId}
+          snapshots={[]}
+          worktreeId="worktree"
+          workspace={currentWorkspace}
+        />
+      ));
+    const button = (label: string) =>
+      [...container.querySelectorAll<HTMLButtonElement>("button")]
+        .find((candidate) => candidate.textContent === label)!;
+    render("repository");
+    act(() => button("新建 Worktree").click());
+    act(() => button("选择").click());
+    render("other", otherWorkspace);
+    act(() => button("新建 Worktree").click());
+    const input = container.querySelector<HTMLInputElement>("#worktree-create-path")!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!
+        .call(input, "C:\\new-target");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => resolveDirectory("C:\\old-target"));
+    expect(input.value).toBe("C:\\new-target");
+    expect(container.querySelector("#worktree-create-panel")).not.toBeNull();
+  });
+
+  it("does not close a new repository draft when an earlier create request finishes", async () => {
+    let resolveRequest!: (accepted: boolean) => void;
+    const request = vi.fn(() => new Promise<boolean>((resolve) => {
+      resolveRequest = resolve;
+    }));
+    const currentCommands = { ...commands, request };
+    const render = (repositoryId: string) => act(() => root.render(
+      <RepositoryWorktrees
+        commands={currentCommands}
+        directoryOpening={false}
+        onOpenDirectory={vi.fn()}
+        repositoryId={repositoryId}
+        snapshots={[]}
+        worktreeId="worktree"
+        workspace={{
+          ...workspace,
+          repositories: workspace.repositories.map((repository) => ({
+            ...repository, id: repositoryId
+          })),
+          worktrees: workspace.worktrees.map((worktree) => ({
+            ...worktree, repositoryId
+          }))
+        }}
+      />
+    ));
+    const openCreate = () => act(() =>
+      [...container.querySelectorAll<HTMLButtonElement>("button")]
+        .find((candidate) => candidate.textContent === "新建 Worktree")!.click()
+    );
+    render("repository");
+    openCreate();
+    const input = container.querySelector<HTMLInputElement>("#worktree-create-path")!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!
+        .call(input, "C:\\old-target");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => container.querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(request).toHaveBeenCalledWith({
+      type: "create", repositoryId: "repository", path: "C:\\old-target"
+    });
+    render("other");
+    openCreate();
+    await act(async () => resolveRequest(true));
+    expect(container.querySelector("#worktree-create-panel")).not.toBeNull();
+  });
+
   it("opens the directory from click, Enter, and Space on the whole card", () => {
     const onOpenDirectory = vi.fn();
 

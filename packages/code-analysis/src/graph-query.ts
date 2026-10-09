@@ -131,8 +131,8 @@ class SnapshotGraphQueryIndex implements CodeGraphQueryIndex {
   }
 
   searchNodes(): readonly IndexedSearchNode[] {
-    this.#ensureNodeIndexes();
-    return this.#searchNodes as IndexedSearchNode[];
+    this.#searchNodes ??= this.nodes.map(toIndexedSearchNode);
+    return this.#searchNodes;
   }
 
   selectedNodes(visited: ReadonlySet<string>): CodeGraphNode[] {
@@ -150,24 +150,20 @@ class SnapshotGraphQueryIndex implements CodeGraphQueryIndex {
   #ensureNodeIndexes(): void {
     if (
       this.#nodeById &&
-      this.#nodesById &&
-      this.#searchNodes
+      this.#nodesById
     ) {
       return;
     }
     const nodeById = new Map<string, CodeGraphNode>();
     const nodesById = new Map<string, IndexedNode[]>();
-    const searchNodes: IndexedSearchNode[] = [];
     for (const [sourceIndex, node] of this.nodes.entries()) {
       nodeById.set(node.id, node);
       const entries = nodesById.get(node.id) ?? [];
       entries.push({ node, sourceIndex });
       nodesById.set(node.id, entries);
-      searchNodes.push(toIndexedSearchNode(node, sourceIndex));
     }
     this.#nodeById = nodeById;
     this.#nodesById = nodesById;
-    this.#searchNodes = searchNodes;
   }
 }
 
@@ -482,10 +478,11 @@ export function findRequestChains(
   const query = normalizeText(
     (filter.query ?? "").slice(0, MAX_QUERY_LENGTH)
   );
-  const nodeById = new Map(
-    snapshot.nodes.map((node) => [node.id, node])
-  );
+  const nodeById = query
+    ? new Map(snapshot.nodes.map((node) => [node.id, node]))
+    : undefined;
   const matched: CodeRequestChain[] = [];
+  let totalMatches = 0;
 
   for (const chain of snapshot.requestChains) {
     if (filter.method && chain.method !== filter.method) {
@@ -500,16 +497,23 @@ export function findRequestChains(
     if (filter.ambiguousOnly && !chain.ambiguous) {
       continue;
     }
-    if (query && !chainSearchText(chain, nodeById).includes(query)) {
+    if (
+      query &&
+      nodeById &&
+      !chainSearchText(chain, nodeById).includes(query)
+    ) {
       continue;
     }
-    matched.push(chain);
+    totalMatches += 1;
+    if (matched.length < limit) {
+      matched.push(chain);
+    }
   }
 
   return {
-    chains: matched.slice(0, limit),
-    truncated: matched.length > limit,
-    totalMatches: matched.length
+    chains: matched,
+    truncated: totalMatches > limit,
+    totalMatches
   };
 }
 

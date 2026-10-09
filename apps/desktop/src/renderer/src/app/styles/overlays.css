@@ -59,8 +59,7 @@
   border: 0;
 }
 
-.global-search-key,
-.global-search-result-key {
+.global-search-key {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -193,14 +192,6 @@
   font-size: var(--font-size-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.global-search-result-key {
-  height: 22px;
-  min-width: 42px;
-  color: var(--accent);
-  background: var(--surface);
-  border-color: var(--accent);
 }
 
 .global-search-empty {

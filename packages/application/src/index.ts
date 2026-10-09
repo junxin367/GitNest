@@ -21,6 +21,7 @@ export {
   type SaveAccountInput
 } from "./account/account-service";
 export { GitInspectionService } from "./git/git-inspection-service";
+export { RepositoryManagementService } from "./repository/repository-management-service";
 export {
   ExternalApplicationService,
   type ExternalApplicationContext,
@@ -125,3 +126,11 @@ export {
   type WorktreeMutationCompleted,
   type WorktreeMutationKind
 } from "./workspace/workspace-runtime-service";
+export {
+  RepositoryWorkflowService,
+  type RepositoryWorkflowCommand,
+  type RepositoryWorkflowState,
+  type RepositoryWorkflowPreflight
+} from "./repository/repository-workflow-service";
+export { RepositoryIgnoreService, type RepositoryIgnoreRequest, type RepositoryIgnorePreflight } from "./repository/repository-ignore-service";
+export { FileHistoryService, type FileHistoryQueryRequest, type FileHistoryDiffQueryRequest } from "./repository/file-history-service";

@@ -17,6 +17,7 @@ interface ActivityRailProps {
   activeView: AppView;
   searchOpen: boolean;
   sidebarCollapsed: boolean;
+  sidebarDisabled: boolean;
   terminalDisabled: boolean;
   terminalTitle: string;
   theme: "dark" | "light";
@@ -31,6 +32,7 @@ export function ActivityRail({
   activeView,
   searchOpen,
   sidebarCollapsed,
+  sidebarDisabled,
   terminalDisabled,
   terminalTitle,
   theme,
@@ -48,9 +50,12 @@ export function ActivityRail({
         }
         aria-pressed={sidebarCollapsed}
         className="rail-button"
+        disabled={sidebarDisabled}
         onClick={onToggleSidebar}
         title={
-          sidebarCollapsed ? "展开仓库目录" : "折叠仓库目录"
+          sidebarDisabled
+            ? undefined
+            : sidebarCollapsed ? "展开仓库目录" : "折叠仓库目录"
         }
         type="button"
       >

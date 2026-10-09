@@ -91,15 +91,16 @@ export function mergeIncrementalWorkspaceSnapshot(
     return refreshed;
   }
 
+  const resolveLocationKey = createLocationKeyResolver();
   const changedLocationKeys = new Set(
     [
       ...changedPaths,
       ...(previous.sourceState?.changedPaths ?? [])
-    ].map(changedPathKey)
+    ].map(resolveLocationKey)
   );
   for (const node of refreshed.nodes) {
     if (node.changed) {
-      changedLocationKeys.add(nodeLocationKey(node));
+      changedLocationKeys.add(resolveLocationKey(node.location));
     }
   }
 
@@ -109,12 +110,12 @@ export function mergeIncrementalWorkspaceSnapshot(
   const nodes = [];
   const includedNodeIds = new Set<string>();
   for (const node of refreshed.nodes) {
-    const locationKey = nodeLocationKey(node);
+    const locationKey = resolveLocationKey(node.location);
     const previousNode = previousNodesById.get(node.id);
     const selected =
       !changedLocationKeys.has(locationKey) &&
       previousNode &&
-      nodeLocationKey(previousNode) === locationKey
+      resolveLocationKey(previousNode.location) === locationKey
         ? {
             ...previousNode,
             changed: false
@@ -126,7 +127,7 @@ export function mergeIncrementalWorkspaceSnapshot(
   for (const node of previous.nodes) {
     if (
       includedNodeIds.has(node.id) ||
-      changedLocationKeys.has(nodeLocationKey(node))
+      changedLocationKeys.has(resolveLocationKey(node.location))
     ) {
       continue;
     }
@@ -142,7 +143,7 @@ export function mergeIncrementalWorkspaceSnapshot(
       .filter(
         (node) =>
           node.changed ||
-          changedLocationKeys.has(nodeLocationKey(node))
+          changedLocationKeys.has(resolveLocationKey(node.location))
       )
       .map((node) => node.id)
   );
@@ -361,30 +362,20 @@ function snapshotContextsMatch(
   );
 }
 
-function changedPathKey(path: ChangedAnalysisPath): string {
-  return locationKey(
-    path.repositoryId,
-    path.worktreeId,
-    path.path
-  );
-}
-
-function nodeLocationKey(
-  node: CodeAnalysisSnapshot["nodes"][number]
-): string {
-  return locationKey(
-    node.location.repositoryId,
-    node.location.worktreeId,
-    node.location.path
-  );
-}
-
-function locationKey(
-  repositoryId: string,
-  worktreeId: string,
-  path: string
-): string {
-  return `${repositoryId}\0${worktreeId}\0${normalizePath(path)}`;
+function createLocationKeyResolver(): (
+  location: ChangedAnalysisPath
+) => string {
+  // Many symbols share the same file. Keep this index local to the
+  // merge so a later analysis always observes renamed or edited paths.
+  const paths = new Map<string, string>();
+  return ({ repositoryId, worktreeId, path }) => {
+    let normalized = paths.get(path);
+    if (normalized === undefined) {
+      normalized = normalizePath(path);
+      paths.set(path, normalized);
+    }
+    return `${repositoryId}\0${worktreeId}\0${normalized}`;
+  };
 }
 
 function normalizePath(path: string): string {

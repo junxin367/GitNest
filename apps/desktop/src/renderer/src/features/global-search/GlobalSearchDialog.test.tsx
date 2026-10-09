@@ -167,6 +167,59 @@ describe("GlobalSearchDialog", () => {
   });
 
   it.each([
+    ["D:/code/sc/workspace/2026-08-07-video-tagging-validation/0824-video-tagging-validation-1/sc_code/svr/ScResTagSvr",
+      "/D:/code/sc/workspace/2026-08-07-video-tagging-validation/0824-video-tagging-validation-1/sc_code/svr/ScResTagSvr/src/main/java/fai/svr/ScResTagSvr/service/impl/ScResTagServiceImpl.java"],
+    ["D:\\code\\ScResTagSvr\\", "D:\\code\\ScResTagSvr\\src\\main\\java\\fai\\svr\\ScResTagSvr\\service\\impl\\ScResTagServiceImpl.java"],
+    ["D:/code/ScResTagSvr/", "d:/CODE/SCRESTAGSVR/src/main/java/fai/svr/ScResTagSvr/service/impl/ScResTagServiceImpl.java"],
+    ["/home/user/ScResTagSvr", "/home/user/ScResTagSvr/src/main/java/fai/svr/ScResTagSvr/service/impl/ScResTagServiceImpl.java"],
+    ["\\\\server\\workspace\\ScResTagSvr", "//server/workspace/ScResTagSvr/src/main/java/fai/svr/ScResTagSvr/service/impl/ScResTagServiceImpl.java"]
+  ])("matches full file paths using the correct worktree (%s)", (worktreePath, query) => {
+    const path = "src/main/java/fai/svr/ScResTagSvr/service/impl/ScResTagServiceImpl.java";
+    const otherTarget = { repositoryId: TARGET.repositoryId, worktreeId: "other-worktree" };
+    const workspace: WorkspaceDetailsDto = {
+      ...WORKSPACE,
+      groups: [{ ...WORKSPACE.groups[0]!, targets: [TARGET, otherTarget] }],
+      worktrees: [
+        { ...WORKSPACE.worktrees[0]!, path: worktreePath },
+        { ...WORKSPACE.worktrees[0]!, id: otherTarget.worktreeId, path: "E:/other/ScResTagSvr", isPrimary: false }
+      ]
+    };
+    const changes: RepositoryChangesDto = {
+      ...CHANGES,
+      snapshot: {
+        ...CHANGES.snapshot,
+        changes: [{ ...CHANGES.snapshot.changes[0]!, path }]
+      }
+    };
+    const onOpenChange = vi.fn();
+    renderDialog({ workspace, changes: [changes, { ...changes, target: otherTarget }], onOpenChange });
+    const input = document.querySelector<HTMLInputElement>("#global-search-input")!;
+    act(() => setInputValue(input, query));
+    const results = Array.from(document.querySelectorAll<HTMLButtonElement>(".global-search-result"));
+    expect(results).toHaveLength(2);
+    expect(results.every(result => result.querySelector("strong")?.textContent === path)).toBe(true);
+    act(() => results.find(result => result.textContent?.includes("未暂存"))!.click());
+    expect(onOpenChange).toHaveBeenCalledWith({ target: TARGET, path, mode: "unstaged" });
+    // Matching only the filename would incorrectly include a different checkout.
+    act(() => setInputValue(input, `F:/unrelated/${path}`));
+    expect(document.querySelectorAll(".global-search-result")).toHaveLength(0);
+  });
+
+  it("matches a renamed file by its full original path and opens its current path", () => {
+    const onOpenChange = vi.fn();
+    renderDialog({ changes: [CHANGES], onOpenChange });
+    const input = document.querySelector<HTMLInputElement>("#global-search-input")!;
+    act(() => setInputValue(input, "/C:/workspace/repository-a/src/old-name.ts"));
+    expect(document.querySelectorAll(".global-search-result")).toHaveLength(2);
+    act(() => input.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Enter", bubbles: true, cancelable: true
+    })));
+    expect(onOpenChange).toHaveBeenCalledWith({
+      target: TARGET, path: "src/changed.ts", mode: "staged"
+    });
+  });
+
+  it.each([
     { key: "Enter", isComposing: true },
     { key: "Escape", isComposing: true },
     { key: "ArrowDown", isComposing: true },
@@ -323,13 +376,81 @@ describe("GlobalSearchDialog", () => {
     expect(laterCandidateReads).toBe(0);
   });
 
+  it("reuses visited candidates' normalized text across query edits", () => {
+    const changes: RepositoryChangesDto = {
+      ...CHANGES,
+      snapshot: {
+        ...CHANGES.snapshot,
+        changes: Array.from({ length: 100 }, (_, index) => ({
+          path: `src/normalization-probe-${index}.ts`,
+          indexStatus: ".",
+          worktreeStatus: "?",
+          kind: "untracked" as const
+        }))
+      }
+    };
+    renderDialog({ changes: [changes] });
+    const normalize = vi.spyOn(String.prototype, "toLowerCase");
+    const input = document.querySelector<HTMLInputElement>("#global-search-input");
+    act(() => setInputValue(input, "missing-one"));
+    const candidateCalls = () => normalize.mock.contexts.filter(
+      value => String(value).startsWith("src/normalization-probe-")
+    ).length;
+    expect(candidateCalls()).toBe(100);
+    normalize.mockClear();
+    act(() => setInputValue(input, "missing-two"));
+    expect(candidateCalls()).toBe(0);
+    act(() => setInputValue(input, "NORMALIZATION-PROBE-99"));
+    expect(document.querySelectorAll(".global-search-result")).toHaveLength(1);
+    expect(document.body.textContent).toContain("normalization-probe-99.ts");
+    normalize.mockRestore();
+  });
+
+  it("indexes target records once and preserves the first duplicate record", () => {
+    const targets = Array.from({ length: 100 }, (_, index) => ({
+      repositoryId: `repository-${index}`, worktreeId: `worktree-${index}`
+    }));
+    const reads = { repositories: 0, worktrees: 0, snapshots: 0 };
+    const counted = <T,>(values: T[], kind: keyof typeof reads): T[] =>
+      new Proxy(values, {
+        get(target, property, receiver) {
+          if (typeof property === "string" && /^\d+$/.test(property)) reads[kind] += 1;
+          return Reflect.get(target, property, receiver);
+        }
+      });
+    const manyWorkspace: WorkspaceDetailsDto = {
+      ...WORKSPACE,
+      groups: [{ ...WORKSPACE.groups[0]!, targets }],
+      repositories: counted(targets.map((target, index) => ({
+        ...WORKSPACE.repositories[0]!, id: target.repositoryId, name: `first-repository-${index}`,
+        primaryWorktreeId: target.worktreeId, worktreeIds: [target.worktreeId]
+      })), "repositories"),
+      worktrees: counted(targets.map(target => ({
+        ...WORKSPACE.worktrees[0]!, id: target.worktreeId,
+        repositoryId: target.repositoryId, name: ""
+      })), "worktrees")
+    };
+    const manySnapshots = counted(targets.map(target => ({
+      ...SNAPSHOT, ...target
+    })), "snapshots");
+    manyWorkspace.repositories.push({
+      ...WORKSPACE.repositories[0]!, id: targets[0]!.repositoryId, name: "duplicate-wrong-name"
+    });
+    renderDialog({ changes: [], workspace: manyWorkspace, snapshots: manySnapshots });
+    expect(reads).toEqual({ repositories: 101, worktrees: 100, snapshots: 100 });
+    expect(document.body.textContent).toContain("first-repository-0");
+    expect(document.body.textContent).not.toContain("duplicate-wrong-name");
+  });
+
   function renderDialog({
     changes,
     changesLoading = false,
     changesLoaded = false,
     failedChangeTargetCount = 0,
     onOpenChange = () => undefined,
-    onClose = vi.fn()
+    onClose = vi.fn(),
+    workspace = WORKSPACE,
+    snapshots = [SNAPSHOT]
   }: {
     changes: RepositoryChangesDto[];
     changesLoading?: boolean;
@@ -339,6 +460,8 @@ describe("GlobalSearchDialog", () => {
       location: RepositoryChangeLocation
     ) => void;
     onClose?: () => void;
+    workspace?: WorkspaceDetailsDto;
+    snapshots?: RepositoryStatusSnapshotDto[];
   }) {
     act(() => {
       root.render(
@@ -347,8 +470,8 @@ describe("GlobalSearchDialog", () => {
           changesLoading={changesLoading}
           changesLoaded={changesLoaded}
           failedChangeTargetCount={failedChangeTargetCount}
-          snapshots={[SNAPSHOT]}
-          workspace={WORKSPACE}
+          snapshots={snapshots}
+          workspace={workspace}
           onClose={onClose}
           onFetchAll={vi.fn()}
           onNavigate={vi.fn()}

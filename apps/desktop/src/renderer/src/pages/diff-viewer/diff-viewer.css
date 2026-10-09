@@ -576,8 +576,13 @@
   line-height: 20px;
 }
 
+.diff-viewer-code::-webkit-scrollbar-corner {
+  background: var(--color-code-bg);
+}
+
 .diff-viewer-code.split-nowrap {
   overflow: hidden;
+  scrollbar-gutter: auto;
 }
 
 .diff-viewer-code.media-preview {
@@ -628,6 +633,7 @@
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
 

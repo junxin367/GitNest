@@ -15,6 +15,7 @@ import type {
   RepositoryDiffDto,
   RepositoryHistoryPageDto,
   RepositoryHistoryScopeDto,
+  RepositoryHistoryFilterDto,
   RepositoryTargetDto
 } from "@gitnest/contracts";
 
@@ -48,6 +49,7 @@ export interface RepositoryDetailsController {
   diffNotice: "change-removed" | "metadata-only" | null;
   history: RepositoryHistoryPageDto | null;
   historyScope: RepositoryHistoryScopeDto | null;
+  historySearch: RepositoryHistoryFilterDto | null;
   commit: RepositoryCommitDto | null;
   branches: RepositoryBranchesDto | null;
   selectedChange: {
@@ -72,6 +74,7 @@ export interface RepositoryDetailsController {
   selectHistoryScope(
     scope: RepositoryHistoryScopeDto | null
   ): Promise<void>;
+  searchHistory(search: RepositoryHistoryFilterDto | null): Promise<void>;
   loadMoreHistory(): Promise<void>;
   reload(
     tab: RepositoryTab,
@@ -123,6 +126,8 @@ export function useRepositoryDetails(
     useState<RepositoryHistoryPageDto | null>(null);
   const [historyScope, setHistoryScope] =
     useState<RepositoryHistoryScopeDto | null>(null);
+  const [historySearch, setHistorySearch] =
+    useState<RepositoryHistoryFilterDto | null>(null);
   const [commit, setCommit] =
     useState<RepositoryCommitDto | null>(null);
   const [branches, setBranches] =
@@ -162,6 +167,8 @@ export function useRepositoryDetails(
   const historyDetailOpenRef = useRef(false);
   const historyScopeRef =
     useRef<RepositoryHistoryScopeDto | null>(null);
+  const historySearchRef =
+    useRef<RepositoryHistoryFilterDto | null>(null);
   const previousTabRef = useRef<RepositoryTab | null>(null);
   const diffRef = useRef<RepositoryDiffDto | null>(null);
   const reloadChangesRef = useRef<
@@ -648,7 +655,8 @@ export function useRepositoryDetails(
   const loadHistory = useCallback(
     async (
       offset = 0,
-      scope = historyScopeRef.current
+      scope = historyScopeRef.current,
+      search = tab === "history" ? historySearchRef.current : null
     ) => {
       if (!stableTarget) {
         return;
@@ -665,7 +673,8 @@ export function useRepositoryDetails(
           target: stableTarget,
           limit: 50,
           offset,
-          ...(scope ? { scope } : {})
+          ...(scope ? { scope } : {}),
+          ...(search ? { search } : {})
         });
 
         if (
@@ -756,6 +765,24 @@ export function useRepositoryDetails(
       historyScopeRef.current = scope;
       setHistoryScope(scope);
       await loadHistory(0, scope);
+    },
+    [cancelQuery, loadHistory, setLoadingKey]
+  );
+
+  const searchHistory = useCallback(
+    async (search: RepositoryHistoryFilterDto | null) => {
+      cancelQuery("history");
+      cancelQuery("commit");
+      setLoadingKey("commit", false);
+      selectedCommitHashRef.current = null;
+      historyDetailOpenRef.current = false;
+      setSelectedCommitHash(null);
+      setHistoryDetailOpen(false);
+      setCommit(null);
+      setHistory(null);
+      historySearchRef.current = search;
+      setHistorySearch(search);
+      await loadHistory(0, historyScopeRef.current, search);
     },
     [cancelQuery, loadHistory, setLoadingKey]
   );
@@ -900,6 +927,8 @@ export function useRepositoryDetails(
     setHistory(null);
     historyScopeRef.current = null;
     setHistoryScope(null);
+    historySearchRef.current = null;
+    setHistorySearch(null);
     setCommit(null);
     setBranches(null);
     setSelectedChange(null);
@@ -1001,6 +1030,7 @@ export function useRepositoryDetails(
     diffNotice: currentTarget ? diffNotice : null,
     history: currentTarget ? history : null,
     historyScope: currentTarget ? historyScope : null,
+    historySearch: currentTarget ? historySearch : null,
     commit: currentTarget ? commit : null,
     branches: currentTarget ? branches : null,
     selectedChange: currentTarget ? selectedChange : null,
@@ -1014,6 +1044,7 @@ export function useRepositoryDetails(
     selectChange,
     selectCommit,
     selectHistoryScope,
+    searchHistory,
     loadMoreHistory,
     reload,
     invalidate,

@@ -137,6 +137,17 @@ export interface RuntimeInfo {
 }
 
 export interface GitNestBridge {
+  repositoryIgnore: {
+    preflight(request: import("./repository-ignore.contracts").RepositoryIgnorePreflightRequest): Promise<GitReadResult<import("./repository-ignore.contracts").RepositoryIgnorePreflightDto>>;
+    execute(request: import("./repository-ignore.contracts").RepositoryIgnoreExecuteRequest): Promise<GitReadResult<import("./repository-ignore.contracts").RepositoryIgnoreExecutionDto>>;
+  };
+  fileHistory: import("./file-history.contracts").FileHistoryBridge;
+  repositoryWorkflow: {
+    inspect(request: import("./workflow.contracts").RepositoryWorkflowInspectRequest): Promise<GitReadResult<import("./workflow.contracts").RepositoryWorkflowStateDto>>;
+    preflight(request: import("./workflow.contracts").RepositoryWorkflowPreflightRequest): Promise<GitReadResult<import("./workflow.contracts").RepositoryWorkflowPreflightDto>>;
+    execute(request: import("./workflow.contracts").RepositoryWorkflowExecuteRequest): Promise<GitReadResult<import("./workflow.contracts").RepositoryWorkflowExecutionDto>>;
+  };
+  repositoryManagement: import("./repository-management.contracts").RepositoryManagementBridge;
   update: {
     getState(): Promise<ApplicationUpdateStateDto>;
     check(): Promise<ApplicationUpdateStateDto>;

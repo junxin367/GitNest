@@ -463,6 +463,14 @@ export function isRepositoryCommandOperation(
     "worktree-move",
     "worktree-repair",
     "worktree-prune",
+    "workflow",
+    "ignore-file",
+    "remote-add",
+    "remote-set-url",
+    "remote-remove",
+    "tag-create",
+    "tag-delete",
+    "tag-push",
     "worktree-remove"
   ].includes(kind);
 }

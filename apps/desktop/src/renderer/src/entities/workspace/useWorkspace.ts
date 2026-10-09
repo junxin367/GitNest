@@ -73,7 +73,31 @@ export function useWorkspace(): WorkspaceController {
   const workspaceTransitionPendingRef = useRef(false);
   const workspaceRequestSequenceRef = useRef(0);
   const currentWorkspaceIdRef = useRef<string | undefined>(undefined);
-  const workspace = runtimeState?.workspace ?? null;
+  const pendingGroupCollapsesRef = useRef(new Map<string, {
+    collapsed: boolean;
+    completion: Promise<void> | undefined;
+  }>());
+  const [groupCollapseOverrides, setGroupCollapseOverrides] =
+    useState<ReadonlyMap<string, boolean>>(new Map());
+  const workspace = useMemo(() => {
+    const current = runtimeState?.workspace ?? null;
+    if (!current || groupCollapseOverrides.size === 0) {
+      return current;
+    }
+    return {
+      ...current,
+      groups: current.groups.map((group) => {
+        const collapsed = groupCollapseOverrides.get(group.id);
+        return collapsed === undefined || collapsed === group.collapsed
+          ? group
+          : { ...group, collapsed };
+      })
+    };
+  }, [runtimeState?.workspace, groupCollapseOverrides]);
+  const clearPendingGroupCollapses = useCallback(() => {
+    pendingGroupCollapsesRef.current.clear();
+    setGroupCollapseOverrides((current) => current.size ? new Map() : current);
+  }, []);
   const acceptRuntimeState = useCallback((state: WorkspaceRuntimeStateDto) => {
     if (currentWorkspaceIdRef.current !== state.workspace.id) {
       if (!workspaceTransitionPendingRef.current) {
@@ -85,9 +109,10 @@ export function useWorkspace(): WorkspaceController {
       workspaceRequestSequenceRef.current += 1;
       targetSelectionSequenceRef.current += 1;
       pendingTargetSelectionsRef.current.clear();
+      clearPendingGroupCollapses();
     }
     setRuntimeState(state);
-  }, []);
+  }, [clearPendingGroupCollapses]);
   const captureRequestScope = useCallback(() => {
     const workspaceId = workspace?.id;
     const sequence = workspaceRequestSequenceRef.current;
@@ -145,12 +170,13 @@ export function useWorkspace(): WorkspaceController {
     workspaceTransitionPendingRef.current = true;
     targetSelectionSequenceRef.current += 1;
     pendingTargetSelectionsRef.current.clear();
+    clearPendingGroupCollapses();
     setSwitchingWorkspaceId(workspaceId);
     setOperation("switching");
     setError(null);
     setNotice(null);
     return transitionId;
-  }, []);
+  }, [clearPendingGroupCollapses]);
 
   const createWorkspace = useCallback(
     async (): Promise<boolean> => {
@@ -636,7 +662,10 @@ export function useWorkspace(): WorkspaceController {
         pendingTargetSelectionsRef.current.delete(requestId);
       }
     },
-    [captureRequestScope, setUnexpectedError, setWorkspace, workspace?.selectedTarget]
+    [
+      captureRequestScope, setUnexpectedError, setWorkspace,
+      workspace?.selectedTarget?.repositoryId, workspace?.selectedTarget?.worktreeId
+    ]
   );
 
   const setGroupCollapsed = useCallback(
@@ -648,27 +677,80 @@ export function useWorkspace(): WorkspaceController {
       if (!isCurrent()) {
         return;
       }
-      try {
-        const result =
-          await window.gitnest.workspace.setGroupCollapsed({
-            groupId,
-            collapsed
-          });
-        if (!isCurrent()) {
-          return;
-        }
-        if (result.ok) {
-          setWorkspace(result.value);
-        } else {
-          setError(result.error);
-        }
-      } catch (reason) {
-        if (isCurrent()) {
-          setUnexpectedError(reason);
-        }
+      setGroupCollapseOverrides((current) =>
+        new Map(current).set(groupId, collapsed)
+      );
+      const pending = pendingGroupCollapsesRef.current.get(groupId);
+      if (pending) {
+        pending.collapsed = collapsed;
+        return pending.completion;
       }
+
+      const request = { collapsed, completion: undefined as Promise<void> | undefined };
+      pendingGroupCollapsesRef.current.set(groupId, request);
+      const isPending = () =>
+        isCurrent() &&
+        pendingGroupCollapsesRef.current.get(groupId) === request;
+      request.completion = (async () => {
+        try {
+          // Serialize each group's writes so an older save cannot persist after
+          // the latest click. Intermediate clicks are folded into the next save.
+          while (isPending()) {
+            const requestedCollapsed = request.collapsed;
+            try {
+              const result = await window.gitnest.workspace.setGroupCollapsed({
+                groupId,
+                collapsed: requestedCollapsed
+              });
+              if (!isPending()) {
+                return;
+              }
+              if (result.ok) {
+                const savedGroup = result.value.groups.find((group) => group.id === groupId);
+                if (savedGroup) {
+                  // The response may predate a selection or another group's save.
+                  // Only merge the field this operation owns.
+                  setRuntimeState((current) => current && current.workspace.id === result.value.id ? {
+                    ...current,
+                    workspace: {
+                      ...current.workspace,
+                      groups: current.workspace.groups.map((group) =>
+                        group.id === groupId
+                          ? { ...group, collapsed: savedGroup.collapsed }
+                          : group
+                      )
+                    }
+                  } : current);
+                }
+              } else if (requestedCollapsed === request.collapsed) {
+                setError(result.error);
+              }
+            } catch (reason) {
+              if (!isPending()) {
+                return;
+              }
+              if (requestedCollapsed === request.collapsed) {
+                setUnexpectedError(reason);
+              }
+            }
+            if (requestedCollapsed === request.collapsed) {
+              return;
+            }
+          }
+        } finally {
+          if (pendingGroupCollapsesRef.current.get(groupId) === request) {
+            pendingGroupCollapsesRef.current.delete(groupId);
+            setGroupCollapseOverrides((current) => {
+              const next = new Map(current);
+              next.delete(groupId);
+              return next;
+            });
+          }
+        }
+      })();
+      return request.completion;
     },
-    [captureRequestScope, setUnexpectedError, setWorkspace]
+    [captureRequestScope, setUnexpectedError]
   );
 
   const clearFeedback = useCallback(() => {

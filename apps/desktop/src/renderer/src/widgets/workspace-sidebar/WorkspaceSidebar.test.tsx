@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import React, { act } from "react";
+import React, { act, forwardRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
   afterEach,
@@ -20,6 +20,22 @@ import type {
 
 import { WorkspaceSidebar } from "./WorkspaceSidebar";
 import { readTapdKeywordPreference } from "./tapdKeywordPreferences";
+
+const repositoryRowRender = vi.hoisted(() => vi.fn());
+vi.mock("../../shared/ui/Button", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../shared/ui/Button")>();
+  return {
+    ...actual,
+    Button: forwardRef<HTMLButtonElement, React.ComponentProps<typeof actual.Button>>(
+      (props, ref) => {
+        if (props.className?.startsWith("repository-row")) {
+          repositoryRowRender();
+        }
+        return <actual.Button {...props} ref={ref} />;
+      }
+    )
+  };
+});
 
 describe("WorkspaceSidebar", () => {
   let container: HTMLDivElement;
@@ -68,6 +84,7 @@ describe("WorkspaceSidebar", () => {
     const onAddDirectory = vi.fn(async () => true);
     const onRescan = vi.fn(async () => true);
     const onOpenWorkspace = vi.fn();
+    const onCreateRepository = vi.fn();
 
     act(() => {
       root.render(
@@ -87,6 +104,7 @@ describe("WorkspaceSidebar", () => {
           onCreateWorkspace={vi.fn(async () => true)}
           onDeleteWorkspace={vi.fn(async () => true)}
           onAddDirectory={onAddDirectory}
+          onCreateRepository={onCreateRepository}
           onOpenWorkspace={onOpenWorkspace}
           onRenameWorkspace={vi.fn(async () => true)}
           onRemoveRepository={vi.fn(async () => true)}
@@ -102,6 +120,9 @@ describe("WorkspaceSidebar", () => {
     expect(container.textContent).toContain("GitNest");
     expect(container.textContent).toContain("GitNest Docs");
     expect(container.textContent).toContain("添加目录");
+    expect(container.querySelector('[aria-label="创建仓库"]')).toBeNull();
+    expect(container.querySelector(".sidebar-footer")?.textContent).not.toContain("克隆");
+    expect(onCreateRepository).not.toHaveBeenCalled();
 
     const workspaceOverview =
       container.querySelector<HTMLButtonElement>(
@@ -135,6 +156,13 @@ describe("WorkspaceSidebar", () => {
         .querySelector("#workspace-root-body")
         ?.getAttribute("aria-hidden")
     ).toBe("true");
+
+    const tree = container.querySelector<HTMLElement>("#workspace-root-body")!;
+    expect(tree.hidden).toBe(true);
+    expect(tree.hasAttribute("inert")).toBe(true);
+    act(() => workspaceOverview?.click());
+    expect(tree.hidden).toBe(false);
+    expect(tree.hasAttribute("inert")).toBe(false);
 
     act(() => {
       container
@@ -228,6 +256,141 @@ describe("WorkspaceSidebar", () => {
     );
   });
 
+  it("preserves mounted repository rows across group toggles", () => {
+    const onSelectTarget = vi.fn();
+    renderSidebar({ onSelectTarget });
+    const originalRows = Array.from(container.querySelectorAll(".repository-row"));
+    repositoryRowRender.mockClear();
+    renderSidebar({
+      onSelectTarget,
+      workspace: {
+        ...workspace,
+        groups: workspace.groups.map(group => ({ ...group, collapsed: true }))
+      }
+    });
+    const body = container.querySelector<HTMLElement>(".group-body")!;
+    expect(body.hidden).toBe(true);
+    expect(body.hasAttribute("inert")).toBe(true);
+    expect(Array.from(body.querySelectorAll(".repository-row"))).toEqual(originalRows);
+    expect(repositoryRowRender).not.toHaveBeenCalled();
+
+    renderSidebar({ onSelectTarget });
+    expect(body.hidden).toBe(false);
+    expect(body.hasAttribute("inert")).toBe(false);
+    expect(Array.from(body.querySelectorAll(".repository-row"))).toEqual(originalRows);
+    expect(repositoryRowRender).not.toHaveBeenCalled();
+  });
+
+  it("defers initially collapsed rows and refreshes retained rows while hidden", () => {
+    const onSelectTarget = vi.fn();
+    const collapsedWorkspace = {
+      ...workspace,
+      groups: workspace.groups.map(group => ({ ...group, collapsed: true }))
+    };
+    renderSidebar({ onSelectTarget, workspace: collapsedWorkspace });
+    expect(container.querySelectorAll(".repository-row")).toHaveLength(0);
+    renderSidebar({ onSelectTarget });
+    const originalRow = container.querySelector(".repository-row");
+    renderSidebar({
+      onSelectTarget,
+      workspace: collapsedWorkspace,
+      snapshots: [{ ...snapshots[0]!, unstaged: 7 }, snapshots[1]!]
+    });
+    expect(container.querySelector(".group-body")?.hasAttribute("hidden")).toBe(true);
+    expect(originalRow?.textContent).toContain("M 7");
+    renderSidebar({
+      onSelectTarget,
+      workspace: { ...collapsedWorkspace, id: "another-workspace" }
+    });
+    expect(container.querySelectorAll(".repository-row")).toHaveLength(0);
+  });
+
+  it("keeps every large-group row addressable and preserves them while collapsed", () => {
+    const largeWorkspace = createLargeWorkspace(63);
+    const targets = largeWorkspace.groups[0]!.targets;
+    const onSelectTarget = vi.fn();
+    renderSidebar({ workspace: largeWorkspace, onSelectTarget });
+    const originalRows = [...container.querySelectorAll<HTMLButtonElement>(".repository-row")];
+    expect(originalRows).toHaveLength(targets.length);
+    expect(originalRows[25]?.getAttribute("aria-current")).toBe("true");
+    act(() => originalRows[62]?.click());
+    expect(onSelectTarget).toHaveBeenCalledWith(targets[62]);
+
+    repositoryRowRender.mockClear();
+    renderSidebar({
+      workspace: {
+        ...largeWorkspace,
+        groups: [{ ...largeWorkspace.groups[0]!, collapsed: true }]
+      },
+      onSelectTarget
+    });
+    expect([...container.querySelectorAll(".repository-row")]).toEqual(originalRows);
+    expect(repositoryRowRender).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLElement>(".group-body")?.hidden).toBe(true);
+
+    act(() => setInputValue(container.querySelector("input"), "Repository 62"));
+    expect(container.querySelectorAll(".repository-row")).toHaveLength(1);
+    expect(container.querySelector(".repository-row")?.textContent).toContain("Repository 62");
+    expect(container.querySelector<HTMLElement>(".group-body")?.hidden).toBe(true);
+    renderSidebar({ workspace: largeWorkspace, onSelectTarget });
+    expect(container.querySelector<HTMLElement>(".group-body")?.hidden).toBe(false);
+    act(() => container.querySelector<HTMLButtonElement>(".repository-row")?.click());
+    expect(onSelectTarget).toHaveBeenLastCalledWith(targets[62]);
+    act(() => setInputValue(container.querySelector("input"), ""));
+    expect(container.querySelectorAll(".repository-row")).toHaveLength(targets.length);
+    expect(container.querySelector(".repository-row.selected")?.textContent).toContain("Repository 25");
+  });
+
+  it.each([1, 10])("preserves the focused target when refresh removes %i preceding rows", (removed) => {
+    const original = createLargeWorkspace(60);
+    const onSelectTarget = vi.fn();
+    const focusedWindow = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    try {
+      renderSidebar({ workspace: original, onSelectTarget });
+      const focused = container.querySelectorAll<HTMLButtonElement>(".repository-row")[25]!;
+      focused.focus();
+      renderSidebar({
+        workspace: {
+          ...original,
+          groups: [{ ...original.groups[0]!, targets: original.groups[0]!.targets.slice(removed) }]
+        },
+        onSelectTarget
+      });
+      expect(focused.isConnected).toBe(false);
+      expect(document.activeElement?.textContent).toContain("Repository 25");
+      act(() => (document.activeElement as HTMLButtonElement).click());
+      expect(onSelectTarget).toHaveBeenCalledWith(original.groups[0]!.targets[25]);
+    } finally {
+      focusedWindow.mockRestore();
+    }
+  });
+
+  it.each(["search", "removed", "hidden", "window"] as const)(
+    "does not restore refreshed repository focus after %s makes it inappropriate",
+    (reason) => {
+      const original = createLargeWorkspace(60);
+      const focusedWindow = vi.spyOn(document, "hasFocus").mockReturnValue(reason !== "window");
+      try {
+        renderSidebar({ workspace: original });
+        container.querySelectorAll<HTMLButtonElement>(".repository-row")[25]!.focus();
+        const search = container.querySelector<HTMLInputElement>("input")!;
+        if (reason === "search") search.focus();
+        const targets = reason === "removed"
+          ? original.groups[0]!.targets.filter((_, index) => index !== 25)
+          : original.groups[0]!.targets.slice(1);
+        renderSidebar({
+          workspace: {
+            ...original,
+            groups: [{ ...original.groups[0]!, targets, collapsed: reason === "hidden" }]
+          }
+        });
+        expect(document.activeElement).toBe(reason === "search" ? search : document.body);
+      } finally {
+        focusedWindow.mockRestore();
+      }
+    }
+  );
+
   it("filters the direct repository rows to targets with local changes", () => {
     renderSidebar();
 
@@ -251,6 +414,139 @@ describe("WorkspaceSidebar", () => {
 
     expect(container.textContent).toContain("GitNest");
     expect(container.textContent).not.toContain("GitNest Docs");
+  });
+
+  it("does not prepare repository metadata when initially mounted hidden", () => {
+    const onRead = vi.fn();
+    renderSidebar({
+      sidebarHidden: true,
+      workspace: {
+        ...workspace,
+        repositories: countIndexedReads(workspace.repositories, onRead),
+        worktrees: countIndexedReads(workspace.worktrees, onRead),
+        groups: countIndexedReads(workspace.groups, onRead)
+      },
+      snapshots: countIndexedReads(snapshots, onRead)
+    });
+    expect(onRead).not.toHaveBeenCalled();
+    expect(container.querySelector(".workspace-root")).toBeNull();
+  });
+
+  it("skips hidden repository DOM and metadata work until the latest data is shown", () => {
+    const largeWorkspace = createLargeWorkspace(500);
+    renderSidebar({ workspace: largeWorkspace });
+    expect(container.querySelectorAll(".repository-row")).toHaveLength(500);
+    const reads = { repositories: 0, worktrees: 0, snapshots: 0, targets: 0 };
+    const updatedWorkspace = {
+      ...largeWorkspace,
+      repositories: countIndexedReads([...largeWorkspace.repositories], () => reads.repositories++),
+      worktrees: countIndexedReads([...largeWorkspace.worktrees], () => reads.worktrees++),
+      groups: largeWorkspace.groups.map(group => ({
+        ...group,
+        targets: countIndexedReads([...group.targets], () => reads.targets++)
+      }))
+    };
+    renderSidebar({
+      sidebarHidden: true,
+      workspace: updatedWorkspace,
+      snapshots: countIndexedReads(
+        largeWorkspace.groups[0]!.targets.map(target => createSnapshot(target)),
+        () => reads.snapshots++
+      )
+    });
+    expect(container.querySelectorAll(".repository-row")).toHaveLength(0);
+    expect(reads).toEqual({ repositories: 0, worktrees: 0, snapshots: 0, targets: 0 });
+    expect(container.querySelectorAll("*").length).toBeLessThan(100);
+
+    const refreshedWorkspace = {
+      ...updatedWorkspace,
+      worktrees: countIndexedReads(
+        largeWorkspace.worktrees.map((worktree, index) => ({
+          ...worktree, name: `Updated ${index}`
+        })),
+        () => reads.worktrees++
+      )
+    };
+    const latestSnapshots = countIndexedReads(
+      largeWorkspace.groups[0]!.targets.map(target => createSnapshot(target, { branch: "updated-branch" })),
+      () => reads.snapshots++
+    );
+    renderSidebar({ sidebarHidden: true, workspace: refreshedWorkspace, snapshots: latestSnapshots });
+    expect(reads).toEqual({ repositories: 0, worktrees: 0, snapshots: 0, targets: 0 });
+    renderSidebar({ sidebarHidden: false, workspace: refreshedWorkspace, snapshots: latestSnapshots });
+    expect(container.querySelectorAll(".repository-row")).toHaveLength(500);
+    expect(container.querySelector(".repository-row")?.textContent).toContain("Updated 0");
+    expect(container.querySelector(".repository-row")?.textContent).toContain("updated-branch");
+    expect(reads).toEqual({ repositories: 500, worktrees: 500, snapshots: 500, targets: 500 });
+  });
+
+  it("keeps search, changed-only filtering and scroll across sidebar hide and reveal", () => {
+    renderSidebar();
+    act(() => setInputValue(container.querySelector("input"), "GitNest"));
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="仓库筛选菜单"]')!.click());
+    act(() => findMenuItem("变更仓库")!.click());
+    const list = container.querySelector<HTMLElement>(".repository-list")!;
+    list.scrollTop = 415;
+    renderSidebar({ sidebarHidden: true });
+    // Emulate browser clamping after removing all scrollable list content.
+    list.scrollTop = 0;
+    renderSidebar({ sidebarHidden: true, snapshots: [...snapshots] });
+    renderSidebar();
+    expect(list.scrollTop).toBe(415);
+    expect(container.querySelector<HTMLInputElement>("input")?.value).toBe("GitNest");
+    expect(container.querySelectorAll(".repository-row")).toHaveLength(1);
+    expect(container.querySelector(".repository-row")?.textContent).not.toContain("Docs");
+  });
+
+  it("retains root collapse state and resets search and scroll when the hidden workspace changes", () => {
+    renderSidebar();
+    act(() => setInputValue(container.querySelector("input"), "Docs"));
+    act(() => container.querySelector<HTMLButtonElement>(".workspace-root-heading")!.click());
+    const list = container.querySelector<HTMLElement>(".repository-list")!;
+    list.scrollTop = 310;
+    renderSidebar({ sidebarHidden: true });
+    renderSidebar();
+    expect(container.querySelector(".workspace-root-heading")?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector<HTMLInputElement>("input")?.value).toBe("Docs");
+    renderSidebar({ sidebarHidden: true });
+    const otherWorkspace = { ...workspace, id: "other-workspace" };
+    renderSidebar({ sidebarHidden: true, workspace: otherWorkspace });
+    renderSidebar({ workspace: otherWorkspace });
+    expect(list.scrollTop).toBe(0);
+    expect(container.querySelector<HTMLInputElement>("input")?.value).toBe("");
+    expect(container.querySelector(".workspace-root-heading")?.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelectorAll(".repository-row")).toHaveLength(2);
+  });
+
+  it.each(["repository", "filter", "switcher"] as const)(
+    "closes the %s menu when the sidebar is hidden without reopening it on reveal",
+    async kind => {
+      renderSidebar();
+      if (kind === "repository") {
+        await openSidebarContextMenu("repository");
+        act(() => findMenuItem("打开方式")!.click());
+      } else {
+        const label = kind === "filter" ? "仓库筛选菜单" : "切换 Workspace";
+        act(() => container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click());
+      }
+      expect(document.querySelector('[role="menu"]')).not.toBeNull();
+      renderSidebar({ sidebarHidden: true });
+      expect(document.querySelector('[role="menu"]')).toBeNull();
+      renderSidebar();
+      expect(document.querySelector('[role="menu"]')).toBeNull();
+    }
+  );
+
+  it("keeps an open repository removal dialog accurate while its sidebar list is hidden", async () => {
+    const onRemoveRepository = vi.fn(async () => true);
+    renderSidebar({ onRemoveRepository });
+    await openSidebarContextMenu("repository");
+    act(() => findMenuItem("移出 Workspace")!.click());
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain("GitNest Docs");
+    renderSidebar({ sidebarHidden: true, onRemoveRepository });
+    expect(container.querySelectorAll(".repository-row")).toHaveLength(0);
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain("GitNest Docs");
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain("E:\\code\\GitNest\\docs");
   });
 
   it("indexes repository metadata and snapshots once while preserving first matches", () => {
@@ -413,7 +709,7 @@ describe("WorkspaceSidebar", () => {
   ])("closes the repository context menu on $key (shift: $shiftKey) and restores its row", async ({ key, shiftKey }) => {
     renderSidebar();
     const origin = await openSidebarContextMenu("repository");
-    const action = findMenuItem("Open In")!;
+    const action = findMenuItem("打开方式")!;
     act(() => action.focus());
     const event = new KeyboardEvent("keydown", { key, shiftKey, bubbles: true, cancelable: true });
     act(() => action.dispatchEvent(event));
@@ -447,7 +743,7 @@ describe("WorkspaceSidebar", () => {
   it.each([false, true])("closes both repository menus on Tab from an application (shift: %s)", async (shiftKey) => {
     renderSidebar();
     const origin = await openSidebarContextMenu("repository");
-    await act(async () => findMenuItem("Open In")?.click());
+    await act(async () => findMenuItem("打开方式")?.click());
     const application = document.querySelector<HTMLButtonElement>(
       '.workspace-context-open-in-submenu [role="menuitem"]'
     )!;
@@ -469,7 +765,7 @@ describe("WorkspaceSidebar", () => {
       renderSidebar();
       await openSidebarContextMenu(kind);
       if (kind === "repository") {
-        act(() => findMenuItem("Open In")?.click());
+        act(() => findMenuItem("打开方式")?.click());
       }
       const nextWorkspace = {
         ...workspace,
@@ -541,6 +837,9 @@ describe("WorkspaceSidebar", () => {
     });
 
     expect(container.textContent).toContain("产品仓库");
+    renderSidebar({ sidebarHidden: true });
+    renderSidebar();
+    expect(container.querySelector(".group-header")?.textContent).toContain("产品仓库");
   });
 
   it("exposes Workspace actions from the root context menu", () => {
@@ -718,7 +1017,10 @@ describe("WorkspaceSidebar", () => {
     );
   });
 
-  async function openRepositoryApplications(name = "GitNest Docs") {
+  async function openRepositoryApplications(
+    name = "GitNest Docs",
+    activation: "click" | "hover" = "click"
+  ) {
     const repository = Array.from(
       container.querySelectorAll<HTMLButtonElement>(".repository-row")
     ).find((button) => button.textContent?.includes(name));
@@ -727,8 +1029,69 @@ describe("WorkspaceSidebar", () => {
         bubbles: true, clientX: 40, clientY: 40
       }));
     });
-    act(() => findMenuItem("Open In")?.click());
+    act(() => {
+      const trigger = findMenuItem("打开方式")!;
+      if (activation === "hover") {
+        trigger.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      } else {
+        trigger.click();
+      }
+    });
   }
+
+  it("keeps the repository submenu open while hovering across menus and clicking its trigger", async () => {
+    renderSidebar();
+    await openSidebarContextMenu("repository");
+    const trigger = findMenuItem("打开方式")!;
+    const submenu = () => document.querySelector<HTMLElement>(
+      ".workspace-context-open-in-submenu"
+    );
+    // Return from the initially focused action before testing pointer entry.
+    if (submenu()) {
+      act(() => submenu()!.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowLeft", bubbles: true, cancelable: true
+      })));
+    }
+    expect(submenu()).toBeNull();
+    vi.useFakeTimers();
+    try {
+      act(() => trigger.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+      expect(submenu()).not.toBeNull();
+      expect(document.activeElement).toBe(trigger);
+      expect(document.querySelector(".workspace-context-menu")?.textContent).not.toContain("Open In");
+
+      act(() => {
+        trigger.dispatchEvent(new MouseEvent("pointerout", {
+          bubbles: true, relatedTarget: document.body
+        }));
+        vi.advanceTimersByTime(60);
+      });
+      expect(submenu()).not.toBeNull();
+      act(() => {
+        submenu()!.dispatchEvent(new MouseEvent("pointerover", {
+          bubbles: true, relatedTarget: document.body
+        }));
+        vi.advanceTimersByTime(120);
+      });
+      expect(submenu()).not.toBeNull();
+
+      act(() => trigger.click());
+      expect(submenu()).not.toBeNull();
+      expect(document.activeElement).toBe(findMenuItem("Visual Studio Code"));
+
+      act(() => {
+        submenu()!.dispatchEvent(new MouseEvent("pointerout", {
+          bubbles: true, relatedTarget: document.body
+        }));
+        vi.advanceTimersByTime(120);
+      });
+      expect(submenu()).toBeNull();
+      expect(document.querySelector(".workspace-context-menu")).not.toBeNull();
+      expect(window.gitnest.system.openExternalApplication).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("opens the right-clicked repository without selecting it or using the selected repository", async () => {
     const onSelectTarget = vi.fn();
@@ -776,7 +1139,7 @@ describe("WorkspaceSidebar", () => {
     renderSidebar();
     await openRepositoryApplications();
     const application = findMenuItem("Visual Studio Code")!;
-    const trigger = findMenuItem("Open In")!;
+    const trigger = findMenuItem("打开方式")!;
     expect(document.activeElement).toBe(application);
     act(() => application.dispatchEvent(new KeyboardEvent("keydown", {
       key: "Escape", bubbles: true, cancelable: true
@@ -804,7 +1167,7 @@ describe("WorkspaceSidebar", () => {
     expect(findMenuItem("Visual Studio Code")).toBeUndefined();
   });
 
-  it("focuses the repository Open In submenu after application discovery finishes", async () => {
+  it.each(["click", "hover"] as const)("only moves focus after application discovery when requested (%s)", async activation => {
     let finishDiscovery!: () => void;
     const discovery = new Promise<void>((resolve) => { finishDiscovery = resolve; });
     vi.mocked(window.gitnest.system.listExternalApplications).mockImplementation(async () => {
@@ -812,13 +1175,16 @@ describe("WorkspaceSidebar", () => {
       return { ok: true, value: [{ kind: "vscode", label: "Visual Studio Code" }] };
     });
     renderSidebar();
-    await openRepositoryApplications();
-    expect(document.querySelector(".workspace-context-open-in-submenu")?.textContent).toContain("正在检测可用应用");
+    await openRepositoryApplications("GitNest Docs", activation);
+    expect(document.querySelector(".workspace-context-open-in-submenu")).toBeNull();
+    expect(document.body.textContent).not.toContain("正在检测可用应用");
     expect(findMenuItem("Visual Studio Code")).toBeUndefined();
     await act(async () => finishDiscovery());
     const application = findMenuItem("Visual Studio Code");
     expect(application).toBeDefined();
-    expect(document.activeElement).toBe(application);
+    expect(document.activeElement).toBe(
+      activation === "click" ? application : findMenuItem("打开方式")
+    );
     expect(window.gitnest.system.openExternalApplication).not.toHaveBeenCalled();
   });
 
@@ -1040,6 +1406,60 @@ describe("WorkspaceSidebar", () => {
     expect(container.querySelector(".gn-skeleton-surface")).toBeNull();
     expect(container.textContent).toContain("尚未发现仓库");
   });
+
+  it("reuses unchanged repository rows during menus, selection, and snapshot updates", () => {
+    const onSelectTarget = vi.fn();
+    renderSidebar({ onSelectTarget });
+    repositoryRowRender.mockClear();
+    openWorkspaceContextMenu();
+    expect(repositoryRowRender).not.toHaveBeenCalled();
+    renderSidebar({
+      onSelectTarget,
+      workspace: { ...workspace, selectedTarget: docsTarget }
+    });
+    expect(repositoryRowRender).toHaveBeenCalledTimes(2);
+    repositoryRowRender.mockClear();
+    renderSidebar({
+      onSelectTarget,
+      workspace: {
+        ...workspace,
+        groups: workspace.groups.map(group => ({
+          ...group, targets: group.targets.map(target => ({ ...target }))
+        })),
+        selectedTarget: docsTarget
+      },
+      snapshots: [snapshots[0]!, { ...snapshots[1]!, unstaged: 4 }]
+    });
+    expect(repositoryRowRender).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.repository-row.selected')?.textContent).toContain("M 4");
+    act(() => container.querySelector<HTMLButtonElement>('.repository-row.selected')?.click());
+    expect(onSelectTarget).toHaveBeenCalledWith(docsTarget);
+  });
+
+  function createLargeWorkspace(size: number): WorkspaceDetailsDto {
+    const targets = Array.from({ length: size }, (_, index) => ({
+      repositoryId: `repository-${index}`,
+      worktreeId: `worktree-${index}`
+    }));
+    return {
+      ...workspace,
+      repositories: targets.map((target, index) => ({
+        ...workspace.repositories[0]!,
+        id: target.repositoryId,
+        name: `Repository ${index}`,
+        primaryWorktreeId: target.worktreeId,
+        worktreeIds: [target.worktreeId]
+      })),
+      worktrees: targets.map((target, index) => ({
+        ...workspace.worktrees[0]!,
+        id: target.worktreeId,
+        repositoryId: target.repositoryId,
+        name: `Repository ${index}`
+      })),
+      groups: [{ ...workspace.groups[0]!, targets }],
+      selectedTarget: targets[25]!
+    };
+  }
 
   function renderSidebar(
     overrides: Partial<

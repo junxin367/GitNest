@@ -1,11 +1,13 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type ReactNode
+  type ReactNode,
+  type Ref
 } from "react";
 
 import type {
@@ -13,8 +15,10 @@ import type {
 } from "@gitnest/contracts";
 
 import { Button } from "../../shared/ui/Button";
+import { scrollWithinContainer } from "../../shared/lib/scrollWithinContainer";
 import { DiffSearchPopover } from "../../shared/ui/DiffSearchPopover";
 import { Icon } from "../../shared/ui/Icon";
+import { DiffContentSkeleton } from "../../widgets/diff-workspace/DiffPanelContent";
 import {
   tokenizeSourceLines,
   type SourceSyntaxToken
@@ -27,6 +31,9 @@ interface SourceSearchHit {
   start: number;
   end: number;
 }
+
+const EMPTY_SOURCE_TOKENS: readonly SourceSyntaxToken[] = [];
+const EMPTY_SOURCE_HITS: readonly SourceSearchHit[] = [];
 
 export function NodeSourceViewer({
   node,
@@ -150,22 +157,18 @@ export function NodeSourceViewer({
     if (!source.file) {
       return;
     }
-    targetLineRef.current?.scrollIntoView({
-      block: "center"
-    });
+    scrollWithinContainer(viewportRef.current, targetLineRef.current);
   }, [source.file, targetLine]);
 
   useLayoutEffect(() => {
     if (!searchOpen || searchHits.length === 0) {
       return;
     }
-    viewportRef.current
-      ?.querySelector<HTMLElement>(
+    scrollWithinContainer(viewportRef.current,
+      viewportRef.current?.querySelector<HTMLElement>(
         `[data-source-search-hit="${normalizedActiveSearchHit}"]`
       )
-      ?.scrollIntoView({
-        block: "center"
-      });
+    );
   }, [
     normalizedActiveSearchHit,
     searchHits,
@@ -268,12 +271,7 @@ export function NodeSourceViewer({
             tabIndex={0}
           >
             {source.loading ? (
-              <SourceState
-                busy
-                icon="refresh"
-                message="正在从节点所属 Worktree 读取当前文件。"
-                title="正在读取节点代码"
-              />
+              <DiffContentSkeleton immediate />
             ) : source.error ? (
               <SourceState
                 icon="warning"
@@ -294,30 +292,23 @@ export function NodeSourceViewer({
                     const lineNumber =
                       source.file!.startLine + index;
                     const focused = lineNumber === targetLine;
+                    const activeHitOnLine =
+                      searchHits[normalizedActiveSearchHit]?.lineIndex === index
+                        ? normalizedActiveSearchHit
+                        : -1;
                     return (
-                      <div
-                        aria-current={
-                          focused ? "location" : undefined
-                        }
-                        className={`analysis-node-source-line${
-                          focused ? " focus-target" : ""
-                        }`}
-                        data-source-line={lineNumber}
+                      <SourceLine
                         key={lineNumber}
-                        ref={
+                        line={line}
+                        lineNumber={lineNumber}
+                        focused={focused}
+                        targetRef={
                           focused ? targetLineRef : undefined
                         }
-                      >
-                        <span>{lineNumber}</span>
-                        <code>
-                          {highlightSourceLine(
-                            line,
-                            syntaxTokens[index] ?? [],
-                            hitsByLine.get(index) ?? [],
-                            normalizedActiveSearchHit
-                          )}
-                        </code>
-                      </div>
+                        tokens={syntaxTokens[index] ?? EMPTY_SOURCE_TOKENS}
+                        hits={hitsByLine.get(index) ?? EMPTY_SOURCE_HITS}
+                        activeSearchHit={activeHitOnLine}
+                      />
                     );
                   })}
                 </div>
@@ -335,6 +326,36 @@ export function NodeSourceViewer({
     </section>
   );
 }
+
+const SourceLine = memo(function SourceLine({
+  line,
+  lineNumber,
+  focused,
+  targetRef,
+  tokens,
+  hits,
+  activeSearchHit
+}: {
+  line: string;
+  lineNumber: number;
+  focused: boolean;
+  targetRef: Ref<HTMLDivElement> | undefined;
+  tokens: readonly SourceSyntaxToken[];
+  hits: readonly SourceSearchHit[];
+  activeSearchHit: number;
+}) {
+  return (
+    <div
+      aria-current={focused ? "location" : undefined}
+      className={`analysis-node-source-line${focused ? " focus-target" : ""}`}
+      data-source-line={lineNumber}
+      ref={targetRef}
+    >
+      <span>{lineNumber}</span>
+      <code>{highlightSourceLine(line, tokens, hits, activeSearchHit)}</code>
+    </div>
+  );
+});
 
 function SourceState({
   icon,

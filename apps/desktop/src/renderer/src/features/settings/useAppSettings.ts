@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState
 } from "react";
@@ -253,11 +254,12 @@ export function useAppSettings(): AppSettingsController {
     setNotice(null);
   }, []);
 
-  return {
+  const saving = savingCount > 0;
+  return useMemo(() => ({
     settings,
     loaded,
     loading,
-    saving: savingCount > 0,
+    saving,
     clearingKey,
     error,
     notice,
@@ -265,7 +267,10 @@ export function useAppSettings(): AppSettingsController {
     update,
     clearAiApiKey,
     clearFeedback
-  };
+  }), [
+    settings, loaded, loading, saving, clearingKey, error, notice,
+    reload, update, clearAiApiKey, clearFeedback
+  ]);
 }
 
 function readLegacyTheme(): "dark" | "light" | null {

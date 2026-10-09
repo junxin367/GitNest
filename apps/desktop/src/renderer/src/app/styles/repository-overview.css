@@ -552,6 +552,16 @@
   width: 100%;
 }
 
+.repository-status-table.deferred-rows > .repository-status-item {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 54px;
+}
+
+.repository-status-table.deferred-rows > .repository-status-item:focus-within {
+  /* Focus outlines extend outside the row's paint boundary. */
+  content-visibility: visible;
+}
+
 .repository-status-row {
   display: grid;
   grid-template-columns:

@@ -121,6 +121,24 @@ describe("MCP registration availability", () => {
 });
 
 describe("Workspace IPC validation", () => {
+  it("preserves the expected Workspace when registering a newly created repository", () => {
+    expect(validateAddWorkspaceDirectoryRequest({
+      path: "D:\\shared\\new-repository",
+      expectedWorkspaceId: "workspace_original"
+    })).toEqual({
+      path: "D:\\shared\\new-repository",
+      expectedWorkspaceId: "workspace_original"
+    });
+  });
+
+  it.each(["", "../workspace", "with space", 42, null, undefined, "w".repeat(4096)])(
+    "rejects an invalid expected Workspace binding: %s", (expectedWorkspaceId) => {
+      expect(() => validateAddWorkspaceDirectoryRequest({
+        path: "D:\\shared\\new-repository", expectedWorkspaceId
+      })).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
+    }
+  );
+
   it("validates an absolute directory added to the current Workspace", () => {
     expect(
       validateAddWorkspaceDirectoryRequest({
@@ -653,6 +671,22 @@ describe("code analysis file IPC validation", () => {
         detail: "navigation"
       })
     ).toEqual({ detail: "navigation" });
+    expect(validateGetCodeAnalysisSnapshotRequest({
+      detail: "nodes", query: "save", focusNodeId: "method:save", inspectedNodeId: "caller"
+    })).toEqual({
+      detail: "nodes", query: "save", focusNodeId: "method:save", inspectedNodeId: "caller"
+    });
+    for (const request of [
+      { detail: "nodes", query: 123 },
+      { detail: "nodes", query: "x".repeat(257) },
+      { detail: "nodes", focusNodeId: {} },
+      { detail: "nodes", inspectedNodeId: "x".repeat(4097) },
+      { detail: "navigation", query: "save" }
+    ]) {
+      expect(() => validateGetCodeAnalysisSnapshotRequest(request)).toThrowError(
+        expect.objectContaining({ code: "INVALID_REQUEST" })
+      );
+    }
     expect(() =>
       validateGetCodeAnalysisSnapshotRequest({
         detail: "summary"
@@ -704,6 +738,27 @@ describe("repository history IPC validation", () => {
     repositoryId: "repository",
     worktreeId: "worktree"
   };
+
+  it("normalizes full-history criteria and rejects invalid search payloads", () => {
+    expect(validateRepositoryHistoryRequest({
+      queryId: "history_search", target,
+      search: { keyword: " --all ", author: " Alice ", since: "2024-02-29", path: "literal[1].ts", ignored: true }
+    }).search).toEqual({
+      keyword: "--all", author: "Alice", since: "2024-02-29", path: "literal[1].ts"
+    });
+    expect(validateRepositoryHistoryRequest({
+      queryId: "history_empty_search", target, search: { keyword: " " }
+    })).not.toHaveProperty("search");
+    for (const search of [
+      null, [], "all", { keyword: 3 }, { author: "Alice\nBob" },
+      { since: "2026-02-29" }, { since: "2026-02-02", until: "2026-02-01" },
+      { path: "../outside" }, { path: "/absolute" }, { keyword: "x".repeat(4097) }
+    ]) {
+      expect(() => validateRepositoryHistoryRequest({
+        queryId: "history_bad_search", target, search
+      })).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
+    }
+  });
 
   it("accepts exact local and remote refs for single and comparison history", () => {
     expect(

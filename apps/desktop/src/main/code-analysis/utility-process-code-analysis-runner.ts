@@ -121,7 +121,10 @@ export class UtilityProcessCodeAnalysisRunner
     let state: ProcessState;
     try {
       throwIfAborted(input.signal);
-      state = await this.#ensureProcess();
+      state = await withAbortSignal(
+        this.#ensureProcess(),
+        input.signal
+      );
       throwIfAborted(input.signal);
       if (this.#disposed) {
         throw new Error(
@@ -650,6 +653,44 @@ function deferred<Value>(): Deferred<Value> {
     }
   );
   return { promise, resolve, reject };
+}
+
+function withAbortSignal<Value>(
+  task: Promise<Value>,
+  signal?: AbortSignal
+): Promise<Value> {
+  if (!signal) {
+    return task;
+  }
+  return new Promise<Value>((resolvePromise, rejectPromise) => {
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      rejectPromise(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error("Code analysis was cancelled.")
+      );
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    // Startup remains supervised and can serve the next analysis.
+    // Always observe its rejection even when this caller cancels.
+    void task.then(
+      (value) => {
+        cleanup();
+        resolvePromise(value);
+      },
+      (error) => {
+        cleanup();
+        rejectPromise(error);
+      }
+    );
+    if (signal.aborted) {
+      onAbort();
+    }
+  });
 }
 
 async function withTimeout<Value>(

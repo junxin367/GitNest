@@ -46,6 +46,44 @@ export interface CodeNodeSearchIndexEntry {
   readonly normalizedPath: string;
 }
 
+export interface CodeChainSearchIndex {
+  readonly chains: readonly CodeRequestChainDto[];
+  readonly nodes: readonly CodeGraphNodeDto[];
+  readonly searchText: Map<CodeRequestChainDto, string>;
+  nodeById?: ReadonlyMap<string, CodeGraphNodeDto>;
+}
+
+// Completed snapshots replace their node array. Share this lookup between the
+// page and graph instead of scanning every node for each selection.
+const nodeLookups = new WeakMap<
+  readonly CodeGraphNodeDto[],
+  ReadonlyMap<string, CodeGraphNodeDto>
+>();
+
+export function getCodeNodeLookup(
+  nodes: readonly CodeGraphNodeDto[]
+): ReadonlyMap<string, CodeGraphNodeDto> {
+  let lookup = nodeLookups.get(nodes);
+  if (!lookup) {
+    const next = new Map<string, CodeGraphNodeDto>();
+    for (const node of nodes) {
+      next.set(node.id, node);
+    }
+    lookup = next;
+    nodeLookups.set(nodes, lookup);
+  }
+  return lookup;
+}
+
+// Owned by the page's snapshot memo, so mutable one-off callers of filterChains
+// still read current input and completed snapshots release their cached text.
+export function createCodeChainSearchIndex(
+  chains: readonly CodeRequestChainDto[],
+  nodes: readonly CodeGraphNodeDto[]
+): CodeChainSearchIndex {
+  return { chains, nodes, searchText: new Map() };
+}
+
 export function codeNodeDisplayName(
   node: Pick<
     CodeGraphNodeDto,
@@ -96,16 +134,33 @@ export function filterChainsWithMetadata(
   method: string,
   limit = MAX_VISIBLE_REQUEST_CHAINS
 ): FilteredCodeChains {
+  return filterCodeChainIndexWithMetadata(
+    createCodeChainSearchIndex(chains, nodes),
+    query,
+    method,
+    limit
+  );
+}
+
+export function filterCodeChainIndexWithMetadata(
+  searchIndex: CodeChainSearchIndex,
+  query: string,
+  method: string,
+  limit = MAX_VISIBLE_REQUEST_CHAINS
+): FilteredCodeChains {
+  const { chains, nodes } = searchIndex;
   const normalized = normalizeSearchText(query).slice(
     0,
     MAX_CHAIN_QUERY_LENGTH
   );
   const safeLimit = Math.max(0, limit);
-  const nodeById = new Map(
-    nodes
-      .slice(0, MAX_CHAIN_SEARCH_NODES)
-      .map((node) => [node.id, node])
-  );
+  if (normalized && !searchIndex.nodeById) {
+    searchIndex.nodeById = new Map(
+      nodes
+        .slice(0, MAX_CHAIN_SEARCH_NODES)
+        .map((node) => [node.id, node])
+    );
+  }
   const filtered: CodeRequestChainDto[] = [];
   const scanCount = Math.min(
     chains.length,
@@ -121,11 +176,15 @@ export function filterChainsWithMetadata(
     if (method !== "all" && chain.method !== method) {
       continue;
     }
-    if (
-      normalized &&
-      !chainSearchText(chain, nodeById).includes(normalized)
-    ) {
-      continue;
+    if (normalized) {
+      let text = searchIndex.searchText.get(chain);
+      if (text === undefined) {
+        text = chainSearchText(chain, searchIndex.nodeById!);
+        searchIndex.searchText.set(chain, text);
+      }
+      if (!text.includes(normalized)) {
+        continue;
+      }
     }
     if (filtered.length >= safeLimit) {
       truncated = true;

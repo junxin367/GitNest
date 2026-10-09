@@ -143,6 +143,15 @@ const codeAnalysisPageSource = readFileSync(
   ),
   "utf8"
 );
+const codeAnalysisSkeletonSource = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../renderer/src/pages/code-analysis/CodeAnalysisSkeleton.tsx",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
 const applicationSettingsPageSource = readFileSync(
   fileURLToPath(
     new URL(
@@ -1478,8 +1487,9 @@ describe("renderer design-system guardrails", () => {
       'label="正在读取代码分析"'
     );
     expect(css).toMatch(
-      /\.analysis-skeleton-workbench\s*\{[^}]*flex:\s*1 0 590px;/
+      /\.analysis-workbench\s*\{[^}]*flex:\s*1 0 590px;/
     );
+    expect(codeAnalysisSkeletonSource).toContain('className="analysis-workbench"');
     expect(prototypeShellHtml).toContain(
       "function renderCodeAnalysisSkeleton()"
     );

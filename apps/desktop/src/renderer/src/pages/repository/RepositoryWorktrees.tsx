@@ -1,5 +1,7 @@
 import { Button } from "../../shared/ui/Button";
 import {
+  memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -69,6 +71,7 @@ export function RepositoryWorktrees({
   );
   const filterInputRef = useRef<HTMLInputElement>(null);
   const filterTriggerRef = useRef<HTMLButtonElement>(null);
+  const repositoryGeneration = useRef(0);
   const repository = useMemo(
     () =>
       workspace.repositories.find(
@@ -98,56 +101,73 @@ export function RepositoryWorktrees({
       ),
     [repositoryId, snapshots]
   );
-  const prunableCount = worktrees.filter(
-    (worktree) => worktree.isPrunable
-  ).length;
+  const { prunableCount, detachedCount } = useMemo(() => {
+    let prunableCount = 0;
+    let detachedCount = 0;
+    for (const worktree of worktrees) {
+      if (worktree.isPrunable) {
+        prunableCount += 1;
+      }
+      if (worktree.isDetached || !worktree.branch) {
+        detachedCount += 1;
+      }
+    }
+    return { prunableCount, detachedCount };
+  }, [worktrees]);
   const existingCount = worktrees.length - prunableCount;
-  const detachedCount = worktrees.filter(
-    (worktree) => worktree.isDetached || !worktree.branch
-  ).length;
-  const snapshotFor = (worktree: WorkspaceWorktreeDto) =>
-    snapshotByWorktreeId.get(worktree.id);
-  const visibleWorktrees = worktrees.filter((worktree) =>
-    matchesWorktreeFilters(worktree, snapshotFor(worktree), filters)
+  const snapshotFor = useCallback(
+    (worktree: WorkspaceWorktreeDto) =>
+      snapshotByWorktreeId.get(worktree.id),
+    [snapshotByWorktreeId]
+  );
+  const visibleWorktrees = useMemo(
+    () =>
+      worktrees.filter((worktree) =>
+        matchesWorktreeFilters(worktree, snapshotFor(worktree), filters)
+      ),
+    [filters, snapshotFor, worktrees]
   );
   const activeFilterCount = activeWorktreeFilterCount(filters);
-  const facetCountWorktrees = worktrees.filter((worktree) =>
-    matchesWorktreeFilters(
-      worktree,
-      snapshotFor(worktree),
-      {
-        ...filters,
-        facet: null
-      }
-    )
-  );
-  const facetCounts = facetCountWorktrees.reduce<
-    Record<WorktreeFacet, number>
-  >(
-    (counts, worktree) => {
-      for (const facet of worktreeFacetIds(worktree)) {
-        counts[facet] += 1;
-      }
-      return counts;
-    },
-    { primary: 0, linked: 0, detached: 0, locked: 0, prunable: 0 }
-  );
-  const dirtyCount = worktrees.filter(
-    (worktree) =>
-      matchesWorktreeFilters(
-        worktree,
-        snapshotFor(worktree),
-        {
-          ...filters,
-          onlyDirty: false
+  const facetCounts = useMemo(() => {
+    const counts: Record<WorktreeFacet, number> = {
+      primary: 0,
+      linked: 0,
+      detached: 0,
+      locked: 0,
+      prunable: 0
+    };
+    const facetFilters = { ...filters, facet: null };
+    for (const worktree of worktrees) {
+      if (
+        matchesWorktreeFilters(worktree, snapshotFor(worktree), facetFilters)
+      ) {
+        for (const facet of worktreeFacetIds(worktree)) {
+          counts[facet] += 1;
         }
-      ) &&
-      isWorktreeSnapshotDirty(snapshotFor(worktree))
-  ).length;
-  const deletePlan = buildWorktreeDeletePlan(
-    visibleWorktrees,
-    snapshotFor,
-    filters.facet
+      }
+    }
+    return counts;
+  }, [filters, snapshotFor, worktrees]);
+  const dirtyCount = useMemo(() => {
+    const dirtyFilters = { ...filters, onlyDirty: false };
+    return worktrees.filter(
+      (worktree) =>
+        matchesWorktreeFilters(
+          worktree,
+          snapshotFor(worktree),
+          dirtyFilters
+        ) &&
+        isWorktreeSnapshotDirty(snapshotFor(worktree))
+    ).length;
+  }, [filters, snapshotFor, worktrees]);
+  const deletePlan = useMemo(
+    () =>
+      buildWorktreeDeletePlan(
+        visibleWorktrees,
+        snapshotFor,
+        filters.facet
+      ),
+    [filters.facet, snapshotFor, visibleWorktrees]
   );
   const pruning = deletePlan.mode === "prune";
   const worktreeBusy = commands.busy || batchCommands.busy;
@@ -164,6 +184,7 @@ export function RepositoryWorktrees({
   const deleteStatusId = "repository-worktree-delete-status";
 
   useEffect(() => {
+    repositoryGeneration.current += 1;
     setCreatePath("");
     setCreateBranch("");
     setCreateStartPoint("");
@@ -172,6 +193,9 @@ export function RepositoryWorktrees({
     setFilterOpen(false);
     commands.clearFeedback();
     batchCommands.clearFeedback();
+    return () => {
+      repositoryGeneration.current += 1;
+    };
   }, [repositoryId]);
 
   useEffect(() => {
@@ -200,6 +224,7 @@ export function RepositoryWorktrees({
     if (!path) {
       return;
     }
+    const generation = repositoryGeneration.current;
     void commands.request({
       type: "create",
       repositoryId,
@@ -207,7 +232,10 @@ export function RepositoryWorktrees({
       ...(branch ? { branch } : {}),
       ...(startPoint ? { startPoint } : {})
     }).then((accepted) => {
-      if (accepted) {
+      if (
+        accepted &&
+        generation === repositoryGeneration.current
+      ) {
         setCreateOpen(false);
       }
     });
@@ -318,10 +346,14 @@ export function RepositoryWorktrees({
                   <Button size="small"
                     disabled={worktreeBusy}
                     onClick={() => {
+                      const generation = repositoryGeneration.current;
                       void commands
                         .chooseDirectory()
                         .then((path) => {
-                          if (path) {
+                          if (
+                            path &&
+                            generation === repositoryGeneration.current
+                          ) {
                             setCreatePath(path);
                           }
                         });
@@ -610,19 +642,14 @@ export function RepositoryWorktrees({
           </div>
 
           {visibleWorktrees.length > 0 ? (
-            <div className="worktree-grid">
-              {visibleWorktrees.map((worktree) => (
-                <WorktreeSummaryCard
-                  current={worktree.id === worktreeId}
-                  directoryOpening={directoryOpening}
-                  key={worktree.id}
-                  onOpenDirectory={onOpenDirectory}
-                  repositoryName={repository.name}
-                  snapshot={snapshotFor(worktree)}
-                  worktree={worktree}
-                />
-              ))}
-            </div>
+            <WorktreeSummaryGrid
+              directoryOpening={directoryOpening}
+              onOpenDirectory={onOpenDirectory}
+              repositoryName={repository.name}
+              snapshotByWorktreeId={snapshotByWorktreeId}
+              worktreeId={worktreeId}
+              worktrees={visibleWorktrees}
+            />
           ) : (
             <div className="worktree-filter-empty">
               <Icon name="search" size={18} />
@@ -645,6 +672,38 @@ export function RepositoryWorktrees({
     </div>
   );
 }
+
+const WorktreeSummaryGrid = memo(function WorktreeSummaryGrid({
+  directoryOpening,
+  onOpenDirectory,
+  repositoryName,
+  snapshotByWorktreeId,
+  worktreeId,
+  worktrees
+}: {
+  directoryOpening: boolean;
+  onOpenDirectory(worktreeId: string): void;
+  repositoryName: string;
+  snapshotByWorktreeId: ReadonlyMap<string, RepositoryStatusSnapshotDto>;
+  worktreeId: string;
+  worktrees: readonly WorkspaceWorktreeDto[];
+}) {
+  return (
+    <div className="worktree-grid">
+      {worktrees.map((worktree) => (
+        <WorktreeSummaryCard
+          current={worktree.id === worktreeId}
+          directoryOpening={directoryOpening}
+          key={worktree.id}
+          onOpenDirectory={onOpenDirectory}
+          repositoryName={repositoryName}
+          snapshot={snapshotByWorktreeId.get(worktree.id)}
+          worktree={worktree}
+        />
+      ))}
+    </div>
+  );
+});
 
 function WorktreeMetricCard({
   icon,
@@ -673,7 +732,7 @@ function WorktreeMetricCard({
   );
 }
 
-function WorktreeSummaryCard({
+const WorktreeSummaryCard = memo(function WorktreeSummaryCard({
   worktree,
   snapshot,
   repositoryName,
@@ -804,7 +863,7 @@ function WorktreeSummaryCard({
       </div>
     </article>
   );
-}
+});
 
 function worktreeChangeCount(
   snapshot: RepositoryStatusSnapshotDto

@@ -174,7 +174,8 @@ describe("RepositoryQueryService", () => {
         kind: "compare",
         leftRef: "refs/heads/main",
         rightRef: "refs/heads/develop"
-      }
+      },
+      { keyword: "message", author: "Alice", path: "src", since: "2026-01-01" }
     );
 
     expect(gitClient.historyCalls).toEqual([
@@ -187,6 +188,7 @@ describe("RepositoryQueryService", () => {
           leftRef: "refs/heads/main",
           rightRef: "refs/heads/develop"
         },
+        search: { keyword: "message", author: "Alice", path: "src", since: "2026-01-01" },
         signal: expect.any(AbortSignal)
       }
     ]);
@@ -293,6 +295,7 @@ class FakeGitClient
     limit: number | undefined;
     offset: number | undefined;
     scope: ReadCommitHistoryOptions["scope"];
+    search: ReadCommitHistoryOptions["search"];
     signal: AbortSignal;
   }> = [];
   readonly commitDiffCalls: Array<{
@@ -412,6 +415,7 @@ class FakeGitClient
       limit: options.limit,
       offset: options.offset,
       scope: options.scope,
+      search: options.search,
       signal:
         options.signal ?? new AbortController().signal
     });

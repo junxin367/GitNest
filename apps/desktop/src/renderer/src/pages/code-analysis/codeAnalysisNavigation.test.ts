@@ -5,14 +5,17 @@ import {
   vi
 } from "vitest";
 
-import type { CodeGraphNodeDto } from "@gitnest/contracts";
+import type { CodeGraphNodeDto, CodeRequestChainDto } from "@gitnest/contracts";
 
 import {
   codeNodeDisplayName,
+  createCodeChainSearchIndex,
   countSearchableCodeNodes,
   createCodeNodeSearchIndex,
   filterChains,
   filterChainsWithMetadata,
+  filterCodeChainIndexWithMetadata,
+  getCodeNodeLookup,
   MAX_VISIBLE_CODE_NODES,
   searchCodeNodeIndexWithMetadata,
   searchCodeNodes,
@@ -20,6 +23,73 @@ import {
 } from "./codeAnalysisNavigation";
 
 describe("code analysis node search", () => {
+  it("shares node selection lookups until the snapshot node array changes", () => {
+    const idRead = vi.fn(() => "target");
+    const target = node("target", "Target", "function", "src/target.ts");
+    Object.defineProperty(target, "id", { get: idRead });
+    const nodes = [target];
+    const first = getCodeNodeLookup(nodes);
+    idRead.mockClear();
+    expect(getCodeNodeLookup(nodes)).toBe(first);
+    expect(getCodeNodeLookup(nodes).get("target")).toBe(target);
+    expect(idRead).not.toHaveBeenCalled();
+    const replacement = node("target", "Updated", "function", "src/new.ts");
+    expect(getCodeNodeLookup([replacement]).get("target")).toBe(replacement);
+  });
+
+  it("reuses chain search text across query edits", () => {
+    const chainNodes = Array.from({ length: 20_000 }, (_, index) =>
+      node(`node-${index}`, `Node ${index}`, "function", `src/${index}.ts`)
+    );
+    const chains: CodeRequestChainDto[] = Array.from({ length: 5_000 }, (_, index) => ({
+      id: `chain-${index}`,
+      profileId: "http",
+      transport: "http",
+      operationKey: `GET /route/${index}`,
+      method: "GET",
+      route: `/route/${index}`,
+      title: `Route ${index}`,
+      clientNodeId: `node-${index}`,
+      endpointNodeId: `node-${index + 1}`,
+      nodeIds: [`node-${index}`, `node-${index + 1}`],
+      edgeIds: [],
+      confidence: "exact",
+      changed: false,
+      ambiguous: false
+    }));
+    const index = createCodeChainSearchIndex(chains, chainNodes);
+    expect(filterCodeChainIndexWithMetadata(index, "", "GET", 3)).toEqual({
+      chains: chains.slice(0, 3),
+      truncated: true
+    });
+    expect(index.nodeById).toBeUndefined();
+    expect(index.searchText.size).toBe(0);
+    const normalization = vi.spyOn(String.prototype, "toLocaleLowerCase");
+    filterCodeChainIndexWithMetadata(index, "not-present", "all");
+    normalization.mockClear();
+    const result = filterCodeChainIndexWithMetadata(index, "node 4999", "all");
+    const calls = normalization.mock.calls.length;
+    normalization.mockRestore();
+    expect(result.chains.map((chain) => chain.id)).toEqual(["chain-4998", "chain-4999"]);
+    expect(calls).toBe(1);
+    expect(index.searchText.size).toBe(5000);
+    expect(filterCodeChainIndexWithMetadata(index, "node 4999", "POST").chains).toEqual([]);
+    expect(filterCodeChainIndexWithMetadata(index, "node 4999", "GET", 1)).toEqual({
+      chains: [chains[4998]],
+      truncated: true
+    });
+    const refreshedChains = [{ ...chains[0]!, title: "New snapshot content" }];
+    expect(filterCodeChainIndexWithMetadata(
+      createCodeChainSearchIndex(refreshedChains, chainNodes),
+      "new snapshot",
+      "all"
+    ).chains).toEqual(refreshedChains);
+    // One-off public calls do not retain stale text if their input is mutable.
+    expect(filterChainsWithMetadata(refreshedChains, chainNodes, "new snapshot", "all").chains).toHaveLength(1);
+    refreshedChains[0]!.title = "Changed caller-owned content";
+    expect(filterChainsWithMetadata(refreshedChains, chainNodes, "new snapshot", "all").chains).toHaveLength(0);
+  });
+
   const nodes = [
     node("file", "Material.ts", "file", "src/api/Material.ts"),
     node(

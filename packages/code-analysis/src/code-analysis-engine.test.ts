@@ -3,6 +3,8 @@ import {
   mkdtemp,
   rename,
   rm,
+  stat,
+  utimes,
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,8 +28,42 @@ import {
   type CodeAnalysisSettings
 } from "./index";
 import type { LspDocumentSymbol } from "./model";
+import * as sourceReader from "./source-reader";
 
 describe("CodeAnalysisEngine", () => {
+  it.each([false, true])("reuses verified discovery bytes and detects preserved-mtime edits with semantic pass enabled=%s", async (enabled) => {
+    const fixture = await createFixture();
+    const engine = new CodeAnalysisEngine();
+    const read = vi.spyOn(sourceReader, "readBoundedSourceFile");
+    try {
+      await writeFile(fixture.frontendFile, "export function alpha() { return 1; }\n");
+      const original = await stat(fixture.frontendFile);
+      const input = {
+        ...analysisInput(fixture, {
+          analysisId: "single-source-read",
+          scope: "workspace",
+          changedPaths: []
+        }),
+        settings: { ...defaultSettings(), enabled }
+      };
+      const first = await engine.analyze(input);
+      const warm = await engine.analyze(input);
+      expect(warm.stats.cachedFiles).toBe(warm.stats.analyzedFiles);
+      await writeFile(fixture.frontendFile, "export function bravo() { return 1; }\n");
+      await utimes(fixture.frontendFile, original.atime, original.mtime);
+      const edited = await engine.analyze(input);
+      expect(first.nodes.some((node) => node.name === "alpha")).toBe(true);
+      expect(edited.nodes.some((node) => node.name === "bravo")).toBe(true);
+      expect(edited.nodes.some((node) => node.name === "alpha")).toBe(false);
+      expect(edited.stats.cachedFiles).toBe(edited.stats.analyzedFiles - 1);
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+      await engine.dispose();
+      await fixture.dispose();
+    }
+  });
+
   it("serializes an uncompacted result only once for the engine payload check", async () => {
     const fixture = await createFixture();
     const engine = new CodeAnalysisEngine();

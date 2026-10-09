@@ -286,6 +286,105 @@ describe("RepositoryStashBrowser", () => {
     );
   });
 
+  it.each([
+    ".repository-stash-pane-header",
+    ".repository-stash-list-body",
+    ".repository-stash-detail"
+  ])("offers creation from the empty panel %s without permanent buttons", (selector) => {
+    const onCreateStash = vi.fn();
+    act(() => root.render(
+      <RepositoryStashBrowser error={null} loading={{ stashes: false, files: false }}
+        selectedStashRef={null} stashFiles={null} stashes={{ target: TARGET, stashes: [] }}
+        onCreateStash={onCreateStash} onReload={vi.fn()} onSelectStash={vi.fn()} />
+    ));
+    expect([...container.querySelectorAll("button")].some(
+      (button) => button.textContent?.includes("创建储藏")
+    )).toBe(false);
+    act(() => container.querySelector(selector)?.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 })
+    ));
+    const menu = document.querySelector('[aria-label="储藏面板操作"]');
+    expect(menu).not.toBeNull();
+    expect(findButtonByText(menu, "储藏当前文件").disabled).toBe(true);
+    expect(menu?.textContent).not.toContain("恢复");
+    act(() => findButtonByText(menu, "创建储藏").click());
+    expect(onCreateStash).toHaveBeenCalledOnce();
+    expect(document.querySelector(".repository-stash-context-menu")).toBeNull();
+  });
+
+  it("keeps row actions when creation is available and stashes only the selected working file", () => {
+    const onCreateStash = vi.fn();
+    const onCreateFileStash = vi.fn();
+    const onSelectStash = vi.fn();
+    act(() => root.render(
+      <RepositoryStashBrowser error={null} loading={{ stashes: false, files: false }}
+        selectedStashRef="stash@{0}" stashFiles={FILES} stashes={STASHES}
+        onCreateStash={onCreateStash} onCreateFileStash={onCreateFileStash}
+        selectedFilePath="src/current.ts" onMutateStash={vi.fn()}
+        onReload={vi.fn()} onSelectStash={onSelectStash} />
+    ));
+    openContextMenu("stash@{1}");
+    const menu = document.querySelector('[aria-label="stash@{1} 储藏操作"]');
+    expect([...menu!.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent?.trim()))
+      .toEqual(["创建储藏", "储藏当前文件", "恢复", "删除", "恢复并删除"]);
+    expect(document.querySelector('[aria-label="储藏面板操作"]')).toBeNull();
+    expect(onSelectStash).toHaveBeenCalledExactlyOnceWith("stash@{1}");
+    const fileAction = findButtonByText(menu, "储藏当前文件");
+    expect(fileAction.title).toBe("src/current.ts");
+    act(() => fileAction.click());
+    expect(onCreateFileStash).toHaveBeenCalledOnce();
+    expect(onCreateStash).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(findStashButton("stash@{1}"));
+  });
+
+  it.each([
+    { key: "ContextMenu", shiftKey: false },
+    { key: "F10", shiftKey: true }
+  ])("opens panel and row menus using $key", (keyboard) => {
+    act(() => root.render(
+      <RepositoryStashBrowser error={null} loading={{ stashes: false, files: false }}
+        selectedStashRef="stash@{0}" stashFiles={FILES} stashes={STASHES}
+        onCreateStash={vi.fn()} onMutateStash={vi.fn()}
+        onReload={vi.fn()} onSelectStash={vi.fn()} />
+    ));
+    const panel = container.querySelector<HTMLElement>('[aria-label="储藏列表"]')!;
+    act(() => {
+      panel.focus();
+      panel.dispatchEvent(new KeyboardEvent("keydown", { ...keyboard, bubbles: true, cancelable: true }));
+    });
+    expect(document.querySelector('[aria-label="储藏面板操作"]')).not.toBeNull();
+    act(() => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Escape", bubbles: true, cancelable: true
+    })));
+    expect(document.querySelector(".repository-stash-context-menu")).toBeNull();
+    expect(document.activeElement).toBe(panel);
+    act(() => findStashButton("stash@{0}").dispatchEvent(
+      new KeyboardEvent("keydown", { ...keyboard, bubbles: true, cancelable: true })
+    ));
+    expect(document.querySelector('[aria-label="stash@{0} 储藏操作"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="储藏面板操作"]')).toBeNull();
+  });
+
+  it.each(["blur", "resize", "target", "busy"])("dismisses the creation menu after %s", (reason) => {
+    const render = (target = TARGET, mutationBusy = false) => root.render(
+      <RepositoryStashBrowser error={null} loading={{ stashes: false, files: false }}
+        selectedStashRef={null} stashFiles={null} stashes={{ target, stashes: [] }}
+        mutationBusy={mutationBusy} onCreateStash={vi.fn()}
+        onReload={vi.fn()} onSelectStash={vi.fn()} />
+    );
+    act(() => render());
+    act(() => container.querySelector(".repository-stash-browser")?.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true })
+    ));
+    expect(document.querySelector('[aria-label="储藏面板操作"]')).not.toBeNull();
+    act(() => {
+      if (reason === "target") render({ repositoryId: "other", worktreeId: "other" });
+      else if (reason === "busy") render(TARGET, true);
+      else window.dispatchEvent(new Event(reason));
+    });
+    expect(document.querySelector(".repository-stash-context-menu")).toBeNull();
+  });
+
   it("opens the stash action menu on right-click and confirms delete with the complete stash", async () => {
     const onSelectStash = vi.fn();
     const onMutateStash = vi.fn(async () => true);
@@ -513,6 +612,24 @@ describe("RepositoryStashBrowser", () => {
         '[aria-label="stash@{0} 储藏操作"]'
       )
     ).toBeNull();
+  });
+
+  it("keeps the menu open while its own content scrolls, then closes on panel scroll", () => {
+    act(() => root.render(
+      <RepositoryStashBrowser error={null} loading={{ stashes: false, files: false }}
+        selectedStashRef="stash@{0}" stashFiles={FILES} stashes={STASHES}
+        onCreateStash={vi.fn()} onMutateStash={vi.fn()}
+        onReload={vi.fn()} onSelectStash={vi.fn()} />
+    ));
+    openContextMenu("stash@{0}");
+    const menu = document.querySelector<HTMLElement>(".repository-stash-context-menu")!;
+    act(() => menu.dispatchEvent(new Event("scroll", { bubbles: false })));
+    expect(document.querySelector(".repository-stash-context-menu")).toBe(menu);
+    expect(findButtonByText(menu, "恢复并删除").disabled).toBe(false);
+    act(() => container.querySelector(".repository-stash-list-body")?.dispatchEvent(
+      new Event("scroll", { bubbles: false })
+    ));
+    expect(document.querySelector(".repository-stash-context-menu")).toBeNull();
   });
 
   it("describes pop conflict safety and disables dialog actions while a mutation is busy", () => {

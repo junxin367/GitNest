@@ -54,7 +54,7 @@ export class CodeAnalysisEngine {
   async analyze(
     input: CodeAnalysisInput
   ): Promise<CodeAnalysisSnapshot> {
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     throwIfAborted(input.signal);
     const cache = new AnalysisCache(
       input.cacheDirectory,
@@ -80,36 +80,6 @@ export class CodeAnalysisEngine {
         ]
       )
     ).values()];
-    input.onProgress?.({
-      stage: "discovering",
-      completed: 0,
-      total: 1,
-      message:
-        input.scope === "changed"
-          ? "正在读取 Git 变动文件"
-          : "正在发现 Workspace 源文件"
-    });
-    const inventory = await discoverSourceFiles({
-      roots: input.roots,
-      changedPaths: reconciliationPaths,
-      scope: input.scope,
-      settings: input.settings,
-      ...(input.signal ? { signal: input.signal } : {})
-    });
-    if (input.scope === "changed") {
-      for (const file of inventory.files) {
-        file.changed = currentDirtyCanonicalPaths.has(
-          file.canonicalPath
-        );
-      }
-    }
-    input.onProgress?.({
-      stage: "discovering",
-      completed: 1,
-      total: 1,
-      message: `已发现 ${inventory.files.length} 个可分析文件`
-    });
-
     const currentRootRevisions =
       rootRevisionRecord(input.roots);
     const cacheRevisionMatches = rootRevisionsMatch(
@@ -128,17 +98,72 @@ export class CodeAnalysisEngine {
       ParsedSourceFile
     >();
     let cachedFiles = 0;
-    let completedReads = 0;
+    const documents: SourceDocument[] = [];
+    input.onProgress?.({
+      stage: "discovering",
+      completed: 0,
+      total: 1,
+      message:
+        input.scope === "changed"
+          ? "正在读取并索引 Git 变动文件"
+          : "正在发现并索引 Workspace 源文件"
+    });
+    const inventory = await discoverSourceFiles({
+      roots: input.roots,
+      changedPaths: reconciliationPaths,
+      scope: input.scope,
+      settings: input.settings,
+      ...(input.signal ? { signal: input.signal } : {}),
+      onSourceFile: async (file, content) => {
+        throwIfAborted(input.signal);
+        if (input.scope === "changed") {
+          file.changed = currentDirtyCanonicalPaths.has(file.canonicalPath);
+        }
+        const cached = input.scope === "changed" && !cacheRevisionMatches
+          ? undefined
+          : cacheDocument.files[file.canonicalPath];
+        const cacheHit = cached?.fingerprint === file.fingerprint;
+        const sourceText = !cacheHit || input.settings.enabled
+          ? content.toString("utf8")
+          : "";
+        if (cacheHit && cached) {
+          parsedByPath.set(file.canonicalPath, {
+            ...cached.parsed,
+            file: { ...cached.parsed.file, ...file }
+          });
+          cachedFiles += 1;
+        } else {
+          parsedByPath.set(file.canonicalPath, parseSourceFile(file, sourceText));
+        }
+        // The built-in parser consumes one verified source at a time. Only
+        // an enabled semantic pass needs to retain source text afterward.
+        if (input.settings.enabled) {
+          documents.push({ file, content: sourceText });
+        }
+        input.onProgress?.({
+          stage: "discovering",
+          completed: parsedByPath.size,
+          total: parsedByPath.size + 1,
+          message: `已读取并索引 ${file.relativePath}`
+        });
+        if (parsedByPath.size % 25 === 0) {
+          await yieldToEventLoop();
+        }
+      }
+    });
+    input.onProgress?.({
+      stage: "discovering",
+      completed: 1,
+      total: 1,
+      message: `已发现 ${inventory.files.length} 个可分析文件`
+    });
+
+    const readFailurePaths = new Set<string>();
     let suppressedWarningCount = Math.max(
       0,
       inventory.warnings.length - MAX_SNAPSHOT_WARNINGS
     );
-    const readFailurePaths = new Set<string>();
-    const documents: SourceDocument[] = [];
-    const warnings = inventory.warnings.slice(
-      0,
-      MAX_SNAPSHOT_WARNINGS
-    );
+    const warnings = inventory.warnings.slice(0, MAX_SNAPSHOT_WARNINGS);
     const addWarning = (warning: string) => {
       if (warnings.length < MAX_SNAPSHOT_WARNINGS) {
         warnings.push(warning);
@@ -146,92 +171,12 @@ export class CodeAnalysisEngine {
         suppressedWarningCount += 1;
       }
     };
-    const filesToRead = inventory.files.filter((file) => {
-      const cached =
-        input.scope === "changed" &&
-        !cacheRevisionMatches
-          ? undefined
-          : cacheDocument.files[file.canonicalPath];
-      if (cached?.fingerprint === file.fingerprint) {
-        parsedByPath.set(file.canonicalPath, {
-          ...cached.parsed,
-          file: {
-            ...cached.parsed.file,
-            ...file,
-            changed: file.changed
-          }
-        });
-        cachedFiles += 1;
-        return false;
-      }
-      return true;
-    });
-
-    input.onProgress?.({
-      stage: "reading",
-      completed: 0,
-      total: filesToRead.length,
-      message: "正在读取源文件"
-    });
-    await runConcurrent(
-      filesToRead,
-      input.settings.readConcurrency,
-      async (file) => {
-        throwIfAborted(input.signal);
-        try {
-          const content = await readBoundedSourceFile(
-            file,
-            input.settings.maxFileSizeBytes
-          );
-          documents.push({ file, content });
-        } catch (error) {
-          readFailurePaths.add(file.canonicalPath);
-          addWarning(
-            `无法读取源文件 ${file.relativePath}：${errorMessage(
-              error
-            )}`
-          );
-        }
-        completedReads += 1;
-        input.onProgress?.({
-          stage: "reading",
-          completed: completedReads,
-          total: filesToRead.length,
-          message: file.relativePath
-        });
-      }
-    );
-
     input.onProgress?.({
       stage: "parsing",
-      completed: 0,
-      total: documents.length,
-      message: "正在建立内置代码索引"
+      completed: parsedByPath.size - cachedFiles,
+      total: parsedByPath.size - cachedFiles,
+      message: "内置代码索引已建立"
     });
-    for (let index = 0; index < documents.length; index += 1) {
-      throwIfAborted(input.signal);
-      const document = documents[index];
-      if (!document) {
-        continue;
-      }
-      const parsed = parseSourceFile(
-        document.file,
-        document.content
-      );
-      parsedByPath.set(
-        document.file.canonicalPath,
-        parsed
-      );
-      input.onProgress?.({
-        stage: "parsing",
-        completed: index + 1,
-        total: documents.length,
-        message: document.file.relativePath
-      });
-      if (index % 25 === 0) {
-        await yieldToEventLoop();
-      }
-    }
 
     let languageServers: CodeAnalysisSnapshot["languageServers"] =
       [];
@@ -622,7 +567,7 @@ export class CodeAnalysisEngine {
             graph.requestChains.length,
           truncated:
             inventory.truncated || graph.truncated,
-          durationMs: Date.now() - startedAt
+          durationMs: Math.max(0, Math.round(performance.now() - startedAt))
         }
       },
       this.#maximumSnapshotPayloadBytes
@@ -667,10 +612,12 @@ async function ensureLspDocuments(
           file,
           content: await readBoundedSourceFile(
             file,
-            maxFileSizeBytes
+            maxFileSizeBytes,
+            signal
           )
         });
       } catch (error) {
+        throwIfAborted(signal);
         onReadError?.(file, error);
       }
     }

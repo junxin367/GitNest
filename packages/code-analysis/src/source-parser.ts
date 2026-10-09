@@ -330,9 +330,11 @@ function parseJava(
     content,
     codeOffsets
   );
+  const isTypeMember = createJavaTypeMemberChecker(content);
   const typeBlocks = extractJavaTypeBlocks(
     content,
-    codeOffsets
+    codeOffsets,
+    isTypeMember
   );
   for (const typeBlock of typeBlocks) {
     symbols.push({
@@ -375,9 +377,9 @@ function parseJava(
       continue;
     }
     const owner = javaTypeOwnerAtOffset(
-      content,
       typeBlocks,
-      start
+      start,
+      isTypeMember
     );
     if (!owner) {
       continue;
@@ -416,9 +418,9 @@ function parseJava(
       continue;
     }
     const owner = javaTypeOwnerAtOffset(
-      content,
       typeBlocks,
-      start
+      start,
+      isTypeMember
     );
     if (!owner || name === owner.name) {
       continue;
@@ -452,9 +454,9 @@ function parseJava(
       continue;
     }
     const owner = javaTypeOwnerAtOffset(
-      content,
       typeBlocks,
-      start
+      start,
+      isTypeMember
     );
     if (!owner || name === owner.name) {
       continue;
@@ -541,9 +543,9 @@ function parseJava(
       continue;
     }
     const owner = javaTypeOwnerAtOffset(
-      content,
       typeBlocks,
-      start
+      start,
+      isTypeMember
     );
     if (!owner || name === owner.name) {
       continue;
@@ -653,7 +655,8 @@ function parseJava(
 
 function extractJavaTypeBlocks(
   content: string,
-  codeOffsets: SourceCodeOffsets
+  codeOffsets: SourceCodeOffsets,
+  isTypeMember: JavaTypeMemberChecker
 ): JavaTypeBlock[] {
   const blocks: JavaTypeBlock[] = [];
   const pattern =
@@ -682,8 +685,7 @@ function extractJavaTypeBlocks(
       );
     if (
       parent &&
-      !isTopLevelTypeMember(
-        content,
+      !isTypeMember(
         parent.bodyStart,
         parent.bodyEnd,
         declarationStart
@@ -716,9 +718,9 @@ function extractJavaTypeBlocks(
 }
 
 function javaTypeOwnerAtOffset(
-  content: string,
   blocks: JavaTypeBlock[],
-  offset: number
+  offset: number,
+  isTypeMember: JavaTypeMemberChecker
 ): JavaTypeBlock | undefined {
   return [...blocks]
     .reverse()
@@ -726,8 +728,7 @@ function javaTypeOwnerAtOffset(
       (block) =>
         offset >= block.bodyStart &&
         offset < block.bodyEnd &&
-        isTopLevelTypeMember(
-          content,
+        isTypeMember(
           block.bodyStart,
           block.bodyEnd,
           offset
@@ -1075,27 +1076,58 @@ function extractJavaVariableTypes(
   return types;
 }
 
-function isTopLevelTypeMember(
-  content: string,
+type JavaTypeMemberChecker = (
   bodyStart: number,
   bodyEnd: number,
   offset: number
-): boolean {
-  if (
-    bodyStart < 0 ||
-    bodyEnd < bodyStart ||
-    offset < bodyStart ||
-    offset > bodyEnd
-  ) {
-    return false;
-  }
+) => boolean;
 
+function createJavaTypeMemberChecker(
+  content: string
+): JavaTypeMemberChecker {
+  // Each class body is scanned at most once per parse. Store only transitions
+  // between top-level and nested code, rather than one value per character.
+  const transitionsByBody = new Map<number, number[]>();
+  return (bodyStart, bodyEnd, offset) => {
+    if (
+      bodyStart < 0 ||
+      bodyEnd < bodyStart ||
+      offset < bodyStart ||
+      offset > bodyEnd
+    ) {
+      return false;
+    }
+    let transitions = transitionsByBody.get(bodyStart);
+    if (!transitions) {
+      transitions = javaTypeMemberTransitions(content, bodyStart, bodyEnd);
+      transitionsByBody.set(bodyStart, transitions);
+    }
+    let low = 0;
+    let high = transitions.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if ((transitions[middle] as number) <= offset) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    return low % 2 === 0;
+  };
+}
+
+function javaTypeMemberTransitions(
+  content: string,
+  bodyStart: number,
+  bodyEnd: number
+): number[] {
+  const transitions: number[] = [];
   let depth = 0;
   let quote = "";
   let escaped = false;
   let lineComment = false;
   let blockComment = false;
-  for (let index = bodyStart; index < offset; index += 1) {
+  for (let index = bodyStart; index < bodyEnd; index += 1) {
     const current = content[index] ?? "";
     const next = content[index + 1] ?? "";
     if (lineComment) {
@@ -1136,12 +1168,18 @@ function isTopLevelTypeMember(
       continue;
     }
     if (current === "{") {
+      if (depth === 0) {
+        transitions.push(index + 1);
+      }
       depth += 1;
     } else if (current === "}") {
+      if (depth === 1) {
+        transitions.push(index + 1);
+      }
       depth = Math.max(0, depth - 1);
     }
   }
-  return depth === 0;
+  return transitions;
 }
 
 function extractClientRequests(

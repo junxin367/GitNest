@@ -1,5 +1,7 @@
 import { Button } from "../../shared/ui/Button";
 import {
+  memo,
+  type ReactNode,
   useEffect,
   useMemo,
   useRef,
@@ -16,12 +18,10 @@ import type {
 
 import {
   filterSnapshotsToTargets,
-  findTargetSnapshot,
   getSnapshotChangeCount,
   isWorkspaceDataBlocked,
   listWorkspaceTargets,
-  repositoryTargetSelected,
-  resolveWorkspaceTarget
+  repositoryTargetSelected
 } from "../../entities/workspace/model";
 import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
 import type { IconName } from "../../shared/ui/Icon";
@@ -86,7 +86,7 @@ interface WorkspaceOverviewPageProps {
   onClearFeedback(): void;
 }
 
-export function WorkspaceOverviewPage({
+export const WorkspaceOverviewPage = memo(function WorkspaceOverviewPage({
   workspace,
   snapshots,
   error,
@@ -104,14 +104,6 @@ export function WorkspaceOverviewPage({
     new Map<string, HistoryCacheEntry>()
   );
   const historyLifecycleRef = useRef(0);
-  const [
-    repositoryStatusCollapsed,
-    setRepositoryStatusCollapsed
-  ] = useState(false);
-  const [
-    recentCommitsCollapsed,
-    setRecentCommitsCollapsed
-  ] = useState(false);
   const targets = useMemo(
     () => listWorkspaceTargets(workspace),
     [workspace]
@@ -120,33 +112,61 @@ export function WorkspaceOverviewPage({
     () => filterSnapshotsToTargets(snapshots, targets),
     [snapshots, targets]
   );
-  const statusRows = useMemo(
+  const targetLookup = useMemo(
+    () => ({
+      repositories: indexFirstById(
+        workspace?.repositories ?? []
+      ),
+      worktrees: indexFirstById(workspace?.worktrees ?? [])
+    }),
+    [workspace?.repositories, workspace?.worktrees]
+  );
+  const snapshotLookup = useMemo(() => {
+    const lookup = new Map<string, RepositoryStatusSnapshotDto>();
+    for (const snapshot of scopedSnapshots) {
+      const key = JSON.stringify([
+        snapshot.repositoryId,
+        snapshot.worktreeId
+      ]);
+      if (!lookup.has(key)) {
+        lookup.set(key, snapshot);
+      }
+    }
+    return lookup;
+  }, [scopedSnapshots]);
+  const targetRows = useMemo(
     () =>
       workspace
-        ? targets
-            .map((target) => ({
-              target,
-              ...resolveWorkspaceTarget(workspace, target),
-              snapshot: findTargetSnapshot(
-                scopedSnapshots,
-                target
-              )
-            }))
-            .sort(compareStatusRows)
+        ? targets.map((target) => ({
+            target,
+            repository: targetLookup.repositories.get(
+              target.repositoryId
+            ),
+            worktree: targetLookup.worktrees.get(
+              target.worktreeId
+            ),
+            snapshot: snapshotLookup.get(
+              JSON.stringify([
+                target.repositoryId,
+                target.worktreeId
+              ])
+            )
+          }))
         : [],
-    [scopedSnapshots, targets, workspace]
+    [snapshotLookup, targetLookup, targets, workspace]
+  );
+  const statusRows = useMemo(
+    () => [...targetRows].sort(compareStatusRows),
+    [targetRows]
   );
   const historyRequestsKey = useMemo(
     () =>
       JSON.stringify(
-        targets.map((target) => {
-          const snapshot = findTargetSnapshot(
-            scopedSnapshots,
-            target
-          );
+        targetRows.map((row) => {
+          const { target, snapshot } = row;
           return {
             target,
-            identity: historyTargetIdentity(workspace, target),
+            identity: historyTargetIdentity(workspace, row),
             head: snapshot ? snapshot.head : null,
             refreshToken: snapshot
               ? String(snapshot.contentVersion ?? "")
@@ -154,7 +174,7 @@ export function WorkspaceOverviewPage({
           } satisfies WorkspaceHistoryRequest;
         })
       ),
-    [scopedSnapshots, targets, workspace]
+    [targetRows, workspace]
   );
   const historyRequests = useMemo<WorkspaceHistoryRequest[]>(
     () => JSON.parse(historyRequestsKey),
@@ -549,45 +569,24 @@ export function WorkspaceOverviewPage({
 
       <section className="dashboard-grid">
         <div>
-          <article className="panel">
-            <button
-              aria-controls="workspace-overview-repository-status"
-              aria-expanded={!repositoryStatusCollapsed}
-              className="panel-header panel-header-toggle"
-              onClick={() =>
-                setRepositoryStatusCollapsed(
-                  (collapsed) => !collapsed
-                )
-              }
-              type="button"
-            >
-              <span className="panel-title">
-                <Icon name="repository" />
-                仓库状态
-              </span>
-              <span className="panel-caption">
-                {statusRows.length > 0
-                  ? `${freshCount}/${statusRows.length} 已刷新`
-                  : workspace
-                    ? `${workspace.repositories.length} 个仓库`
-                    : "正在恢复…"}
-              </span>
-              <Icon
-                className="panel-collapse-indicator"
-                name="chevron"
-                size={14}
-              />
-            </button>
-            <div
-              aria-hidden={repositoryStatusCollapsed}
-              className="panel-collapsible-body"
-              hidden={repositoryStatusCollapsed}
-              id="workspace-overview-repository-status"
-            >
+          <WorkspaceCollapsiblePanel
+            id="workspace-overview-repository-status"
+            icon="repository"
+            title="仓库状态"
+            caption={
+              statusRows.length > 0
+                ? `${freshCount}/${statusRows.length} 已刷新`
+                : workspace
+                  ? `${workspace.repositories.length} 个仓库`
+                  : "正在恢复…"
+            }
+          >
               {statusRows.length > 0 && workspace ? (
                 <div
                   aria-label="仓库状态"
-                  className="repository-status-table"
+                  className={`repository-status-table${
+                    statusRows.length > 50 ? " deferred-rows" : ""
+                  }`}
                   role="list"
                 >
                   <div
@@ -707,20 +706,13 @@ export function WorkspaceOverviewPage({
                   </div>
                 </div>
               )}
-            </div>
-          </article>
+          </WorkspaceCollapsiblePanel>
         </div>
 
         <div>
           <WorkspaceRecentCommitsPanel
-            collapsed={recentCommitsCollapsed}
             recentCommits={recentCommits}
             rows={recentRows}
-            onToggle={() =>
-              setRecentCommitsCollapsed(
-                (collapsed) => !collapsed
-              )
-            }
             onSelectTarget={onSelectTarget}
           />
           <WorkspaceBranchDistributionPanel
@@ -731,6 +723,52 @@ export function WorkspaceOverviewPage({
       </section>
       </div>
     </SkeletonBoundary>
+  );
+});
+
+function WorkspaceCollapsiblePanel({
+  id,
+  icon,
+  title,
+  caption,
+  children
+}: {
+  id: string;
+  icon: IconName;
+  title: string;
+  caption: string;
+  children: ReactNode;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <article className="panel">
+      <button
+        aria-controls={id}
+        aria-expanded={!collapsed}
+        className="panel-header panel-header-toggle"
+        onClick={() => setCollapsed((current) => !current)}
+        type="button"
+      >
+        <span className="panel-title">
+          <Icon name={icon} />
+          {title}
+        </span>
+        <span className="panel-caption">{caption}</span>
+        <Icon
+          className="panel-collapse-indicator"
+          name="chevron"
+          size={14}
+        />
+      </button>
+      <div
+        aria-hidden={collapsed}
+        className="panel-collapsible-body"
+        hidden={collapsed}
+        id={id}
+      >
+        {children}
+      </div>
+    </article>
   );
 }
 
@@ -781,46 +819,21 @@ function WorkspaceOverviewSkeleton() {
 }
 
 function WorkspaceRecentCommitsPanel({
-  collapsed,
   recentCommits,
   rows,
-  onSelectTarget,
-  onToggle
+  onSelectTarget
 }: {
-  collapsed: boolean;
   recentCommits: Map<string, CommitSummaryDto>;
   rows: StatusRow[];
   onSelectTarget(target: RepositoryTargetDto): void;
-  onToggle(): void;
 }) {
   return (
-    <article className="panel">
-      <button
-        aria-controls="workspace-overview-recent-commits"
-        aria-expanded={!collapsed}
-        className="panel-header panel-header-toggle"
-        onClick={onToggle}
-        type="button"
-      >
-        <span className="panel-title">
-          <Icon name="history" />
-          各仓库最近提交
-        </span>
-        <span className="panel-caption">
-          每仓库采集 1 条
-        </span>
-        <Icon
-          className="panel-collapse-indicator"
-          name="chevron"
-          size={14}
-        />
-      </button>
-      <div
-        aria-hidden={collapsed}
-        className="panel-collapsible-body"
-        hidden={collapsed}
-        id="workspace-overview-recent-commits"
-      >
+    <WorkspaceCollapsiblePanel
+      id="workspace-overview-recent-commits"
+      icon="history"
+      title="各仓库最近提交"
+      caption="每仓库采集 1 条"
+    >
         {rows.length > 0 ? (
           <div className="workspace-activity-list">
             {rows.map(
@@ -909,8 +922,7 @@ function WorkspaceRecentCommitsPanel({
             </div>
           </div>
         )}
-      </div>
-    </article>
+    </WorkspaceCollapsiblePanel>
   );
 }
 
@@ -966,10 +978,22 @@ function WorkspaceBranchDistributionPanel({
 
 type StatusRow = {
   target: RepositoryTargetDto;
-  repository: ReturnType<typeof resolveWorkspaceTarget>["repository"];
-  worktree: ReturnType<typeof resolveWorkspaceTarget>["worktree"];
+  repository: WorkspaceDetailsDto["repositories"][number] | undefined;
+  worktree: WorkspaceDetailsDto["worktrees"][number] | undefined;
   snapshot: RepositoryStatusSnapshotDto | undefined;
 };
+
+function indexFirstById<T extends { id: string }>(
+  values: T[]
+): Map<string, T> {
+  const index = new Map<string, T>();
+  for (const value of values) {
+    if (!index.has(value.id)) {
+      index.set(value.id, value);
+    }
+  }
+  return index;
+}
 
 type BranchDistributionRow = {
   name: string;
@@ -1029,24 +1053,18 @@ function targetKey(target: RepositoryTargetDto): string {
 
 function historyTargetIdentity(
   workspace: WorkspaceDetailsDto | null,
-  target: RepositoryTargetDto
+  { target, repository, worktree }: StatusRow
 ): string {
-  const resolved = workspace
-    ? resolveWorkspaceTarget(workspace, target)
-    : {
-        repository: undefined,
-        worktree: undefined
-      };
   return JSON.stringify([
     workspace?.id ?? "",
     workspace?.canonicalPath ?? workspace?.path ?? "",
     target.repositoryId,
     target.worktreeId,
-    resolved.repository?.canonicalCommonDir ??
-      resolved.repository?.commonDir ??
+    repository?.canonicalCommonDir ??
+      repository?.commonDir ??
       "",
-    resolved.worktree?.canonicalPath ??
-      resolved.worktree?.path ??
+    worktree?.canonicalPath ??
+      worktree?.path ??
       ""
   ]);
 }

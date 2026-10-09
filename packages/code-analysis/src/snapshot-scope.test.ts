@@ -11,6 +11,47 @@ import { parseSourceFile } from "./source-parser";
 import type { AnalysisSourceFile } from "./model";
 
 describe("createChangedAnalysisSnapshot", () => {
+  it("keeps shared file paths scoped to their worktrees and refreshes path keys on every merge", () => {
+    const previous = createWorkspaceSnapshot();
+    previous.nodes = ["first", "second"].map((id) => ({
+      ...node(id, "function", false),
+      name: `semantic-${id}`,
+      source: "lsp",
+      location: {
+        repositoryId: "repository",
+        worktreeId: id,
+        path: "src/shared.ts",
+        line: 1,
+        column: 1
+      }
+    }));
+    previous.edges = [];
+    previous.requestChains = [];
+    const refreshed = {
+      ...previous,
+      nodes: previous.nodes.map((item) => ({
+        ...item,
+        name: `current-${item.id}`,
+        source: "builtin" as const
+      }))
+    };
+    const changes = [{
+      repositoryId: "repository",
+      worktreeId: "first",
+      path: "src\\shared.ts"
+    }];
+    expect(
+      mergeIncrementalWorkspaceSnapshot(previous, refreshed, changes)
+        .nodes.map((item) => item.name)
+    ).toEqual(["current-first", "semantic-second"]);
+
+    changes[0]!.worktreeId = "second";
+    expect(
+      mergeIncrementalWorkspaceSnapshot(previous, refreshed, changes)
+        .nodes.map((item) => item.name)
+    ).toEqual(["semantic-first", "current-second"]);
+  });
+
   it("keeps a truncated incremental graph partial", () => {
     const previous = createWorkspaceSnapshot();
     previous.indexStatus = {

@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState
 } from "react";
@@ -13,24 +14,25 @@ import { Button } from "../../shared/ui/Button";
 import { Dialog } from "../../shared/ui/Dialog";
 import { Icon } from "../../shared/ui/Icon";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
-import { Menu, MenuItem } from "../../shared/ui/Menu";
+import { Menu, MenuItem, MenuSeparator } from "../../shared/ui/Menu";
 
 const CONTEXT_MENU_WIDTH = 222;
 const CONTEXT_MENU_HEIGHT = 132;
 const VIEWPORT_PADDING = 8;
 
 export interface RepositoryStashContextMenuState {
-  stash: StashSummaryDto;
-  anchor?: HTMLButtonElement;
+  stash: StashSummaryDto | null;
+  anchor?: HTMLElement;
   x: number;
   y: number;
 }
 
 export function createRepositoryStashContextMenuState(
-  stash: StashSummaryDto,
+  stash: StashSummaryDto | null,
   clientX: number,
   clientY: number,
-  anchor?: HTMLButtonElement
+  anchor?: HTMLElement,
+  menuHeight = CONTEXT_MENU_HEIGHT
 ): RepositoryStashContextMenuState {
   const maxX = Math.max(
     VIEWPORT_PADDING,
@@ -41,7 +43,7 @@ export function createRepositoryStashContextMenuState(
   const maxY = Math.max(
     VIEWPORT_PADDING,
     window.innerHeight -
-      CONTEXT_MENU_HEIGHT -
+      menuHeight -
       VIEWPORT_PADDING
   );
 
@@ -56,11 +58,19 @@ export function createRepositoryStashContextMenuState(
 export function RepositoryStashContextMenu({
   contextMenu,
   mutationBusy,
+  canMutateStash = true,
+  onCreateStash,
+  onCreateFileStash,
+  selectedFilePath,
   onChoose,
   onClose
 }: {
   contextMenu: RepositoryStashContextMenuState | null;
   mutationBusy: boolean;
+  canMutateStash?: boolean;
+  onCreateStash?(): void;
+  onCreateFileStash?(): void;
+  selectedFilePath?: string;
   onChoose(
     action: RepositoryStashMutationAction,
     stash: StashSummaryDto
@@ -68,6 +78,21 @@ export function RepositoryStashContextMenu({
   onClose(): void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!contextMenu || !menu) {
+      return;
+    }
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(
+      VIEWPORT_PADDING,
+      Math.min(contextMenu.x, window.innerWidth - rect.width - VIEWPORT_PADDING)
+    )}px`;
+    menu.style.top = `${Math.max(
+      VIEWPORT_PADDING,
+      Math.min(contextMenu.y, window.innerHeight - rect.height - VIEWPORT_PADDING)
+    )}px`;
+  }, [contextMenu, canMutateStash, onCreateStash, onCreateFileStash, selectedFilePath]);
   const closeContextMenu = useCallback(() => {
     onClose();
   }, [onClose]);
@@ -109,6 +134,12 @@ export function RepositoryStashContextMenu({
         closeAndRestoreFocus();
       }
     };
+    const closeFromScroll = (event: Event) => {
+      if (event.target instanceof Node && menuRef.current?.contains(event.target)) {
+        return;
+      }
+      closeContextMenu();
+    };
     const focusFrame = window.requestAnimationFrame(() => {
       menuRef.current
         ?.querySelector<HTMLButtonElement>(
@@ -121,7 +152,7 @@ export function RepositoryStashContextMenu({
     document.addEventListener("keydown", closeFromKeyboard);
     document.addEventListener(
       "scroll",
-      closeContextMenu,
+      closeFromScroll,
       true
     );
     window.addEventListener("blur", closeContextMenu);
@@ -138,7 +169,7 @@ export function RepositoryStashContextMenu({
       );
       document.removeEventListener(
         "scroll",
-        closeContextMenu,
+        closeFromScroll,
         true
       );
       window.removeEventListener("blur", closeContextMenu);
@@ -160,7 +191,7 @@ export function RepositoryStashContextMenu({
   }
 
   const choose = (action: RepositoryStashMutationAction) => {
-    if (mutationBusy) {
+    if (mutationBusy || !canMutateStash || !contextMenu.stash) {
       return;
     }
     const { stash } = contextMenu;
@@ -168,41 +199,73 @@ export function RepositoryStashContextMenu({
     closeAndRestoreFocus();
     onChoose(action, stash);
   };
+  const create = (callback: (() => void) | undefined) => {
+    if (mutationBusy || !callback) {
+      return;
+    }
+    closeAndRestoreFocus();
+    callback();
+  };
+  const hasCreationActions = Boolean(onCreateStash || onCreateFileStash);
+  const hasStashActions = Boolean(contextMenu.stash && canMutateStash);
 
   return (
     <LayerPortal>
       <Menu
-        aria-label={`${contextMenu.stash.ref} 储藏操作`}
+        aria-label={contextMenu.stash ? `${contextMenu.stash.ref} 储藏操作` : "储藏面板操作"}
         className="workspace-context-menu repository-stash-context-menu"
         ref={menuRef}
         style={{
           left: contextMenu.x,
-          top: contextMenu.y
+          top: contextMenu.y,
+          maxHeight: "calc(100vh - 16px)",
+          overflowY: "auto"
         }}
       >
-        <MenuItem
-          disabled={mutationBusy}
-          leading={<Icon name="undo" size={14} />}
-          onClick={() => choose("apply")}
-        >
-          恢复
-        </MenuItem>
-        <MenuItem
-          disabled={mutationBusy}
-          leading={<Icon name="warning" size={14} />}
-          onClick={() => choose("drop")}
-          tone="danger"
-        >
-          删除
-        </MenuItem>
-        <MenuItem
-          disabled={mutationBusy}
-          leading={<Icon name="download" size={14} />}
-          onClick={() => choose("pop")}
-          tone="danger"
-        >
-          恢复并删除
-        </MenuItem>
+        {hasCreationActions && (
+          <>
+            {onCreateStash && (
+              <MenuItem disabled={mutationBusy} onClick={() => create(onCreateStash)}>
+                创建储藏
+              </MenuItem>
+            )}
+            <MenuItem
+              disabled={mutationBusy || !onCreateFileStash || !selectedFilePath}
+              onClick={() => create(onCreateFileStash)}
+              title={selectedFilePath ?? "请先在变更文件中选择一个文件"}
+            >
+              储藏当前文件
+            </MenuItem>
+          </>
+        )}
+        {hasCreationActions && hasStashActions && <MenuSeparator />}
+        {hasStashActions && (
+          <>
+            <MenuItem
+              disabled={mutationBusy}
+              leading={<Icon name="undo" size={14} />}
+              onClick={() => choose("apply")}
+            >
+              恢复
+            </MenuItem>
+            <MenuItem
+              disabled={mutationBusy}
+              leading={<Icon name="warning" size={14} />}
+              onClick={() => choose("drop")}
+              tone="danger"
+            >
+              删除
+            </MenuItem>
+            <MenuItem
+              disabled={mutationBusy}
+              leading={<Icon name="download" size={14} />}
+              onClick={() => choose("pop")}
+              tone="danger"
+            >
+              恢复并删除
+            </MenuItem>
+          </>
+        )}
       </Menu>
     </LayerPortal>
   );

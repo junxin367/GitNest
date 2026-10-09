@@ -48,6 +48,28 @@ describe("useAppSettings concurrent activity", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps the controller stable on unrelated parent renders and publishes new settings and errors", async () => {
+    installBridge({
+      update: vi.fn(async () => ({
+        ok: false as const,
+        error: { code: "COMMAND_FAILED" as const, message: "save failed", details: {} }
+      }))
+    });
+    await mountHarness();
+    const initial = controller!;
+    await mountHarness();
+    expect(controller).toBe(initial);
+    await act(async () => {
+      await controller!.update({ appearance: { theme: "light" } });
+    });
+    expect(controller).not.toBe(initial);
+    expect(controller!.error?.message).toBe("save failed");
+    expect(controller!.saving).toBe(false);
+    const failed = controller!;
+    await mountHarness();
+    expect(controller).toBe(failed);
+  });
+
   it("does not mark default settings as loaded after the first read fails", async () => {
     installBridge({
       get: vi.fn().mockResolvedValue({

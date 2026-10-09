@@ -7,6 +7,7 @@ import type {
   WorkspaceWorktreeDto
 } from "@gitnest/contracts";
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -322,47 +323,60 @@ function WorkspaceWorktreesPanel({
       ),
     [snapshots]
   );
-  const snapshotFor = (worktree: WorkspaceWorktreeDto) =>
-    snapshotByTarget.get(
-      workspaceTargetKey(worktree.repositoryId, worktree.id)
-    );
-  const visibleWorktrees = worktrees.filter((worktree) =>
-    matchesWorktreeFilters(worktree, snapshotFor(worktree), filters)
+  const snapshotFor = useCallback(
+    (worktree: WorkspaceWorktreeDto) =>
+      snapshotByTarget.get(
+        workspaceTargetKey(worktree.repositoryId, worktree.id)
+      ),
+    [snapshotByTarget]
+  );
+  const visibleWorktrees = useMemo(
+    () =>
+      worktrees.filter((worktree) =>
+        matchesWorktreeFilters(
+          worktree,
+          snapshotFor(worktree),
+          filters
+        )
+      ),
+    [worktrees, snapshotFor, filters]
   );
   const activeFilterCount = activeWorktreeFilterCount(filters);
-  const facetCountWorktrees = worktrees.filter((worktree) =>
-    matchesWorktreeFilters(
-      worktree,
-      snapshotFor(worktree),
-      {
-        ...filters,
-        facet: null
+  const facetCounts = useMemo(() => {
+    const counts: Record<WorktreeFacet, number> = {
+      primary: 0,
+      linked: 0,
+      detached: 0,
+      locked: 0,
+      prunable: 0
+    };
+    const countFilters = { ...filters, facet: null };
+    for (const worktree of worktrees) {
+      if (!matchesWorktreeFilters(
+        worktree,
+        snapshotFor(worktree),
+        countFilters
+      )) {
+        continue;
       }
-    )
-  );
-  const facetCounts = facetCountWorktrees.reduce<
-    Record<WorktreeFacet, number>
-  >(
-    (counts, worktree) => {
       for (const facet of worktreeFacetIds(worktree)) {
         counts[facet] += 1;
       }
-      return counts;
-    },
-    { primary: 0, linked: 0, detached: 0, locked: 0, prunable: 0 }
-  );
-  const dirtyCount = worktrees.filter(
-    (worktree) =>
-      matchesWorktreeFilters(
-        worktree,
-        snapshotFor(worktree),
-        {
-          ...filters,
-          onlyDirty: false
-        }
-      ) &&
-      isWorktreeSnapshotDirty(snapshotFor(worktree))
-  ).length;
+    }
+    return counts;
+  }, [worktrees, snapshotFor, filters]);
+  const dirtyCount = useMemo(() => {
+    const countFilters = { ...filters, onlyDirty: false };
+    return worktrees.filter(
+      (worktree) =>
+        matchesWorktreeFilters(
+          worktree,
+          snapshotFor(worktree),
+          countFilters
+        ) &&
+        isWorktreeSnapshotDirty(snapshotFor(worktree))
+    ).length;
+  }, [worktrees, snapshotFor, filters]);
   const repositoryIdsWithWorktrees = useMemo(
     () =>
       new Set(
@@ -393,10 +407,14 @@ function WorkspaceWorktreesPanel({
   );
   const selectedRepositoryName =
     repositoryNames.get(filters.repositoryId) ?? "全部仓库";
-  const deletePlan = buildWorktreeDeletePlan(
-    visibleWorktrees,
-    snapshotFor,
-    filters.facet
+  const deletePlan = useMemo(
+    () =>
+      buildWorktreeDeletePlan(
+        visibleWorktrees,
+        snapshotFor,
+        filters.facet
+      ),
+    [visibleWorktrees, snapshotFor, filters.facet]
   );
   const pruning = deletePlan.mode === "prune";
   const batchLimitExceeded =
@@ -410,6 +428,21 @@ function WorkspaceWorktreesPanel({
         commands.busy
       );
   const deleteStatusId = "workspace-worktree-delete-status";
+  const worktreeCards = useMemo(
+    () =>
+      visibleWorktrees.map((worktree) => (
+        <WorkspaceWorktreeCard
+          key={worktree.id}
+          onSelectTarget={onSelectTarget}
+          repositoryName={
+            repositoryNames.get(worktree.repositoryId) ?? ""
+          }
+          snapshot={snapshotFor(worktree)}
+          worktree={worktree}
+        />
+      )),
+    [visibleWorktrees, onSelectTarget, repositoryNames, snapshotFor]
+  );
 
   useEffect(() => {
     setFilters((current) => {
@@ -760,23 +793,7 @@ function WorkspaceWorktreesPanel({
       </div>
       {visibleWorktrees.length > 0 ? (
         <div className="worktree-grid">
-          {visibleWorktrees.map((worktree) => {
-            const target = {
-              repositoryId: worktree.repositoryId,
-              worktreeId: worktree.id
-            };
-            return (
-              <WorkspaceWorktreeCard
-                key={worktree.id}
-                onSelect={() => onSelectTarget(target)}
-                repositoryName={
-                  repositoryNames.get(worktree.repositoryId) ?? ""
-                }
-                snapshot={snapshotFor(worktree)}
-                worktree={worktree}
-              />
-            );
-          })}
+          {worktreeCards}
         </div>
       ) : (
         <div className="worktree-filter-empty">
@@ -1112,13 +1129,13 @@ function RepositoryTable({
   );
 }
 
-function WorkspaceWorktreeCard({
-  onSelect,
+const WorkspaceWorktreeCard = memo(function WorkspaceWorktreeCard({
+  onSelectTarget,
   repositoryName,
   snapshot,
   worktree
 }: {
-  onSelect(): void;
+  onSelectTarget(target: RepositoryTargetDto): void;
   repositoryName: string;
   snapshot: RepositoryStatusSnapshotDto | undefined;
   worktree: WorkspaceWorktreeDto;
@@ -1143,7 +1160,10 @@ function WorkspaceWorktreeCard({
     .join("，");
   const activate = () => {
     if (interactive) {
-      onSelect();
+      onSelectTarget({
+        repositoryId: worktree.repositoryId,
+        worktreeId: worktree.id
+      });
     }
   };
 
@@ -1227,7 +1247,7 @@ function WorkspaceWorktreeCard({
       </div>
     </article>
   );
-}
+});
 
 function WorkspaceEmptyState() {
   return (

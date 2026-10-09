@@ -1,17 +1,24 @@
 import {
   mkdir,
   mkdtemp,
+  open,
   rm,
+  symlink,
   utimes,
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CodeAnalysisSettings } from "./model";
 import { discoverSourceFiles } from "./source-inventory";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
 
 describe("discoverSourceFiles budgets", () => {
   let directory = "";
@@ -349,6 +356,194 @@ describe("discoverSourceFiles budgets", () => {
     expect(result.configuredSkippedFiles).toBe(0);
     expect(result.inspectionFailureCount).toBe(1);
     expect(result.warnings[0]).toContain("无法读取目录");
+  });
+
+  it("preserves changed-path order, byte budgets and verified content with parallel reads", async () => {
+    directory = await mkdtemp(join(tmpdir(), "gitnest-source-parallel-"));
+    const paths = ["third.ts", "first.ts", "second.ts", "last.ts"];
+    await Promise.all(paths.map((path, index) =>
+      writeFile(join(directory, path), `${index}`.repeat(16), "utf8")
+    ));
+    const input = {
+      roots: [{ repositoryId: "repository", worktreeId: "worktree", name: "Repository", path: directory }],
+      changedPaths: [...paths, paths[0]!].map((path) => ({
+        repositoryId: "repository", worktreeId: "worktree", path
+      })),
+      scope: "changed" as const,
+      settings: { ...settings(), maxTotalSourceBytes: 48, maxFileSizeBytes: 16 }
+    };
+    const serial = await discoverSourceFiles(input);
+    const consumed: string[] = [];
+    const parallel = await discoverSourceFiles({
+      ...input,
+      settings: { ...input.settings, readConcurrency: 4 },
+      onSourceFile: (file, content) => {
+        consumed.push(file.relativePath);
+        expect(content.toString("utf8")).toBe(`${paths.indexOf(file.relativePath)}`.repeat(16));
+      }
+    });
+    expect(parallel).toEqual(serial);
+    expect(consumed).toEqual(paths.slice(0, 3));
+  });
+
+  it("bounds fingerprint reads to the discovered size when a file keeps growing", async () => {
+    directory = await mkdtemp(join(tmpdir(), "gitnest-source-growing-"));
+    const path = join(directory, "source.ts");
+    const size = 64 * 1_024;
+    await writeFile(path, "a".repeat(size));
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    let bytesRead = 0;
+    vi.mocked(open).mockImplementation(async (...args) => {
+      const handle = await actual.open(...args);
+      handle.read = new Proxy(handle.read, {
+        apply: async (target, thisArgument, argumentsList) => {
+          const result = await Reflect.apply(target, thisArgument, argumentsList);
+          bytesRead += result.bytesRead;
+          await actual.appendFile(path, "b".repeat(size));
+          return result;
+        }
+      });
+      return handle;
+    });
+    try {
+      const result = await discoverSourceFiles({
+        roots: [{ repositoryId: "repository", worktreeId: "worktree", name: "Repository", path: directory }],
+        changedPaths: [],
+        scope: "workspace",
+        settings: { ...settings(), maxFileSizeBytes: size }
+      });
+      expect(bytesRead).toBe(size);
+      expect(result.files).toHaveLength(0);
+      expect(result.inspectionFailureCount).toBe(1);
+      expect(result.warnings[0]).toContain("changed while");
+    } finally {
+      vi.mocked(open).mockImplementation(actual.open);
+    }
+  });
+
+  it("drains a concurrent batch and stops consuming sources after cancellation", async () => {
+    directory = await mkdtemp(join(tmpdir(), "gitnest-source-cancel-"));
+    await Promise.all(["first.ts", "second.ts", "third.ts"].map((path) =>
+      writeFile(join(directory, path), "export const value = 1;")
+    ));
+    const controller = new AbortController();
+    const consumed: string[] = [];
+    await expect(discoverSourceFiles({
+      roots: [{ repositoryId: "repository", worktreeId: "worktree", name: "Repository", path: directory }],
+      changedPaths: [],
+      scope: "workspace",
+      settings: { ...settings(), readConcurrency: 3 },
+      signal: controller.signal,
+      onSourceFile: (file) => {
+        consumed.push(file.relativePath);
+        controller.abort(new Error("cancelled by test"));
+      }
+    })).rejects.toThrow("cancelled by test");
+    expect(consumed).toHaveLength(1);
+  });
+
+  it("closes every in-flight file before rejecting cancellation during reads", async () => {
+    directory = await mkdtemp(join(tmpdir(), "gitnest-source-read-cancel-"));
+    const paths = ["first.ts", "second.ts", "third.ts"];
+    await Promise.all(paths.map((path) =>
+      writeFile(join(directory, path), "x".repeat(128 * 1_024))
+    ));
+    const controller = new AbortController();
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    let opened = 0;
+    let closed = 0;
+    vi.mocked(open).mockImplementation(async (...args) => {
+      const handle = await actual.open(...args);
+      opened += 1;
+      handle.read = new Proxy(handle.read, {
+        apply: async (target, thisArgument, argumentsList) => {
+          const result = await Reflect.apply(target, thisArgument, argumentsList);
+          controller.abort(new Error("cancelled during read"));
+          return result;
+        }
+      });
+      handle.close = new Proxy(handle.close, {
+        apply: async (target, thisArgument, argumentsList) => {
+          await Reflect.apply(target, thisArgument, argumentsList);
+          closed += 1;
+        }
+      });
+      return handle;
+    });
+    try {
+      await expect(discoverSourceFiles({
+        roots: [{ repositoryId: "repository", worktreeId: "worktree", name: "Repository", path: directory }],
+        changedPaths: [],
+        scope: "workspace",
+        settings: { ...settings(), readConcurrency: 3, maxFileSizeBytes: 256 * 1_024 },
+        signal: controller.signal
+      })).rejects.toThrow("cancelled during read");
+      expect(opened).toBeGreaterThan(0);
+      expect(closed).toBe(opened);
+    } finally {
+      vi.mocked(open).mockImplementation(actual.open);
+    }
+  });
+
+  it("does not follow directory links while walking a workspace", async () => {
+    directory = await mkdtemp(join(tmpdir(), "gitnest-source-links-"));
+    const repository = join(directory, "repository");
+    const outside = join(directory, "outside");
+    await mkdir(repository);
+    await mkdir(outside);
+    await writeFile(join(repository, "inside.ts"), "export const inside = 1;");
+    await writeFile(join(outside, "outside.ts"), "export const outside = 1;");
+    await symlink(outside, join(repository, "linked"), "junction");
+    const result = await discoverSourceFiles({
+      roots: [{ repositoryId: "repository", worktreeId: "worktree", name: "Repository", path: repository }],
+      changedPaths: [],
+      scope: "workspace",
+      settings: { ...settings(), readConcurrency: 4 }
+    });
+    expect(result.files.map((file) => file.relativePath)).toEqual(["inside.ts"]);
+  });
+
+  it("rejects an equal-size rewrite during hashing even when mtime is restored", async () => {
+    directory = await mkdtemp(join(tmpdir(), "gitnest-source-rewrite-"));
+    const path = join(directory, "source.ts");
+    const size = 128 * 1_024;
+    const fixedTime = new Date("2026-09-01T00:00:00.000Z");
+    await writeFile(path, "a".repeat(size));
+    await utimes(path, fixedTime, fixedTime);
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    let rewritten = false;
+    vi.mocked(open).mockImplementation(async (...args) => {
+      const handle = await actual.open(...args);
+      handle.read = new Proxy(handle.read, {
+        apply: async (target, thisArgument, argumentsList) => {
+          const result = await Reflect.apply(target, thisArgument, argumentsList);
+          if (!rewritten) {
+            rewritten = true;
+            // Separate ctime updates even on filesystems with millisecond precision.
+            await new Promise((resolveDelay) => setTimeout(resolveDelay, 5));
+            await writeFile(path, "b".repeat(size));
+            await utimes(path, fixedTime, fixedTime);
+          }
+          return result;
+        }
+      });
+      return handle;
+    });
+    try {
+      const consumed = vi.fn();
+      const result = await discoverSourceFiles({
+        roots: [{ repositoryId: "repository", worktreeId: "worktree", name: "Repository", path: directory }],
+        changedPaths: [],
+        scope: "workspace",
+        settings: { ...settings(), maxFileSizeBytes: size },
+        onSourceFile: consumed
+      });
+      expect(result.files).toHaveLength(0);
+      expect(result.inspectionFailureCount).toBe(1);
+      expect(consumed).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(open).mockImplementation(actual.open);
+    }
   });
 });
 

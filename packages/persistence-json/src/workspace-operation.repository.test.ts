@@ -92,6 +92,14 @@ describe("JsonWorkspaceOperationStore", () => {
     ).resolves.toEqual(second);
   });
 
+  it("preserves queued ignore-file operations in recovery history", async () => {
+    temporary = await createTemporaryDirectoryFixture("ignore-operation-store");
+    const store = new JsonWorkspaceOperationStore(join(temporary.path, "operations.json"));
+    const operation = { ...createOperation("ignore:1", "succeeded"), kind: "ignore-file" as const };
+    await store.save("workspace", [operation]);
+    await expect(store.load("workspace")).resolves.toEqual([operation]);
+  });
+
   it("migrates a v0 operation document and drops unknown fields", async () => {
     temporary =
       await createTemporaryDirectoryFixture(

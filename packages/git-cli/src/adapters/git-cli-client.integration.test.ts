@@ -152,6 +152,108 @@ describe("GitCliClient integration", () => {
     );
   });
 
+  it("starts snapshot stats while upstream reconciliation is still pending", async () => {
+    const original = processRunner.runProcess;
+    let releaseUpstream!: () => void;
+    const upstreamPending = new Promise<void>((resolve) => {
+      releaseUpstream = resolve;
+    });
+    let statsStarted = false;
+    const commands = vi.spyOn(processRunner, "runProcess").mockImplementation(async (request) => {
+      if (request.args.includes("status")) {
+        const result = await original(request);
+        return { ...result, stdout: `# branch.upstream origin/main\0${result.stdout}` };
+      }
+      if (request.args[0] === "for-each-ref") {
+        await upstreamPending;
+        return { exitCode: 0, stdout: "origin/main\n", stderr: "", durationMs: 0 };
+      }
+      if (request.args.includes("--numstat")) {
+        statsStarted = true;
+      }
+      return original(request);
+    });
+    const pending = client.readRepositorySnapshot(fixture.repositoryPath, {
+      includeChangeStats: true
+    });
+    try {
+      await vi.waitFor(() => expect(statsStarted).toBe(true));
+    } finally {
+      releaseUpstream();
+      try {
+        await expect(pending).resolves.toMatchObject({
+          upstream: "origin/main",
+          staged: 1,
+          unstaged: 1
+        });
+      } finally {
+        commands.mockRestore();
+      }
+    }
+  });
+
+  it("resolves both compared refs before waiting for either result", async () => {
+    const original = processRunner.runProcess;
+    let releaseLeft!: () => void;
+    const leftPending = new Promise<void>((resolve) => {
+      releaseLeft = resolve;
+    });
+    let rightStarted = false;
+    const commands = vi.spyOn(processRunner, "runProcess").mockImplementation(async (request) => {
+      if (request.args[0] === "rev-parse") {
+        if (request.args.includes("refs/heads/main^{commit}")) {
+          await leftPending;
+        }
+        if (request.args.includes("refs/heads/feature/test^{commit}")) {
+          rightStarted = true;
+        }
+      }
+      return original(request);
+    });
+    const pending = client.readCommitHistory(fixture.repositoryPath, {
+      scope: {
+        kind: "compare",
+        leftRef: "refs/heads/main",
+        rightRef: "refs/heads/feature/test"
+      }
+    });
+    try {
+      await vi.waitFor(() => expect(rightStarted).toBe(true));
+    } finally {
+      releaseLeft();
+      try {
+        await expect(pending).resolves.toMatchObject({
+          comparison: { leftRef: "refs/heads/main", rightRef: "refs/heads/feature/test" }
+        });
+      } finally {
+        commands.mockRestore();
+      }
+    }
+  });
+
+  it("counts untracked lines across read boundaries and keeps binary detection", async () => {
+    const lineFixture = await createTemporaryDirectoryFixture("untracked-line-boundaries");
+    try {
+      await runGit(lineFixture.path, ["init", "--initial-branch=main", "."]);
+      const files = [
+        { name: "empty.txt", content: "", additions: 0 },
+        { name: "no-newline.txt", content: "x".repeat(131073), additions: 1 },
+        { name: "boundary.txt", content: `${"x".repeat(65535)}\n\nlast`, additions: 3 },
+        { name: "crlf.txt", content: "x\r\n".repeat(25000), additions: 25000 },
+        { name: "dense.txt", content: "\n".repeat(131072), additions: 131072 },
+        { name: "binary.bin", content: "prefix\0suffix\n", additions: 0 }
+      ];
+      await Promise.all(files.map((file) => writeFile(join(lineFixture.path, file.name), file.content)));
+      const snapshot = await client.readRepositorySnapshot(lineFixture.path, { includeChangeStats: true });
+      for (const file of files) {
+        expect(snapshot.changes.find((change) => change.path === file.name)?.untrackedStats)
+          .toEqual({ additions: file.additions, deletions: 0 });
+      }
+    } finally {
+      await lineFixture.dispose();
+    }
+  });
+
   it.each(["primary", "linked"] as const)(
     "reads %s topology without scanning changes, branches or history",
     async (target) => {

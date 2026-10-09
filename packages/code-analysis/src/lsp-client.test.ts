@@ -81,6 +81,95 @@ describe("language server message identity and coverage", () => {
     }
   });
 
+  it("decodes fragmented UTF-8 and coalesced responses across buffer growth and reuse", async () => {
+    const fixture = await serverFixture("fragmented");
+    const client = new JsonRpcClient(
+      process.execPath,
+      [fixture.serverPath, fixture.mode],
+      fixture.root
+    );
+    try {
+      await client.start();
+      const responses = await Promise.all([
+        client.request("fragmented", {}, 2_000),
+        client.request("fragmented", {}, 2_000),
+        client.request("fragmented", {}, 2_000)
+      ]);
+      expect(responses).toEqual([
+        "中文🙂".repeat(50_000),
+        "second",
+        "third"
+      ]);
+      await expect(
+        client.request("initialize", {}, 1_000)
+      ).resolves.toHaveProperty("capabilities");
+    } finally {
+      await client.terminate();
+    }
+  });
+
+  it("retains an unsupported call hierarchy result throughout a reused session", async () => {
+    const fixture = await serverFixture(
+      "hierarchy-unsupported"
+    );
+    const settings = typescriptAnalysisSettings(
+      fixture.serverPath
+    );
+    settings.typescript.args.push(fixture.mode);
+    const file = sourceFile(fixture.root, "typescript");
+    const pool = new ExternalLanguageServerPool();
+    try {
+      const names: string[] = [];
+      for (let pass = 0; pass < 3; pass += 1) {
+        const result = await pool.analyze({
+          sessionPrefix: "unsupported",
+          workspaceRootPath: fixture.root,
+          workspaceFolders: [fixture.root],
+          lspDataDirectory: join(fixture.root, "lsp"),
+          settings,
+          documents: [{ file, content: "function f() {}" }]
+        });
+        names.push(
+          result.symbolsByPath.get(file.canonicalPath)![0]!
+            .name
+        );
+        expect(result.statuses[0]).toMatchObject({
+          state: "connected",
+          semanticCoverage: "partial",
+          enrichmentStoppedEarly: false
+        });
+      }
+      // The server names each document response with its observed probe count.
+      expect(names).toEqual([
+        "probes-0",
+        "probes-1",
+        "probes-1"
+      ]);
+    } finally {
+      await pool.disposeAll();
+    }
+  });
+
+  it.each([
+    ["oversized-header", "LSP 消息头超过安全上限"],
+    ["missing-length", "LSP 消息缺少有效的 Content-Length"]
+  ] as const)("rejects an invalid fragmented %s", async (mode, message) => {
+    const fixture = await serverFixture(mode);
+    const client = new JsonRpcClient(
+      process.execPath,
+      [fixture.serverPath, fixture.mode],
+      fixture.root
+    );
+    try {
+      await client.start();
+      await expect(
+        client.request("initialize", {}, 1_000)
+      ).rejects.toThrow(message);
+    } finally {
+      await client.terminate();
+    }
+  });
+
   it.each([
     ["reference-error", "partial"],
     ["reference-truncated", "partial"],
@@ -134,6 +223,8 @@ function coverageLanguageServerSource(): string {
   return String.raw`
 const mode = process.argv[2];
 let buffer = Buffer.alloc(0);
+let hierarchyProbes = 0;
+const fragmentedIds = [];
 const range = {
   start: { line: 0, character: 0 },
   end: { line: 0, character: 5 }
@@ -155,6 +246,34 @@ function handle(message) {
   const { id, method, params } = message;
   if (method === "exit") return process.exit(0);
   if (id === undefined) return;
+  if (mode === "oversized-header" || mode === "missing-length") {
+    const header = mode === "oversized-header"
+      ? "X-Test: " + "x".repeat(65537)
+      : "X-Test: missing";
+    process.stdout.write(header.slice(0, 5));
+    setTimeout(() => process.stdout.write(header.slice(5) + "\r\n\r\n"), 5);
+    return;
+  }
+  if (mode === "fragmented" && method === "fragmented") {
+    fragmentedIds.push(id);
+    if (fragmentedIds.length < 3) return;
+    const values = ["中文🙂".repeat(50000), "second", "third"];
+    const output = Buffer.concat(fragmentedIds.map((responseId, index) => {
+      const body = JSON.stringify({ jsonrpc: "2.0", id: responseId, result: values[index] });
+      return Buffer.from("Content-Length: " + Buffer.byteLength(body) + "\r\n\r\n" + body);
+    }));
+    const sizes = [1, 2, 31, 8191, 3, 65537];
+    let offset = 0;
+    let part = 0;
+    function writePart() {
+      const size = sizes[part++ % sizes.length];
+      process.stdout.write(output.subarray(offset, offset + size));
+      offset += size;
+      if (offset < output.length) setImmediate(writePart);
+    }
+    writePart();
+    return;
+  }
   if (mode === "overlap" && method === "initialize") {
     return send({
       id, method: "workspace/configuration",
@@ -166,10 +285,14 @@ function handle(message) {
   }
   if (method === "textDocument/documentSymbol") {
     return send({ id, result: [{
-      name: "VALUE",
-      kind: mode.startsWith("incoming-") ? 12 : mode === "type-error" ? 5 : 14,
+      name: mode === "hierarchy-unsupported" ? "probes-" + hierarchyProbes : "VALUE",
+      kind: mode.startsWith("incoming-") || mode === "hierarchy-unsupported" ? 12 : mode === "type-error" ? 5 : 14,
       range, selectionRange: range
     }] });
+  }
+  if (mode === "hierarchy-unsupported" && method === "textDocument/prepareCallHierarchy") {
+    hierarchyProbes += 1;
+    return send({ id, error: { code: -32601, message: "Method not found" } });
   }
   if (
     (mode === "reference-error" && method === "textDocument/references") ||

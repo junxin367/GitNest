@@ -18,7 +18,7 @@ import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
 import { Button } from "../../shared/ui/Button";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
-import { Skeleton } from "../../shared/ui/Skeleton";
+import { Skeleton, SkeletonSurface } from "../../shared/ui/Skeleton";
 import { DiffViewerState } from "../../widgets/diff-workspace/DiffPanel";
 import {
   createRepositoryStashContextMenuState,
@@ -37,6 +37,9 @@ interface RepositoryStashBrowserProps {
   };
   error: GitReadErrorDto | null;
   mutationBusy?: boolean;
+  onCreateStash?(): void;
+  onCreateFileStash?(): void;
+  selectedFilePath?: string;
   onReload(): void;
   onSelectStash(stashRef: string): void;
   onMutateStash?(
@@ -55,6 +58,9 @@ export function RepositoryStashBrowser({
   loading,
   error,
   mutationBusy = false,
+  onCreateStash,
+  onCreateFileStash,
+  selectedFilePath,
   onReload,
   onSelectStash,
   onMutateStash
@@ -103,25 +109,48 @@ export function RepositoryStashBrowser({
 
   const openContextMenu = useCallback(
     (
-      event: React.MouseEvent<HTMLButtonElement>,
-      stash: StashSummaryDto
+      event: React.MouseEvent<HTMLElement> | React.KeyboardEvent<HTMLElement>,
+      stash: StashSummaryDto | null = null
     ) => {
       event.preventDefault();
-      if (mutationBusy || !onMutateStash) {
+      event.stopPropagation();
+      if (mutationBusy || (!onCreateStash && !onCreateFileStash && !(stash && onMutateStash))) {
         return;
       }
-      onSelectStash(stash.ref);
+      if (stash) {
+        onSelectStash(stash.ref);
+      }
+      const focusTarget = event.target instanceof HTMLElement
+        ? event.target.closest<HTMLElement>("button, input, [tabindex]")
+        : null;
+      const anchor = stash ? event.currentTarget : focusTarget ?? event.currentTarget;
+      const bounds = anchor.getBoundingClientRect();
+      const pointer = "clientX" in event && (event.clientX !== 0 || event.clientY !== 0);
+      const hasCreationActions = Boolean(onCreateStash || onCreateFileStash);
       setContextMenu(
         createRepositoryStashContextMenuState(
           stash,
-          event.clientX,
-          event.clientY,
-          event.currentTarget
+          pointer ? event.clientX : bounds.left + 8,
+          pointer ? event.clientY : bounds.top + 24,
+          anchor,
+          (stash && onMutateStash ? 132 : 12) + (hasCreationActions ? 80 : 0)
         )
       );
     },
-    [mutationBusy, onMutateStash, onSelectStash]
+    [mutationBusy, onCreateStash, onCreateFileStash, onMutateStash, onSelectStash]
   );
+  const openKeyboardMenu = (
+    event: React.KeyboardEvent<HTMLElement>,
+    stash: StashSummaryDto | null = null
+  ) => {
+    if (
+      !event.defaultPrevented &&
+      !event.nativeEvent.isComposing &&
+      (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))
+    ) {
+      openContextMenu(event, stash);
+    }
+  };
 
   useEffect(() => {
     closeContextMenu();
@@ -134,11 +163,17 @@ export function RepositoryStashBrowser({
 
   return (
     <>
-      <div className="repository-stash-browser">
+      <div
+        className="repository-stash-browser"
+        onContextMenu={openContextMenu}
+        onKeyDown={openKeyboardMenu}
+        tabIndex={-1}
+      >
         <div
           aria-label="储藏列表"
           className="repository-stash-list"
           role="region"
+          tabIndex={0}
         >
           <header className="repository-stash-pane-header">
             <div>
@@ -198,6 +233,7 @@ export function RepositoryStashBrowser({
                     onContextMenu={(event) =>
                       openContextMenu(event, stash)
                     }
+                    onKeyDown={(event) => openKeyboardMenu(event, stash)}
                     type="button"
                     variant="unstyled"
                   >
@@ -225,7 +261,7 @@ export function RepositoryStashBrowser({
             ) : (
               <DiffViewerState
                 icon="files"
-                message="创建储藏后，它会显示在这里。"
+                message={onCreateStash ? "在储藏面板右键，创建储藏后会显示在这里。" : "创建储藏后，它会显示在这里。"}
                 title="没有储藏的变更"
               />
             )}
@@ -235,6 +271,7 @@ export function RepositoryStashBrowser({
           aria-label="储藏内容"
           className="repository-stash-detail"
           role="region"
+          tabIndex={0}
         >
           {selectedStash ? (
             <>
@@ -350,6 +387,10 @@ export function RepositoryStashBrowser({
       <RepositoryStashContextMenu
         contextMenu={contextMenu}
         mutationBusy={mutationBusy}
+        canMutateStash={Boolean(onMutateStash)}
+        {...(onCreateStash ? { onCreateStash } : {})}
+        {...(onCreateFileStash ? { onCreateFileStash } : {})}
+        {...(selectedFilePath ? { selectedFilePath } : {})}
         onChoose={(action, stash) =>
           setPendingAction({ action, stash })
         }
@@ -446,10 +487,9 @@ function RepositoryStashError({
 
 function RepositoryStashListSkeleton() {
   return (
-    <div
-      aria-label="正在读取储藏列表"
+    <SkeletonSurface
+      label="正在读取储藏列表"
       className="repository-stash-skeleton-list"
-      role="status"
     >
       {STASH_SKELETON_ROWS.map((row) => (
         <div className="repository-stash-skeleton-item" key={row}>
@@ -458,30 +498,28 @@ function RepositoryStashListSkeleton() {
           <Skeleton height={9} width="58%" />
         </div>
       ))}
-    </div>
+    </SkeletonSurface>
   );
 }
 
 function RepositoryStashDetailSkeleton() {
   return (
-    <div
-      aria-label="正在读取储藏内容"
+    <SkeletonSurface
+      label="正在读取储藏内容"
       className="repository-stash-detail-skeleton"
-      role="status"
     >
       <Skeleton height={14} width={86} />
       <Skeleton height={20} width="54%" />
       <Skeleton height={11} width="38%" />
-    </div>
+    </SkeletonSurface>
   );
 }
 
 function RepositoryStashFileSkeleton() {
   return (
-    <div
-      aria-label="正在读取储藏文件"
+    <SkeletonSurface
+      label="正在读取储藏文件"
       className="repository-stash-file-skeleton"
-      role="status"
     >
       {FILE_SKELETON_ROWS.map((row) => (
         <div className="repository-stash-skeleton-file" key={row}>
@@ -490,7 +528,7 @@ function RepositoryStashFileSkeleton() {
           <Skeleton height={10} width={42} />
         </div>
       ))}
-    </div>
+    </SkeletonSurface>
   );
 }
 

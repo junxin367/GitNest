@@ -12,6 +12,33 @@ import {
 import { createGitNestBridge } from "./bridge";
 
 describe("createGitNestBridge", () => {
+  it("forwards file history and ignore requests through their typed channels", async () => {
+    const calls: Array<{ channel: string; args: unknown[] }> = [];
+    const response = { ok: true, value: true };
+    const bridge = createGitNestBridge((async (channel: string, ...args: unknown[]) => {
+      calls.push({ channel, args });
+      return response;
+    }) as IpcInvoke);
+    const target = { repositoryId: "repository", worktreeId: "worktree" };
+    const history = { queryId: "history:1", target, path: "目录/a.ts", revision: "a".repeat(40), offset: 50, limit: 50 };
+    const diff = { queryId: "diff:1", target, path: "new.ts", previousPath: "old.ts", commitHash: "a".repeat(40) };
+    const ignore = { target, path: "new.txt", scope: "file" as const };
+    const execute = { preflightId: "ignore:1", confirmed: true };
+    const cancel = { queryId: "history:1" };
+    expect(await bridge.repositoryIgnore.preflight(ignore)).toBe(response);
+    expect(await bridge.repositoryIgnore.execute(execute)).toBe(response);
+    expect(await bridge.fileHistory.history(history)).toBe(response);
+    expect(await bridge.fileHistory.diff(diff)).toBe(response);
+    expect(await bridge.fileHistory.cancel(cancel)).toBe(response);
+    expect(calls).toEqual([
+      { channel: IPC_CHANNELS.repositoryIgnorePreflight, args: [ignore] },
+      { channel: IPC_CHANNELS.repositoryIgnoreExecute, args: [execute] },
+      { channel: IPC_CHANNELS.fileHistoryHistory, args: [history] },
+      { channel: IPC_CHANNELS.fileHistoryDiff, args: [diff] },
+      { channel: IPC_CHANNELS.fileHistoryCancel, args: [cancel] }
+    ]);
+  });
+
   it("exposes only the typed system and window capabilities", async () => {
     const calls: Array<{
       channel: string;
@@ -431,6 +458,10 @@ describe("createGitNestBridge", () => {
     await bridge.window.close();
 
     expect(Object.keys(bridge)).toEqual([
+      "repositoryIgnore",
+      "fileHistory",
+      "repositoryWorkflow",
+      "repositoryManagement",
       "update",
       "codeAnalysis",
       "settings",

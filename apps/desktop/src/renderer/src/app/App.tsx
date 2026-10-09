@@ -23,8 +23,15 @@ import {
   type RepositoryTab,
   type WorkspaceTab
 } from "./navigation";
+import { useRepositoryWorkflow } from "../features/repository-workflow/useRepositoryWorkflow";
+import { RepositoryWorkflowDialog } from "../features/repository-workflow/RepositoryWorkflowDialog";
+import { RepositoryWorkflowDraftDialog } from "../features/repository-workflow/RepositoryWorkflowToolbar";
+import { CreateBranchFromCommitDialog, type RepositoryCommitActionHandler } from "../features/repository-workflow/RepositoryCommitActions";
+import { Toast, ToastViewport } from "../shared/ui/Toast";
 import {
-  listWorkspaceTargets
+  listWorkspaceTargets,
+  findTargetSnapshot,
+  getSnapshotContentRevision
 } from "../entities/workspace/model";
 import { useWorkspace } from "../entities/workspace/useWorkspace";
 import type {
@@ -65,6 +72,8 @@ import { DetailInspector } from "../widgets/detail-inspector/DetailInspector";
 import { RepositoryHeader } from "../widgets/repository-header/RepositoryHeader";
 import { StatusBar } from "../widgets/status-bar/StatusBar";
 import { WorkspaceSidebar } from "../widgets/workspace-sidebar/WorkspaceSidebar";
+import { AnalysisPageHost } from "./AnalysisPageHost";
+import { CodeAnalysisLoadingFallback } from "../pages/code-analysis/CodeAnalysisSkeleton";
 
 const CodeAnalysisPage = lazy(() =>
   import("../pages/code-analysis/CodeAnalysisPage").then(
@@ -164,6 +173,43 @@ export function App() {
     [workspace.workspace]
   );
   const selectedTarget = workspace.workspace?.selectedTarget;
+  const workflow = useRepositoryWorkflow(
+    selectedTarget,
+    workspace.operations,
+    workspace.workspace?.id,
+    view === "repository" && repositoryTab === "changes",
+    getSnapshotContentRevision(findTargetSnapshot(workspace.snapshots, selectedTarget))
+  );
+  const [branchFromCommit, setBranchFromCommit] = useState<RepositoryCommitDto["commit"] | null>(null);
+  const [commitActionError, setCommitActionError] = useState<string | null>(null);
+  const [openingCommit, setOpeningCommit] = useState(false);
+  const workflowScope = `${workspace.workspace?.id ?? ""}:${selectedTarget?.repositoryId ?? ""}:${selectedTarget?.worktreeId ?? ""}`;
+  const workflowScopeRef = useRef(workflowScope);
+  workflowScopeRef.current = workflowScope;
+  useEffect(() => {
+    setBranchFromCommit(null);
+    setCommitActionError(null);
+    setOpeningCommit(false);
+  }, [workflowScope]);
+  const onCommitAction: RepositoryCommitActionHandler = async (action, commit) => {
+    if (!selectedTarget || workflow.busy || repositoryCommands.busy || openingCommit) return;
+    setCommitActionError(null);
+    if (action === "create-branch") { setBranchFromCommit(commit); return; }
+    if (action === "cherry-pick" || action === "revert") {
+      await workflow.request({ type: action, commitHash: commit.hash });
+      return;
+    }
+    const scope = workflowScope;
+    setOpeningCommit(true);
+    try {
+      const result = await window.gitnest.repositoryManagement.openCommit({ target: selectedTarget, hash: commit.hash });
+      if (workflowScopeRef.current === scope && !result.ok) setCommitActionError(result.error.message);
+    } catch (reason) {
+      if (workflowScopeRef.current === scope) setCommitActionError(reason instanceof Error ? reason.message : "打开远程提交失败。");
+    } finally {
+      if (workflowScopeRef.current === scope) setOpeningCommit(false);
+    }
+  };
   const selectedTargetKey = selectedTarget
     ? `${selectedTarget.repositoryId}:${selectedTarget.worktreeId}`
     : "";
@@ -177,6 +223,8 @@ export function App() {
   );
   const repositoryCommandLocked =
     workspace.busy ||
+    workflow.busy ||
+    workflow.preflight !== null ||
     repositoryCommands.active !== null ||
     repositoryCommands.preflight !== null ||
     selectedRepositoryBusy;
@@ -394,7 +442,7 @@ export function App() {
     repositoryCommands.preflight
   ]);
 
-  const openRepositoryTarget = async (
+  const openRepositoryTarget = useCallback(async (
     target: RepositoryTargetDto
   ) => {
     const navigationId = ++changeNavigationSequence.current;
@@ -418,8 +466,8 @@ export function App() {
       },
       { silent: true }
     );
-  };
-  const openRepositoryChange = async (
+  }, [appSettings.update, repositoryTab, workspace.selectTarget]);
+  const openRepositoryChange = useCallback(async (
     location: RepositoryChangeLocation
   ) => {
     const navigationId = ++changeNavigationSequence.current;
@@ -449,12 +497,14 @@ export function App() {
       },
       { silent: true }
     );
-  };
-  const navigate = (
+  }, [appSettings.update, workspace.selectTarget]);
+  const navigate = useCallback((
     nextView: AppView,
     nextSettingsSection: ApplicationSettingsSection =
       "general"
   ) => {
+    // A user's navigation wins over startup settings that arrive later.
+    startupNavigationApplied.current = true;
     changeNavigationSequence.current += 1;
     setPendingChangeNavigation(null);
     if (nextView === "workspace") {
@@ -480,9 +530,10 @@ export function App() {
       setSettingsSection(nextSettingsSection);
     }
     setView(nextView);
-  };
+  }, [appSettings.update]);
+  const openWorkspace = useCallback(() => navigate("workspace"), [navigate]);
 
-  const openWorkspaceTab = (tab: WorkspaceTab) => {
+  const openWorkspaceTab = useCallback((tab: WorkspaceTab) => {
     changeNavigationSequence.current += 1;
     setPendingChangeNavigation(null);
     setWorkspaceTab(tab);
@@ -496,7 +547,7 @@ export function App() {
       },
       { silent: true }
     );
-  };
+  }, [appSettings.update]);
 
   const openRepositoryTab = (tab: RepositoryTab) => {
     changeNavigationSequence.current += 1;
@@ -542,6 +593,7 @@ export function App() {
           activeView={view}
           searchOpen={globalSearchOpen}
           sidebarCollapsed={directoryPanelHidden}
+          sidebarDisabled={fullPageView}
           terminalDisabled={
             !selectedTarget ||
             externalTerminals.loading ||
@@ -582,7 +634,7 @@ export function App() {
           onSwitchWorkspace={workspace.switchWorkspace}
           onDeleteWorkspace={workspace.deleteWorkspace}
           onAddDirectory={workspace.chooseDirectory}
-          onOpenWorkspace={() => navigate("workspace")}
+          onOpenWorkspace={openWorkspace}
           onRenameWorkspace={workspace.renameWorkspace}
           onRemoveRepository={workspace.removeRepository}
           onRescan={workspace.rescan}
@@ -706,6 +758,24 @@ export function App() {
               id="main-content"
               tabIndex={-1}
             >
+              <AnalysisPageHost active={view === "analysis"} workspace={workspace.workspace}>
+                <Suspense fallback={
+                  <AppPageLoadingFallback
+                    view="analysis"
+                    repositoryTab={repositoryTab}
+                    workspaceTab={workspaceTab}
+                    commitPanelHeight={appSettings.settings.diff.commitPanelHeight}
+                  />
+                }>
+                  <CodeAnalysisPage
+                    onOpenSettings={() => navigate("settings", "analysis")}
+                    onReloadSettings={appSettings.reload}
+                    settings={appSettings.settings}
+                    snapshots={workspace.snapshots}
+                    workspace={workspace.workspace}
+                  />
+                </Suspense>
+              </AnalysisPageHost>
               <Suspense fallback={
                 <AppPageLoadingFallback
                   view={view}
@@ -756,6 +826,9 @@ export function App() {
                   />
                 ) : view === "repository" ? (
                   <RepositoryPage
+                    workflow={workflow}
+                    onCommitAction={onCommitAction}
+                    actionBusy={repositoryCommandLocked || openingCommit}
                     key={workspace.workspace?.id}
                     appSettings={appSettings}
                     changeSelectionRequest={
@@ -782,17 +855,7 @@ export function App() {
                       workspace.syncCurrentWorkspace
                     }
                   />
-                ) : view === "analysis" ? (
-                  <CodeAnalysisPage
-                    onOpenSettings={() =>
-                      navigate("settings", "analysis")
-                    }
-                    onReloadSettings={appSettings.reload}
-                    settings={appSettings.settings}
-                    snapshots={workspace.snapshots}
-                    workspace={workspace.workspace}
-                  />
-                ) : view === "operations" ? (
+                ) : view === "analysis" ? null : view === "operations" ? (
                   <OperationCenterPage
                     commands={repositoryCommands}
                     loading={workspace.operation === "loading"}
@@ -812,6 +875,8 @@ export function App() {
             </main>
             {inspectorVisible && (
               <DetailInspector
+                onCommitAction={onCommitAction}
+                actionBusy={repositoryCommandLocked || openingCommit}
                 commit={selectedCommit}
                 gitEnvironment={gitEnvironment}
                 gitError={gitError}
@@ -841,6 +906,17 @@ export function App() {
         snapshots={workspace.snapshots}
         workspace={workspace.workspace}
       />
+      <RepositoryWorkflowDialog controller={workflow} />
+      <RepositoryWorkflowDraftDialog controller={workflow} />
+      {branchFromCommit && selectedTarget && <CreateBranchFromCommitDialog
+        key={`${workflowScope}:${branchFromCommit.hash}`}
+        commit={branchFromCommit} target={selectedTarget} commands={repositoryCommands}
+        onClose={() => setBranchFromCommit(null)} />}
+      <ToastViewport>
+        {workflow.error && <Toast title="Git 操作未完成" message={workflow.error} tone="error" onClose={workflow.clearFeedback} />}
+        {!workflow.error && workflow.notice && <Toast title="Git 操作" message={workflow.notice} onClose={workflow.clearFeedback} />}
+        {commitActionError && <Toast title="提交操作未完成" message={commitActionError} tone="error" onClose={() => setCommitActionError(null)} />}
+      </ToastViewport>
       {globalSearchOpen && (
         <GlobalSearchDialog
           changes={workspaceChangedFiles.changes}
@@ -930,6 +1006,9 @@ export function AppPageLoadingFallback({
   workspaceTab?: WorkspaceTab;
   commitPanelHeight?: number;
 }) {
+  if (view === "analysis") {
+    return <CodeAnalysisLoadingFallback />;
+  }
   if (view === "repository" && repositoryTab === "changes") {
     return (
       <div className="changes-page">
@@ -937,6 +1016,7 @@ export function AppPageLoadingFallback({
           className="changes-layout"
           commitPanelHeight={commitPanelHeight}
           showCommit
+          showAuxiliary
         />
       </div>
     );
@@ -944,7 +1024,7 @@ export function AppPageLoadingFallback({
   const overview =
     (view === "workspace" && workspaceTab === "overview") ||
     (view === "repository" && repositoryTab === "overview");
-  const layout = view === "settings" || view === "analysis"
+  const layout = view === "settings"
     ? view
     : overview ? "overview" : "list";
   const label = {
@@ -961,14 +1041,16 @@ export function AppPageLoadingFallback({
   return (
     <SkeletonSurface
       label={label}
-      className="page-scroll gn-page-skeleton"
+      className={layout === "settings"
+        ? "page-scroll settings-page-scroll"
+        : "page-scroll gn-page-skeleton"}
       data-layout={layout}
     >
-      <div className="gn-skeleton-heading">
+      {layout !== "settings" && <div className="gn-skeleton-heading">
         <Skeleton height={12} variant="text" width="18%" />
         <Skeleton height={28} width="38%" />
         <Skeleton height={10} variant="text" width="62%" />
-      </div>
+      </div>}
       {overview && (
         <div className="gn-skeleton-metric-grid" aria-hidden="true">
           {Array.from({ length: 4 }, (_, index) => (
@@ -980,13 +1062,19 @@ export function AppPageLoadingFallback({
           ))}
         </div>
       )}
-      {layout === "settings" || layout === "analysis" ? (
-        <div className={`app-skeleton-columns is-${layout}`} aria-hidden="true">
-          <div className="gn-skeleton-panel">
-            <AppLoadingRows count={5} />
-          </div>
-          {layout === "settings" ? (
-            <div className="app-skeleton-settings-panels">
+      {layout === "settings" ? (
+        <div className="settings-layout" aria-hidden="true">
+          <aside className="settings-sidebar">
+            <div className="gn-skeleton-heading">
+              <Skeleton height={31} width={96} />
+              <Skeleton height={10} variant="text" width="100%" />
+              <Skeleton height={10} variant="text" width="72%" />
+            </div>
+            <div className="gn-skeleton-panel settings-nav">
+              <AppLoadingRows count={5} />
+            </div>
+          </aside>
+            <div className="settings-content">
               {Array.from({ length: 3 }, (_, index) => (
                 <div className="gn-skeleton-panel" key={index}>
                   <div className="gn-skeleton-panel-header">
@@ -996,18 +1084,6 @@ export function AppPageLoadingFallback({
                 </div>
               ))}
             </div>
-          ) : (
-            <div className="gn-skeleton-panel app-skeleton-analysis-panel">
-              <div className="gn-skeleton-panel-header">
-                <Skeleton height={12} width="38%" />
-              </div>
-              <div className="app-skeleton-graph">
-                {Array.from({ length: 6 }, (_, index) => (
-                  <Skeleton height={48} width="100%" key={index} />
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       ) : (
         <div className="gn-skeleton-panel" aria-hidden="true">

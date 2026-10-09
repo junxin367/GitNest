@@ -28,6 +28,7 @@ export interface ExcludeWorkspaceRepositoryInput {
 
 export interface AddWorkspaceDirectoryInput {
   path: string;
+  expectedWorkspaceId?: string;
 }
 
 export interface AddWorkspaceDirectoryResult {

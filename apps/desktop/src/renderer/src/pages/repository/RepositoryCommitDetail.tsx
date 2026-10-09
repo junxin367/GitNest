@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { FileHistoryDialog } from "../../features/file-history/FileHistoryDialog";
 
 import type {
   RepositoryCommitDto,
@@ -19,6 +20,7 @@ import {
   type DiffPanelState
 } from "../../widgets/diff-workspace/DiffPanel";
 import { repositoryDiffWorkspaceConfiguration } from "../../widgets/diff-workspace/diffWorkspaceConfiguration";
+import type { RepositoryCommitActionHandler } from "../../features/repository-workflow/RepositoryCommitActions";
 
 export type RepositoryCommitDetailView = "details" | "files";
 
@@ -30,7 +32,12 @@ export function RepositoryCommitDetail({
   commit: RepositoryCommitDto["commit"];
   target: RepositoryTargetDto;
   view: RepositoryCommitDetailView;
+  onCommitAction?: RepositoryCommitActionHandler;
+  actionBusy?: boolean;
 }) {
+  const scope = `${target.repositoryId}:${target.worktreeId}:${commit.hash}`;
+  const [historyPath, setHistoryPath] = useState<{ scope: string; path: string } | null>(null);
+  useEffect(() => setHistoryPath(null), [scope]);
   const commitDiff = useRepositoryCommitDiff(
     target,
     commit.hash
@@ -151,6 +158,7 @@ export function RepositoryCommitDetail({
                 commitHash={commit.hash}
                 file={selectedFile}
                 selectionPending={selectionPending}
+                onFileHistory={() => selectedFile && setHistoryPath({ scope, path: selectedFile.path })}
               />
             </div>
           ) : (
@@ -162,6 +170,13 @@ export function RepositoryCommitDetail({
           )}
         </section>
       )}
+      {historyPath?.scope === scope && <FileHistoryDialog
+        bridge={window.gitnest.fileHistory}
+        target={target}
+        path={historyPath.path}
+        revision={commit.hash}
+        onDismiss={() => setHistoryPath(null)}
+      />}
     </div>
   );
 }
@@ -170,12 +185,14 @@ function CommitFileDiffPreview({
   commitDiff,
   commitHash,
   file,
-  selectionPending
+  selectionPending,
+  onFileHistory
 }: {
   commitDiff: RepositoryCommitDiffController;
   commitHash: string;
   file: RepositoryCommitDto["commit"]["files"][number] | undefined;
   selectionPending: boolean;
+  onFileHistory(): void;
 }) {
   if (!file) {
     return (
@@ -245,7 +262,9 @@ function CommitFileDiffPreview({
         contextLoading={commitDiff.loading || selectionPending}
         deletions={diff?.deletions ?? file.deletions}
         headerActions={
-          commitDiff.error && !diff ? (
+          <>
+          <Button size="small" variant="default" onClick={onFileHistory}>文件历史</Button>
+          {commitDiff.error && !diff ? (
             <Button
               icon={<Icon name="refresh" size={13} />}
               onClick={() =>
@@ -256,7 +275,8 @@ function CommitFileDiffPreview({
             >
               重试
             </Button>
-          ) : undefined
+          ) : null}
+          </>
         }
         maxLines={4_000}
         media={diff?.media}

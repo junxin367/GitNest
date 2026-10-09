@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -17,9 +18,16 @@ import type {
 } from "@gitnest/contracts";
 
 import { Icon } from "../../shared/ui/Icon";
-import { codeNodeDisplayName } from "./codeAnalysisNavigation";
+import { Button } from "../../shared/ui/Button";
+import {
+  codeNodeDisplayName,
+  getCodeNodeLookup
+} from "./codeAnalysisNavigation";
 
 interface CodeRelationGraphProps {
+  loading?: boolean;
+  error?: string | undefined;
+  onRetry?(): void;
   snapshot: CodeAnalysisSnapshotDto;
   chain: CodeRequestChainDto | null;
   focusNodeId: string | null;
@@ -66,6 +74,11 @@ export interface RelationGraphLayout {
   truncated: boolean;
 }
 
+const EMPTY_LAYOUT: RelationGraphLayout = {
+  nodes: [], edges: [], positionById: new Map(),
+  width: 0, height: 0, truncated: false
+};
+
 interface DirectionalEdges {
   incoming: Map<string, CodeGraphEdgeDto[]>;
   outgoing: Map<string, CodeGraphEdgeDto[]>;
@@ -79,8 +92,9 @@ const EMPTY_DIRECTIONAL_EDGES: DirectionalEdges = {
 interface RelationGraphIndex {
   nodes: CodeGraphNodeDto[];
   edges: CodeGraphEdgeDto[];
-  nodeById: Map<string, CodeGraphNodeDto>;
+  nodeById: ReadonlyMap<string, CodeGraphNodeDto>;
   relationEdges: CodeGraphEdgeDto[];
+  outgoingEdgeIndexes: Map<string, number[]>;
   fallbackIds: string[];
   directional?: DirectionalEdges;
   container?: {
@@ -107,22 +121,62 @@ function getRelationGraphIndex(
   ) {
     return cached;
   }
-  const nodeById = new Map(
-    snapshot.nodes.map((node) => [node.id, node])
-  );
+  const nodeById = getCodeNodeLookup(snapshot.nodes);
+  const relationEdges: CodeGraphEdgeDto[] = [];
+  const outgoingEdgeIndexes = new Map<string, number[]>();
+  for (const edge of snapshot.edges) {
+    if (!isCodeRelation(edge, nodeById)) {
+      continue;
+    }
+    let outgoing = outgoingEdgeIndexes.get(edge.from);
+    if (!outgoing) {
+      outgoing = [];
+      outgoingEdgeIndexes.set(edge.from, outgoing);
+    }
+    outgoing.push(relationEdges.length);
+    relationEdges.push(edge);
+  }
+  const fallbackIds: string[] = [];
+  for (const node of snapshot.nodes) {
+    if (node.kind !== "file") {
+      fallbackIds.push(node.id);
+      if (fallbackIds.length === Math.min(48, MAX_GRAPH_NODES)) {
+        break;
+      }
+    }
+  }
   const index: RelationGraphIndex = {
     nodes: snapshot.nodes,
     edges: snapshot.edges,
     nodeById,
-    relationEdges: snapshot.edges.filter((edge) =>
-      isCodeRelation(edge, nodeById)
-    ),
-    fallbackIds: snapshot.nodes
-      .filter((node) => node.kind !== "file")
-      .map((node) => node.id)
+    relationEdges,
+    outgoingEdgeIndexes,
+    fallbackIds
   };
   relationGraphIndexes.set(snapshot, index);
   return index;
+}
+
+function edgesWithin(
+  index: RelationGraphIndex,
+  nodeIds: ReadonlySet<string>,
+  edgeIds?: ReadonlySet<string>
+): CodeGraphEdgeDto[] {
+  const positions: number[] = [];
+  for (const nodeId of nodeIds) {
+    for (const position of index.outgoingEdgeIndexes.get(nodeId) ?? []) {
+      const edge = index.relationEdges[position]!;
+      if (
+        nodeIds.has(edge.to) &&
+        (!edgeIds?.size || edgeIds.has(edge.id))
+      ) {
+        positions.push(position);
+      }
+    }
+  }
+  // Layout and truncation depend on the original snapshot edge order.
+  positions.sort((left, right) => left - right);
+  return positions.map((position) => index.relationEdges[position]!);
 }
 
 function directionalEdges(
@@ -158,6 +212,9 @@ type GraphDragState =
     };
 
 export const CodeRelationGraph = memo(function CodeRelationGraph({
+  loading = false,
+  error,
+  onRetry,
   snapshot,
   chain,
   focusNodeId,
@@ -166,13 +223,13 @@ export const CodeRelationGraph = memo(function CodeRelationGraph({
   onClearSelection
 }: CodeRelationGraphProps) {
   const graph = useMemo(
-    () =>
+    () => loading || error ? EMPTY_LAYOUT :
       buildRelationGraphLayout(
         snapshot,
         chain,
         focusNodeId
       ),
-    [chain, focusNodeId, snapshot]
+    [chain, focusNodeId, snapshot, loading, error]
   );
   const [positionOverrides, setPositionOverrides] = useState<
     Record<string, Position>
@@ -193,19 +250,34 @@ export const CodeRelationGraph = memo(function CodeRelationGraph({
   const panOffsetRef = useRef(panOffset);
   panOffsetRef.current = panOffset;
   const arrowId = useId().replace(/:/g, "");
-  const contextKey = `${snapshot.analysisId}:${
+  const workspaceKey = JSON.stringify([snapshot.workspaceId, snapshot.scope]);
+  const contextKey = `${workspaceKey}:${
     chain ? `chain:${chain.id}` : `node:${focusNodeId ?? ""}`
   }`;
 
-  useEffect(() => {
+  const zoomWorkspaceKeyRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (zoomWorkspaceKeyRef.current === workspaceKey) return;
+    zoomWorkspaceKeyRef.current = workspaceKey;
     zoomRef.current = 1;
     setZoom(1);
-  }, [snapshot.analysisId]);
+  }, [workspaceKey]);
 
   const layoutFocusNodeId =
     focusNodeId ?? chain?.clientNodeId ?? graph.nodes[0]?.node.id;
 
-  useEffect(() => {
+  const layoutKey = useMemo(() => JSON.stringify([
+    graph.nodes.map(({ node, x, y }) => [node.id, x, y]),
+    graph.edges.map(edge => [edge.id, edge.from, edge.to])
+  ]), [graph]);
+  const layoutContextRef = useRef<{ key: string; layout: string; focus: typeof layoutFocusNodeId } | null>(null);
+  useLayoutEffect(() => {
+    // Commit the completed layout and its centered viewport before painting.
+    // A partial graph must never briefly appear while its neighborhood loads.
+    if (loading || error) return;
+    const previous = layoutContextRef.current;
+    if (previous?.key === contextKey && previous.layout === layoutKey && previous.focus === layoutFocusNodeId) return;
+    layoutContextRef.current = { key: contextKey, layout: layoutKey, focus: layoutFocusNodeId };
     setPositionOverrides({});
     dragRef.current = null;
     setPanning(false);
@@ -221,15 +293,18 @@ export const CodeRelationGraph = memo(function CodeRelationGraph({
   }, [
     contextKey,
     graph,
-    layoutFocusNodeId
+    layoutKey,
+    layoutFocusNodeId,
+    loading,
+    error
   ]);
 
   const displayedNodes = useMemo(
     () =>
-      graph.nodes.map((positioned) => ({
-        ...positioned,
-        ...(positionOverrides[positioned.node.id] ?? {})
-      })),
+      graph.nodes.map((positioned) => {
+        const override = positionOverrides[positioned.node.id];
+        return override ? { ...positioned, ...override } : positioned;
+      }),
     [graph.nodes, positionOverrides]
   );
   const displayedPositionById = useMemo(
@@ -242,6 +317,10 @@ export const CodeRelationGraph = memo(function CodeRelationGraph({
       ),
     [displayedNodes]
   );
+  const displayedPositionByIdRef = useRef(displayedPositionById);
+  useLayoutEffect(() => {
+    displayedPositionByIdRef.current = displayedPositionById;
+  }, [displayedPositionById]);
   const zoomAtClientPoint = useCallback(
     (
       nextZoomValue: number,
@@ -323,17 +402,6 @@ export const CodeRelationGraph = memo(function CodeRelationGraph({
       viewport.removeEventListener("wheel", handleWheel);
   }, [graph.nodes.length, zoomAtClientPoint]);
 
-  if (graph.nodes.length === 0) {
-    return (
-      <div className="analysis-graph-empty">
-        <strong>当前没有可绘制的调用、引用或类型关系</strong>
-        <p>
-          搜索并选择代码节点后，这里会同时展示上游调用者、引用位置、类型关系与下游依赖。
-        </p>
-      </div>
-    );
-  }
-
   const handleCanvasPointerDown = (
     event: ReactPointerEvent<HTMLDivElement>
   ) => {
@@ -412,14 +480,14 @@ export const CodeRelationGraph = memo(function CodeRelationGraph({
     }
   };
 
-  const handleNodePointerDown = (
+  const handleNodePointerDown = useCallback((
     event: ReactPointerEvent<SVGGElement>,
     nodeId: string
   ) => {
     if (event.button !== 0) {
       return;
     }
-    const position = displayedPositionById.get(nodeId);
+    const position = displayedPositionByIdRef.current.get(nodeId);
     const svg = event.currentTarget.ownerSVGElement;
     if (!position || !svg) {
       return;
@@ -444,9 +512,9 @@ export const CodeRelationGraph = memo(function CodeRelationGraph({
       moved: false
     };
     setDraggingNodeId(nodeId);
-  };
+  }, []);
 
-  const handleNodePointerMove = (
+  const handleNodePointerMove = useCallback((
     event: ReactPointerEvent<SVGGElement>,
     nodeId: string
   ) => {
@@ -482,9 +550,9 @@ export const CodeRelationGraph = memo(function CodeRelationGraph({
         y: drag.startY + deltaY
       }
     }));
-  };
+  }, [graph.width, graph.height]);
 
-  const endNodeDrag = (
+  const endNodeDrag = useCallback((
     event: ReactPointerEvent<SVGGElement>,
     nodeId: string,
     cancelled = false
@@ -507,7 +575,36 @@ export const CodeRelationGraph = memo(function CodeRelationGraph({
     if (!cancelled && !drag.moved) {
       onSelectNode(nodeId);
     }
-  };
+  }, [onSelectNode]);
+
+  if (loading || error) {
+    return (
+      <div className="analysis-graph-stage" aria-busy={loading}>
+        <div className="analysis-graph-scroll analysis-graph-state">
+          <div className="analysis-graph-state-copy" role={error ? "alert" : "status"}>
+            <Icon name={error ? "warning" : "refresh"} size={24}
+              className={loading ? "is-spinning" : undefined} />
+            <strong>{error ? "节点关系加载失败" : "正在加载节点关系…"}</strong>
+            <p>{error ?? "正在读取该节点的上下游关系。"}</p>
+            {error && onRetry && (
+              <Button onClick={onRetry} size="small" type="button">重新加载</Button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (graph.nodes.length === 0) {
+    return (
+      <div className="analysis-graph-empty">
+        <strong>当前没有可绘制的调用、引用或类型关系</strong>
+        <p>
+          搜索并选择代码节点后，这里会同时展示上游调用者、引用位置、类型关系与下游依赖。
+        </p>
+      </div>
+    );
+  }
 
   const resetLayout = () => {
     setPositionOverrides({});
@@ -584,162 +681,26 @@ export const CodeRelationGraph = memo(function CodeRelationGraph({
                 <path d="M0 0 8 4 0 8z" />
               </marker>
             </defs>
-            <g className="analysis-graph-edges">
-              {graph.edges.map((edge) => {
-                const from = displayedPositionById.get(
-                  edge.from
-                );
-                const to = displayedPositionById.get(edge.to);
-                if (!from || !to) {
-                  return null;
-                }
-                const path = edgePath(from, to);
-                return (
-                  <g key={edge.id}>
-                    <title>
-                      {[
-                        `${edge.kind}: ${from.node.qualifiedName} → ${to.node.qualifiedName}`,
-                        `confidence: ${edge.confidence}`,
-                        `source: ${edge.source ?? "unknown"}`,
-                        edge.evidence
-                      ]
-                        .filter(Boolean)
-                        .join("\n")}
-                    </title>
-                    <path
-                      className={`analysis-graph-edge edge-${edge.kind}`}
-                      d={path.d}
-                      markerEnd={`url(#${arrowId})`}
-                    />
-                    {(edge.kind === "http-request" ||
-                      edge.kind === "rpc-request" ||
-                      edge.kind === "references" ||
-                      edge.kind === "extends" ||
-                      edge.kind === "implements" ||
-                      edge.kind === "overrides") && (
-                      <text
-                        className={`analysis-graph-edge-label edge-label-${edge.kind}`}
-                        x={path.labelX}
-                        y={path.labelY}
-                      >
-                        {edge.kind === "rpc-request"
-                          ? "RPC"
-                          : edge.kind === "references"
-                            ? "引用"
-                            : edge.kind === "extends"
-                              ? "继承"
-                              : edge.kind === "implements"
-                                ? "实现"
-                                : edge.kind === "overrides"
-                                  ? "重写"
-                            : "HTTP"}
-                      </text>
-                    )}
-                  </g>
-                );
-              })}
-            </g>
+            <RelationGraphEdges
+              edges={graph.edges}
+              displayedPositionById={displayedPositionById}
+              arrowId={arrowId}
+            />
             <g className="analysis-graph-nodes">
-              {displayedNodes.map(({ node, x, y }) => {
-                const documentation = nodeDocumentation(node);
-                const location = `${node.location.path}:${node.location.line}`;
-                const displayName = codeNodeDisplayName(node);
-                return (
-                  <g
-                    aria-label={`${node.kind} ${node.qualifiedName}`}
-                    className={`analysis-graph-node node-${node.kind}${
-                      selectedNodeId === node.id
-                        ? " selected"
-                        : ""
-                    }${node.changed ? " changed" : ""}${
-                      draggingNodeId === node.id
-                        ? " dragging"
-                        : ""
-                    }`}
-                    data-graph-node="true"
-                    key={node.id}
-                    onKeyDown={(event) => {
-                      if (
-                        event.key === "Enter" ||
-                        event.key === " "
-                      ) {
-                        event.preventDefault();
-                        onSelectNode(node.id);
-                      }
-                    }}
-                    onPointerCancel={(event) =>
-                      endNodeDrag(event, node.id, true)
-                    }
-                    onPointerDown={(event) =>
-                      handleNodePointerDown(event, node.id)
-                    }
-                    onPointerMove={(event) =>
-                      handleNodePointerMove(event, node.id)
-                    }
-                    onPointerUp={(event) =>
-                      endNodeDrag(event, node.id)
-                    }
-                    role="button"
-                    tabIndex={0}
-                    transform={`translate(${x} ${y})`}
-                  >
-                    <title>
-                      {[
-                        node.qualifiedName,
-                        documentation,
-                        location
-                      ]
-                        .filter(Boolean)
-                        .join("\n")}
-                    </title>
-                    <rect
-                      height={NODE_HEIGHT}
-                      rx="9"
-                      width={NODE_WIDTH}
-                    />
-                    <circle cx="12" cy="13" r="5" />
-                    <text
-                      className="analysis-node-kind"
-                      x="22"
-                      y="17"
-                    >
-                      {nodeKindLabel(node)}
-                    </text>
-                    <foreignObject
-                      aria-hidden="true"
-                      className="analysis-node-copy"
-                      height={NODE_TEXT_HEIGHT}
-                      pointerEvents="none"
-                      width={NODE_TEXT_WIDTH}
-                      x={NODE_TEXT_INSET}
-                      y={NODE_TEXT_TOP}
-                    >
-                      <div className="analysis-node-copy-inner">
-                        <strong
-                          className="analysis-node-name"
-                          title={node.qualifiedName}
-                        >
-                          {displayName}
-                        </strong>
-                        {documentation && (
-                          <span
-                            className="analysis-node-documentation-summary"
-                            title={documentation}
-                          >
-                            {documentation}
-                          </span>
-                        )}
-                        <span
-                          className="analysis-node-path"
-                          title={location}
-                        >
-                          {location}
-                        </span>
-                      </div>
-                    </foreignObject>
-                  </g>
-                );
-              })}
+              {displayedNodes.map(({ node, x, y }) => (
+                <RelationGraphNode
+                  key={node.id}
+                  node={node}
+                  x={x}
+                  y={y}
+                  selected={selectedNodeId === node.id}
+                  dragging={draggingNodeId === node.id}
+                  onSelectNode={onSelectNode}
+                  handleNodePointerDown={handleNodePointerDown}
+                  handleNodePointerMove={handleNodePointerMove}
+                  endNodeDrag={endNodeDrag}
+                />
+              ))}
             </g>
           </svg>
         </div>
@@ -813,12 +774,239 @@ export const CodeRelationGraph = memo(function CodeRelationGraph({
       </div>
 
       {graph.truncated && (
-        <div className="analysis-graph-limit-note">
-          为保持交互流畅，关系图仅展示当前上下文中的前{" "}
-          {MAX_GRAPH_NODES} 个节点和 {MAX_GRAPH_EDGES} 条边。
+        <div className="analysis-graph-limit-note" role="status">
+          {`关系较多，当前最多展示 ${MAX_GRAPH_NODES} 个节点和 ${MAX_GRAPH_EDGES} 条边；可搜索其他节点查看其上下游。`}
         </div>
       )}
     </div>
+  );
+});
+
+const RelationGraphNode = memo(function RelationGraphNode({
+  node,
+  x,
+  y,
+  selected,
+  dragging,
+  onSelectNode,
+  handleNodePointerDown,
+  handleNodePointerMove,
+  endNodeDrag
+}: {
+  node: CodeGraphNodeDto;
+  x: number;
+  y: number;
+  selected: boolean;
+  dragging: boolean;
+  onSelectNode(nodeId: string): void;
+  handleNodePointerDown(
+    event: ReactPointerEvent<SVGGElement>,
+    nodeId: string
+  ): void;
+  handleNodePointerMove(
+    event: ReactPointerEvent<SVGGElement>,
+    nodeId: string
+  ): void;
+  endNodeDrag(
+    event: ReactPointerEvent<SVGGElement>,
+    nodeId: string,
+    cancelled?: boolean
+  ): void;
+}) {
+  const documentation = nodeDocumentation(node);
+  const location = `${node.location.path}:${node.location.line}`;
+  const displayName = codeNodeDisplayName(node);
+  return (
+    <g
+      aria-label={`${node.kind} ${node.qualifiedName}`}
+      className={`analysis-graph-node node-${node.kind}${
+        selected ? " selected" : ""
+      }${node.changed ? " changed" : ""}${
+        dragging ? " dragging" : ""
+      }`}
+      data-graph-node="true"
+      onKeyDown={(event) => {
+        if (
+          event.key === "Enter" ||
+          event.key === " "
+        ) {
+          event.preventDefault();
+          onSelectNode(node.id);
+        }
+      }}
+      onPointerCancel={(event) =>
+        endNodeDrag(event, node.id, true)
+      }
+      onPointerDown={(event) =>
+        handleNodePointerDown(event, node.id)
+      }
+      onPointerMove={(event) =>
+        handleNodePointerMove(event, node.id)
+      }
+      onPointerUp={(event) =>
+        endNodeDrag(event, node.id)
+      }
+      role="button"
+      tabIndex={0}
+      transform={`translate(${x} ${y})`}
+    >
+      <title>
+        {[
+          node.qualifiedName,
+          documentation,
+          location
+        ]
+          .filter(Boolean)
+          .join("\n")}
+      </title>
+      <rect
+        height={NODE_HEIGHT}
+        rx="9"
+        width={NODE_WIDTH}
+      />
+      <circle cx="12" cy="13" r="5" />
+      <text
+        className="analysis-node-kind"
+        x="22"
+        y="17"
+      >
+        {nodeKindLabel(node)}
+      </text>
+      <foreignObject
+        aria-hidden="true"
+        className="analysis-node-copy"
+        height={NODE_TEXT_HEIGHT}
+        pointerEvents="none"
+        width={NODE_TEXT_WIDTH}
+        x={NODE_TEXT_INSET}
+        y={NODE_TEXT_TOP}
+      >
+        <div className="analysis-node-copy-inner">
+          <strong
+            className="analysis-node-name"
+            title={node.qualifiedName}
+          >
+            {displayName}
+          </strong>
+          {documentation && (
+            <span
+              className="analysis-node-documentation-summary"
+              title={documentation}
+            >
+              {documentation}
+            </span>
+          )}
+          <span
+            className="analysis-node-path"
+            title={location}
+          >
+            {location}
+          </span>
+        </div>
+      </foreignObject>
+    </g>
+  );
+});
+
+const RelationGraphEdges = memo(function RelationGraphEdges({
+  edges,
+  displayedPositionById,
+  arrowId
+}: {
+  edges: CodeGraphEdgeDto[];
+  displayedPositionById: Map<string, PositionedCodeNode>;
+  arrowId: string;
+}) {
+  return (
+    <g className="analysis-graph-edges">
+      {edges.map((edge) => {
+        const from = displayedPositionById.get(
+          edge.from
+        );
+        const to = displayedPositionById.get(edge.to);
+        if (!from || !to) {
+          return null;
+        }
+        return (
+          <RelationGraphEdge
+            key={edge.id}
+            edge={edge}
+            fromNode={from.node}
+            toNode={to.node}
+            fromX={from.x}
+            fromY={from.y}
+            toX={to.x}
+            toY={to.y}
+            arrowId={arrowId}
+          />
+        );
+      })}
+    </g>
+  );
+});
+
+const RelationGraphEdge = memo(function RelationGraphEdge({
+  edge,
+  fromNode,
+  toNode,
+  fromX,
+  fromY,
+  toX,
+  toY,
+  arrowId
+}: {
+  edge: CodeGraphEdgeDto;
+  fromNode: CodeGraphNodeDto;
+  toNode: CodeGraphNodeDto;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  arrowId: string;
+}) {
+  const path = edgePath({ x: fromX, y: fromY }, { x: toX, y: toY });
+  return (
+    <g>
+      <title>
+        {[
+          `${edge.kind}: ${fromNode.qualifiedName} → ${toNode.qualifiedName}`,
+          `confidence: ${edge.confidence}`,
+          `source: ${edge.source ?? "unknown"}`,
+          edge.evidence
+        ]
+          .filter(Boolean)
+          .join("\n")}
+      </title>
+      <path
+        className={`analysis-graph-edge edge-${edge.kind}`}
+        d={path.d}
+        markerEnd={`url(#${arrowId})`}
+      />
+      {(edge.kind === "http-request" ||
+        edge.kind === "rpc-request" ||
+        edge.kind === "references" ||
+        edge.kind === "extends" ||
+        edge.kind === "implements" ||
+        edge.kind === "overrides") && (
+        <text
+          className={`analysis-graph-edge-label edge-label-${edge.kind}`}
+          x={path.labelX}
+          y={path.labelY}
+        >
+          {edge.kind === "rpc-request"
+            ? "RPC"
+            : edge.kind === "references"
+              ? "引用"
+              : edge.kind === "extends"
+                ? "继承"
+                : edge.kind === "implements"
+                  ? "实现"
+                  : edge.kind === "overrides"
+                    ? "重写"
+              : "HTTP"}
+        </text>
+      )}
+    </g>
   );
 });
 
@@ -841,12 +1029,7 @@ export function buildRelationGraphLayout(
     ]);
     const chainIdSet = new Set(chainIds);
     const chainEdgeIds = new Set(chain.edgeIds);
-    candidateEdges = relationEdges.filter(
-      (edge) =>
-        chainIdSet.has(edge.from) &&
-        chainIdSet.has(edge.to) &&
-        (chainEdgeIds.size === 0 || chainEdgeIds.has(edge.id))
-    );
+    candidateEdges = edgesWithin(index, chainIdSet, chainEdgeIds);
     const context = collectDirectionalContext(
       chain.clientNodeId,
       directionalEdges(candidateEdges),
@@ -900,10 +1083,12 @@ export function buildRelationGraphLayout(
     const node = nodeById.get(id);
     return node ? [node] : [];
   });
-  const allVisibleEdges = candidateEdges.filter(
-    (edge) =>
-      visibleIds.has(edge.from) && visibleIds.has(edge.to)
-  );
+  const allVisibleEdges = chain
+    ? candidateEdges.filter(
+        (edge) =>
+          visibleIds.has(edge.from) && visibleIds.has(edge.to)
+      )
+    : edgesWithin(index, visibleIds);
   const edges = allVisibleEdges.slice(0, MAX_GRAPH_EDGES);
 
   for (const node of nodes) {
@@ -997,6 +1182,8 @@ export function buildRelationGraphLayout(
     width,
     height,
     truncated:
+      (!chain && snapshot.nodePage?.focusNodeId === focusNodeId &&
+        snapshot.nodePage.graphTruncated) ||
       preferredIds.length > MAX_GRAPH_NODES ||
       allVisibleEdges.length > MAX_GRAPH_EDGES
   };

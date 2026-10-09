@@ -1,5 +1,6 @@
 import { Button } from "../../shared/ui/Button";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -12,7 +13,7 @@ import type {
   OpenDiffViewerRequest,
   RepositoryDiffDto
 } from "@gitnest/contracts";
-import type { WorkspaceRuntimeStateDto } from "@gitnest/contracts";
+import type { WorkspaceOperationDto, WorkspaceRuntimeStateDto } from "@gitnest/contracts";
 
 import {
   canStageChange,
@@ -22,6 +23,8 @@ import {
 } from "../../entities/repository/useRepositoryMutations";
 import { getSnapshotContentRevision } from "../../entities/workspace/model";
 import { useExternalApplications } from "../../features/external-application/useExternalApplications";
+import { FileHistoryDialog } from "../../features/file-history/FileHistoryDialog";
+import { RepositoryIgnoreDialog, type RepositoryIgnoreSelection } from "../../features/repository-ignore/RepositoryIgnoreDialog";
 import { useAppSettings } from "../../features/settings/useAppSettings";
 import { resolveRepositoryFileBrowsing } from "../../features/settings/settingsRuntime";
 import { useWindowMaximized } from "../../shared/lib/useWindowMaximized";
@@ -31,7 +34,7 @@ import {
   type DiffViewerMode
 } from "../../shared/model/diffViewModel";
 import { Icon } from "../../shared/ui/Icon";
-import { useSkeletonVisibility } from "../../shared/ui/Skeleton";
+import { SkeletonScope, useSkeletonVisibility } from "../../shared/ui/Skeleton";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import {
   DEFAULT_DIFF_CONTEXT_LINES,
@@ -120,6 +123,9 @@ function DiffViewer({
   const [diffError, setDiffError] =
     useState<GitReadErrorDto | null>(null);
   const [targetMissing, setTargetMissing] = useState(false);
+  const [operations, setOperations] = useState<WorkspaceOperationDto[]>([]);
+  const [fileHistory, setFileHistory] = useState<DiffViewerFile | null>(null);
+  const [ignoreSelection, setIgnoreSelection] = useState<RepositoryIgnoreSelection | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
@@ -129,6 +135,18 @@ function DiffViewer({
   const selectedFileKeyRef = useRef(initialFile.key);
   const requestGenerationRef = useRef(0);
   const targetMissingRef = useRef(false);
+  const openFileHistory = useCallback((file: DiffViewerFile) => {
+    if (!targetMissingRef.current) setFileHistory(file);
+  }, []);
+  const openIgnoreFile = useCallback((file: DiffViewerFile, scope: RepositoryIgnoreSelection["scope"]) => {
+    if (!targetMissingRef.current) setIgnoreSelection({ path: file.path, scope });
+  }, []);
+  const closeFileHistory = useCallback(() => setFileHistory(null), []);
+  const closeIgnore = useCallback(() => setIgnoreSelection(null), []);
+  const refreshFiles = useCallback(() => setRefreshVersion(version => version + 1), []);
+  const ignoreBusy = operations.some(operation => operation.kind === "ignore-file" &&
+    operation.targetIds.includes(`${request.target.repositoryId}:${request.target.worktreeId}`) &&
+    ["queued", "running", "cancelling"].includes(operation.state));
   const [pathCopyStatus, setPathCopyStatus] =
     useState<DiffPathCopyStatus>("idle");
   const mutationHooks = useMemo(
@@ -144,6 +162,35 @@ function DiffViewer({
     request.target,
     mutationHooks
   );
+  const stageFile = useCallback(
+    (file: DiffViewerFile) => mutations.stageChange(file.change),
+    [mutations.stageChange]
+  );
+  const stageFiles = useCallback(
+    (files: readonly DiffViewerFile[]) => mutations.stageChanges(files.map(file => file.change)),
+    [mutations.stageChanges]
+  );
+  const unstageFile = useCallback(
+    (file: DiffViewerFile) => mutations.unstageChange(file.change),
+    [mutations.unstageChange]
+  );
+  const unstageFiles = useCallback(
+    (files: readonly DiffViewerFile[]) => mutations.unstageChanges(files.map(file => file.change)),
+    [mutations.unstageChanges]
+  );
+  const discardFile = useCallback(
+    (file: DiffViewerFile) => mutations.discardChange(file.change),
+    [mutations.discardChange]
+  );
+  const discardFiles = useCallback(
+    (files: readonly DiffViewerFile[]) => mutations.discardChanges(files.map(file => file.change)),
+    [mutations.discardChanges]
+  );
+  const selectFile = useCallback((file: DiffViewerFile) => {
+    setDiffContextLines(DEFAULT_DIFF_CONTEXT_LINES);
+    setSelectedKey(file.key);
+  }, []);
+
   const selectedFile =
     files.find((file) => file.key === selectedKey) ??
     files[0];
@@ -290,6 +337,8 @@ function DiffViewer({
         refreshTimerRef.current = null;
       }
       setTargetMissing(true);
+      setFileHistory(null);
+      setIgnoreSelection(null);
       setFiles([]);
       setSelectedKey("");
       setBranch(undefined);
@@ -325,6 +374,7 @@ function DiffViewer({
           return;
         }
         eventObserved = true;
+        setOperations(state.operations ?? []);
         const snapshot = targetSnapshot(state);
         const previousRevision = snapshotRevisionRef.current;
         const revision = getSnapshotContentRevision(snapshot);
@@ -354,6 +404,7 @@ function DiffViewer({
           return;
         }
         const snapshot = targetSnapshot(result.value);
+        setOperations(result.value.operations ?? []);
         snapshotRevisionRef.current =
           getSnapshotContentRevision(snapshot);
         if (!snapshot) {
@@ -507,15 +558,19 @@ function DiffViewer({
           title: "变更列表读取失败"
         }
       : undefined;
-  const requestDiffContext = ({
+  const requestDiffContext = useCallback(({
     contextLines
   }: DiffContextRequest) => {
     setDiffContextLines((current) =>
       Math.max(current, contextLines)
     );
-  };
+  }, []);
 
   return (
+    <SkeletonScope
+      scopeKey={`${request.target.repositoryId}:${request.target.worktreeId}`}
+      loading={showChangesSkeleton || (selectedDiffLoading && !selectedDiff)}
+    >
     <div className="diff-viewer-app">
       <header
         className="diff-viewer-titlebar"
@@ -583,27 +638,28 @@ function DiffViewer({
           className="diff-viewer-workspace"
           label="正在读取工作区变更"
           layout={appSettings.settings.diff.layout}
+          wrap={appSettings.settings.diff.wrap}
+          showToolbar
+          showStatusbar
         />
       ) : (
         <DiffWorkspace
         {...(changesMessage
           ? { changesError: changesMessage }
           : {})}
-        canStageFile={(file) => canStageChange(file.change)}
-        canUnstageFile={(file) =>
-          canUnstageChange(file.change)
-        }
-        canDiscardFile={(file) => canDiscardChange(file.change)}
+        canStageFile={canStageFile}
+        canUnstageFile={canUnstageFile}
+        canDiscardFile={canDiscardFile}
         changesLoading={changesLoading}
         className="diff-viewer-workspace"
         configuration={standaloneDiffWorkspaceConfiguration}
         externalApplications={externalApplications}
         fileView={fileBrowsing.fileView}
         files={workspaceFiles}
-        mutationBusy={mutations.active !== null}
-        onRefresh={() =>
-          setRefreshVersion((version) => version + 1)
-        }
+        mutationBusy={mutations.active !== null || ignoreBusy}
+        onRefresh={refreshFiles}
+        onFileHistory={openFileHistory}
+        onIgnoreFile={openIgnoreFile}
         onFileViewChange={(fileView) =>
           void appSettings.update(
             {
@@ -615,34 +671,13 @@ function DiffViewer({
             { silent: true }
           )
         }
-        onSelectedFileChange={(file) => {
-          setDiffContextLines(DEFAULT_DIFF_CONTEXT_LINES);
-          setSelectedKey(file.key);
-        }}
-        onStageFile={(file) =>
-          mutations.stageChange(file.change)
-        }
-        onUnstageFile={(file) =>
-          mutations.unstageChange(file.change)
-        }
-        onDiscardFile={(file) =>
-          mutations.discardChange(file.change)
-        }
-        onDiscardFiles={(files) =>
-          mutations.discardChanges(
-            files.map((file) => file.change)
-          )
-        }
-        onStageFiles={(files) =>
-          mutations.stageChanges(
-            files.map((file) => file.change)
-          )
-        }
-        onUnstageFiles={(files) =>
-          mutations.unstageChanges(
-            files.map((file) => file.change)
-          )
-        }
+        onSelectedFileChange={selectFile}
+        onStageFile={stageFile}
+        onUnstageFile={unstageFile}
+        onDiscardFile={discardFile}
+        onDiscardFiles={discardFiles}
+        onStageFiles={stageFiles}
+        onUnstageFiles={unstageFiles}
         panelProps={{
           additions: selectedDiff?.additions,
           binary: selectedDiff?.binary,
@@ -704,6 +739,21 @@ function DiffViewer({
         />
       )}
 
+      {!targetMissing && fileHistory && <FileHistoryDialog
+        bridge={window.gitnest.fileHistory}
+        target={request.target}
+        path={fileHistory.path}
+        {...(fileHistory.change.originalPath ? { originalPath: fileHistory.change.originalPath } : {})}
+        onDismiss={closeFileHistory}
+      />}
+      {!targetMissing && ignoreSelection && <RepositoryIgnoreDialog
+        key={`${request.target.repositoryId}:${request.target.worktreeId}:${ignoreSelection.path}:${ignoreSelection.scope}`}
+        target={request.target}
+        selection={ignoreSelection}
+        operations={operations}
+        onDismiss={closeIgnore}
+        onCompleted={refreshFiles}
+      />}
       <ToastViewport>
         {pathCopyStatus === "copied" && selectedFile ? (
           <Toast
@@ -763,6 +813,7 @@ function DiffViewer({
         ) : null}
       </ToastViewport>
     </div>
+    </SkeletonScope>
   );
 }
 
@@ -892,4 +943,16 @@ function unexpectedError(reason: unknown): GitReadErrorDto {
         : "发生了未预期的读取错误。",
     details: {}
   };
+}
+
+function canStageFile(file: DiffViewerFile): boolean {
+  return canStageChange(file.change);
+}
+
+function canUnstageFile(file: DiffViewerFile): boolean {
+  return canUnstageChange(file.change);
+}
+
+function canDiscardFile(file: DiffViewerFile): boolean {
+  return canDiscardChange(file.change);
 }

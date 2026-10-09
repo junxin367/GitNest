@@ -4,6 +4,7 @@ import type {
   CommitDetails,
   CommitHistoryPage,
   CommitHistoryScope,
+  CommitHistoryFilter,
   GitClient,
   GitCommitDiffClient,
   GitStashClient,
@@ -142,7 +143,8 @@ export class RepositoryQueryService {
     target: RepositoryTarget,
     limit?: number,
     offset?: number,
-    scope?: CommitHistoryScope
+    scope?: CommitHistoryScope,
+    search?: CommitHistoryFilter
   ): Promise<RepositoryHistoryResult> {
     return this.#runQuery(queryId, async (signal) => {
       const path = await this.#resolveTargetPath(target);
@@ -152,6 +154,7 @@ export class RepositoryQueryService {
           ...(limit === undefined ? {} : { limit }),
           ...(offset === undefined ? {} : { offset }),
           ...(scope === undefined ? {} : { scope }),
+          ...(search === undefined ? {} : { search }),
           signal
         })
       };

@@ -92,7 +92,8 @@ p {
   height: 10px;
 }
 
-::-webkit-scrollbar-track {
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 
@@ -794,14 +795,8 @@ p {
 }
 
 .workspace-root-body {
-  display: grid;
-  grid-template-rows: 1fr;
   min-height: 0;
   overflow: hidden;
-  opacity: 1;
-  transition:
-    grid-template-rows var(--motion-layer) var(--ease-enter),
-    opacity var(--motion-micro) var(--ease-enter);
 }
 
 .workspace-root-body-inner {
@@ -809,10 +804,9 @@ p {
   overflow: hidden;
 }
 
-.workspace-root.collapsed .workspace-root-body {
-  grid-template-rows: 0fr;
-  opacity: 0;
-  pointer-events: none;
+.workspace-root-body[hidden],
+.group-body[hidden] {
+  display: none;
 }
 
 .repository-group {
@@ -896,6 +890,20 @@ p {
   left: 0;
   width: 1px;
   background: var(--border-soft);
+}
+
+.repository-row-chunks {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.repository-row-chunk {
+  min-width: 0;
+  content-visibility: auto;
+  /* Keep the selected marker and focus outline inside the paint boundary,
+     including the first and last row of each block. */
+  margin: -4px;
+  padding: 4px;
 }
 
 .repository-group-empty {
@@ -1132,7 +1140,11 @@ p {
   border-radius: var(--radius-regular);
 }
 
-.workspace-caption > .gn-skeleton {
+.workspace-caption > .gn-skeleton-surface {
+  display: block;
+}
+
+.workspace-caption .gn-skeleton {
   max-width: 112px;
 }
 

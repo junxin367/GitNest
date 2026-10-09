@@ -47,6 +47,49 @@ describe("useWorkspace integration", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps selection callbacks stable across cloned broadcasts without losing fresh state", async () => {
+    let publish!: (state: WorkspaceRuntimeStateDto) => void;
+    const state = createRuntimeState();
+    state.snapshots = [TARGET_A, TARGET_B].map((target) => ({
+      ...target, head: "head", ahead: 0, behind: 0,
+      staged: 0, unstaged: 0, untracked: 0, conflicted: 0,
+      contentVersion: 1, refreshPending: false, stale: false,
+      refreshedAt: "2026-10-05T00:00:00.000Z"
+    }));
+    installBridge({
+      getState: vi.fn(async () => ({ ok: true as const, value: state })),
+      onStateChanged: (listener) => {
+        publish = listener;
+        return () => undefined;
+      }
+    });
+    await renderHarness();
+    const initial = controller!;
+    const changed = structuredClone(state);
+    changed.monitor.lastEventAt = "2026-10-05T00:00:01.000Z";
+    changed.snapshots[0]!.refreshedAt = "2026-10-05T00:00:01.000Z";
+    changed.snapshots[0]!.refreshPending = true;
+    changed.cleanupWarning = "cleanup pending";
+    act(() => publish(changed));
+
+    expect(controller!.selectTarget).toBe(initial.selectTarget);
+    expect(controller!.workspace).toEqual(changed.workspace);
+    expect(controller!.snapshots[0]).toEqual(changed.snapshots[0]);
+    expect(controller!.snapshots[0]).not.toBe(initial.snapshots[0]);
+    expect(controller!.monitor).toEqual(changed.monitor);
+    expect(controller!.cleanupWarning).toBe("cleanup pending");
+    act(() => publish(structuredClone(changed)));
+    expect(controller!.selectTarget).toBe(initial.selectTarget);
+
+    const selected = structuredClone(changed);
+    selected.workspace.selectedTarget = TARGET_B;
+    delete selected.cleanupWarning;
+    act(() => publish(selected));
+    expect(controller!.selectTarget).not.toBe(initial.selectTarget);
+    expect(controller!.workspace!.selectedTarget).toEqual(TARGET_B);
+    expect(controller!.cleanupWarning).toBeNull();
+  });
+
   it("keeps only the latest asynchronous target selection", async () => {
     const targetB = deferred<
       Awaited<
@@ -547,6 +590,200 @@ describe("useWorkspace integration", () => {
     );
   });
 
+  it("updates the group immediately while persistence is pending and keeps fresh broadcast fields", async () => {
+    const saving = deferred<GroupCollapseResult>();
+    let publish!: (state: WorkspaceRuntimeStateDto) => void;
+    installBridge({
+      setGroupCollapsed: vi.fn(() => saving.promise),
+      onStateChanged: (listener) => {
+        publish = listener;
+        return () => undefined;
+      }
+    });
+    await renderHarness();
+
+    let completion!: Promise<void>;
+    act(() => { completion = controller!.setGroupCollapsed("group", true); });
+    expect(controller!.workspace!.groups[0]!.collapsed).toBe(true);
+    expect(controller!.busy).toBe(false);
+    const fresh = createRuntimeState(workspaceWithTarget(TARGET_C));
+    fresh.workspace.name = "Fresh name";
+    fresh.monitor.lastEventAt = "2026-10-06T00:00:00.000Z";
+    act(() => publish(fresh));
+    expect(controller!.workspace!.groups[0]!.collapsed).toBe(true);
+    expect(controller!.workspace!.selectedTarget).toEqual(TARGET_C);
+    expect(controller!.monitor).toEqual(fresh.monitor);
+
+    await act(async () => {
+      saving.resolve({ ok: true, value: workspaceWithCollapsedGroup(true) });
+      await completion;
+    });
+    expect(controller!.workspace!.groups[0]!.collapsed).toBe(true);
+    expect(controller!.workspace!.selectedTarget).toEqual(TARGET_C);
+    expect(controller!.workspace!.name).toBe("Fresh name");
+  });
+
+  it("serializes group saves and folds rapid clicks into the latest desired state", async () => {
+    const first = deferred<GroupCollapseResult>();
+    const latest = deferred<GroupCollapseResult>();
+    const save = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(latest.promise);
+    installBridge({ setGroupCollapsed: save });
+    await renderHarness();
+
+    const completions: Promise<void>[] = [];
+    act(() => {
+      completions.push(controller!.setGroupCollapsed("group", true));
+      completions.push(controller!.setGroupCollapsed("group", false));
+      completions.push(controller!.setGroupCollapsed("group", true));
+      completions.push(controller!.setGroupCollapsed("group", false));
+    });
+    expect(controller!.workspace!.groups[0]!.collapsed).toBe(false);
+    expect(save).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      first.resolve({ ok: true, value: workspaceWithCollapsedGroup(true) });
+      await flushAsyncWork();
+    });
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith({ groupId: "group", collapsed: false });
+    expect(controller!.workspace!.groups[0]!.collapsed).toBe(false);
+    await act(async () => {
+      latest.resolve({ ok: true, value: workspaceWithCollapsedGroup(false) });
+      await Promise.all(completions);
+    });
+    expect(controller!.workspace!.groups[0]!.collapsed).toBe(false);
+  });
+
+  it("merges concurrent group saves independently without reverting another group", async () => {
+    const initial = workspaceWithTarget(TARGET_A);
+    initial.groups.push({ ...initial.groups[0]!, id: "second-group" });
+    const first = deferred<GroupCollapseResult>();
+    const second = deferred<GroupCollapseResult>();
+    const save = vi.fn(({ groupId }: { groupId: string }) =>
+      groupId === "group" ? first.promise : second.promise
+    );
+    installBridge({
+      getState: vi.fn(async () => ({ ok: true as const, value: createRuntimeState(initial) })),
+      setGroupCollapsed: save
+    });
+    await renderHarness();
+    let firstCompletion!: Promise<void>;
+    let secondCompletion!: Promise<void>;
+    act(() => {
+      firstCompletion = controller!.setGroupCollapsed("group", true);
+      secondCompletion = controller!.setGroupCollapsed("second-group", true);
+    });
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(controller!.workspace!.groups.map((group) => group.collapsed)).toEqual([true, true]);
+    const secondResult = structuredClone(initial);
+    secondResult.groups[1]!.collapsed = true;
+    await act(async () => {
+      second.resolve({ ok: true, value: secondResult });
+      await secondCompletion;
+    });
+    const firstResult = structuredClone(initial);
+    firstResult.groups[0]!.collapsed = true;
+    await act(async () => {
+      first.resolve({ ok: true, value: firstResult });
+      await firstCompletion;
+    });
+    expect(controller!.workspace!.groups.map((group) => group.collapsed)).toEqual([true, true]);
+  });
+
+  it("rolls a failed save back to the latest confirmed value and reports the error", async () => {
+    const first = deferred<GroupCollapseResult>();
+    const latest = deferred<GroupCollapseResult>();
+    installBridge({
+      setGroupCollapsed: vi.fn()
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(latest.promise)
+    });
+    await renderHarness();
+    let completion!: Promise<void>;
+    act(() => {
+      void controller!.setGroupCollapsed("group", true);
+      completion = controller!.setGroupCollapsed("group", false);
+    });
+    await act(async () => {
+      first.resolve({ ok: true, value: workspaceWithCollapsedGroup(true) });
+      await flushAsyncWork();
+    });
+    expect(controller!.workspace!.groups[0]!.collapsed).toBe(false);
+    await act(async () => {
+      latest.resolve({
+        ok: false,
+        error: { code: "SCAN_FAILED", message: "Save failed", details: {} }
+      });
+      await completion;
+    });
+    expect(controller!.workspace!.groups[0]!.collapsed).toBe(true);
+    expect(controller!.error!.message).toBe("Save failed");
+  });
+
+  it("retries a newer intention after an obsolete failure without showing stale feedback", async () => {
+    const first = deferred<GroupCollapseResult>();
+    const save = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ ok: true, value: workspaceWithCollapsedGroup(false) });
+    installBridge({ setGroupCollapsed: save });
+    await renderHarness();
+    let completion!: Promise<void>;
+    act(() => {
+      void controller!.setGroupCollapsed("group", true);
+      completion = controller!.setGroupCollapsed("group", false);
+    });
+    await act(async () => {
+      first.resolve({
+        ok: false,
+        error: { code: "SCAN_FAILED", message: "Obsolete failure", details: {} }
+      });
+      await completion;
+    });
+    expect(save).toHaveBeenLastCalledWith({ groupId: "group", collapsed: false });
+    expect(controller!.workspace!.groups[0]!.collapsed).toBe(false);
+    expect(controller!.error).toBeNull();
+  });
+
+  it("clears the optimistic state when persistence throws", async () => {
+    const saving = deferred<GroupCollapseResult>();
+    installBridge({ setGroupCollapsed: vi.fn(() => saving.promise) });
+    await renderHarness();
+    let completion!: Promise<void>;
+    act(() => { completion = controller!.setGroupCollapsed("group", true); });
+    expect(controller!.workspace!.groups[0]!.collapsed).toBe(true);
+    await act(async () => {
+      saving.reject(new Error("IPC disconnected"));
+      await completion;
+    });
+    expect(controller!.workspace!.groups[0]!.collapsed).toBe(false);
+    expect(controller!.error!.message).toBe("IPC disconnected");
+  });
+
+  it("isolates late group saves and queued intentions when switching Workspace", async () => {
+    const saving = deferred<GroupCollapseResult>();
+    const destination = createRuntimeState(workspaceWithIdentity("workspace-second", "Second"));
+    const save = vi.fn(() => saving.promise);
+    installBridge({
+      setGroupCollapsed: save,
+      switch: vi.fn(async () => ({ ok: true as const, value: destination }))
+    });
+    await renderHarness();
+    let completion!: Promise<void>;
+    act(() => {
+      void controller!.setGroupCollapsed("group", true);
+      completion = controller!.setGroupCollapsed("group", false);
+    });
+    await act(async () => { await controller!.switchWorkspace("workspace-second"); });
+    await act(async () => {
+      saving.resolve({ ok: true, value: workspaceWithCollapsedGroup(true) });
+      await completion;
+    });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(controller!.workspace).toEqual(destination.workspace);
+    expect(controller!.error).toBeNull();
+  });
+
   it("ignores a late repository removal after switching Workspace", async () => {
     const removal = deferred<
       Awaited<
@@ -813,6 +1050,14 @@ const TARGET_C: RepositoryTargetDto = {
   worktreeId: "worktree-c"
 };
 
+type GroupCollapseResult = Awaited<ReturnType<GitNestBridge["workspace"]["setGroupCollapsed"]>>;
+
+function workspaceWithCollapsedGroup(collapsed: boolean): WorkspaceDetailsDto {
+  const workspace = workspaceWithTarget(TARGET_A);
+  workspace.groups[0]!.collapsed = collapsed;
+  return workspace;
+}
+
 function createEmptyWorkspace(): WorkspaceDetailsDto {
   return {
     schemaVersion: 2,
@@ -953,12 +1198,15 @@ function targetsEqual(
 
 function deferred<Value>() {
   let resolve!: (value: Value) => void;
-  const promise = new Promise<Value>((resolver) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<Value>((resolver, rejecter) => {
     resolve = resolver;
+    reject = rejecter;
   });
   return {
     promise,
-    resolve
+    resolve,
+    reject
   };
 }
 

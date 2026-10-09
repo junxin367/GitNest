@@ -103,6 +103,76 @@ describe("compactCodeAnalysisSnapshotPayload", () => {
       expect.stringContaining("已自动精简")
     );
   });
+
+  it.each([4_096, 8_192, 16_384])(
+    "keeps the exact UTF-8 payload within %i bytes when graph entries contain escaped and multibyte text",
+    (maximumBytes) => {
+      const snapshot = createSnapshot();
+      const text = '说明😀\u0000\n"\\'.repeat(30);
+      snapshot.nodes.push(
+        ...Array.from({ length: 100 }, (_, index) =>
+          createNode(`optional-${index}`, "function", {
+            signature: text,
+            documentation: text
+          })
+        )
+      );
+      snapshot.edges.push(
+        ...snapshot.nodes.slice(2).map((node, index) => ({
+          id: `edge-${index}`,
+          from: "client",
+          to: node.id,
+          kind: "calls" as const,
+          confidence: "exact" as const,
+          label: text
+        }))
+      );
+      snapshot.diagnostics = snapshot.nodes.map((node) => ({
+        id: `diagnostic-${node.id}`,
+        kind: "unresolved-call",
+        severity: "warning",
+        message: text,
+        evidence: text,
+        nodeId: node.id,
+        relatedNodeIds: ["client", node.id]
+      }));
+
+      const compacted = compactCodeAnalysisSnapshotPayload(
+        snapshot,
+        maximumBytes
+      );
+      expect(
+        Buffer.byteLength(JSON.stringify(compacted), "utf8")
+      ).toBeLessThanOrEqual(maximumBytes);
+      expect(compacted.requestChains).toHaveLength(1);
+      const nodeIds = new Set(compacted.nodes.map((node) => node.id));
+      expect(
+        compacted.diagnostics?.every((diagnostic) =>
+          (!diagnostic.nodeId || nodeIds.has(diagnostic.nodeId)) &&
+          diagnostic.relatedNodeIds.every((id) => nodeIds.has(id))
+        )
+      ).toBe(true);
+
+      snapshot.nodes[0] = {
+        ...snapshot.nodes[0]!,
+        metadata: { signature: text.repeat(2) }
+      };
+      expect(
+        compactCodeAnalysisSnapshotPayload(snapshot, maximumBytes)
+      ).toEqual(
+        compactCodeAnalysisSnapshotPayload(
+          structuredClone(snapshot),
+          maximumBytes
+        )
+      );
+    }
+  );
+
+  it("rejects limits smaller than the snapshot envelope", () => {
+    expect(() =>
+      compactCodeAnalysisSnapshotPayload(createSnapshot(), 1)
+    ).toThrow("could not be compacted");
+  });
 });
 
 function createSnapshot(): CodeAnalysisSnapshot {

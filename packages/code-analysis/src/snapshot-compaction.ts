@@ -164,6 +164,12 @@ function compactGraphPayload(
     (node) =>
       node.changed || KEY_NODE_KINDS.has(node.kind)
   ).length;
+  const edgeById = new Map(
+    snapshot.edges.map((edge) => [edge.id, edge])
+  );
+  // Only reuse sizes within this synchronous compaction pass. Public
+  // snapshots can be mutable, so a cache must never outlive the call.
+  const payloadSize = createGraphPayloadSizer();
 
   let chainCount = rankedChains.length;
   let edgeCount = rankedEdges.length;
@@ -180,14 +186,14 @@ function compactGraphPayload(
       edgeCount,
       nodeCount,
       diagnosticCount
-    });
+    }, edgeById);
   let candidate = build();
-  let size = snapshotPayloadSize(candidate);
+  let size = payloadSize(candidate);
 
   if (size > maximumBytes && diagnosticCount > 1) {
     diagnosticCount = 1;
     candidate = build();
-    size = snapshotPayloadSize(candidate);
+    size = payloadSize(candidate);
   }
   if (
     size > maximumBytes &&
@@ -195,7 +201,7 @@ function compactGraphPayload(
   ) {
     nodeCount = criticalNodeCount;
     candidate = build();
-    size = snapshotPayloadSize(candidate);
+    size = payloadSize(candidate);
   }
   while (size > maximumBytes && edgeCount > 0) {
     edgeCount = reducedCollectionSize(
@@ -204,17 +210,17 @@ function compactGraphPayload(
       maximumBytes
     );
     candidate = build();
-    size = snapshotPayloadSize(candidate);
+    size = payloadSize(candidate);
   }
   if (size > maximumBytes && nodeCount > 0) {
     nodeCount = 0;
     candidate = build();
-    size = snapshotPayloadSize(candidate);
+    size = payloadSize(candidate);
   }
   if (size > maximumBytes && diagnosticCount > 0) {
     diagnosticCount = 0;
     candidate = build();
-    size = snapshotPayloadSize(candidate);
+    size = payloadSize(candidate);
   }
   while (size > maximumBytes && chainCount > 0) {
     chainCount = reducedCollectionSize(
@@ -223,7 +229,7 @@ function compactGraphPayload(
       maximumBytes
     );
     candidate = build();
-    size = snapshotPayloadSize(candidate);
+    size = payloadSize(candidate);
   }
 
   return candidate;
@@ -241,7 +247,8 @@ interface GraphSubsetSelection {
 
 function buildGraphSubset(
   snapshot: CodeAnalysisSnapshot,
-  selection: GraphSubsetSelection
+  selection: GraphSubsetSelection,
+  edgeById: ReadonlyMap<string, CodeGraphEdge>
 ): CodeAnalysisSnapshot {
   const selectedChains = selection.rankedChains.slice(
     0,
@@ -271,9 +278,6 @@ function buildGraphSubset(
     }
   }
 
-  const edgeById = new Map(
-    snapshot.edges.map((edge) => [edge.id, edge])
-  );
   for (const edgeId of selectedEdgeIds) {
     const edge = edgeById.get(edgeId);
     if (!edge) {
@@ -646,4 +650,37 @@ function snapshotPayloadSize(
     JSON.stringify(snapshot),
     "utf8"
   );
+}
+
+function createGraphPayloadSizer(): (
+  snapshot: CodeAnalysisSnapshot
+) => number {
+  const itemSizes = new WeakMap<object, number>();
+  const arrayContentSize = (items: readonly object[]) => {
+    let size = Math.max(0, items.length - 1);
+    for (const item of items) {
+      let itemSize = itemSizes.get(item);
+      if (itemSize === undefined) {
+        itemSize = Buffer.byteLength(
+          JSON.stringify(item),
+          "utf8"
+        );
+        itemSizes.set(item, itemSize);
+      }
+      size += itemSize;
+    }
+    return size;
+  };
+  return (snapshot) =>
+    snapshotPayloadSize({
+      ...snapshot,
+      nodes: [],
+      edges: [],
+      requestChains: [],
+      diagnostics: []
+    }) +
+    arrayContentSize(snapshot.nodes) +
+    arrayContentSize(snapshot.edges) +
+    arrayContentSize(snapshot.requestChains) +
+    arrayContentSize(snapshot.diagnostics ?? []);
 }

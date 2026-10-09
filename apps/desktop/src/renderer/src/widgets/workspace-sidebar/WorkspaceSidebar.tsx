@@ -1,11 +1,14 @@
 import { Button } from "../../shared/ui/Button";
 import {
+  Component,
+  createRef,
   memo,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type ReactNode,
   type DragEvent,
   type MouseEvent
 } from "react";
@@ -19,20 +22,18 @@ import type {
   WorkspaceSummaryDto
 } from "@gitnest/contracts";
 
-import {
-  getSnapshotChangeCount,
-  repositoryTargetSelected
-} from "../../entities/workspace/model";
+import { getSnapshotChangeCount } from "../../entities/workspace/model";
 import type { AppView } from "../../app/navigation";
 import { useExternalApplications } from "../../features/external-application/useExternalApplications";
-import { ApplicationIcon } from "../repository-header/OpenInControl";
+import { OpenInSubmenu } from "../repository-header/OpenInSubmenu";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import { LayerPortal } from "../../shared/ui/LayerPortal";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import {
   Skeleton,
-  SkeletonBoundary
+  SkeletonBoundary,
+  SkeletonSurface
 } from "../../shared/ui/Skeleton";
 import {
   Menu,
@@ -73,6 +74,7 @@ export interface WorkspaceSidebarProps {
   onSwitchWorkspace(workspaceId: string): Promise<boolean>;
   onDeleteWorkspace(workspaceId: string): Promise<boolean>;
   onAddDirectory(): Promise<boolean>;
+  onCreateRepository?(kind: "clone" | "init"): void;
   onOpenWorkspace(): void;
   onRenameWorkspace(
     workspaceId: string,
@@ -186,13 +188,11 @@ export function WorkspaceSidebar({
   const [contextMenu, setContextMenu] =
     useState<ContextMenuState | null>(null);
   const repositoryApplications = useExternalApplications(
-    contextMenu?.kind === "repository"
+    !sidebarHidden && contextMenu?.kind === "repository"
       ? { scope: "repository", target: contextMenu.target }
       : undefined,
     workspace?.id
   );
-  const [openInMenuOpen, setOpenInMenuOpen] = useState(false);
-  const openInTriggerRef = useRef<HTMLButtonElement>(null);
   const openInMenuRef = useRef<HTMLDivElement>(null);
   const [groupNameOverrides, setGroupNameOverrides] =
     useState<Record<string, string>>({});
@@ -248,16 +248,20 @@ export function WorkspaceSidebar({
           workspaceId
         );
   const targetLookup = useMemo(
-    () => createWorkspaceTargetLookup(workspace, snapshots),
+    () => sidebarHidden
+      ? emptyWorkspaceTargetLookup
+      : createWorkspaceTargetLookup(workspace, snapshots),
     [
+      sidebarHidden,
       snapshots,
       workspace?.repositories,
       workspace?.worktrees
     ]
   );
   const visibleGroups = useMemo(
-    () =>
-      getVisibleGroups(
+    () => sidebarHidden
+      ? []
+      : getVisibleGroups(
         workspace,
         targetLookup,
         normalizedQuery,
@@ -268,6 +272,7 @@ export function WorkspaceSidebar({
       groupNameOverrides,
       normalizedQuery,
       showChangedRepositoriesOnly,
+      sidebarHidden,
       targetLookup,
       workspace
     ]
@@ -317,10 +322,14 @@ export function WorkspaceSidebar({
       contextRepositoryCanonicalPath.toLocaleLowerCase();
   const removeTargetDetails =
     removeTarget && workspace
-      ? resolveWorkspaceTargetFromLookup(
-          targetLookup,
-          removeTarget
-        )
+      ? {
+          repository: workspace.repositories.find(
+            repository => repository.id === removeTarget.repositoryId
+          ),
+          worktree: workspace.worktrees.find(
+            worktree => worktree.id === removeTarget.worktreeId
+          )
+        }
       : null;
   const removeTargetName =
     removeTargetDetails?.repository?.name ??
@@ -426,14 +435,11 @@ export function WorkspaceSidebar({
     const nextCollapsed = allGroupsHaveExpanded;
     setBulkCollapsing(true);
     try {
-      for (const { group } of visibleGroups) {
-        if (group.collapsed !== nextCollapsed) {
-          await onSetGroupCollapsed(
-            group.id,
-            nextCollapsed
-          );
-        }
-      }
+      await Promise.all(
+        visibleGroups
+          .filter(({ group }) => group.collapsed !== nextCollapsed)
+          .map(({ group }) => onSetGroupCollapsed(group.id, nextCollapsed))
+      );
     } finally {
       setBulkCollapsing(false);
     }
@@ -465,10 +471,6 @@ export function WorkspaceSidebar({
     setRemoveTarget(null);
     setRepositoryMenuOpen(false);
   }, [workspaceId]);
-
-  useEffect(() => {
-    setOpenInMenuOpen(false);
-  }, [contextMenu]);
 
   useEffect(() => {
     if (contextMenu && !contextMenuTargetExists) {
@@ -577,6 +579,7 @@ export function WorkspaceSidebar({
     if (sidebarHidden) {
       setRepositoryMenuOpen(false);
       setContextMenu(null);
+      setGroupDragState(null);
     }
   }, [sidebarHidden]);
 
@@ -603,7 +606,7 @@ export function WorkspaceSidebar({
     setWorkspaceRootCollapsed((collapsed) => !collapsed);
   };
 
-  const openRepositoryContextMenu = (
+  const openRepositoryContextMenu = useCallback((
     event: MouseEvent<HTMLButtonElement>,
     target: RepositoryTargetDto,
     targetName: string
@@ -623,7 +626,7 @@ export function WorkspaceSidebar({
       targetName,
       ...position
     });
-  };
+  }, []);
 
   const openGroupContextMenu = (
     event: MouseEvent<HTMLButtonElement>,
@@ -780,12 +783,11 @@ export function WorkspaceSidebar({
       }
     };
 
-  const renderRepositoryRow = (
+  const selectedRepositoryId = workspace?.selectedTarget?.repositoryId;
+  const selectedWorktreeId = workspace?.selectedTarget?.worktreeId;
+  const renderRepositoryRow = useCallback((
     target: RepositoryTargetDto
   ) => {
-    if (!workspace) {
-      return null;
-    }
     const resolved = resolveWorkspaceTargetFromLookup(
       targetLookup,
       target
@@ -799,10 +801,8 @@ export function WorkspaceSidebar({
     );
     const selected =
       activeView === "repository" &&
-      repositoryTargetSelected(
-        workspace.selectedTarget,
-        target
-      );
+      selectedRepositoryId === target.repositoryId &&
+      selectedWorktreeId === target.worktreeId;
     const branch =
       snapshot?.branch ??
       resolved.worktree?.branch ??
@@ -810,48 +810,24 @@ export function WorkspaceSidebar({
     const tone = snapshotTone(snapshot);
     const status = snapshotStatus(snapshot);
 
-    return (
-      <Button
-        variant="unstyled"
-        aria-current={selected ? "true" : undefined}
-        aria-haspopup="menu"
-        className={`repository-row${
-          selected ? " selected" : ""
-        }`}
-        key={`${target.repositoryId}:${target.worktreeId}`}
-        onClick={() => onSelectTarget(target)}
-        onContextMenu={(event) =>
-          openRepositoryContextMenu(event, target, name)
-        }
-        title={resolved.worktree?.path}
-        type="button"
-      >
-        <span className={`repository-state ${tone}`}>
-          <Icon name="repository" size={13} />
-        </span>
-        <span className="repository-row-main">
-          <span
-            className="repository-row-name"
-            title={name}
-          >
-            {name}
-          </span>
-          <span className="repository-row-branch">
-            <Icon name="branch" size={11} />
-            <span title={branch}>{branch}</span>
-          </span>
-        </span>
-        {status.label && (
-          <span
-            aria-label={status.ariaLabel}
-            className={`repository-row-status ${tone}`}
-          >
-            {status.label}
-          </span>
-        )}
-      </Button>
-    );
-  };
+    return <SidebarRepositoryRow
+      key={`${target.repositoryId}:${target.worktreeId}`}
+      repositoryId={target.repositoryId}
+      worktreeId={target.worktreeId}
+      name={name}
+      branch={branch}
+      tone={tone}
+      statusLabel={status.label}
+      statusAriaLabel={status.ariaLabel}
+      path={resolved.worktree?.path}
+      selected={selected}
+      onSelectTarget={onSelectTarget}
+      openRepositoryContextMenu={openRepositoryContextMenu}
+    />;
+  }, [
+    activeView, selectedRepositoryId, selectedWorktreeId,
+    targetLookup, onSelectTarget, openRepositoryContextMenu
+  ]);
 
   return (
     <aside className="workspace-sidebar">
@@ -904,7 +880,7 @@ export function WorkspaceSidebar({
           >
             <Icon name="more" size={15} />
           </Button>
-          {repositoryMenuOpen && (
+          {!sidebarHidden && repositoryMenuOpen && (
             <MenuPopover
               align="start"
               anchor={repositoryMenuTriggerRef.current}
@@ -963,11 +939,8 @@ export function WorkspaceSidebar({
         </div>
       </div>
 
-      <nav
-        aria-label="Workspace 仓库"
-        className="repository-list"
-      >
-        {workspace ? (
+      <SidebarRepositoryList hidden={sidebarHidden} workspaceId={workspaceId}>
+        {!sidebarHidden && (workspace ? (
           <section
             className={`workspace-root${
               activeView === "workspace" ? " selected" : ""
@@ -1016,6 +989,7 @@ export function WorkspaceSidebar({
 
             <div
               aria-hidden={workspaceRootCollapsed}
+              hidden={workspaceRootCollapsed}
               className="workspace-root-body"
               id="workspace-root-body"
               inert={workspaceRootCollapsed}
@@ -1028,7 +1002,7 @@ export function WorkspaceSidebar({
                         className={`repository-group${
                           group.collapsed ? " collapsed" : ""
                         }`}
-                        key={group.id}
+                        key={`${workspace.id}:${group.id}`}
                       >
                         <Button
                           variant="unstyled"
@@ -1092,17 +1066,11 @@ export function WorkspaceSidebar({
                             {targets.length}
                           </span>
                         </Button>
-                        {!group.collapsed && (
-                          <div className="group-body">
-                            {targets.length === 0 ? (
-                              <div className="repository-group-empty">
-                                暂无仓库
-                              </div>
-                            ) : (
-                              targets.map(renderRepositoryRow)
-                            )}
-                          </div>
-                        )}
+                        <RepositoryGroupBody
+                          collapsed={group.collapsed}
+                          targets={targets}
+                          renderRow={renderRepositoryRow}
+                        />
                       </div>
                     )
                   )
@@ -1124,8 +1092,8 @@ export function WorkspaceSidebar({
             onClearQuery={() => setQuery("")}
             query={normalizedQuery}
           />
-        )}
-      </nav>
+        ))}
+      </SidebarRepositoryList>
 
       <div className="sidebar-footer">
         <Button
@@ -1152,7 +1120,7 @@ export function WorkspaceSidebar({
         </Button>
       </div>
 
-      {contextMenu && contextMenuTargetExists && (
+      {!sidebarHidden && contextMenu && contextMenuTargetExists && (
         <LayerPortal>
           <Menu
             aria-label={
@@ -1227,73 +1195,21 @@ export function WorkspaceSidebar({
               </MenuItem>
             ) : (
               <>
-                <MenuItem
-                  aria-expanded={openInMenuOpen}
-                  aria-haspopup="menu"
-                  leading={<Icon name="external" size={14} />}
-                  onClick={() => setOpenInMenuOpen((open) => !open)}
-                  onKeyDown={(event) => {
-                    if (event.key === "ArrowRight") {
-                      event.preventDefault();
-                      setOpenInMenuOpen(true);
+                <OpenInSubmenu
+                  profiles={repositoryApplications.profiles}
+                  loading={repositoryApplications.loading}
+                  active={repositoryApplications.active}
+                  label="选择用于打开此仓库的应用"
+                  resetKey={contextMenu}
+                  menuRef={openInMenuRef}
+                  onTab={() => closeContextMenu(true)}
+                  onOpen={async kind => {
+                    const opened = await repositoryApplications.open(kind);
+                    if (opened) {
+                      setContextMenu(current => current === contextMenu ? null : current);
                     }
                   }}
-                  ref={openInTriggerRef}
-                  title="选择用于打开此仓库的应用"
-                  trailing={<Icon name="collapse" size={14} />}
-                >
-                  Open In
-                </MenuItem>
-                {openInMenuOpen && (
-                  <MenuPopover
-                    anchor={openInTriggerRef.current}
-                    aria-label="选择用于打开此仓库的应用"
-                    autoFocus={!repositoryApplications.loading}
-                    className="workspace-context-open-in-submenu"
-                    onKeyDown={(event) => {
-                      event.stopPropagation();
-                      if (event.defaultPrevented || event.nativeEvent.isComposing || event.keyCode === 229) {
-                        return;
-                      }
-                      if (event.key === "Escape" || event.key === "ArrowLeft") {
-                        event.preventDefault();
-                        setOpenInMenuOpen(false);
-                        openInTriggerRef.current?.focus();
-                      } else if (event.key === "Tab") {
-                        closeContextMenu(true);
-                      }
-                    }}
-                    ref={openInMenuRef}
-                    side="right"
-                  >
-                    <MenuHeading>Open In</MenuHeading>
-                    {repositoryApplications.profiles.length > 0
-                      ? repositoryApplications.profiles.map((profile) => (
-                          <MenuItem
-                            disabled={repositoryApplications.active !== null}
-                            key={profile.kind}
-                            leading={<ApplicationIcon profile={profile} />}
-                            onClick={async () => {
-                              const opened = await repositoryApplications.open(profile.kind);
-                              if (opened) {
-                                setContextMenu((current) =>
-                                  current === contextMenu ? null : current
-                                );
-                              }
-                            }}
-                          >
-                            {profile.label}
-                          </MenuItem>
-                        ))
-                      : (
-                          <span className="workspace-context-open-in-empty">
-                            {repositoryApplications.loading
-                              ? "正在检测可用应用…"
-                              : "未检测到可用应用"}
-                          </span>
-                        )}
-                  </MenuPopover>
-                )}
+                />
                 <MenuSeparator />
                 <MenuItem
                   disabled={busy || contextRepositoryIsRoot}
@@ -1374,6 +1290,55 @@ export function WorkspaceSidebar({
   );
 }
 
+interface SidebarRepositoryListProps {
+  hidden: boolean;
+  workspaceId: string | undefined;
+  children: ReactNode;
+}
+
+class SidebarRepositoryList extends Component<
+  SidebarRepositoryListProps,
+  Record<string, never>,
+  number | null
+> {
+  private readonly listRef = createRef<HTMLElement>();
+  private savedScrollTop = 0;
+
+  override getSnapshotBeforeUpdate(
+    previous: Readonly<SidebarRepositoryListProps>
+  ): number | null {
+    // Read before removing rows: the browser may clamp scrollTop to zero
+    // as soon as the hidden list loses its scrollable content.
+    return !previous.hidden && this.props.hidden
+      ? this.listRef.current?.scrollTop ?? null
+      : null;
+  }
+
+  override componentDidUpdate(
+    previous: Readonly<SidebarRepositoryListProps>,
+    _previousState: Readonly<Record<string, never>>,
+    scrollTop: number | null
+  ): void {
+    const workspaceChanged = previous.workspaceId !== this.props.workspaceId;
+    if (workspaceChanged) {
+      this.savedScrollTop = 0;
+    } else if (scrollTop !== null) {
+      this.savedScrollTop = scrollTop;
+    }
+    if (!this.props.hidden && (previous.hidden || workspaceChanged) && this.listRef.current) {
+      this.listRef.current.scrollTop = this.savedScrollTop;
+    }
+  }
+
+  override render(): ReactNode {
+    return (
+      <nav aria-label="Workspace 仓库" className="repository-list" ref={this.listRef}>
+        {this.props.children}
+      </nav>
+    );
+  }
+}
+
 interface WorkspaceSwitcherProps {
   busy: boolean;
   error: WorkspaceErrorDto | null;
@@ -1385,6 +1350,80 @@ interface WorkspaceSwitcherProps {
   onSwitchWorkspace(workspaceId: string): Promise<boolean>;
   onDeleteWorkspace(workspaceId: string): Promise<boolean>;
 }
+
+const SidebarRepositoryRow = memo(function SidebarRepositoryRow({
+  repositoryId,
+  worktreeId,
+  name,
+  branch,
+  tone,
+  statusLabel,
+  statusAriaLabel,
+  path,
+  selected,
+  onSelectTarget,
+  openRepositoryContextMenu
+}: {
+  repositoryId: string;
+  worktreeId: string;
+  name: string;
+  branch: string;
+  tone: string;
+  statusLabel: string | null;
+  statusAriaLabel: string | undefined;
+  path: string | undefined;
+  selected: boolean;
+  onSelectTarget(target: RepositoryTargetDto): void;
+  openRepositoryContextMenu(event: MouseEvent<HTMLButtonElement>, target: RepositoryTargetDto, name: string): void;
+}) {
+  const target = useMemo(
+    () => ({ repositoryId, worktreeId }),
+    [repositoryId, worktreeId]
+  );
+  return (
+    <Button
+      variant="unstyled"
+      aria-current={selected ? "true" : undefined}
+      aria-haspopup="menu"
+      className={`repository-row${
+        selected ? " selected" : ""
+      }`}
+      data-repository-id={repositoryId}
+      data-worktree-id={worktreeId}
+      key={`${target.repositoryId}:${target.worktreeId}`}
+      onClick={() => onSelectTarget(target)}
+      onContextMenu={(event) =>
+        openRepositoryContextMenu(event, target, name)
+      }
+      title={path}
+      type="button"
+    >
+      <span className={`repository-state ${tone}`}>
+        <Icon name="repository" size={13} />
+      </span>
+      <span className="repository-row-main">
+        <span
+          className="repository-row-name"
+          title={name}
+        >
+          {name}
+        </span>
+        <span className="repository-row-branch">
+          <Icon name="branch" size={11} />
+          <span title={branch}>{branch}</span>
+        </span>
+      </span>
+      {statusLabel && (
+        <span
+          aria-label={statusAriaLabel}
+          className={`repository-row-status ${tone}`}
+        >
+          {statusLabel}
+        </span>
+      )}
+    </Button>
+  );
+});
 
 const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
   busy,
@@ -1495,7 +1534,9 @@ const WorkspaceSwitcher = memo(function WorkspaceSwitcher({
               {workspace ? (
                 `${workspaces.length} 个 Workspace · 本地持久化`
               ) : (
-                <Skeleton variant="text" width="72%" />
+                <SkeletonSurface as="span" label="正在读取 Workspace 信息">
+                  <Skeleton variant="text" width="72%" />
+                </SkeletonSurface>
               )}
             </span>
           </span>
@@ -1694,6 +1735,109 @@ function snapshotStatus(
   };
 }
 
+function RepositoryGroupBody({
+  collapsed,
+  targets,
+  renderRow
+}: {
+  collapsed: boolean;
+  targets: RepositoryTargetDto[];
+  renderRow(target: RepositoryTargetDto): ReactNode;
+}) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // Mount on first expansion, then preserve rows across toggles.
+  const [hasExpanded, setHasExpanded] = useState(!collapsed);
+  if (!collapsed && !hasExpanded) {
+    setHasExpanded(true);
+  }
+  if (!hasExpanded && collapsed) {
+    return null;
+  }
+  return (
+    <div className="group-body" hidden={collapsed} inert={collapsed} ref={bodyRef}>
+      <RepositoryGroupFocusBoundary bodyRef={bodyRef}>
+        <RepositoryGroupRows targets={targets} renderRow={renderRow} />
+      </RepositoryGroupFocusBoundary>
+    </div>
+  );
+}
+
+class RepositoryGroupFocusBoundary extends Component<{
+  bodyRef: { readonly current: HTMLDivElement | null };
+  children: ReactNode;
+}, Record<string, never>, HTMLButtonElement | null> {
+  override getSnapshotBeforeUpdate(): HTMLButtonElement | null {
+    const active = document.activeElement;
+    return active instanceof HTMLButtonElement &&
+      active.classList.contains("repository-row") &&
+      this.props.bodyRef.current?.contains(active)
+      ? active
+      : null;
+  }
+
+  override componentDidUpdate(
+    _previousProps: Readonly<RepositoryGroupFocusBoundary["props"]>,
+    _previousState: Readonly<Record<string, never>>,
+    focused: HTMLButtonElement | null
+  ): void {
+    const body = this.props.bodyRef.current;
+    if (
+      !focused || focused.isConnected || !body ||
+      document.activeElement !== document.body ||
+      !document.hasFocus() || body.closest("[hidden], [inert]")
+    ) {
+      return;
+    }
+    // Filtering can move a surviving target across a layout block boundary.
+    // Restore only the focus lost during this commit, never earlier focus
+    // from before a user moved to search, a menu, or another window.
+    const replacement = [...body.querySelectorAll<HTMLButtonElement>(".repository-row")]
+      .find(row =>
+        row.dataset.repositoryId === focused.dataset.repositoryId &&
+        row.dataset.worktreeId === focused.dataset.worktreeId
+      );
+    replacement?.focus({ preventScroll: true });
+  }
+
+  override render(): ReactNode {
+    return this.props.children;
+  }
+}
+
+const RepositoryGroupRows = memo(function RepositoryGroupRows({
+  targets,
+  renderRow
+}: {
+  targets: RepositoryTargetDto[];
+  renderRow(target: RepositoryTargetDto): ReactNode;
+}) {
+  if (targets.length === 0) {
+    return <div className="repository-group-empty">暂无仓库</div>;
+  }
+  if (targets.length <= 50) {
+    return targets.map(renderRow);
+  }
+
+  // Keep every row in the DOM for focus and search. Small blocks let the
+  // browser defer offscreen layout without clipping each row's focus ring.
+  const chunks: ReactNode[] = [];
+  for (let offset = 0; offset < targets.length; offset += 25) {
+    const chunk = targets.slice(offset, offset + 25);
+    chunks.push(
+      <div
+        className="repository-row-chunk"
+        key={offset}
+        // Estimate unvisited blocks using the row's minimum height; auto
+        // remembers the measured height after the block has been rendered.
+        style={{ containIntrinsicBlockSize: `auto ${chunk.length * 48}px` }}
+      >
+        {chunk.map(renderRow)}
+      </div>
+    );
+  }
+  return <div className="repository-row-chunks">{chunks}</div>;
+});
+
 function getVisibleGroups(
   workspace: WorkspaceDetailsDto | null,
   targetLookup: WorkspaceTargetLookup,
@@ -1714,7 +1858,9 @@ function getVisibleGroups(
       const groupMatches =
         !query ||
         displayName.toLocaleLowerCase().includes(query);
-      const targets = group.targets.filter((target) => {
+      const targets = !showChangedRepositoriesOnly && groupMatches
+        ? group.targets
+        : group.targets.filter((target) => {
         if (
           showChangedRepositoriesOnly &&
           !targetHasLocalChanges(targetLookup, target)
@@ -1823,6 +1969,12 @@ interface WorkspaceTargetLookup {
     RepositoryStatusSnapshotDto
   >;
 }
+
+const emptyWorkspaceTargetLookup: WorkspaceTargetLookup = {
+  repositoriesById: new Map(),
+  worktreesById: new Map(),
+  snapshotsByTarget: new Map()
+};
 
 function createWorkspaceTargetLookup(
   workspace: WorkspaceDetailsDto | null,

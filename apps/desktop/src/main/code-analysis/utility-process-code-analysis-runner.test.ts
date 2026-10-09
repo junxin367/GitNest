@@ -15,6 +15,80 @@ import {
 import { UtilityProcessCodeAnalysisRunner } from "./utility-process-code-analysis-runner";
 
 describe("UtilityProcessCodeAnalysisRunner", () => {
+  it("cancels startup immediately and reuses the supervised process for the next analysis", async () => {
+    vi.useFakeTimers();
+    const child = new FakeUtilityProcess(900);
+    const spawn = vi.fn(() => child as unknown as UtilityProcess);
+    const runner = new UtilityProcessCodeAnalysisRunner({ spawn });
+    const controller = new AbortController();
+    const cancelled = new Error("Cancelled during startup");
+    let result: unknown;
+    const first = runner.analyze({
+      ...createInput("analysis-startup-cancelled"),
+      signal: controller.signal
+    }).catch((error: unknown) => { result = error; });
+    try {
+      controller.abort(cancelled);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(result).toBe(cancelled);
+      expect(child.posted).toHaveLength(0);
+
+      child.onPostMessage = (message) => {
+        if (message.type === "analyze") {
+          queueMicrotask(() => child.emit("message", {
+            version: CODE_ANALYSIS_PROCESS_PROTOCOL_VERSION,
+            type: "result",
+            analysisId: message.analysisId,
+            snapshot: createSnapshot(message.analysisId)
+          }));
+        }
+      };
+      const second = runner.analyze(createInput("analysis-after-cancel"));
+      child.emit("message", {
+        version: CODE_ANALYSIS_PROCESS_PROTOCOL_VERSION,
+        type: "ready"
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(second).resolves.toMatchObject({
+        analysisId: "analysis-after-cancel"
+      });
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(child.posted.map((message) => message.type)).toEqual(["analyze"]);
+    } finally {
+      child.emit("exit", 0);
+      await first;
+      vi.useRealTimers();
+    }
+  });
+
+  it("still supervises startup timeout after its caller cancels", async () => {
+    vi.useFakeTimers();
+    const child = new FakeUtilityProcess(901);
+    const terminateTree = vi.fn(async () => undefined);
+    const runner = new UtilityProcessCodeAnalysisRunner({
+      spawn: () => child as unknown as UtilityProcess,
+      terminateTree,
+      startupTimeoutMs: 100
+    });
+    const controller = new AbortController();
+    const task = runner.analyze({
+      ...createInput("analysis-startup-timeout"),
+      signal: controller.signal
+    });
+    const rejection = expect(task).rejects.toThrow("Cancelled startup");
+    try {
+      controller.abort(new Error("Cancelled startup"));
+      await vi.advanceTimersByTimeAsync(0);
+      await rejection;
+      expect(terminateTree).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(terminateTree).toHaveBeenCalledExactlyOnceWith(child);
+    } finally {
+      child.emit("exit", 0);
+      vi.useRealTimers();
+    }
+  });
+
   it("starts lazily and replaces an exited analysis process", async () => {
     const children: FakeUtilityProcess[] = [];
     const spawn = vi.fn(() => {

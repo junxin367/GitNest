@@ -11,6 +11,7 @@ import type {
   CodeAnalysisSnapshotDto,
   CodeAnalysisStateDto,
   GitReadErrorDto,
+  GetCodeAnalysisSnapshotRequest,
   InstallableLanguageServerDto,
   LanguageServerInstallResultDto
 } from "@gitnest/contracts";
@@ -22,6 +23,10 @@ export interface CodeAnalysisController {
   loaded: boolean;
   loading: boolean;
   loadingFullSnapshot: boolean;
+  nodeView: CodeAnalysisSnapshotDto | null;
+  loadingNodes: boolean;
+  nodeViewError: GitReadErrorDto | null;
+  loadNodeView(request: Omit<GetCodeAnalysisSnapshotRequest, "detail">): Promise<boolean>;
   action:
     | "starting"
     | "restoring"
@@ -60,6 +65,10 @@ export function useCodeAnalysis(
   const [loadingSnapshot, setLoadingSnapshot] = useState(false);
   const [loadingFullSnapshot, setLoadingFullSnapshot] =
     useState(false);
+  const [nodeView, setNodeView] = useState<CodeAnalysisSnapshotDto | null>(null);
+  const [loadingNodes, setLoadingNodes] = useState(false);
+  const [nodeViewError, setNodeViewError] = useState<GitReadErrorDto | null>(null);
+  const nodeRequestRef = useRef(0);
   const [action, setAction] = useState<
     "starting" | "restoring" | "cancelling" | null
   >(null);
@@ -80,6 +89,12 @@ export function useCodeAnalysis(
   const requestedSnapshotKeyRef = useRef("");
   const snapshotKeyRef = useRef("");
   const snapshotErrorRef = useRef<GitReadErrorDto | null>(null);
+  const fullSnapshotRequestRef = useRef<{
+    key: string;
+    generation: number;
+    requestId: number;
+    promise: Promise<boolean>;
+  } | null>(null);
 
   const loadSnapshot = useCallback(
     async (
@@ -203,6 +218,10 @@ export function useCodeAnalysis(
         requestedSnapshotKeyRef.current = "";
         setLoadingFullSnapshot(false);
         setLoadingSnapshot(false);
+        nodeRequestRef.current += 1;
+        setNodeView(null);
+        setLoadingNodes(false);
+        setNodeViewError(null);
       }
       setState(nextState);
       setLoaded(true);
@@ -251,12 +270,13 @@ export function useCodeAnalysis(
     [loadSnapshot]
   );
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (reuseSnapshot = false) => {
     const generation = ++generationRef.current;
     const requestId = ++stateRequestRef.current;
     requestedSnapshotKeyRef.current = "";
     setLoadingSnapshot(false);
     setLoadingFullSnapshot(false);
+    setLoadingNodes(false);
     setAction((current) => current === "restoring" ? null : current);
     setRestorePending(false);
     setLoading(true);
@@ -276,7 +296,13 @@ export function useCodeAnalysis(
       }
       applyState(result.value, false);
       if (result.value.snapshotAvailable) {
-        await loadSnapshot(result.value, generation);
+        // A completed snapshot is immutable. Keep the existing full graph when
+        // reactivating the page; only a changed result needs another IPC read.
+        if (!reuseSnapshot || result.value.state !== "ready" || !snapshotKeyMatchesExpectation(
+          snapshotKeyRef.current, snapshotExpectationKey(result.value)
+        )) {
+          await loadSnapshot(result.value, generation);
+        }
       } else {
         setSnapshot(null);
         snapshotKeyRef.current = "";
@@ -314,22 +340,73 @@ export function useCodeAnalysis(
     }
 
     const generation = generationRef.current;
+    const pending = fullSnapshotRequestRef.current;
+    if (
+      pending?.key === expectationKey &&
+      pending.generation === generation &&
+      pending.requestId === snapshotRequestRef.current
+    ) {
+      return pending.promise;
+    }
     setLoadingFullSnapshot(true);
-    try {
-      return await loadSnapshot(
-        expectedState,
-        generation,
-        "full"
-      );
-    } finally {
+    const promise = loadSnapshot(
+      expectedState,
+      generation,
+      "full"
+    ).finally(() => {
+      if (fullSnapshotRequestRef.current?.promise !== promise) {
+        return;
+      }
+      fullSnapshotRequestRef.current = null;
       if (
         generation === generationRef.current &&
         expectationKey === snapshotExpectationRef.current
       ) {
         setLoadingFullSnapshot(false);
       }
-    }
+    });
+    fullSnapshotRequestRef.current = {
+      key: expectationKey,
+      generation,
+      requestId: snapshotRequestRef.current,
+      promise
+    };
+    return promise;
   }, [loadSnapshot]);
+
+  const loadNodeView = useCallback(async (
+    request: Omit<GetCodeAnalysisSnapshotRequest, "detail">
+  ) => {
+    if (!stateRef.current.snapshotAvailable) return false;
+    const generation = generationRef.current;
+    const expectation = snapshotExpectationRef.current;
+    const requestId = ++nodeRequestRef.current;
+    const isCurrent = () =>
+      generation === generationRef.current &&
+      expectation === snapshotExpectationRef.current &&
+      requestId === nodeRequestRef.current;
+    setLoadingNodes(true);
+    setNodeViewError(null);
+    try {
+      const result = await window.gitnest.codeAnalysis.getSnapshot({ ...request, detail: "nodes" });
+      if (!isCurrent()) return false;
+      if (!result.ok) {
+        setNodeViewError(result.error);
+        return false;
+      }
+      if (!snapshotMatchesState(result.value, stateRef.current)) {
+        setNodeViewError(unexpectedError(new Error("代码节点与当前分析结果不匹配，请重试。")));
+        return false;
+      }
+      setNodeView(result.value);
+      return true;
+    } catch (reason) {
+      if (isCurrent()) setNodeViewError(unexpectedError(reason));
+      return false;
+    } finally {
+      if (isCurrent()) setLoadingNodes(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!enabled) {
@@ -338,7 +415,7 @@ export function useCodeAnalysis(
       setRestorePending(false);
       return;
     }
-    void reload();
+    void reload(true);
     const unsubscribe =
       window.gitnest.codeAnalysis.onStateChanged(
         (nextState) => {
@@ -351,6 +428,7 @@ export function useCodeAnalysis(
       generationRef.current += 1;
       stateRequestRef.current += 1;
       snapshotRequestRef.current += 1;
+      nodeRequestRef.current += 1;
       unsubscribe();
     };
   }, [applyState, enabled, reload]);
@@ -503,6 +581,10 @@ export function useCodeAnalysis(
     loaded,
     loading: loading || loadingSnapshot || restorePending || action === "restoring",
     loadingFullSnapshot,
+    nodeView,
+    loadingNodes,
+    nodeViewError,
+    loadNodeView,
     action: restorePending ? "restoring" : action,
     installingLanguage,
     error,

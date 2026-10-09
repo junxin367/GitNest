@@ -1,10 +1,13 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useState
 } from "react";
 
-import type { RepositoryTargetDto } from "@gitnest/contracts";
+import type { RepositoryTargetDto, WorkspaceOperationDto } from "@gitnest/contracts";
+import { FileHistoryDialog } from "../../features/file-history/FileHistoryDialog";
+import { RepositoryIgnoreDialog, type RepositoryIgnoreSelection } from "../../features/repository-ignore/RepositoryIgnoreDialog";
 
 import type { useRepositoryDetails } from "../../entities/repository/useRepositoryDetails";
 import {
@@ -21,8 +24,8 @@ import type { ExternalApplicationController } from "../../features/external-appl
 import type { RepositoryCommandController } from "../../features/repository-command/useRepositoryCommands";
 import type { AppSettingsController } from "../../features/settings/useAppSettings";
 import { resolveRepositoryFileBrowsing } from "../../features/settings/settingsRuntime";
-import { buildDiffViewerFiles } from "../../shared/model/diffViewModel";
-import { useSkeletonVisibility } from "../../shared/ui/Skeleton";
+import { buildDiffViewerFiles, type DiffViewerFile } from "../../shared/model/diffViewModel";
+import { SkeletonScope, useSkeletonVisibility } from "../../shared/ui/Skeleton";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import {
   DEFAULT_DIFF_CONTEXT_LINES,
@@ -36,6 +39,8 @@ import {
 } from "../../widgets/diff-workspace/DiffWorkspace";
 import { repositoryDiffWorkspaceConfiguration } from "../../widgets/diff-workspace/diffWorkspaceConfiguration";
 import { RepositoryStashBrowser } from "./RepositoryStashBrowser";
+import type { RepositoryWorkflowController } from "../../features/repository-workflow/useRepositoryWorkflow";
+import { RepositoryWorkflowToolbar } from "../../features/repository-workflow/RepositoryWorkflowToolbar";
 
 export function shouldShowRepositoryChangesSkeleton({
   hasCurrentChanges,
@@ -62,7 +67,9 @@ export function RepositoryChanges({
   onPushAfterCommitChange,
   onCommitted,
   workspaceId,
-  target
+  target,
+  operations = [],
+  workflow
 }: {
   appSettings: AppSettingsController;
   aiGenerating: boolean;
@@ -79,11 +86,25 @@ export function RepositoryChanges({
   onCommitted(submittedMessage: string): void;
   workspaceId: string | undefined;
   target: RepositoryTargetDto;
+  operations?: WorkspaceOperationDto[];
+  workflow?: RepositoryWorkflowController;
 }) {
   const fileBrowsing = resolveRepositoryFileBrowsing(
     appSettings.settings, target.repositoryId
   );
   const changesScopeKey = `${workspaceId ?? ""}\u0001${target.repositoryId}:${target.worktreeId}`;
+  const [fileHistory, setFileHistory] = useState<{ scope: string; file: DiffViewerFile } | null>(null);
+  const [ignoreSelection, setIgnoreSelection] = useState<{ scope: string; selection: RepositoryIgnoreSelection } | null>(null);
+  const openFileHistory = useCallback((file: DiffViewerFile) => {
+    setFileHistory({ scope: changesScopeKey, file });
+  }, [changesScopeKey]);
+  const openIgnoreFile = useCallback((file: DiffViewerFile, scope: RepositoryIgnoreSelection["scope"]) => {
+    setIgnoreSelection({ scope: changesScopeKey, selection: { path: file.path, scope } });
+  }, [changesScopeKey]);
+  useEffect(() => {
+    setFileHistory(null);
+    setIgnoreSelection(null);
+  }, [changesScopeKey]);
   const controllerChangesScopeKey = controller.changes
     ? `${workspaceId ?? ""}\u0001${controller.changes.target.repositoryId}:${controller.changes.target.worktreeId}`
     : "";
@@ -168,6 +189,10 @@ export function RepositoryChanges({
     }
   }, [stashView.active, stashes.load]);
 
+  useEffect(() => {
+    if (workflow?.completionVersion) void stashes.reload();
+  }, [workflow?.completionVersion, stashes.reload]);
+
   const openSelectedDiffViewer = async () => {
     if (!selectedDiff || diffViewerOpening) {
       return;
@@ -191,7 +216,7 @@ export function RepositoryChanges({
       setDiffViewerOpening(false);
     }
   };
-  const requestDiffContext = ({
+  const requestDiffContext = useCallback(({
     contextLines
   }: DiffContextRequest) => {
     if (!selectedFile || contextLines <= diffContextLines) {
@@ -206,10 +231,40 @@ export function RepositoryChanges({
         preserveDiff: true
       }
     );
-  };
+  }, [controller.selectChange, diffContextLines, selectedFile]);
+
+  const stageFile = useCallback(
+    (file: DiffViewerFile) => mutations.stageChange(file.change),
+    [mutations.stageChange]
+  );
+  const stageFiles = useCallback(
+    (files: readonly DiffViewerFile[]) => mutations.stageChanges(files.map(file => file.change)),
+    [mutations.stageChanges]
+  );
+  const unstageFile = useCallback(
+    (file: DiffViewerFile) => mutations.unstageChange(file.change),
+    [mutations.unstageChange]
+  );
+  const unstageFiles = useCallback(
+    (files: readonly DiffViewerFile[]) => mutations.unstageChanges(files.map(file => file.change)),
+    [mutations.unstageChanges]
+  );
+  const discardFile = useCallback(
+    (file: DiffViewerFile) => mutations.discardChange(file.change),
+    [mutations.discardChange]
+  );
+  const discardFiles = useCallback(
+    (files: readonly DiffViewerFile[]) => mutations.discardChanges(files.map(file => file.change)),
+    [mutations.discardChanges]
+  );
+  const selectFile = useCallback(
+    (file: DiffViewerFile) => void controller.selectChange(file.change, file.mode),
+    [controller.selectChange]
+  );
 
   if (showChangesSkeleton) {
     return (
+      <SkeletonScope scopeKey={changesScopeKey} loading>
       <div className="changes-page">
         <DiffWorkspaceSkeleton
           className="changes-layout"
@@ -218,8 +273,10 @@ export function RepositoryChanges({
           }
           label="正在读取工作区变更…"
           showCommit
+          showAuxiliary
         />
       </div>
+      </SkeletonScope>
     );
   }
 
@@ -264,7 +321,13 @@ export function RepositoryChanges({
             : undefined;
 
   return (
-    <div className="changes-page">
+    <SkeletonScope scopeKey={changesScopeKey} loading={showDiffSkeleton}>
+    <div className={`changes-page${workflow?.state?.operation || workflow?.state?.conflictedPaths.length ? " changes-page-with-workflow" : ""}`}>
+      {workflow && <RepositoryWorkflowToolbar
+        controller={workflow}
+        busy={commands.busy || mutations.active !== null || stashes.active !== null}
+        externalApplications={externalApplications}
+      />}
       <ToastViewport>
         {(stashes.mutationError || stashes.notice) && (
           <Toast
@@ -295,37 +358,48 @@ export function RepositoryChanges({
             stashes.active !== null ||
             mutations.active !== null ||
             commands.busy,
-          content: (
+          content: stashView.active ? (
+            <SkeletonScope
+              scopeKey={`${changesScopeKey}:stash`}
+              loading={stashes.loading.stashes || stashes.loading.files}
+            >
             <RepositoryStashBrowser
               error={stashes.error}
               loading={stashes.loading}
               mutationBusy={
                 stashes.active !== null ||
                 mutations.active !== null ||
-                commands.busy
+                commands.busy ||
+                Boolean(workflow?.busy || workflow?.preflight || workflow?.draft)
               }
               selectedStashRef={stashes.selectedStashRef}
               stashFiles={stashes.stashFiles}
               stashes={stashes.stashes}
               onMutateStash={stashes.mutateStash}
+              {...(workflow ? {
+                onCreateStash: () => workflow.openDraft("create-stash"),
+                ...(selectedFile ? {
+                  selectedFilePath: selectedFile.path,
+                  onCreateFileStash: () => workflow.openDraft(
+                    "create-stash", selectedFile.path, selectedFile.change.originalPath
+                  )
+                } : {})
+              } : {})}
               onReload={() => void stashes.reload()}
               onSelectStash={(stashRef) =>
                 void stashes.selectStash(stashRef)
               }
             />
-          ),
+            </SkeletonScope>
+          ) : null,
           count: stashes.stashes?.stashes.length,
           label: "储藏的变更",
-          onToggle: () => {
-            stashView.toggle();
-          }
+          onToggle: stashView.toggle
         }}
         className="changes-layout"
-        canStageFile={(file) => canStageChange(file.change)}
-        canUnstageFile={(file) =>
-          canUnstageChange(file.change)
-        }
-        canDiscardFile={(file) => canDiscardChange(file.change)}
+        canStageFile={canStageFile}
+        canUnstageFile={canUnstageFile}
+        canDiscardFile={canDiscardFile}
         changesError={
           !currentChanges && controller.error
             ? {
@@ -357,7 +431,8 @@ export function RepositoryChanges({
           busy:
             mutations.active !== null ||
             stashes.active !== null ||
-            commands.busy,
+            commands.busy ||
+            Boolean(workflow?.busy),
           commitPanelHeight:
             appSettings.settings.diff.commitPanelHeight,
           conflicted:
@@ -402,7 +477,7 @@ export function RepositoryChanges({
         fileView={fileBrowsing.fileView}
         files={workspaceFiles}
         mutationBusy={
-          mutations.active !== null || stashes.active !== null
+          mutations.active !== null || stashes.active !== null || Boolean(workflow?.busy)
         }
         onFileViewChange={(fileView) =>
           void appSettings.update(
@@ -415,33 +490,15 @@ export function RepositoryChanges({
             { silent: true }
           )
         }
-        onSelectedFileChange={(file) =>
-          void controller.selectChange(file.change, file.mode)
-        }
-        onStageFile={(file) =>
-          mutations.stageChange(file.change)
-        }
-        onUnstageFile={(file) =>
-          mutations.unstageChange(file.change)
-        }
-        onDiscardFile={(file) =>
-          mutations.discardChange(file.change)
-        }
-        onDiscardFiles={(files) =>
-          mutations.discardChanges(
-            files.map((file) => file.change)
-          )
-        }
-        onStageFiles={(files) =>
-          mutations.stageChanges(
-            files.map((file) => file.change)
-          )
-        }
-        onUnstageFiles={(files) =>
-          mutations.unstageChanges(
-            files.map((file) => file.change)
-          )
-        }
+        onSelectedFileChange={selectFile}
+        onFileHistory={openFileHistory}
+        onIgnoreFile={openIgnoreFile}
+        onStageFile={stageFile}
+        onUnstageFile={unstageFile}
+        onDiscardFile={discardFile}
+        onDiscardFiles={discardFiles}
+        onStageFiles={stageFiles}
+        onUnstageFiles={unstageFiles}
         openStandalone={{
           busy: diffViewerOpening,
           disabled: !selectedDiff,
@@ -497,6 +554,34 @@ export function RepositoryChanges({
             )
         }}
       />
+      {fileHistory?.scope === changesScopeKey && <FileHistoryDialog
+        bridge={window.gitnest.fileHistory}
+        target={target}
+        path={fileHistory.file.path}
+        {...(fileHistory.file.change.originalPath ? { originalPath: fileHistory.file.change.originalPath } : {})}
+        onDismiss={() => setFileHistory(null)}
+      />}
+      {ignoreSelection?.scope === changesScopeKey && <RepositoryIgnoreDialog
+        key={`${changesScopeKey}:${ignoreSelection.selection.path}:${ignoreSelection.selection.scope}`}
+        target={target}
+        selection={ignoreSelection.selection}
+        operations={operations}
+        onDismiss={() => setIgnoreSelection(null)}
+        onCompleted={() => void controller.reload("changes")}
+      />}
     </div>
+    </SkeletonScope>
   );
+}
+
+function canStageFile(file: DiffViewerFile): boolean {
+  return canStageChange(file.change);
+}
+
+function canUnstageFile(file: DiffViewerFile): boolean {
+  return canUnstageChange(file.change);
+}
+
+function canDiscardFile(file: DiffViewerFile): boolean {
+  return canDiscardChange(file.change);
 }

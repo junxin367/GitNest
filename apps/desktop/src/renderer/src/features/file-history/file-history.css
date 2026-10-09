@@ -1,0 +1,25 @@
+.gn-dialog.file-history-dialog { width: min(1180px, calc(100vw - 48px)); max-height: min(880px, calc(100vh - 48px)); }
+.gn-dialog__body.file-history-body { display: flex; flex-direction: column; gap: var(--space-3); min-height: 0; }
+.file-history-heading { display: flex; flex-direction: column; gap: var(--space-1); overflow-wrap: anywhere; }
+.file-history-heading > strong { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.file-history-heading > span, .file-history-caption { color: var(--color-text-muted); font-size: var(--font-size-caption); }
+.file-history-caption { margin: var(--space-2) 0; }
+.file-history-layout { display: grid; grid-template-columns: minmax(220px, 30%) minmax(0, 1fr); gap: var(--space-4); min-height: 320px; height: min(65vh, 720px); }
+.file-history-sidebar, .file-history-list, .file-history-detail { min-width: 0; min-height: 0; }
+.file-history-sidebar { display: flex; flex-direction: column; gap: var(--space-3); padding-right: var(--space-2); border-right: 1px solid var(--color-border); }
+.file-history-heading { flex-shrink: 0; }
+.file-history-list { overflow: auto; flex: 1; }
+.file-history-list ol { list-style: none; margin: 0; padding: 0; }
+.file-history-entry { display: flex; flex-direction: column; gap: var(--space-1); width: 100%; text-align: left; color: inherit; padding: var(--space-3); border: 1px solid transparent; border-radius: var(--radius-small); background: transparent; cursor: pointer; }
+.file-history-entry:hover { background: var(--color-bg-hover); }
+.file-history-entry[aria-current="true"] { background: var(--color-primary-soft); border-color: var(--color-primary); }
+.file-history-entry > span, .file-history-entry > time { color: var(--color-text-muted); font-size: var(--font-size-caption); }
+.file-history-entry > strong, .file-history-path { overflow-wrap: anywhere; }
+.file-history-detail { display: flex; flex-direction: column; gap: var(--space-2); }
+.file-history-panel { min-height: 0; overflow: auto; flex: 1; display: flex; flex-direction: column; }
+.file-history-panel > .diff-viewer-panel { min-height: 260px; flex: 1; }
+.file-history-entry:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
+@media (max-width: 760px) {
+  .gn-dialog.file-history-dialog { width: calc(100vw - 24px); }
+  .file-history-layout { grid-template-columns: minmax(0, 34%) minmax(0, 1fr); height: 70vh; }
+}

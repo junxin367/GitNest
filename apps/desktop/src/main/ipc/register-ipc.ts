@@ -133,7 +133,15 @@ import {
   type WorktreeCommandExecuteRequest,
   type WorktreeCommandPreflightRequest
 } from "@gitnest/contracts";
-import { GitError } from "@gitnest/git-core";
+import { GitError, normalizeCommitHistorySearch } from "@gitnest/git-core";
+import {
+  featureRecord, featureString, featureBoolean, featureTarget, featureHash,
+  validateWorkflowCommand, validateManagementCommand, validateRepositoryCreation
+} from "./repository-feature-validation";
+import {
+  validateIgnorePreflight, validateIgnoreExecute,
+  validateFileHistory, validateFileHistoryDiff, validateFileHistoryCancel
+} from "./file-actions-validation";
 import { WorkspaceError } from "@gitnest/workspace-core";
 
 import type { ApplicationServices } from "../bootstrap/register-services";
@@ -213,6 +221,7 @@ const CODE_ANALYSIS_SCOPES = new Set([
 ]);
 const CODE_ANALYSIS_SNAPSHOT_DETAILS = new Set([
   "navigation",
+  "nodes",
   "full"
 ]);
 const INSTALLABLE_LANGUAGE_SERVERS = new Set<string>(
@@ -369,13 +378,10 @@ export function registerIpcHandlers(
     ): Promise<
       GitReadResult<CodeAnalysisSnapshotDto | null>
     > =>
-      captureGitRead(() =>
-        services.codeAnalysis.getSnapshot(
-          validateGetCodeAnalysisSnapshotRequest(
-            request
-          ).detail
-        )
-      )
+      captureGitRead(() => {
+        const validated = validateGetCodeAnalysisSnapshotRequest(request);
+        return services.codeAnalysis.getSnapshot(validated.detail, validated);
+      })
   );
 
   registerHandler(
@@ -854,6 +860,63 @@ export function registerIpcHandlers(
       })
   );
 
+  registerHandler(IPC_CHANNELS.repositoryIgnorePreflight, (_event, request) =>
+    captureGitRead(() => services.repositoryIgnore.preflight(validateIgnorePreflight(request))));
+  registerHandler(IPC_CHANNELS.repositoryIgnoreExecute, (_event, request) =>
+    captureGitRead(() => {
+      const input = validateIgnoreExecute(request);
+      return services.repositoryIgnore.execute(input.preflightId, input.confirmed);
+    }));
+  registerHandler(IPC_CHANNELS.fileHistoryHistory, (_event, request) =>
+    captureGitRead(() => services.fileHistory.history(validateFileHistory(request))));
+  registerHandler(IPC_CHANNELS.fileHistoryDiff, (_event, request) =>
+    captureGitRead(() => services.fileHistory.diff(validateFileHistoryDiff(request))));
+  registerHandler(IPC_CHANNELS.fileHistoryCancel, (_event, request) =>
+    captureGitRead(() => Promise.resolve(services.fileHistory.cancel(validateFileHistoryCancel(request).queryId))));
+
+  registerHandler(IPC_CHANNELS.repositoryWorkflowInspect, (_event, request) =>
+    captureGitRead(() => services.repositoryWorkflow.inspect(featureTarget(featureRecord(request).target))));
+  registerHandler(IPC_CHANNELS.repositoryWorkflowPreflight, (_event, request) =>
+    captureGitRead(() => services.repositoryWorkflow.preflight(validateWorkflowCommand(featureRecord(request).command))));
+  registerHandler(IPC_CHANNELS.repositoryWorkflowExecute, (_event, request) =>
+    captureGitRead(() => {
+      const input = featureRecord(request);
+      return services.repositoryWorkflow.execute(
+        validateWorkflowCommand(input.command),
+        featureString(input.preflightId, 200),
+        featureBoolean(input.confirmed)
+      );
+    }));
+  registerHandler(IPC_CHANNELS.repositoryManagementInspect, (_event, request) =>
+    captureGitRead(() => services.repositoryManagement.inspect(featureTarget(featureRecord(request).target))));
+  registerHandler(IPC_CHANNELS.repositoryManagementPreflight, (_event, request) =>
+    captureGitRead(() => services.repositoryManagement.preflight(validateManagementCommand(request))));
+  registerHandler(IPC_CHANNELS.repositoryManagementExecute, (_event, request) =>
+    captureGitRead(() => {
+      const input = featureRecord(request);
+      return services.repositoryManagement.execute(featureString(input.preflightId, 200), featureBoolean(input.confirmed));
+    }));
+  registerHandler(IPC_CHANNELS.repositoryManagementCreate, (_event, request) =>
+    captureGitRead(() => Promise.resolve(services.repositoryManagement.create(validateRepositoryCreation(request)))));
+  registerHandler(IPC_CHANNELS.repositoryManagementCreationStatus, (_event, request) =>
+    captureGitRead(() => Promise.resolve(services.repositoryManagement.creationStatus(featureString(featureRecord(request).operationId, 200)))));
+  registerHandler(IPC_CHANNELS.repositoryManagementCancelCreation, (_event, request) =>
+    captureGitRead(() => Promise.resolve(services.repositoryManagement.cancelCreation(featureString(featureRecord(request).operationId, 200)))));
+  registerHandler(IPC_CHANNELS.repositoryManagementOpenCommit, (_event, request) =>
+    captureGitRead(async () => {
+      const input = featureRecord(request);
+      const result = await services.repositoryManagement.commitUrl(
+        featureTarget(input.target), featureHash(input.hash),
+        input.remote === undefined ? undefined : featureString(input.remote, 255)
+      );
+      const url = new URL(result.url);
+      if (url.protocol !== "https:" || url.username || url.password) {
+        throw new GitError("INVALID_REQUEST", "远程提交地址必须是不含凭据的 HTTPS 地址。");
+      }
+      await shell.openExternal(url.href);
+      return result;
+    }));
+
   registerHandler(
     IPC_CHANNELS.repositoryGetDiff,
     (_event, request) =>
@@ -879,7 +942,8 @@ export function registerIpcHandlers(
           input.target,
           input.limit,
           input.offset,
-          input.scope
+          input.scope,
+          input.search
         );
       })
   );
@@ -1908,9 +1972,19 @@ export function validateGetCodeAnalysisSnapshotRequest(
       "Reading a code analysis snapshot requires a supported detail level."
     );
   }
-  return {
+  const result: GetCodeAnalysisSnapshotRequest = {
     detail: detail as GetCodeAnalysisSnapshotRequest["detail"]
   };
+  for (const key of ["query", "focusNodeId", "inspectedNodeId"] as const) {
+    const value = request[key];
+    if (value === undefined) continue;
+    if (detail !== "nodes" || typeof value !== "string" ||
+      value.length > (key === "query" ? 256 : 4096)) {
+      throw new GitError("INVALID_REQUEST", "Invalid code node query.");
+    }
+    result[key] = value;
+  }
+  return result;
 }
 
 export function validateCancelCodeAnalysisRequest(
@@ -2182,7 +2256,10 @@ export function validateAddWorkspaceDirectoryRequest(
   request: unknown
 ): AddWorkspaceDirectoryRequest {
   return {
-    path: readWorkspacePath(request)
+    path: readWorkspacePath(request),
+    ...(request && typeof request === "object" && "expectedWorkspaceId" in request
+      ? { expectedWorkspaceId: readWorkspaceId({ workspaceId: request.expectedWorkspaceId }) }
+      : {})
   };
 }
 
@@ -2504,12 +2581,16 @@ export function validateRepositoryHistoryRequest(
     rawScope === undefined
       ? undefined
       : validateRepositoryHistoryScope(rawScope);
+  const search = normalizeCommitHistorySearch(
+    "search" in request ? request.search : undefined
+  );
 
   return {
     ...base,
     ...(limit === undefined ? {} : { limit }),
     ...(offset === undefined ? {} : { offset }),
-    ...(scope === undefined ? {} : { scope })
+    ...(scope === undefined ? {} : { scope }),
+    ...(search === undefined ? {} : { search })
   };
 }
 

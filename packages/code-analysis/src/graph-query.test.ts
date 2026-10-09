@@ -346,6 +346,51 @@ describe("searchGraphNodes", () => {
 });
 
 describe("findRequestChains / resolveRequestChain", () => {
+  it("retains full counts and source order beyond the result limit", () => {
+    const base = snapshot();
+    const chain = base.requestChains[0]!;
+    base.requestChains = Array.from({ length: 25 }, (_, index) => ({
+      ...chain,
+      id: `chain-${index}`,
+      changed: index % 2 === 0,
+      route: index % 3 === 0 ? "/selected" : "/other"
+    }));
+    const result = findRequestChains(base, { changedOnly: true, limit: 3 });
+    expect(result.chains.map((item) => item.id)).toEqual([
+      "chain-0", "chain-2", "chain-4"
+    ]);
+    expect(result.totalMatches).toBe(13);
+    expect(result.truncated).toBe(true);
+    const filtered = findRequestChains(base, {
+      query: "/selected", changedOnly: true, limit: 2
+    });
+    expect(filtered.chains.map((item) => item.id)).toEqual([
+      "chain-0", "chain-6"
+    ]);
+    expect(filtered.totalMatches).toBe(5);
+    expect(filtered.truncated).toBe(true);
+  });
+
+  it("supports search and subgraph queries in either order on one index", () => {
+    const base = deepFreeze(snapshot());
+    for (const searchFirst of [true, false]) {
+      const index = createCodeGraphQueryIndex(base);
+      const search = () => expect(searchGraphNodes(base, { query: "service" }, index))
+        .toEqual(searchGraphNodes(base, { query: "service" }));
+      const subgraph = () => expect(collectSubgraph(base, { nodeIds: ["client"] }, index))
+        .toEqual(collectSubgraph(base, { nodeIds: ["client"] }));
+      if (searchFirst) {
+        search();
+        subgraph();
+      } else {
+        subgraph();
+        search();
+      }
+      search();
+      subgraph();
+    }
+  });
+
   it("filters by transport, changed flag and text", () => {
     const all = findRequestChains(snapshot(), {});
     expect(all.totalMatches).toBe(1);

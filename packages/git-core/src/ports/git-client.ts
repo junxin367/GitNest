@@ -1,4 +1,5 @@
 import type { GitEnvironment } from "../domain/git-environment";
+import type { CommitHistoryFilter } from "../domain/history-search";
 import type {
   Branch,
   RepositoryInspection,
@@ -43,6 +44,7 @@ export interface ReadCommitHistoryOptions extends GitReadOptions {
   limit?: number;
   offset?: number;
   scope?: CommitHistoryScope;
+  search?: CommitHistoryFilter;
 }
 
 export interface GitClient {

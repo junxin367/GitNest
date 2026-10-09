@@ -24,6 +24,7 @@ import {
   useCodeAnalysis,
   type CodeAnalysisController
 } from "./useCodeAnalysis";
+import { AnalysisPageHost } from "../../app/AnalysisPageHost";
 
 describe("useCodeAnalysis snapshot synchronization", () => {
   let container: HTMLDivElement;
@@ -45,6 +46,168 @@ describe("useCodeAnalysis snapshot synchronization", () => {
     act(() => root.unmount());
     container.remove();
     vi.restoreAllMocks();
+  });
+
+  it("immediately restores a visited page while revalidating, without rereading an unchanged full graph", async () => {
+    const ready = readyState("retained", "2026-10-09T03:00:00.000Z");
+    const revalidation = deferred<Awaited<ReturnType<GitNestBridge["codeAnalysis"]["getState"]>>>();
+    const unsubscribe = vi.fn();
+    const getState = vi.fn<GitNestBridge["codeAnalysis"]["getState"]>()
+      .mockResolvedValueOnce({ ok: true, value: ready })
+      .mockImplementationOnce(() => revalidation.promise);
+    const getSnapshot = vi.fn(async () => ({
+      ok: true as const, value: { ...snapshotFor(ready), detailLevel: "full" as const }
+    }));
+    installBridge({ getState, getSnapshot, onStateChanged: vi.fn(() => unsubscribe) });
+    function Content() {
+      controller = useCodeAnalysis();
+      return <section>{controller.snapshot?.analysisId ?? "no content"}</section>;
+    }
+    const render = async (active: boolean) => {
+      await act(async () => {
+        root.render(<AnalysisPageHost active={active} workspace={null}><Content /></AnalysisPageHost>);
+        await flushAsyncWork();
+      });
+    };
+    await render(false);
+    expect(getState).not.toHaveBeenCalled();
+    await render(true);
+    const original = container.querySelector("section")!;
+    const snapshot = controller?.snapshot;
+    expect(original.textContent).toBe("retained");
+    await render(false);
+    expect(original.style.display).toBe("none");
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    await render(true);
+    expect(container.querySelector("section")).toBe(original);
+    expect(original.style.display).not.toBe("none");
+    expect(original.textContent).toBe("retained");
+    expect(controller?.snapshot).toBe(snapshot);
+    expect(controller?.loading).toBe(true);
+    await act(async () => {
+      revalidation.resolve({ ok: true, value: ready });
+      await flushAsyncWork();
+    });
+    expect(controller?.loading).toBe(false);
+    expect(controller?.snapshot).toBe(snapshot);
+    expect(controller?.snapshotDetail).toBe("full");
+    expect(getSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("keeps navigation visible and ignores an older node query finishing after a newer query", async () => {
+    const ready = readyState("nodes", "2026-10-09T03:00:00.000Z");
+    const first = deferredSnapshot();
+    const second = deferredSnapshot();
+    const navigation = { ...snapshotFor(ready), detailLevel: "navigation" as const };
+    const getSnapshot = vi.fn<GitNestBridge["codeAnalysis"]["getSnapshot"]>()
+      .mockResolvedValueOnce({ ok: true, value: navigation })
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    installBridge({
+      getState: vi.fn(async () => ({ ok: true as const, value: ready })),
+      getSnapshot, onStateChanged: vi.fn(() => vi.fn())
+    });
+    await act(async () => {
+      root.render(<Harness onChange={value => { controller = value; }} />);
+      await flushAsyncWork();
+    });
+    const original = controller!.snapshot;
+    let oldRequest!: Promise<boolean>;
+    let newRequest!: Promise<boolean>;
+    act(() => { oldRequest = controller!.loadNodeView({ query: "old" }); });
+    expect(controller!.loading).toBe(false);
+    expect(controller!.loadingNodes).toBe(true);
+    expect(controller!.snapshot).toBe(original);
+    act(() => { newRequest = controller!.loadNodeView({ query: "new", focusNodeId: "new-node" }); });
+    const latest = {
+      ...snapshotFor(ready), detailLevel: "nodes" as const,
+      nodePage: { query: "new", nodeIds: [], totalMatches: 0, graphTruncated: false }
+    };
+    await act(async () => {
+      second.resolve({ ok: true, value: latest });
+      expect(await newRequest).toBe(true);
+    });
+    await act(async () => {
+      first.resolve({ ok: false, error: {
+        code: "COMMAND_FAILED", message: "old query failed", details: {}
+      } });
+      expect(await oldRequest).toBe(false);
+    });
+    expect(controller!.nodeView).toBe(latest);
+    expect(controller!.snapshot).toBe(original);
+    expect(controller!.loadingNodes).toBe(false);
+    expect(controller!.nodeViewError).toBeNull();
+    expect(getSnapshot.mock.calls.map(([request]) => request?.detail)).toEqual(["navigation", "nodes", "nodes"]);
+  });
+
+  it("discards pending node views on a workspace change and supports retry after failure", async () => {
+    const ready = readyState("nodes", "2026-10-09T03:00:00.000Z");
+    const pending = deferredSnapshot();
+    let listener!: (state: CodeAnalysisStateDto) => void;
+    const getSnapshot = vi.fn<GitNestBridge["codeAnalysis"]["getSnapshot"]>()
+      .mockResolvedValueOnce({ ok: true, value: snapshotFor(ready) })
+      .mockResolvedValueOnce({ ok: false, error: {
+        code: "COMMAND_FAILED", message: "query failed", details: {}
+      } })
+      .mockImplementationOnce(() => pending.promise);
+    installBridge({
+      getState: vi.fn(async () => ({ ok: true as const, value: ready })),
+      getSnapshot, onStateChanged: vi.fn(callback => { listener = callback; return vi.fn(); })
+    });
+    await act(async () => {
+      root.render(<Harness onChange={value => { controller = value; }} />);
+      await flushAsyncWork();
+    });
+    await act(async () => {
+      expect(await controller!.loadNodeView({ query: "retry" })).toBe(false);
+    });
+    expect(controller!.nodeViewError?.message).toBe("query failed");
+    let retried!: Promise<boolean>;
+    act(() => { retried = controller!.loadNodeView({ query: "retry" }); });
+    expect(controller!.nodeViewError).toBeNull();
+    act(() => listener({ state: "idle", workspaceId: "other", snapshotAvailable: false }));
+    await act(async () => {
+      pending.resolve({ ok: true, value: snapshotFor(ready) });
+      expect(await retried).toBe(false);
+    });
+    expect(controller!.nodeView).toBeNull();
+    expect(controller!.loadingNodes).toBe(false);
+    expect(controller!.nodeViewError).toBeNull();
+  });
+
+  it("loads a newer result produced while the retained page was hidden", async () => {
+    const first = readyState("before", "2026-10-09T03:00:00.000Z");
+    const next = readyState("after", "2026-10-09T03:01:00.000Z");
+    const pending = deferredSnapshot();
+    const getSnapshot = vi.fn<GitNestBridge["codeAnalysis"]["getSnapshot"]>()
+      .mockResolvedValueOnce({ ok: true, value: snapshotFor(first) })
+      .mockImplementationOnce(() => pending.promise);
+    installBridge({
+      getState: vi.fn<GitNestBridge["codeAnalysis"]["getState"]>()
+        .mockResolvedValueOnce({ ok: true, value: first })
+        .mockResolvedValueOnce({ ok: true, value: next }),
+      getSnapshot, onStateChanged: vi.fn(() => vi.fn())
+    });
+    const render = async (active: boolean) => {
+      await act(async () => {
+        root.render(<AnalysisPageHost active={active} workspace={null}>
+          <Harness onChange={value => { controller = value; }} />
+        </AnalysisPageHost>);
+        await flushAsyncWork();
+      });
+    };
+    await render(true);
+    await render(false);
+    await render(true);
+    expect(controller?.snapshot?.analysisId).toBe("before");
+    expect(controller?.loading).toBe(true);
+    await act(async () => {
+      pending.resolve({ ok: true, value: snapshotFor(next) });
+      await flushAsyncWork();
+    });
+    expect(controller?.snapshot?.analysisId).toBe("after");
+    expect(controller?.loading).toBe(false);
+    expect(getSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("keeps loading active until an event-triggered snapshot read settles", async () => {
@@ -516,6 +679,58 @@ describe("useCodeAnalysis snapshot synchronization", () => {
     });
     expect(controller?.snapshotDetail).toBe("full");
     expect(controller?.loadingFullSnapshot).toBe(false);
+  });
+
+  it.each([true, false])("coalesces concurrent full-snapshot upgrades, releasing them after success=%s", async (success) => {
+    const ready = readyState("analysis-full", "2026-09-19T01:00:00.000Z");
+    const pending = deferredSnapshot();
+    const getSnapshot = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { ...snapshotFor(ready), detailLevel: "navigation" }
+      })
+      .mockImplementationOnce(() => pending.promise);
+    installBridge({
+      getState: vi.fn(async () => ({ ok: true as const, value: ready })),
+      getSnapshot,
+      onStateChanged: vi.fn(() => vi.fn())
+    });
+    await act(async () => {
+      root.render(<Harness onChange={(value) => (controller = value)} />);
+      await flushAsyncWork();
+    });
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
+    act(() => {
+      first = controller!.loadFullSnapshot();
+      second = controller!.loadFullSnapshot();
+    });
+    expect(getSnapshot).toHaveBeenCalledTimes(2);
+    expect(controller?.loadingFullSnapshot).toBe(true);
+    await act(async () => {
+      pending.resolve(success
+        ? {
+            ok: true,
+            value: { ...snapshotFor(ready), detailLevel: "full" }
+          }
+        : {
+            ok: false,
+            error: { code: "COMMAND_FAILED", message: "read failed", details: {} }
+          });
+      expect(await Promise.all([first, second])).toEqual([success, success]);
+    });
+    expect(controller?.loadingFullSnapshot).toBe(false);
+    if (!success) {
+      getSnapshot.mockResolvedValueOnce({
+        ok: true,
+        value: { ...snapshotFor(ready), detailLevel: "full" }
+      });
+      await act(async () => {
+        expect(await controller!.loadFullSnapshot()).toBe(true);
+      });
+      expect(getSnapshot).toHaveBeenCalledTimes(3);
+    }
+    expect(controller?.snapshotDetail).toBe("full");
   });
 
   it("does not let a delayed navigation response replace a full snapshot", async () => {

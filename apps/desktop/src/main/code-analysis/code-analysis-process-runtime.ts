@@ -2,6 +2,7 @@ import {
   assertCodeAnalysisSnapshotPayloadSize,
   CodeAnalysisEngine,
   type CodeAnalysisInput,
+  type CodeAnalysisProgress,
   type CodeAnalysisSnapshot
 } from "@gitnest/code-analysis";
 
@@ -11,6 +12,8 @@ import {
   type CodeAnalysisHostMessage,
   type CodeAnalysisWorkerMessage
 } from "./code-analysis-process-protocol";
+
+const PROGRESS_INTERVAL_MS = 100;
 
 interface AnalysisEngine {
   analyze(
@@ -80,6 +83,37 @@ export function startCodeAnalysisProcess(
       return;
     }
     const controller = new AbortController();
+    let lastProgressAt = Number.NEGATIVE_INFINITY;
+    let lastProgressStage: CodeAnalysisProgress["stage"] | undefined;
+    let pendingProgress: CodeAnalysisProgress | undefined;
+    let progressTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearProgressTimer = () => {
+      if (progressTimer !== undefined) {
+        clearTimeout(progressTimer);
+        progressTimer = undefined;
+      }
+    };
+    const publishProgress = (progress: CodeAnalysisProgress) => {
+      clearProgressTimer();
+      pendingProgress = undefined;
+      if (controller.signal.aborted) {
+        return;
+      }
+      lastProgressAt = performance.now();
+      lastProgressStage = progress.stage;
+      post({
+        version: CODE_ANALYSIS_PROCESS_PROTOCOL_VERSION,
+        type: "progress",
+        analysisId: message.analysisId,
+        progress
+      });
+    };
+    const flushProgress = () => {
+      clearProgressTimer();
+      if (pendingProgress) {
+        publishProgress(pendingProgress);
+      }
+    };
     const task = Promise.resolve()
       .then(() => {
         if (controller.signal.aborted) {
@@ -89,17 +123,28 @@ export function startCodeAnalysisProcess(
           ...message.input,
           signal: controller.signal,
           onProgress: (progress) => {
-            post({
-              version:
-                CODE_ANALYSIS_PROCESS_PROTOCOL_VERSION,
-              type: "progress",
-              analysisId: message.analysisId,
-              progress
-            });
+            if (controller.signal.aborted) {
+              return;
+            }
+            const elapsed = performance.now() - lastProgressAt;
+            if (
+              progress.stage !== lastProgressStage ||
+              (progress.total > 0 && progress.completed >= progress.total) ||
+              elapsed >= PROGRESS_INTERVAL_MS
+            ) {
+              publishProgress(progress);
+              return;
+            }
+            pendingProgress = progress;
+            progressTimer ??= setTimeout(
+              flushProgress,
+              PROGRESS_INTERVAL_MS - elapsed
+            );
           }
         });
       })
       .then((snapshot) => {
+        flushProgress();
         assertCodeAnalysisSnapshotPayloadSize(snapshot);
         post({
           version: CODE_ANALYSIS_PROCESS_PROTOCOL_VERSION,
@@ -109,6 +154,7 @@ export function startCodeAnalysisProcess(
         });
       })
       .catch((error: unknown) => {
+        flushProgress();
         if (controller.signal.aborted) {
           post({
             version: CODE_ANALYSIS_PROCESS_PROTOCOL_VERSION,
@@ -123,6 +169,8 @@ export function startCodeAnalysisProcess(
         postError(post, message.analysisId, error);
       })
       .finally(() => {
+        clearProgressTimer();
+        pendingProgress = undefined;
         if (active?.analysisId === message.analysisId) {
           active = undefined;
         }

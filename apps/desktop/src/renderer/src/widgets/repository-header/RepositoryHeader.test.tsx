@@ -325,6 +325,44 @@ describe("RepositoryHeader", () => {
       .toBe("Multi-repository Workspace");
   });
 
+  it("shows a branch-count badge only after a positive count arrives", async () => {
+    let resolveBranches!: (value: unknown) => void;
+    const getBranches = vi.fn(() => new Promise((resolve) => {
+      resolveBranches = resolve;
+    }));
+    vi.stubGlobal("gitnest", { repository: { getBranches, cancelQuery: vi.fn() } });
+    await act(async () => root.render(
+      <RepositoryHeader
+        commandActive={null} commandCompletionVersion={0} commandLocked={false}
+        externalApplications={externalApplications} inspectorOpen={false}
+        refreshing={false} repositoryTab="changes" snapshots={[]} view="repository"
+        workspace={repositoryWorkspace} workspaceCommandBusy={false} workspaceTab="overview"
+        onFetch={vi.fn()} onFetchWorkspace={vi.fn()} onOpenOperations={vi.fn()}
+        onOpenRepository={vi.fn()} onOpenSettings={vi.fn()} onOpenWorkspace={vi.fn()}
+        onPull={vi.fn()} onPullWorkspace={vi.fn()} onPushWorkspace={vi.fn()} onPush={vi.fn()}
+        onRefresh={vi.fn()} onRepositoryTabChange={vi.fn()} onSwitchBranch={vi.fn()}
+        onToggleInspector={vi.fn()} onWorkspaceTabChange={vi.fn()}
+      />
+    ));
+    const tab = Array.from(container.querySelectorAll('[role="tab"]'))
+      .find((node) => node.textContent?.startsWith("分支"))!;
+    expect(tab.querySelector(".tab-count")).toBeNull();
+    await act(async () => resolveBranches({
+      ok: true,
+      value: {
+        branches: Array.from({ length: 123 }, (_, index) => ({
+          name: `branch-${index}`, fullName: `refs/heads/branch-${index}`,
+          head: "abc", current: false, remote: false
+        }))
+      }
+    }));
+    const slot = tab.querySelector(".tab-count")!;
+    expect(slot).not.toBeNull();
+    expect(slot.hasAttribute("data-empty")).toBe(false);
+    expect(slot.hasAttribute("aria-hidden")).toBe(false);
+    expect(slot.textContent).toBe("123");
+  });
+
   it.each([0, 4])("shows a Pull badge only for local behind status (%i)", (behind) => {
     const target = repositoryWorkspace.selectedTarget!;
     act(() => {
@@ -397,6 +435,7 @@ describe("RepositoryHeader", () => {
   it("shows repository actions without a force-push control", () => {
     const profile = { kind: "vscode" as const, label: "Visual Studio Code" };
     const open = vi.fn(async () => true);
+    const onOpenManagement = vi.fn();
     act(() => {
       root.render(
         <RepositoryHeader
@@ -422,6 +461,7 @@ describe("RepositoryHeader", () => {
           onOpenOperations={vi.fn()}
           onOpenRepository={vi.fn()}
           onOpenSettings={vi.fn()}
+          onOpenManagement={onOpenManagement}
           onOpenWorkspace={vi.fn()}
           onPull={vi.fn()}
           onPullWorkspace={vi.fn()}
@@ -441,6 +481,8 @@ describe("RepositoryHeader", () => {
         ".repository-actions .toolbar-button"
       )
     ).toHaveLength(4);
+    expect(container.textContent).not.toContain("远程与标签");
+    expect(onOpenManagement).not.toHaveBeenCalled();
 
     const actionGroup = container.querySelector(
       ".repository-header-action-group"

@@ -85,10 +85,11 @@ export class AnalysisCache {
 
     try {
       const parsed = JSON.parse(raw) as unknown;
-      if (!isCacheDocument(parsed)) {
-        return empty;
-      }
-      if (parsed.settingsKey !== settingsKey(settings, roots)) {
+      if (
+        !isRecord(parsed) ||
+        parsed.settingsKey !== empty.settingsKey ||
+        !isCacheDocument(parsed)
+      ) {
         return empty;
       }
       return parsed;
@@ -150,6 +151,8 @@ export interface CodeAnalysisSnapshotStore {
     snapshot: CodeAnalysisSnapshot,
     settings: CodeAnalysisSettings
   ): Promise<void>;
+  /** Persists the final task duration after the larger snapshot write completes. */
+  saveDuration?(snapshot: CodeAnalysisSnapshot): Promise<void>;
 }
 
 export function assertCodeAnalysisSnapshotPayloadSize(
@@ -256,6 +259,19 @@ export class AnalysisSnapshotCache
       new Date().toISOString()
     );
   }
+
+  async saveDuration(snapshot: CodeAnalysisSnapshot): Promise<void> {
+    // Keep final timing separate so accounting for persistence does not require
+    // serializing and writing a potentially 100 MiB graph a second time.
+    await writeTextFileAtomically(
+      snapshotDurationFilePath(this.#cacheDirectory, snapshot.workspaceId, snapshot.scope),
+      JSON.stringify({
+        analysisId: snapshot.analysisId,
+        generatedAt: snapshot.generatedAt,
+        durationMs: snapshot.stats.durationMs
+      })
+    );
+  }
 }
 
 /**
@@ -314,8 +330,9 @@ export async function loadSnapshotFromDirectory(
   }
 
   if (latestDocument) {
+    const snapshot = await restoreSnapshotDuration(cacheDirectory, latestDocument.snapshot);
     return {
-      snapshot: latestDocument.snapshot,
+      snapshot,
       savedAt: latestDocument.savedAt,
       source: "scoped",
       pointerNeedsRepair:
@@ -348,6 +365,42 @@ export async function loadSnapshotFromDirectory(
     : null;
 }
 
+async function restoreSnapshotDuration(
+  cacheDirectory: string,
+  snapshot: CodeAnalysisSnapshot
+): Promise<CodeAnalysisSnapshot> {
+  try {
+    const raw = await readBoundedTextFile(
+      snapshotDurationFilePath(cacheDirectory, snapshot.workspaceId, snapshot.scope),
+      1_024
+    );
+    const timing: unknown = raw === null ? null : JSON.parse(raw);
+    if (
+      isRecord(timing) &&
+      timing.analysisId === snapshot.analysisId &&
+      timing.generatedAt === snapshot.generatedAt &&
+      isFiniteNumber(timing.durationMs) &&
+      timing.durationMs >= 0
+    ) {
+      return { ...snapshot, stats: { ...snapshot.stats, durationMs: timing.durationMs } };
+    }
+  } catch {
+    // Missing or damaged optional timing must not discard a usable graph.
+  }
+  return snapshot;
+}
+
+function snapshotDurationFilePath(
+  cacheDirectory: string,
+  workspaceId: string,
+  scope: CodeAnalysisScope
+): string {
+  return join(
+    codeAnalysisWorkspaceCacheDirectory(cacheDirectory, workspaceId),
+    `snapshot-${scope}-duration.json`
+  );
+}
+
 function snapshotSavedAtMilliseconds(savedAt: string): number {
   const milliseconds = Date.parse(savedAt);
   return Number.isFinite(milliseconds)
@@ -373,11 +426,14 @@ async function loadSnapshotDocument(
   try {
     const value = JSON.parse(raw) as unknown;
     if (
-      !isSnapshotDocument(value) ||
+      !isRecord(value) ||
       value.workspaceId !== workspaceId ||
+      !isRecord(value.snapshot) ||
       value.snapshot.workspaceId !== workspaceId ||
       (scope !== undefined &&
         value.snapshot.scope !== scope) ||
+      !Array.isArray(value.snapshot.roots) ||
+      !value.snapshot.roots.every(isAnalysisRoot) ||
       !analysisRootsMatch(value.snapshot.roots, roots) ||
       (
         value.configurationKey !==
@@ -390,7 +446,8 @@ async function loadSnapshotDocument(
             settings,
             value.snapshot.roots
           )
-      )
+      ) ||
+      !isSnapshotDocument(value)
     ) {
       return null;
     }

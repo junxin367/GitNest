@@ -62,6 +62,7 @@ export {
   unlockWorktreeArguments
 } from "./commands/worktree-operations";
 export { findGitExecutable } from "./environment/find-git-executable";
+export { GitRepositoryManagementAdapter } from "./adapters/repository-management.adapter";
 export { readGitEnvironment } from "./environment/read-git-environment";
 export {
   createReadOnlyProcessEnvironment,
@@ -72,3 +73,6 @@ export {
   type ProcessRequest,
   type ProcessResult
 } from "./process/git-process-runner";
+export { GitCliWorkflowClient, type GitCliWorkflowClientOptions } from "./adapters/git-workflow-client";
+export { GitCliFileHistoryClient, type GitCliFileHistoryClientOptions } from "./adapters/file-history-client";
+export { GitCliIgnoreClient, type GitCliIgnoreClientOptions } from "./adapters/git-ignore-client";

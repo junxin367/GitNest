@@ -189,7 +189,6 @@
   z-index: var(--z-raised);
   color: var(--text);
   background: var(--surface-hover);
-  border-color: var(--border-strong);
 }
 
 .open-in-primary:disabled,

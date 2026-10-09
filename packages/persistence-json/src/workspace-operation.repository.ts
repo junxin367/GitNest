@@ -42,6 +42,14 @@ const OPERATION_KINDS = new Set<
   "worktree-move",
   "worktree-repair",
   "worktree-prune",
+  "workflow",
+  "ignore-file",
+  "remote-add",
+  "remote-set-url",
+  "remote-remove",
+  "tag-create",
+  "tag-delete",
+  "tag-push",
   "worktree-remove"
 ]);
 const OPERATION_STATES = new Set<

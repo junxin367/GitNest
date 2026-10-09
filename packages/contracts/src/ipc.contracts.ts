@@ -115,6 +115,21 @@ interface IpcContract<
 }
 
 export interface IpcContractMap {
+  [IPC_CHANNELS.repositoryIgnorePreflight]: IgnoreBridgeContract<"preflight">;
+  [IPC_CHANNELS.repositoryIgnoreExecute]: IgnoreBridgeContract<"execute">;
+  [IPC_CHANNELS.fileHistoryHistory]: FileHistoryBridgeContract<"history">;
+  [IPC_CHANNELS.fileHistoryDiff]: FileHistoryBridgeContract<"diff">;
+  [IPC_CHANNELS.fileHistoryCancel]: FileHistoryBridgeContract<"cancel">;
+  [IPC_CHANNELS.repositoryWorkflowInspect]: WorkflowBridgeContract<"inspect">;
+  [IPC_CHANNELS.repositoryWorkflowPreflight]: WorkflowBridgeContract<"preflight">;
+  [IPC_CHANNELS.repositoryWorkflowExecute]: WorkflowBridgeContract<"execute">;
+  [IPC_CHANNELS.repositoryManagementInspect]: BridgeContract<"inspect">;
+  [IPC_CHANNELS.repositoryManagementPreflight]: BridgeContract<"preflight">;
+  [IPC_CHANNELS.repositoryManagementExecute]: BridgeContract<"execute">;
+  [IPC_CHANNELS.repositoryManagementCreate]: BridgeContract<"create">;
+  [IPC_CHANNELS.repositoryManagementCreationStatus]: BridgeContract<"creationStatus">;
+  [IPC_CHANNELS.repositoryManagementCancelCreation]: BridgeContract<"cancelCreation">;
+  [IPC_CHANNELS.repositoryManagementOpenCommit]: BridgeContract<"openCommit">;
   [IPC_CHANNELS.updateGetState]: IpcContract<
     [],
     ApplicationUpdateStateDto
@@ -379,7 +394,35 @@ export interface IpcContractMap {
   >;
 }
 
+type BridgeContract<
+  Method extends keyof import("./repository-management.contracts").RepositoryManagementBridge
+> = IpcContract<
+  Parameters<import("./repository-management.contracts").RepositoryManagementBridge[Method]>,
+  Awaited<ReturnType<import("./repository-management.contracts").RepositoryManagementBridge[Method]>>
+>;
+
+type WorkflowBridgeContract<
+  Method extends keyof import("./system.contracts").GitNestBridge["repositoryWorkflow"]
+> = IpcContract<
+  Parameters<import("./system.contracts").GitNestBridge["repositoryWorkflow"][Method]>,
+  Awaited<ReturnType<import("./system.contracts").GitNestBridge["repositoryWorkflow"][Method]>>
+>;
+
 export type IpcChannel = keyof IpcContractMap;
+
+type IgnoreBridgeContract<
+  Method extends keyof import("./system.contracts").GitNestBridge["repositoryIgnore"]
+> = IpcContract<
+  Parameters<import("./system.contracts").GitNestBridge["repositoryIgnore"][Method]>,
+  Awaited<ReturnType<import("./system.contracts").GitNestBridge["repositoryIgnore"][Method]>>
+>;
+
+type FileHistoryBridgeContract<
+  Method extends keyof import("./file-history.contracts").FileHistoryBridge
+> = IpcContract<
+  Parameters<import("./file-history.contracts").FileHistoryBridge[Method]>,
+  Awaited<ReturnType<import("./file-history.contracts").FileHistoryBridge[Method]>>
+>;
 
 export type IpcArguments<Channel extends IpcChannel> =
   IpcContractMap[Channel]["arguments"];

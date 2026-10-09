@@ -1,10 +1,12 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type MouseEvent,
   type ReactNode
 } from "react";
@@ -65,6 +67,54 @@ interface PendingSelectionReveal {
   fileKey: string;
   requestKey: string;
 }
+
+// A directory only needs its own collapsed flag. Keep subscriptions local so
+// toggling one branch does not rebuild every visible file in the navigator.
+function createDirectoryCollapseStore() {
+  let snapshot: ReadonlySet<string> = new Set();
+  const listeners = new Set<() => void>();
+  const directoryListeners = new Map<string, Set<() => void>>();
+  return {
+    getSnapshot: () => snapshot,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    subscribeDirectory(key: string, listener: () => void) {
+      let subscribers = directoryListeners.get(key);
+      if (!subscribers) {
+        subscribers = new Set();
+        directoryListeners.set(key, subscribers);
+      }
+      subscribers.add(listener);
+      return () => {
+        subscribers.delete(listener);
+        if (subscribers.size === 0) {
+          directoryListeners.delete(key);
+        }
+      };
+    },
+    update(
+      value: ReadonlySet<string> |
+        ((current: ReadonlySet<string>) => ReadonlySet<string>)
+    ) {
+      const previous = snapshot;
+      const next = typeof value === "function" ? value(previous) : value;
+      if (previous === next) {
+        return;
+      }
+      snapshot = next;
+      for (const [key, subscribers] of directoryListeners) {
+        if (previous.has(key) !== next.has(key)) {
+          subscribers.forEach((listener) => listener());
+        }
+      }
+      listeners.forEach((listener) => listener());
+    }
+  };
+}
+
+type DirectoryCollapseStore = ReturnType<typeof createDirectoryCollapseStore>;
 
 export type DiffFileSelectionOrigin = "automatic" | "user";
 
@@ -201,8 +251,12 @@ export function DiffFileNavigator({
     navigatorStateByScope.get(navigatorScopeKey) ??
     DEFAULT_NAVIGATOR_STATE;
   const { filter, collapsedSections } = navigatorState;
-  const [collapsedDirectories, setCollapsedDirectories] =
-    useState<Set<string>>(() => new Set());
+  const [directoryCollapseStore] = useState(createDirectoryCollapseStore);
+  const collapsedDirectories = useSyncExternalStore(
+    directoryCollapseStore.subscribe,
+    directoryCollapseStore.getSnapshot
+  );
+  const setCollapsedDirectories = directoryCollapseStore.update;
   const [pendingSelectionReveal, setPendingSelectionReveal] =
     useState<PendingSelectionReveal | null>(null);
   const viewMenuTriggerRef = useRef<HTMLButtonElement>(null);
@@ -374,9 +428,10 @@ export function DiffFileNavigator({
       treeScopeRef.current = scopeKey;
       treeCollapsedPreferenceRef.current = initiallyCollapsed;
       knownDirectoryKeysRef.current = nextKeys;
+      // Discovery adds keys in place; subscribers need an immutable old snapshot.
       setCollapsedDirectories(
         treePreference?.initiallyCollapsed
-          ? nextKeys
+          ? new Set(nextKeys)
           : new Set()
       );
       return;
@@ -572,104 +627,21 @@ export function DiffFileNavigator({
     file: DiffViewerFile,
     depth = 0
   ): ReactNode => {
-    const selected = file.key === selectedFile?.key;
-    const staged = file.mode === "staged";
-    const canToggle = staged
-      ? Boolean(onUnstageFile) &&
-        (canUnstageFile?.(file) ?? true)
-      : Boolean(onStageFile) &&
-        (canStageFile?.(file) ?? true);
-    const canDiscard =
-      !staged &&
-      Boolean(onDiscardFile) &&
-      (canDiscardFile?.(file) ?? true);
-    const displayName =
-      depth > 0 ? fileName(file.path) : file.path;
-    const showStats =
-      Number.isFinite(file.additions) &&
-      Number.isFinite(file.deletions);
-
-    return (
-      <div
-        className={`diff-workspace-file${
-          selected ? " selected" : ""
-        }`}
-        data-diff-file-key={file.key}
-        key={file.key}
-        onContextMenu={(event) =>
-          onFileContextMenu?.(event, file)
-        }
-        style={
-          depth > 0
-            ? {
-                paddingLeft: `calc(var(--space-3) + ${depth} * var(--space-4))`
-              }
-            : undefined
-        }
-      >
-        <Button variant="unstyled"
-          aria-current={selected ? "true" : undefined}
-          aria-label={displayName}
-          className="diff-workspace-file-select"
-          onClick={() => onSelectedFileChange(file, "user")}
-          type="button"
-        >
-          <strong title={file.path}>{displayName}</strong>
-          <span className="diff-workspace-file-meta">
-            <span
-              className={`diff-workspace-file-status kind-${file.kind}`}
-              data-status={file.status}
-            >
-              {file.status}
-            </span>
-            {file.change.originalPath ? (
-              <small>
-                原路径：{file.change.originalPath}
-              </small>
-            ) : null}
-            {showStats ? (
-              <span
-                aria-label={`新增 ${file.additions} 行，删除 ${file.deletions} 行`}
-                className="diff-workspace-file-stats"
-              >
-                <strong>+{file.additions}</strong>
-                <em>-{file.deletions}</em>
-              </span>
-            ) : null}
-          </span>
-        </Button>
-        <div className="diff-workspace-file-actions">
-          {!staged ? (
-            <Button
-              aria-label={`放弃更改 ${file.path}`}
-              className="diff-workspace-discard-toggle"
-              disabled={!canDiscard || mutationBusy}
-              icon={<Icon name="undo" size={12} />}
-              onClick={() => void onDiscardFile?.(file)}
-              size="small"
-              title="放弃更改"
-              variant="icon"
-            />
-          ) : null}
-          <Button
-            aria-label={`${staged ? "取消暂存" : "暂存"} ${file.path}`}
-            className="diff-workspace-stage-toggle"
-            disabled={!canToggle || mutationBusy}
-            icon={<Icon name={staged ? "minus" : "plus"} size={12} />}
-            onClick={() => {
-              if (staged) {
-                void onUnstageFile?.(file);
-              } else {
-                void onStageFile?.(file);
-              }
-            }}
-            size="small"
-            title={staged ? "取消暂存" : "暂存"}
-            variant="icon"
-          />
-        </div>
-      </div>
-    );
+    return <DiffFileRow
+      key={file.key}
+      file={file}
+      depth={depth}
+      selected={file.key === selectedFile?.key}
+      mutationBusy={mutationBusy}
+      onSelectedFileChange={onSelectedFileChange}
+      onFileContextMenu={onFileContextMenu}
+      onStageFile={onStageFile}
+      onUnstageFile={onUnstageFile}
+      onDiscardFile={onDiscardFile}
+      canStageFile={canStageFile}
+      canUnstageFile={canUnstageFile}
+      canDiscardFile={canDiscardFile}
+    />;
   }, [
     selectedFile?.key,
     mutationBusy,
@@ -682,94 +654,6 @@ export function DiffFileNavigator({
     canUnstageFile,
     canDiscardFile
   ]);
-  const renderTreeNodes = useCallback(function renderNodes(
-    nodes: readonly ChangeTreeNode[],
-    section: DiffFileSection,
-    filesByPath: ReadonlyMap<string, DiffViewerFile>,
-    depth = 0
-  ): ReactNode[] {
-    return nodes.flatMap((node) => {
-      if (!node.directory && node.change) {
-        const file = filesByPath.get(node.change.path);
-        return file ? [renderFileRow(file, depth)] : [];
-      }
-      const key = `${section.mode}:${node.path}`;
-      const collapsed = collapsedDirectories.has(key);
-      return [
-        <Button variant="unstyled"
-          aria-expanded={!collapsed}
-          className={`diff-workspace-tree-directory${
-            collapsed ? " collapsed" : ""
-          }`}
-          key={`${key}:directory`}
-          onClick={() =>
-            setCollapsedDirectories((current) => {
-              const next = new Set(current);
-              if (next.has(key)) {
-                next.delete(key);
-              } else {
-                next.add(key);
-              }
-              return next;
-            })
-          }
-          style={{
-            paddingLeft: `calc(var(--space-3) + ${depth} * var(--space-4))`
-          }}
-          type="button"
-        >
-          <Icon
-            className="diff-workspace-tree-directory-chevron"
-            name="collapse"
-            size={13}
-          />
-          <Icon
-            className="diff-workspace-tree-directory-folder"
-            name="folder"
-            size={13}
-          />
-          <span title={node.path}>{node.name}</span>
-        </Button>,
-        ...(collapsed
-          ? []
-          : renderNodes(
-              node.children,
-              section,
-              filesByPath,
-              depth + 1
-            ))
-      ];
-    });
-  }, [collapsedDirectories, renderFileRow]);
-
-  const renderSectionRows = useCallback((
-    section: DiffFileSection
-  ): ReactNode => {
-    if (viewMode !== "tree") {
-      return section.files.map((file) => renderFileRow(file));
-    }
-
-    const tree = sectionTrees.get(section.mode);
-    return tree
-      ? renderTreeNodes(
-          tree.nodes,
-          section,
-          tree.filesByPath
-        )
-      : [];
-  }, [viewMode, sectionTrees, renderTreeNodes, renderFileRow]);
-  const sectionRows = useMemo(
-    () => new Map(
-      sections.map((section) => [
-        section.mode,
-        changesError || collapsedSections[section.mode]
-          ? null
-          : renderSectionRows(section)
-      ])
-    ),
-    [sections, changesError, collapsedSections, renderSectionRows]
-  );
-
   const renderSectionActions = useCallback((
     section: DiffFileSection
   ): ReactNode => {
@@ -984,7 +868,7 @@ export function DiffFileNavigator({
             message="当前工作区没有可查看的本地变更。"
             title="工作区干净"
           />
-        ) : filter && sections.length === 0 ? (
+        ) : filter && sections.length === 0 && !changesLoading ? (
           <DiffViewerState
             icon="search"
             message="尝试文件名、目录或状态。"
@@ -1046,7 +930,12 @@ export function DiffFileNavigator({
                 </div>
                 {collapsed ? null : (
                   <div id={bodyId}>
-                    {sectionRows.get(section.mode)}
+                    <DiffSectionRows
+                      section={section}
+                      tree={sectionTrees.get(section.mode)}
+                      directoryCollapseStore={directoryCollapseStore}
+                      renderFileRow={renderFileRow}
+                    />
                   </div>
                 )}
               </section>
@@ -1057,6 +946,226 @@ export function DiffFileNavigator({
     </>
   );
 }
+
+type FileRowRenderer = (file: DiffViewerFile, depth?: number) => ReactNode;
+
+const DiffSectionRows = memo(function DiffSectionRows({
+  section,
+  tree,
+  directoryCollapseStore,
+  renderFileRow
+}: {
+  section: DiffFileSection;
+  tree: DiffFileSectionTree | undefined;
+  directoryCollapseStore: DirectoryCollapseStore;
+  renderFileRow: FileRowRenderer;
+}) {
+  return tree ? (
+    <DiffTreeRows
+      nodes={tree.nodes}
+      mode={section.mode}
+      filesByPath={tree.filesByPath}
+      depth={0}
+      directoryCollapseStore={directoryCollapseStore}
+      renderFileRow={renderFileRow}
+    />
+  ) : section.files.map((file) => renderFileRow(file));
+});
+
+interface DiffTreeRowsProps {
+  nodes: readonly ChangeTreeNode[];
+  mode: DiffViewerMode;
+  filesByPath: ReadonlyMap<string, DiffViewerFile>;
+  depth: number;
+  directoryCollapseStore: DirectoryCollapseStore;
+  renderFileRow: FileRowRenderer;
+}
+
+const DiffTreeRows = memo(function DiffTreeRows({
+  nodes,
+  ...props
+}: DiffTreeRowsProps) {
+  return nodes.map((node) => {
+    if (!node.directory && node.change) {
+      const file = props.filesByPath.get(node.change.path);
+      return file ? props.renderFileRow(file, props.depth) : null;
+    }
+    return <DiffTreeDirectory key={node.path} node={node} {...props} />;
+  });
+});
+
+const DiffTreeDirectory = memo(function DiffTreeDirectory({
+  node,
+  ...props
+}: Omit<DiffTreeRowsProps, "nodes"> & { node: ChangeTreeNode }) {
+  const { mode, depth, directoryCollapseStore } = props;
+  const key = `${mode}:${node.path}`;
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      directoryCollapseStore.subscribeDirectory(key, listener),
+    [directoryCollapseStore, key]
+  );
+  const collapsed = useSyncExternalStore(
+    subscribe,
+    () => directoryCollapseStore.getSnapshot().has(key)
+  );
+  return (
+    <>
+      <Button
+        variant="unstyled"
+        aria-expanded={!collapsed}
+        className={`diff-workspace-tree-directory${collapsed ? " collapsed" : ""}`}
+        onClick={() => directoryCollapseStore.update((current) => {
+          const next = new Set(current);
+          if (next.has(key)) {
+            next.delete(key);
+          } else {
+            next.add(key);
+          }
+          return next;
+        })}
+        style={{
+          paddingLeft: `calc(var(--space-3) + ${depth} * var(--space-4))`
+        }}
+        type="button"
+      >
+        <Icon className="diff-workspace-tree-directory-chevron" name="collapse" size={13} />
+        <Icon className="diff-workspace-tree-directory-folder" name="folder" size={13} />
+        <span title={node.path}>{node.name}</span>
+      </Button>
+      {collapsed ? null : (
+        <DiffTreeRows nodes={node.children} {...props} depth={depth + 1} />
+      )}
+    </>
+  );
+});
+
+const DiffFileRow = memo(function DiffFileRow({
+  file,
+  depth,
+  selected,
+  mutationBusy,
+  onSelectedFileChange,
+  onFileContextMenu,
+  onStageFile,
+  onUnstageFile,
+  onDiscardFile,
+  canStageFile,
+  canUnstageFile,
+  canDiscardFile
+}: Pick<DiffFileNavigatorProps,
+  | "onSelectedFileChange"
+  | "onFileContextMenu"
+  | "onStageFile"
+  | "onUnstageFile"
+  | "onDiscardFile"
+  | "canStageFile"
+  | "canUnstageFile"
+  | "canDiscardFile"
+> & {
+  file: DiffViewerFile;
+  depth: number;
+  selected: boolean;
+  mutationBusy: boolean;
+}) {
+  const staged = file.mode === "staged";
+  const canToggle = staged
+    ? Boolean(onUnstageFile) &&
+      (canUnstageFile?.(file) ?? true)
+    : Boolean(onStageFile) &&
+      (canStageFile?.(file) ?? true);
+  const canDiscard =
+    !staged &&
+    Boolean(onDiscardFile) &&
+    (canDiscardFile?.(file) ?? true);
+  const displayName =
+    depth > 0 ? fileName(file.path) : file.path;
+  const showStats =
+    Number.isFinite(file.additions) &&
+    Number.isFinite(file.deletions);
+
+  return (
+    <div
+      className={`diff-workspace-file${
+        selected ? " selected" : ""
+      }`}
+      data-diff-file-key={file.key}
+      key={file.key}
+      onContextMenu={(event) =>
+        onFileContextMenu?.(event, file)
+      }
+      style={
+        depth > 0
+          ? {
+              paddingLeft: `calc(var(--space-3) + ${depth} * var(--space-4))`
+            }
+          : undefined
+      }
+    >
+      <Button variant="unstyled"
+        aria-current={selected ? "true" : undefined}
+        aria-label={displayName}
+        className="diff-workspace-file-select"
+        onClick={() => onSelectedFileChange(file, "user")}
+        type="button"
+      >
+        <strong title={file.path}>{displayName}</strong>
+        <span className="diff-workspace-file-meta">
+          <span
+            className={`diff-workspace-file-status kind-${file.kind}`}
+            data-status={file.status}
+          >
+            {file.status}
+          </span>
+          {file.change.originalPath ? (
+            <small>
+              原路径：{file.change.originalPath}
+            </small>
+          ) : null}
+          {showStats ? (
+            <span
+              aria-label={`新增 ${file.additions} 行，删除 ${file.deletions} 行`}
+              className="diff-workspace-file-stats"
+            >
+              <strong>+{file.additions}</strong>
+              <em>-{file.deletions}</em>
+            </span>
+          ) : null}
+        </span>
+      </Button>
+      <div className="diff-workspace-file-actions">
+        {!staged ? (
+          <Button
+            aria-label={`放弃更改 ${file.path}`}
+            className="diff-workspace-discard-toggle"
+            disabled={!canDiscard || mutationBusy}
+            icon={<Icon name="undo" size={12} />}
+            onClick={() => void onDiscardFile?.(file)}
+            size="small"
+            title="放弃更改"
+            variant="icon"
+          />
+        ) : null}
+        <Button
+          aria-label={`${staged ? "取消暂存" : "暂存"} ${file.path}`}
+          className="diff-workspace-stage-toggle"
+          disabled={!canToggle || mutationBusy}
+          icon={<Icon name={staged ? "minus" : "plus"} size={12} />}
+          onClick={() => {
+            if (staged) {
+              void onUnstageFile?.(file);
+            } else {
+              void onStageFile?.(file);
+            }
+          }}
+          size="small"
+          title={staged ? "取消暂存" : "暂存"}
+          variant="icon"
+        />
+      </div>
+    </div>
+  );
+});
 
 function modeLabel(mode: DiffViewerMode): string {
   if (mode === "staged") {

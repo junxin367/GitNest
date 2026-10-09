@@ -56,6 +56,10 @@ win:
 
 nsis:
   artifactName: GitNest-Setup-${version}-${arch}.${ext}
+  include: build/installer.nsh
+  installerLanguages:
+    - en_US
+    - zh_CN
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

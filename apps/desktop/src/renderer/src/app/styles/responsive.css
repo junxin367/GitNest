@@ -64,9 +64,6 @@
     grid-template-columns: minmax(220px, 270px) minmax(0, 1fr);
   }
 
-  .analysis-skeleton-workbench {
-    grid-template-columns: minmax(220px, 270px) minmax(0, 1fr);
-  }
 }
 
 @media (max-width: 760px) {
@@ -104,8 +101,12 @@
     gap: var(--space-4);
   }
 
-  .settings-nav {
+  .settings-sidebar {
     position: static;
+    gap: var(--space-4);
+  }
+
+  .settings-nav {
     grid-template-columns: repeat(5, max-content);
     grid-template-rows: auto auto;
     overflow-x: auto;
@@ -201,17 +202,7 @@
     flex-direction: column;
   }
 
-  .analysis-skeleton-title-row {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
   .analysis-header-actions {
-    justify-content: flex-start;
-    width: 100%;
-  }
-
-  .analysis-skeleton-actions {
     justify-content: flex-start;
     width: 100%;
   }
@@ -220,16 +211,7 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .analysis-skeleton-summary-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .analysis-workbench {
-    flex: 0 0 auto;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .analysis-skeleton-workbench {
     flex: 0 0 auto;
     grid-template-columns: minmax(0, 1fr);
   }
@@ -237,12 +219,6 @@
   .analysis-chain-panel,
   .analysis-graph-workspace,
   .analysis-graph-panel {
-    grid-column: auto;
-    min-height: 420px;
-  }
-
-  .analysis-skeleton-navigation,
-  .analysis-skeleton-graph {
     grid-column: auto;
     min-height: 420px;
   }

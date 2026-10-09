@@ -596,6 +596,14 @@ function isRepositoryCommandKind(
     "worktree-move",
     "worktree-repair",
     "worktree-prune",
+    "workflow",
+    "ignore-file",
+    "remote-add",
+    "remote-set-url",
+    "remote-remove",
+    "tag-create",
+    "tag-delete",
+    "tag-push",
     "worktree-remove"
   ].includes(kind);
 }
@@ -616,6 +624,14 @@ function operationKindLabel(
   kind: WorkspaceOperationDto["kind"]
 ): string {
   return {
+    workflow: "Git 工作流",
+    "ignore-file": "忽略文件",
+    "remote-add": "添加远程",
+    "remote-set-url": "修改远程地址",
+    "remote-remove": "移除远程",
+    "tag-create": "创建标签",
+    "tag-delete": "删除标签",
+    "tag-push": "推送标签",
     scan: "Workspace 状态扫描",
     status: "读取仓库状态",
     stage: "暂存文件",

@@ -30,6 +30,47 @@ import {
 } from "./CodeRelationGraph";
 
 describe("buildRelationGraphLayout", () => {
+  it("does not rescan unrelated edges when changing focus or request chain", () => {
+    const unrelatedEndpoint = vi.fn(() => "unrelated");
+    const unrelated = Array.from({ length: 10_000 }, (_, index) => {
+      const value = edge(`unrelated-${index}`, "unrelated", "other", "calls");
+      Object.defineProperty(value, "from", { get: unrelatedEndpoint });
+      return value;
+    });
+    const snapshot = createSnapshot(
+      [node("a", "a"), node("b", "b"), node("c", "c")],
+      [
+        edge("b-c", "b", "c", "calls"),
+        ...unrelated,
+        edge("a-b", "a", "b", "calls"),
+        edge("a-c", "a", "c", "calls")
+      ]
+    );
+    buildRelationGraphLayout(snapshot, null, "a");
+    unrelatedEndpoint.mockClear();
+    const focused = buildRelationGraphLayout(snapshot, null, "b");
+    expect(focused.edges.map((value) => value.id)).toEqual(["b-c", "a-b", "a-c"]);
+    const chain: CodeRequestChainDto = {
+      id: "chain",
+      profileId: "http",
+      transport: "http",
+      operationKey: "GET /a",
+      method: "GET",
+      route: "/a",
+      title: "chain",
+      clientNodeId: "a",
+      endpointNodeId: "c",
+      nodeIds: ["a", "b", "c"],
+      edgeIds: ["a-c", "a-b"],
+      confidence: "exact",
+      changed: false,
+      ambiguous: false
+    };
+    const chained = buildRelationGraphLayout(snapshot, chain, "a");
+    expect(chained.edges.map((value) => value.id)).toEqual(["a-b", "a-c"]);
+    expect(unrelatedEndpoint).not.toHaveBeenCalled();
+  });
+
   it.each(["calls", "contains"] as const)(
     "limits a 150000-node %s neighborhood without overflowing the argument stack",
     (kind) => {
@@ -572,6 +613,162 @@ describe("CodeRelationGraph interactions", () => {
     act(() => root.unmount());
     container.remove();
     vi.unstubAllGlobals();
+  });
+
+  it("uses a fixed graph stage for loading and failures, then restores the complete graph at the retained zoom", () => {
+    const snapshot = createSnapshot(
+      [node("a", "caller"), node("b", "callee")],
+      [edge("a-b", "a", "b", "calls")]
+    );
+    const retry = vi.fn();
+    const render = (loading: boolean, error?: string) => act(() => root.render(
+      createElement(CodeRelationGraph, {
+        snapshot, chain: null, focusNodeId: "a", selectedNodeId: "a",
+        onSelectNode: vi.fn(), onClearSelection: vi.fn(), loading, error, onRetry: retry
+      })
+    ));
+    render(false);
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="放大关系图"]')!.click());
+    expect(container.querySelector<HTMLInputElement>('[aria-label="调整关系图缩放"]')!.value).toBe("120");
+    render(true);
+    expect(container.querySelector(".analysis-graph-stage")?.getAttribute("aria-busy")).toBe("true");
+    expect(container.querySelector(".analysis-graph-scroll")).not.toBeNull();
+    expect(container.querySelector(".analysis-graph-svg")).toBeNull();
+    expect(container.querySelector(".is-spinning")).not.toBeNull();
+    expect(container.textContent).not.toContain("当前没有可绘制");
+    render(false, "读取失败");
+    expect(container.querySelectorAll(".analysis-graph-stage")).toHaveLength(1);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("读取失败");
+    act(() => container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click());
+    expect(retry).toHaveBeenCalledOnce();
+    render(false);
+    expect(container.querySelector(".analysis-graph-state")).toBeNull();
+    expect(container.querySelectorAll(".analysis-graph-node")).toHaveLength(2);
+    expect(container.querySelector<HTMLInputElement>('[aria-label="调整关系图缩放"]')!.value).toBe("120");
+  });
+
+  it("retains zoom and pan when a refreshed analysis has the same graph", () => {
+    let snapshot = createSnapshot(
+      [node("a", "caller"), node("b", "callee")],
+      [edge("a-b", "a", "b", "calls")]
+    );
+    const render = (loading = false) => act(() => root.render(createElement(CodeRelationGraph, {
+      snapshot, chain: null, focusNodeId: "a", selectedNodeId: "a", loading,
+      onSelectNode: vi.fn(), onClearSelection: vi.fn()
+    })));
+    render();
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="放大关系图"]')!.click());
+    const viewport = container.querySelector(".analysis-graph-scroll")!;
+    act(() => {
+      dispatchPointer(viewport, "pointerdown", { pointerId: 1, clientX: 100, clientY: 100 });
+      dispatchPointer(viewport, "pointermove", { pointerId: 1, clientX: 160, clientY: 130 });
+      dispatchPointer(viewport, "pointerup", { pointerId: 1, clientX: 160, clientY: 130 });
+    });
+    const previousPan = container.querySelector<HTMLElement>(".analysis-graph-canvas")!.style.cssText;
+    snapshot = { ...snapshot, analysisId: "refreshed", generatedAt: "2026-10-09T05:00:00.000Z",
+      nodes: snapshot.nodes.map(node => ({ ...node })), edges: [...snapshot.edges] };
+    render(true);
+    render();
+    expect(container.querySelector<HTMLInputElement>('[aria-label="调整关系图缩放"]')!.value).toBe("120");
+    expect(container.querySelector<HTMLElement>(".analysis-graph-canvas")!.style.cssText).toBe(previousPan);
+    snapshot = { ...snapshot, workspaceId: "other-workspace" };
+    render();
+    expect(container.querySelector<HTMLInputElement>('[aria-label="调整关系图缩放"]')!.value).toBe("100");
+    expect(container.querySelector<HTMLElement>(".analysis-graph-canvas")!.style.cssText).not.toBe(previousPan);
+  });
+
+  it("does not rebuild node labels while panning and zooming", () => {
+    const documentation = vi.fn(() => "Node documentation");
+    const nodes = Array.from({ length: 160 }, (_, index) => {
+      const value = node(`node-${index}`, `Node ${index}`);
+      Object.defineProperty(value.metadata, "documentation", {
+        get: documentation
+      });
+      return value;
+    });
+    const snapshot = createSnapshot(
+      nodes,
+      nodes.slice(1).map((value) =>
+        edge(value.id, nodes[0]!.id, value.id, "calls")
+      )
+    );
+    const props = {
+      snapshot,
+      chain: null,
+      focusNodeId: "node-0",
+      selectedNodeId: "node-0",
+      onSelectNode: vi.fn(),
+      onClearSelection: vi.fn()
+    };
+    act(() => root.render(createElement(CodeRelationGraph, props)));
+    documentation.mockClear();
+    const viewport = container.querySelector(".analysis-graph-scroll")!;
+    for (let index = 0; index < 10; index += 1) {
+      act(() => viewport.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        deltaY: -20,
+        clientX: 100,
+        clientY: 100
+      })));
+    }
+    act(() => dispatchPointer(viewport, "pointerdown", {
+      pointerId: 21, clientX: 0, clientY: 0
+    }));
+    for (let index = 1; index <= 10; index += 1) {
+      act(() => dispatchPointer(viewport, "pointermove", {
+        pointerId: 21, clientX: index * 10, clientY: index * 10
+      }));
+    }
+    act(() => dispatchPointer(viewport, "pointerup", {
+      pointerId: 21, clientX: 100, clientY: 100
+    }));
+    expect(documentation).not.toHaveBeenCalled();
+    act(() => root.render(createElement(CodeRelationGraph, {
+      ...props,
+      selectedNodeId: "node-1"
+    })));
+    expect(documentation).toHaveBeenCalledTimes(2);
+  });
+
+  it("rebuilds only incident edge paths and labels while dragging a node", () => {
+    const evidence = vi.fn(() => "edge evidence");
+    const nodes = Array.from({ length: 80 }, (_, index) =>
+      node(`node-${index}`, `Node ${index}`)
+    );
+    const edges = nodes.slice(1).map((value) => {
+      const connection = edge(value.id, "node-0", value.id, "calls");
+      Object.defineProperty(connection, "evidence", { get: evidence });
+      return connection;
+    });
+    act(() => root.render(createElement(CodeRelationGraph, {
+      snapshot: createSnapshot(nodes, edges),
+      chain: null,
+      focusNodeId: "node-0",
+      selectedNodeId: null,
+      onSelectNode: vi.fn(),
+      onClearSelection: vi.fn()
+    })));
+    const svg = container.querySelector("svg")!;
+    vi.spyOn(svg, "getBoundingClientRect").mockReturnValue({
+      x: 0, y: 0, top: 0, left: 0, right: 800, bottom: 500,
+      width: 800, height: 500, toJSON: () => ({})
+    });
+    const leaf = container.querySelector('[aria-label="function Node 1"]')!;
+    const before = [...container.querySelectorAll(".analysis-graph-edge")]
+      .map((path) => path.getAttribute("d"));
+    evidence.mockClear();
+    act(() => dispatchPointer(leaf, "pointerdown", {
+      pointerId: 51, clientX: 100, clientY: 100
+    }));
+    act(() => dispatchPointer(leaf, "pointermove", {
+      pointerId: 51, clientX: 150, clientY: 140
+    }));
+    const after = [...container.querySelectorAll(".analysis-graph-edge")]
+      .map((path) => path.getAttribute("d"));
+    expect(after[0]).not.toBe(before[0]);
+    expect(after.slice(1)).toEqual(before.slice(1));
+    expect(evidence).toHaveBeenCalledTimes(1);
   });
 
   it("wraps complete node paths inside a compact graph node", () => {
@@ -1153,7 +1350,7 @@ describe("CodeRelationGraph interactions", () => {
     ).toBe("120");
   });
 
-  it("keeps pan, zoom, and node positions when only the selected node changes", () => {
+  it.each([false, true])("keeps pan, zoom, and node positions with a new selection and refreshed query data (%s)", (refresh) => {
     const snapshot = createSnapshot(
       [node("a", "caller"), node("b", "callee")],
       [edge("a-b", "a", "b", "calls")]
@@ -1162,7 +1359,9 @@ describe("CodeRelationGraph interactions", () => {
     const onClearSelection = vi.fn();
     const renderGraph = (selectedNodeId: string) =>
       createElement(CodeRelationGraph, {
-        snapshot,
+        snapshot: refresh && selectedNodeId === "b"
+          ? { ...structuredClone(snapshot), nodes: [...structuredClone(snapshot.nodes), node("unrelated", "searchResult")] }
+          : snapshot,
         chain: null,
         focusNodeId: "a",
         selectedNodeId,

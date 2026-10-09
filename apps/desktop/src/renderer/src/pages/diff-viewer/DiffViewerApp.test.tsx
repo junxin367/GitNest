@@ -110,6 +110,53 @@ describe("DiffViewerApp", () => {
     ).not.toBeNull();
   });
 
+  it("opens file history from the standalone file menu and closes it when its target disappears", async () => {
+    await renderDiffViewer(root);
+    expect(window.gitnest.fileHistory.history).not.toHaveBeenCalled();
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".diff-workspace-file"))
+      .find(candidate => candidate.textContent?.includes("App.java"))!;
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 100, clientY: 100 }));
+    });
+    await act(async () => { findButton(document.body, "文件历史").click(); });
+    expect(window.gitnest.fileHistory.history).toHaveBeenCalledWith(expect.objectContaining({
+      target: { repositoryId: "repository", worktreeId: "worktree" }, path: "src/main/java/App.java"
+    }));
+    expect(document.querySelector(".file-history-dialog")).not.toBeNull();
+    await act(async () => { emitWorkspaceState?.({ snapshots: [], operations: [] }); });
+    expect(document.querySelector(".file-history-dialog")).toBeNull();
+  });
+
+  it("waits for the queued ignore operation before refreshing and dismissing its preview", async () => {
+    await renderDiffViewer(root);
+    const row = Array.from(container.querySelectorAll<HTMLElement>(".diff-workspace-file"))
+      .find(candidate => candidate.textContent?.includes("README.md"))!;
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 100, clientY: 100 }));
+    });
+    await act(async () => { findButton(document.body, "忽略此文件").click(); });
+    expect(window.gitnest.repositoryIgnore.preflight).toHaveBeenCalledWith({
+      target: { repositoryId: "repository", worktreeId: "worktree" }, path: "README.md", scope: "file"
+    });
+    await act(async () => { findButton(document.body, "写入 .gitignore").click(); });
+    expect(document.body.textContent).toContain("操作已加入队列");
+    const reads = vi.mocked(window.gitnest.repository.getChanges).mock.calls.length;
+    const operation = {
+      id: "ignore:1", kind: "ignore-file", scope: "worktree", targetIds: ["repository:worktree"],
+      state: "running", progress: 0, succeeded: 0, failed: 0, message: "写入中"
+    };
+    await act(async () => {
+      emitWorkspaceState?.({ snapshots: [workspaceSnapshot(4)], operations: [operation] });
+    });
+    expect(window.gitnest.repository.getChanges).toHaveBeenCalledTimes(reads);
+    expect(document.body.textContent).toContain("操作已加入队列");
+    await act(async () => {
+      emitWorkspaceState?.({ snapshots: [workspaceSnapshot(4)], operations: [{ ...operation, state: "succeeded" }] });
+    });
+    expect(document.body.textContent).not.toContain("预览忽略规则");
+    expect(window.gitnest.repository.getChanges).toHaveBeenCalledTimes(reads + 1);
+  });
+
   it("loads repository browsing preferences and synchronizes changes from another window", async () => {
     const settings = createDefaultAppSettings();
     settings.repositoryFileBrowsing.repository = {
@@ -729,6 +776,7 @@ describe("DiffViewerApp", () => {
       fileRow.dispatchEvent(contextMenuEvent);
     });
     expect(contextMenuEvent.defaultPrevented).toBe(true);
+    await act(async () => { findButton(document.body, "打开方式").click(); });
 
     await vi.waitFor(() => {
       expect(
@@ -829,6 +877,21 @@ function createBridge(): typeof window.gitnest {
   ];
 
   return {
+    fileHistory: {
+      history: vi.fn().mockResolvedValue({ ok: true, value: {
+        revision: "a".repeat(40), path: "src/main/java/App.java", entries: [], nextOffset: null, status: "empty"
+      } }),
+      diff: vi.fn(),
+      cancel: vi.fn().mockResolvedValue({ ok: true, value: true })
+    },
+    repositoryIgnore: {
+      preflight: vi.fn().mockResolvedValue({ ok: true, value: {
+        preflightId: "ignore:preview", expiresAt: "2026-10-06T23:59:00.000Z",
+        target: { repositoryId: "repository", worktreeId: "worktree" }, path: "README.md", scope: "file",
+        ignoreFilePath: ".gitignore", rule: "/README.md", summary: "忽略此文件", warnings: [], confirmationRequired: true
+      } }),
+      execute: vi.fn().mockResolvedValue({ ok: true, value: { operationId: "ignore:1" } })
+    },
     settings: {
       onChanged: vi.fn((listener: (settings: AppSettingsDto) => void) => {
         emitSettings = listener;

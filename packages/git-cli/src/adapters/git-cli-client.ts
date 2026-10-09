@@ -17,6 +17,7 @@ import {
 
 import {
   GitError,
+  normalizeCommitHistorySearch,
   parseBranches,
   parseCommitMetadata,
   parseCommitNumstat,
@@ -461,6 +462,7 @@ export class GitCliClient
     const executablePath = await this.#getExecutablePath(options.signal);
     const limit = clampHistoryPageLimit(options.limit);
     const offset = clampHistoryOffset(options.offset);
+    const search = normalizeCommitHistorySearch(options.search);
     const commandOptions = {
       executable: executablePath,
       cwd: worktreePath,
@@ -479,14 +481,10 @@ export class GitCliClient
       }
 
       if (options.scope?.kind === "compare") {
-        const leftRef = await resolveHistoryRef(
-          commandOptions,
-          options.scope.leftRef
-        );
-        const rightRef = await resolveHistoryRef(
-          commandOptions,
-          options.scope.rightRef
-        );
+        const [leftRef, rightRef] = await Promise.all([
+          resolveHistoryRef(commandOptions, options.scope.leftRef),
+          resolveHistoryRef(commandOptions, options.scope.rightRef)
+        ]);
         if (leftRef === rightRef) {
           throw new GitError(
             "INVALID_REQUEST",
@@ -502,7 +500,8 @@ export class GitCliClient
                 limit + 1,
                 offset,
                 leftRef,
-                rightRef
+                rightRef,
+                search
               ),
               outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
             }),
@@ -510,7 +509,8 @@ export class GitCliClient
               ...commandOptions,
               args: compareHistoryCountArguments(
                 leftRef,
-                rightRef
+                rightRef,
+                search
               ),
               outputLimitBytes: 4_096
             }),
@@ -573,7 +573,7 @@ export class GitCliClient
           : undefined;
       const result = await runProcess({
         ...commandOptions,
-        args: historyPageArguments(limit + 1, offset, ref),
+        args: historyPageArguments(limit + 1, offset, ref, search),
         outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
       });
       const commits = parseCommitHistory(result.stdout);
@@ -2838,44 +2838,27 @@ async function reconcileRepositorySnapshot(
   options: CommandOptions,
   includeChangeStats: boolean
 ): Promise<RepositorySnapshot> {
-  if (snapshot.branch && snapshot.upstream) {
-    // Porcelain shortens upstream refs for display; colliding tags can add
-    // namespace prefixes and break commands that expect remote/branch.
-    const upstreamResult = await runProcess({
-      ...options,
-      args: [
-        "for-each-ref",
-        "--format=%(upstream:lstrip=2)",
-        `refs/heads/${snapshot.branch}`
-      ]
-    });
-    const upstream = trimSingleLine(upstreamResult.stdout);
-    const { upstream: _displayUpstream, ...withoutUpstream } = snapshot;
-    snapshot = {
-      ...withoutUpstream,
-      ...(upstream ? { upstream } : {})
-    };
-  }
   const hasOrdinaryWorktreeModification =
     snapshot.changes.some(
       (change) =>
         change.kind === "ordinary" &&
         change.worktreeStatus === "M"
     );
-  if (!includeChangeStats && !hasOrdinaryWorktreeModification) {
-    return snapshot;
-  }
-
-  const [stagedResult, unstagedResult, untrackedStats] =
+  const needsUnstagedStats =
+    (includeChangeStats || hasOrdinaryWorktreeModification) &&
+    snapshot.unstaged > 0;
+  // Upstream display-name reconciliation does not affect which files need
+  // stats. Read both from Git together instead of adding a serial round trip.
+  const [upstreamSnapshot, stagedResult, unstagedResult, untrackedStats] =
     await Promise.all([
+      reconcileSnapshotUpstream(snapshot, options),
       includeChangeStats && snapshot.staged > 0
         ? runProcess({
             ...options,
             args: STAGED_DIFF_STAT_ARGUMENTS
           })
         : undefined,
-      (includeChangeStats || hasOrdinaryWorktreeModification) &&
-      snapshot.unstaged > 0
+      needsUnstagedStats
         ? runProcess({
             ...options,
             args: UNSTAGED_DIFF_PATH_ARGUMENTS
@@ -2889,6 +2872,11 @@ async function reconcileRepositorySnapshot(
           )
         : new Map<string, ChangedPathStats>()
     ]);
+  snapshot = upstreamSnapshot;
+  if (!includeChangeStats && !hasOrdinaryWorktreeModification) {
+    return snapshot;
+  }
+
   const stagedStats = parseSimpleDiffStats(
     stagedResult?.stdout ?? ""
   );
@@ -2918,6 +2906,31 @@ async function reconcileRepositorySnapshot(
       )
     )
   };
+}
+
+async function reconcileSnapshotUpstream(
+  snapshot: RepositorySnapshot,
+  options: CommandOptions
+): Promise<RepositorySnapshot> {
+  if (snapshot.branch && snapshot.upstream) {
+    // Porcelain shortens upstream refs for display; colliding tags can add
+    // namespace prefixes and break commands that expect remote/branch.
+    const upstreamResult = await runProcess({
+      ...options,
+      args: [
+        "for-each-ref",
+        "--format=%(upstream:lstrip=2)",
+        `refs/heads/${snapshot.branch}`
+      ]
+    });
+    const upstream = trimSingleLine(upstreamResult.stdout);
+    const { upstream: _displayUpstream, ...withoutUpstream } = snapshot;
+    snapshot = {
+      ...withoutUpstream,
+      ...(upstream ? { upstream } : {})
+    };
+  }
+  return snapshot;
 }
 
 function parseSimpleDiffStats(
@@ -3045,8 +3058,8 @@ async function readUntrackedFileStats(
         break;
       }
 
-      for (const byte of chunk) {
-        additions += Number(byte === 0x0a);
+      for (let index = 0; index < bytesRead; index += 1) {
+        additions += Number(buffer[index] === 0x0a);
       }
       bytesReadTotal += bytesRead;
       lastByte = chunk[bytesRead - 1] ?? lastByte;

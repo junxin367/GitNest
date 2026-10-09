@@ -35,6 +35,12 @@ describe("page loading layouts", () => {
     const markup = renderToStaticMarkup(createElement(AppPageLoadingFallback, { view }));
     expect(markup).toContain(`data-layout="${layout}"`);
     expect(markup).toContain(`aria-label="${label}"`);
+    if (view === "analysis") {
+      expect(markup.match(/analysis-skeleton-summary-card/g)).toHaveLength(5);
+      expect(markup).toContain("analysis-workbench");
+      expect(markup).toContain("analysis-graph-controls");
+      expect(markup).not.toContain("app-skeleton-columns");
+    }
   });
 
   it("uses the changes workspace and commit panel when switching repositories on the changes tab", () => {

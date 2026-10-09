@@ -71,6 +71,7 @@ export interface DiffPanelProps {
   emptyPathLabel?: string | undefined;
   emptyStatsLabel?: string | undefined;
   state?: DiffPanelState | undefined;
+  immediateLoadingSkeleton?: boolean | undefined;
   focusLine?: number | undefined;
   headerActions?: ReactNode | undefined;
   className?: string | undefined;

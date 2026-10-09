@@ -1,4 +1,6 @@
 export type { GitEnvironment } from "./domain/git-environment";
+export { normalizeCommitHistorySearch } from "./domain/history-search";
+export type { CommitHistoryFilter } from "./domain/history-search";
 export type {
   GitAncestry,
   RemoteBranchRef
@@ -99,3 +101,10 @@ export type {
   GitWorktreeCommandClient,
   LockWorktreeOptions
 } from "./ports/git-worktree-client";
+export type { GitWorkflowAction, GitWorkflowClient, GitWorkflowInspectOptions, GitWorkflowOperation, GitWorkflowState } from "./ports/git-workflow-client";
+export type { GitIgnoreScope, GitIgnoreInput, GitIgnorePlan, GitIgnoreClient } from "./ports/git-ignore-client";
+export type * from "./ports/file-history-client";
+export type {
+  ManagedRemote, ManagedTag, RepositoryManagementState,
+  RepositoryManagementAction, RepositoryCreationInput, RepositoryManagementPort
+} from "./repository-management";

@@ -29,6 +29,15 @@ export interface RepositoryHistoryRequest
   limit?: number;
   offset?: number;
   scope?: RepositoryHistoryScopeDto;
+  search?: RepositoryHistoryFilterDto;
+}
+
+export interface RepositoryHistoryFilterDto {
+  keyword?: string;
+  author?: string;
+  since?: string;
+  until?: string;
+  path?: string;
 }
 
 export type RepositoryHistoryScopeDto =

@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import React, { act } from "react";
+import React, { act, forwardRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
   afterEach,
@@ -27,6 +27,25 @@ import { RepositoryOverview } from "./RepositoryOverview";
 import { RepositoryBranches } from "./RepositoryBranches";
 import { RepositoryChanges } from "./RepositoryChanges";
 import { useRepositoryDetails, type RepositoryDetailsController } from "../../entities/repository/useRepositoryDetails";
+import * as commitTimestamp from "../../shared/lib/formatCommitTimestamp";
+import { useRepositoryMutations } from "../../entities/repository/useRepositoryMutations";
+import type { RepositoryWorkflowController } from "../../features/repository-workflow/useRepositoryWorkflow";
+
+const changesFileRowRender = vi.hoisted(() => vi.fn());
+const branchRowRender = vi.hoisted(() => vi.fn());
+vi.mock("../../shared/ui/Button", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../shared/ui/Button")>();
+  return {
+    ...actual,
+    Button: forwardRef<HTMLButtonElement, React.ComponentProps<typeof actual.Button>>(
+      (props, ref) => {
+        if (props.className === "diff-workspace-file-select") changesFileRowRender();
+        if (props.className === "icon-button branch-row-menu-trigger") branchRowRender(props["aria-label"]);
+        return <actual.Button {...props} ref={ref} />;
+      }
+    )
+  };
+});
 
 (globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT: boolean;
@@ -176,6 +195,68 @@ describe("RepositoryCommitDetail", () => {
     act(() => findButtonByText(document.body, "重命名").click());
   }
 
+  it("keeps unrelated branch rows stable across create, menu and rename interactions and refreshes changed data", () => {
+    const request = vi.fn(async () => false);
+    const branches = Array.from({ length: 30 }, (_, index) => ({
+      name: `feature/${index}`,
+      fullName: `refs/heads/feature/${index}`,
+      head: "a".repeat(40),
+      remote: false,
+      current: index === 0,
+      updatedAt: "2026-10-05T08:00:00.000Z"
+    }));
+    const controller = {
+      branches: { target: TARGET, branches },
+      loading: { branches: false }, error: null
+    } as RepositoryDetailsController;
+    const commands = {
+      active: null, busy: false, request,
+      preflight: null, error: null, notice: null, completionVersion: 0,
+      confirm: async () => false, dismissPreflight: vi.fn(),
+      cancelOperation: async () => false, clearFeedback: vi.fn()
+    } as React.ComponentProps<typeof RepositoryBranches>["commands"];
+    const render = () => root.render(
+      <RepositoryBranches controller={controller} commands={commands}
+        target={TARGET} snapshot={undefined} worktreePath="E:/repo" />
+    );
+    act(render);
+    branchRowRender.mockClear();
+    const formatter = vi.spyOn(Intl, "DateTimeFormat");
+    act(() => findButtonByText(container, "新建分支").click());
+    act(() => editBranchInput("#new-branch-name", "feature/new"));
+    act(() => findButtonByText(container, "收起").click());
+    expect(branchRowRender).not.toHaveBeenCalled();
+    expect(formatter).not.toHaveBeenCalled();
+
+    act(() => findButtonByLabel(container, "打开 feature/1 操作").click());
+    expect(branchRowRender.mock.calls).toEqual([["打开 feature/1 操作"]]);
+    branchRowRender.mockClear();
+    act(() => findButtonByText(document.body, "重命名").click());
+    act(() => editBranchInput('[aria-label="重命名 feature/1"]', "feature/renamed"));
+    expect(branchRowRender).not.toHaveBeenCalled();
+    expect(formatter).not.toHaveBeenCalled();
+    act(() => findButtonByText(container, "保存").click());
+    expect(request).toHaveBeenCalledWith({
+      type: "rename-branch", target: TARGET,
+      branch: "feature/1", newName: "feature/renamed"
+    });
+
+    const updatedAt = "2026-10-06T09:30:00.000Z";
+    controller.branches = {
+      target: TARGET,
+      branches: branches.map((branch, index) => index === 2
+        ? { ...branch, updatedAt, upstream: "origin/feature/2" }
+        : branch)
+    };
+    branchRowRender.mockClear();
+    act(render);
+    expect(branchRowRender.mock.calls).toEqual([["打开 feature/2 操作"]]);
+    expect(formatter).toHaveBeenCalledTimes(1);
+    const changedRow = findButtonByLabel(container, "打开 feature/2 操作").closest(".branches-row")!;
+    expect(changedRow.querySelector(".branch-updated")?.getAttribute("title")).toBe(updatedAt);
+    expect(changedRow.textContent).toContain("origin/feature/2");
+  });
+
   it.each([false, true])("focuses an enabled branch action after opening and restores the trigger on Escape (current: %s)", (current) => {
     const nativeFocus = HTMLElement.prototype.focus;
     vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
@@ -314,6 +395,53 @@ describe("RepositoryCommitDetail", () => {
       repositoryKey={`${target.repositoryId}:${target.worktreeId}`} target={target} />);
   }
 
+  it("only formats changed history rows on selection, detail loading, and pagination", () => {
+    const format = vi.spyOn(commitTimestamp, "formatCommitTimestamp");
+    const commits = Array.from({ length: 100 }, (_, index) => ({
+      ...COMMIT, hash: `commit-${index}`, shortHash: `${index}`,
+      subject: `Commit ${index}`
+    }));
+    let controller = {
+      historyScope: null, historyDetailOpen: true,
+      selectedCommitHash: commits[0]!.hash, commit: null,
+      history: { target: TARGET, page: { commits } },
+      loading: { history: false, branches: false, commit: true },
+      error: null, selectCommit: vi.fn(async () => undefined),
+      selectHistoryScope: vi.fn(), loadMoreHistory: vi.fn()
+    } as unknown as RepositoryDetailsController;
+    const onCopyCommitId = vi.fn(async () => undefined);
+    const render = () => root.render(
+      <RepositoryHistory branch="main" controller={controller}
+        onCopyCommitId={onCopyCommitId} repositoryKey="repository-a:worktree-a"
+        target={TARGET} />
+    );
+    act(render);
+    expect(format).toHaveBeenCalledTimes(100);
+    format.mockClear();
+    controller = { ...controller, selectedCommitHash: commits[50]!.hash };
+    act(render);
+    expect(format).toHaveBeenCalledTimes(2);
+    format.mockClear();
+    controller = { ...controller, loading: { ...controller.loading, commit: false } };
+    act(render);
+    expect(format).not.toHaveBeenCalled();
+    const appended = { ...COMMIT, hash: "appended", subject: "New commit" };
+    controller = { ...controller, history: {
+      target: TARGET, page: { commits: [...commits, appended] }
+    } };
+    act(render);
+    expect(format).toHaveBeenCalledTimes(1);
+    expect(container.querySelectorAll(".commit-row")).toHaveLength(101);
+    const first = container.querySelector<HTMLElement>(".commit-id")!;
+    act(() => first.click());
+    expect(onCopyCommitId).toHaveBeenCalledWith(commits[0]!.hash);
+    expect(controller.selectCommit).not.toHaveBeenCalled();
+    act(() => container.querySelector<HTMLElement>('.commit-row.selected')?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true })
+    ));
+    expect(controller.selectCommit).toHaveBeenCalledWith(commits[50]!.hash);
+  });
+
   function editHistoryFilter(value: string) {
     const input = container.querySelector<HTMLInputElement>('[aria-label="筛选提交历史"]');
     if (!input) throw new Error("History filter was not rendered.");
@@ -400,11 +528,11 @@ describe("RepositoryCommitDetail", () => {
     }
   );
 
-  it("restores the full history list when the filter button closes its input", () => {
+  it("keeps loaded results unchanged until the full-history search is submitted", () => {
     act(() => renderHistory());
     act(() => findButtonByText(container, "筛选").click());
     act(() => editHistoryFilter("first"));
-    expect(container.querySelectorAll(".commit-row")).toHaveLength(1);
+    expect(container.querySelectorAll(".commit-row")).toHaveLength(2);
     act(() => findButtonByText(container, "筛选").click());
     expect(container.querySelector('[aria-label="筛选提交历史"]')).toBeNull();
     expect(container.querySelectorAll(".commit-row")).toHaveLength(2);
@@ -414,14 +542,16 @@ describe("RepositoryCommitDetail", () => {
 
   it("clears history filtering when switching repositories with the same HEAD scope", async () => {
     installBridge({
-      getHistory: vi.fn(async ({ target }) => ({
+      getHistory: vi.fn(async ({ target, search }) => ({
         ok: true as const,
         value: {
           target,
-          page: { commits: [
+          page: { commits: (search?.keyword ? [
+            { ...COMMIT, subject: "first visible commit" }
+          ] : [
             { ...COMMIT, subject: "first visible commit" },
             { ...COMMIT, hash: "c".repeat(40), shortHash: "ccccccc", subject: "second visible commit" }
-          ] }
+          ]) }
         }
       })),
       getBranches: vi.fn(async ({ target }) => ({
@@ -437,6 +567,7 @@ describe("RepositoryCommitDetail", () => {
     await act(async () => root.render(<Harness target={TARGET} />));
     act(() => findButtonByText(container, "筛选").click());
     act(() => editHistoryFilter("first"));
+    await act(async () => findButtonByText(container, "搜索历史").click());
     expect(container.querySelectorAll(".commit-row")).toHaveLength(1);
     await act(async () => root.render(
       <Harness target={{ repositoryId: "history-b", worktreeId: "history-b-main" }} />
@@ -445,13 +576,65 @@ describe("RepositoryCommitDetail", () => {
     expect(container.querySelectorAll(".commit-row")).toHaveLength(2);
   });
 
+  it("submits combined full-history criteria, preserves applied search on close and clears to page one", async () => {
+    const getHistory = vi.fn(async ({ target, search }) => ({
+      ok: true as const,
+      value: { target, page: { commits: search ? [] : [COMMIT] } }
+    }));
+    installBridge({
+      getHistory,
+      getBranches: vi.fn(async ({ target }) => ({
+        ok: true as const, value: { target, branches: [] }
+      }))
+    });
+    function Harness() {
+      const controller = useRepositoryDetails(TARGET, "history");
+      return <RepositoryHistory branch="main" controller={controller}
+        onCopyCommitId={vi.fn(async () => undefined)}
+        repositoryKey={`${TARGET.repositoryId}:${TARGET.worktreeId}`} target={TARGET} />;
+    }
+    await act(async () => root.render(<Harness />));
+    act(() => findButtonByText(container, "筛选").click());
+    function edit(label: string, value: string) {
+      const input = container.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    act(() => {
+      edit("筛选提交历史", " old message ");
+      edit("作者", "Alice");
+      edit("开始日期", "2026-02-02");
+      edit("结束日期", "2026-02-01");
+      edit("文件路径", "src/[literal].ts");
+    });
+    act(() => findButtonByText(container, "搜索历史").click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("开始日期不能晚于");
+    expect(getHistory).toHaveBeenCalledTimes(1);
+    act(() => edit("结束日期", "2026-02-03"));
+    await act(async () => findButtonByText(container, "搜索历史").click());
+    expect(getHistory.mock.calls.at(-1)![0]).toMatchObject({
+      offset: 0,
+      search: { keyword: "old message", author: "Alice", since: "2026-02-02", until: "2026-02-03", path: "src/[literal].ts" }
+    });
+    expect(container.textContent).toContain("已搜索所选引用的完整历史");
+    act(() => findButtonByText(container, "筛选 · 已应用").click());
+    expect(container.querySelector('[aria-label="筛选提交历史"]')).toBeNull();
+    expect(getHistory).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("没有匹配的提交");
+    act(() => findButtonByText(container, "筛选 · 已应用").click());
+    expect(container.querySelector<HTMLInputElement>('[aria-label="作者"]')?.value).toBe("Alice");
+    await act(async () => findButtonByText(container, "清除条件").click());
+    expect(getHistory.mock.calls.at(-1)![0]).not.toHaveProperty("search");
+    expect(container.querySelectorAll(".commit-row")).toHaveLength(1);
+  });
+
   it("preserves the visible history filter during a same-repository refresh", () => {
     act(() => renderHistory());
     act(() => findButtonByText(container, "筛选").click());
     act(() => editHistoryFilter("first"));
     act(() => renderHistory());
     expect(container.querySelector<HTMLInputElement>('[aria-label="筛选提交历史"]')?.value).toBe("first");
-    expect(container.querySelectorAll(".commit-row")).toHaveLength(1);
+    expect(container.querySelectorAll(".commit-row")).toHaveLength(2);
   });
 
   it.each(["overview", "branches", "history"] as const)(
@@ -540,6 +723,78 @@ describe("RepositoryCommitDetail", () => {
     });
     expect(container.querySelector(".gn-skeleton")).toBeNull();
     expect(container.textContent).toContain("所选引用已删除");
+  });
+
+  it("keeps file rows reusable through the actual changes parent and controller hooks", async () => {
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    const changes = Array.from({ length: 100 }, (_, index) => ({
+      path: `src/file-${index}.ts`, kind: "ordinary" as const,
+      indexStatus: ".", worktreeStatus: "M"
+    }));
+    const stage = vi.fn(async () => ({
+      ok: true as const, value: { target: TARGET, operationId: "stage-probe" }
+    }));
+    installBridge({
+      stage,
+      getChanges: vi.fn(async ({ target }) => ({
+        ok: true as const, value: { target, snapshot: {
+          branch: "main", head: "head", ahead: 0, behind: 0,
+          staged: 0, unstaged: changes.length, untracked: 0, conflicted: 0,
+          refreshedAt: "2026-10-05T00:00:00Z", changes
+        } }
+      })),
+      getDiff: vi.fn(async ({ target, path, mode }) => ({
+        ok: true as const, value: { target, diff: {
+          path, mode, content: "@@ -1 +1 @@\n-before\n+after\n",
+          additions: 1, deletions: 1, binary: false, truncated: false
+        } }
+      }))
+    });
+    const settings = createDefaultAppSettings();
+    const workflow = createWorkflowController();
+    function Harness() {
+      const controller = useRepositoryDetails(TARGET, "changes");
+      const hooks = React.useMemo(() => ({
+        beforeMutation: controller.invalidate,
+        afterMutation: () => controller.reload("changes")
+      }), [controller.invalidate, controller.reload]);
+      const mutations = useRepositoryMutations(TARGET, hooks);
+      const [commitMessage, onCommitMessageChange] = React.useState("");
+      return <RepositoryChanges {...{
+        controller, target: TARGET, workspaceId: "file-row-parent-probe",
+        appSettings: { settings }, mutations, workflow,
+        commands: { busy: false, active: null },
+        externalApplications: { profiles: [] }, commitMessage,
+        aiGenerating: false, pushAfterCommit: false,
+        onCommitMessageChange, onGenerateAi: vi.fn(),
+        onPushAfterCommitChange: vi.fn(), onCommitted: vi.fn()
+      } as unknown as React.ComponentProps<typeof RepositoryChanges>} />;
+    }
+    await act(async () => root.render(<Harness />));
+    expect(container.querySelectorAll(".diff-workspace-file-select")).toHaveLength(100);
+    expect(container.querySelector(".repository-workflow-toolbar")).toBeNull();
+    expect(container.querySelector(".changes-page-with-workflow")).toBeNull();
+    expect(container.querySelector(".repository-stash-browser")).toBeNull();
+    expect(container.textContent).not.toContain("刷新操作状态");
+    expect(container.textContent).not.toContain("修正最近提交");
+    expect(container.textContent).not.toContain("创建储藏");
+    changesFileRowRender.mockClear();
+    const input = container.querySelector<HTMLTextAreaElement>('[name="commit-message"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(input, "typed draft");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(input.value).toBe("typed draft");
+    expect(changesFileRowRender).not.toHaveBeenCalled();
+    await act(async () => container.querySelectorAll<HTMLButtonElement>(".diff-workspace-file-select")[1]!.click());
+    expect(changesFileRowRender.mock.calls.length).toBeLessThanOrEqual(4);
+    expect(container.querySelector(".diff-workspace-file.selected")?.textContent).toContain(changes[1]!.path);
+    await act(async () => findButtonByLabel(container, `暂存 ${changes[1]!.path}`).click());
+    expect(stage).toHaveBeenCalledWith({ target: TARGET, paths: [changes[1]!.path] });
   });
 
   it("stops the changes skeleton after an initial read is cancelled", async () => {
@@ -725,6 +980,7 @@ describe("RepositoryCommitDetail", () => {
           commit={COMMIT}
           target={TARGET}
           view="details"
+          onCommitAction={vi.fn()}
         />
       );
     });
@@ -740,6 +996,8 @@ describe("RepositoryCommitDetail", () => {
     ).toBeNull();
     expect(container.textContent).toContain(COMMIT.subject);
     expect(container.textContent).toContain(COMMIT.body);
+    expect(container.querySelector(".history-commit-overview .quick-grid")).toBeNull();
+    expect(container.querySelector(".history-commit-overview button")).toBeNull();
     expect(getCommitDiff).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -785,6 +1043,53 @@ describe("RepositoryCommitDetail", () => {
     ).toBe("true");
     expect(container.textContent).toContain("oldValue");
     expect(container.textContent).toContain("newValue");
+  });
+
+  it("keeps file history anchored to the displayed commit after removing permanent commit actions", async () => {
+    installBridge({
+      getCommitDiff: vi.fn(async () => ({
+        ok: true as const,
+        value: createCommitDiff("src/App.tsx", "@@ -1 +1 @@\n-old\n+selected commit file\n")
+      }))
+    });
+    const fileHistory: GitNestBridge["fileHistory"] = {
+      history: vi.fn(async request => ({
+        ok: true as const,
+        value: {
+          revision: request.revision!, path: request.path,
+          entries: [{
+            hash: COMMIT_HASH, path: request.path, authorName: COMMIT.authorName,
+            authoredAt: COMMIT.authoredAt, subject: COMMIT.subject, status: "M"
+          }],
+          nextOffset: null, status: "ok" as const
+        }
+      })),
+      diff: vi.fn(async request => ({
+        ok: true as const,
+        value: {
+          commitHash: request.commitHash, path: request.path,
+          patch: "@@ -1 +1 @@\n-old\n+historical file diff\n", status: "ok" as const
+        }
+      })),
+      cancel: vi.fn(async () => ({ ok: true as const, value: true }))
+    };
+    Object.defineProperty(window.gitnest, "fileHistory", { value: fileHistory, configurable: true });
+    await act(async () => root.render(
+      <RepositoryCommitDetail commit={COMMIT} target={TARGET} view="files" onCommitAction={vi.fn()} />
+    ));
+    expect(container.querySelector(".quick-grid")).toBeNull();
+    await act(async () => findButtonByText(container, "文件历史").click());
+    expect(fileHistory.history).toHaveBeenCalledWith(expect.objectContaining({
+      target: TARGET, path: "src/App.tsx", revision: COMMIT_HASH
+    }));
+    expect(fileHistory.diff).toHaveBeenCalledWith(expect.objectContaining({
+      target: TARGET, path: "src/App.tsx", commitHash: COMMIT_HASH
+    }));
+    expect(document.body.textContent).toContain("historical file diff");
+    expect(document.querySelector(".file-history-dialog [role=tablist]")).toBeNull();
+    await act(async () => findButtonByText(document.body, "关闭").click());
+    expect(document.querySelector(".file-history-dialog")).toBeNull();
+    expect(container.textContent).toContain("selected commit file");
   });
 
   it("keeps the latest selected file when diff responses arrive out of order", async () => {
@@ -1069,6 +1374,70 @@ describe("RepositoryPage AI commit requests", () => {
     vi.unstubAllGlobals();
   });
 
+  it("preserves stash context actions without adding permanent history actions", async () => {
+    const workflow = createWorkflowController();
+    window.gitnest.repository.getChanges = vi.fn(async ({ target }) => ({
+      ok: true as const,
+      value: { target, snapshot: {
+        branch: "main", head: COMMIT_HASH, ahead: 0, behind: 0,
+        staged: 1, unstaged: 0, untracked: 0, conflicted: 0,
+        refreshedAt: "2026-10-06T00:00:00Z",
+        changes: [{
+          path: "src/renamed.ts", originalPath: "src/original.ts",
+          kind: "renamed" as const, indexStatus: "R", worktreeStatus: "."
+        }]
+      } }
+    }));
+    window.gitnest.repository.getStashes = vi.fn(async ({ target }) => ({
+      ok: true as const, value: { target, stashes: [] }
+    }));
+    window.gitnest.repository.getHistory = vi.fn(async ({ target }) => ({
+      ok: true as const, value: { target, page: { commits: [COMMIT] } }
+    }));
+    window.gitnest.repository.getBranches = vi.fn(async ({ target }) => ({
+      ok: true as const, value: { target, branches: [] }
+    }));
+    await renderRepository("layout-actions", { workflow });
+    expect(container.querySelector(".repository-workflow-toolbar")).toBeNull();
+    expect(container.querySelector(".changes-page-with-workflow")).toBeNull();
+    expect(container.querySelector(".repository-stash-browser")).toBeNull();
+    expect(window.gitnest.repository.getStashes).not.toHaveBeenCalled();
+
+    await act(async () => findButtonByLabel(container, "储藏的变更").click());
+    expect(container.querySelector(".repository-stash-browser")).not.toBeNull();
+    expect([...container.querySelectorAll("button")].some(button =>
+      button.textContent?.trim() === "创建储藏"
+    )).toBe(false);
+    const openStashMenu = () => act(() => {
+      container.querySelector(".repository-stash-browser")!.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 300, clientY: 200 })
+      );
+    });
+    openStashMenu();
+    act(() => findButtonByText(document.body, "创建储藏").click());
+    expect(workflow.openDraft).toHaveBeenLastCalledWith("create-stash");
+    openStashMenu();
+    act(() => findButtonByText(document.body, "储藏当前文件").click());
+    expect(workflow.openDraft).toHaveBeenLastCalledWith(
+      "create-stash", "src/renamed.ts", "src/original.ts"
+    );
+    openStashMenu();
+    await act(async () => findButtonByLabel(container, "储藏的变更").click());
+    expect(container.querySelector(".repository-stash-browser")).toBeNull();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+
+    await renderRepository("layout-actions", { workflow, tab: "history" });
+    expect(container.querySelector(".repository-page-history .history-header-actions")).not.toBeNull();
+    expect(container.textContent).not.toContain("提交操作");
+    expect(container.textContent).not.toContain("修正最近提交");
+    expect(container.textContent).not.toContain("撤销最近提交");
+    expect(workflow.openDraft).toHaveBeenCalledTimes(2);
+    expect(workflow.reload).not.toHaveBeenCalled();
+    expect(workflow.request).not.toHaveBeenCalled();
+    expect(workflow.confirm).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain("刷新操作状态");
+  });
+
   it.each([false, true])("clears only the submitted draft after commit refresh (A/B/A navigation: %s)", async (navigate) => {
     await renderRepository("a");
     const getChanges = vi.mocked(window.gitnest.repository.getChanges);
@@ -1282,7 +1651,10 @@ describe("RepositoryPage AI commit requests", () => {
     expect(messageInput().value).toBe("feat: reopened page");
   });
 
-  async function renderRepository(repositoryId: string) {
+  async function renderRepository(
+    repositoryId: string,
+    overrides: Partial<React.ComponentProps<typeof RepositoryPage>> = {}
+  ) {
     const props = {
       workspace,
       target: { repositoryId, worktreeId: `${repositoryId}-wt` },
@@ -1291,7 +1663,8 @@ describe("RepositoryPage AI commit requests", () => {
       terminals: { clearFeedback: noOp },
       externalApplications: { profiles: [] },
       appSettings: { settings },
-      onOpenTab: noOp
+      onOpenTab: noOp,
+      ...overrides
     } as unknown as React.ComponentProps<typeof RepositoryPage>;
     await act(async () => {
       root.render(<RepositoryPage key={workspace.id} {...props} />);
@@ -1326,6 +1699,16 @@ describe("RepositoryPage AI commit requests", () => {
     };
   }
 });
+
+function createWorkflowController(): RepositoryWorkflowController {
+  return {
+    state: null, preflight: null, busy: false, inspecting: false,
+    error: null, notice: null, completionVersion: 0, draft: null,
+    openDraft: vi.fn(), closeDraft: vi.fn(), reload: vi.fn(async () => null),
+    request: vi.fn(async () => true), confirm: vi.fn(async () => true),
+    dismiss: vi.fn(), clearFeedback: vi.fn()
+  };
+}
 
 function CommitDetailBreadcrumbHarness() {
   const [view, setView] = React.useState<

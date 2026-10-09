@@ -8,6 +8,55 @@ import type { AnalysisSourceFile } from "./model";
 import { parseSourceFile } from "./source-parser";
 
 describe("parseSourceFile client requests", () => {
+  it("keeps Java member ownership across nested bodies and repeated parses", () => {
+    const source = [
+      "class Outer {",
+      '  private String braces = "}{";',
+      "  static {",
+      "    if (true) {",
+      '      String local = "}";',
+      "    }",
+      "  }",
+      "  public int first() {",
+      "    class Local {",
+      "      public int hidden() { return 1; }",
+      "    }",
+      "    return 2;",
+      "  }",
+      "  /* } { class Comment {} */",
+      "  class Inner {",
+      '    public String nested() { return "\\\"}"; }',
+      "  }",
+      "  interface InnerApi {",
+      "    String bodyless();",
+      "  }",
+      "  public int last() { return 3; }",
+      "}"
+    ].join("\n");
+    const first = parseSourceFile(
+      sourceFile("Outer.java", "java"),
+      source
+    );
+    expect(first.symbols.filter(
+      (symbol) => symbol.kind === "method"
+    ).map((symbol) => symbol.qualifiedName)).toEqual([
+      "Outer.first",
+      "Outer.Inner.nested",
+      "Outer.last",
+      "Outer.InnerApi.bodyless"
+    ]);
+    expect(first.symbols.some(
+      (symbol) => symbol.name === "local" || symbol.name === "hidden"
+    )).toBe(false);
+    const second = parseSourceFile(
+      sourceFile("Outer.java", "java"),
+      ["class Outer {", "  public int replacement() { return 4; }", "}"].join("\n")
+    );
+    expect(second.symbols.filter(
+      (symbol) => symbol.kind === "method"
+    ).map((symbol) => symbol.qualifiedName)).toEqual(["Outer.replacement"]);
+  });
+
   it("recognizes imported request helpers, aliases, generics, and config calls", () => {
     const parsed = parseSourceFile(
       sourceFile("client.ts"),

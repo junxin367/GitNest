@@ -213,6 +213,53 @@ describe("AnalysisSnapshotCache", () => {
     );
   });
 
+  it("restores completed durations per scope without rewriting the saved graphs", async () => {
+    const directory = await createTemporaryDirectory();
+    const store = new AnalysisSnapshotCache(directory);
+    const settings = createSettings();
+    for (const [scope, durationMs] of [["workspace", 6_000], ["changed", 1_200]] as const) {
+      const snapshot = createSnapshot(`timed-${scope}`, scope);
+      await store.save(snapshot, settings);
+      const graphPath = join(
+        codeAnalysisWorkspaceCacheDirectory(directory, snapshot.workspaceId),
+        `snapshot-${scope}.json`
+      );
+      const graphBefore = await readFile(graphPath, "utf8");
+      await store.saveDuration({ ...snapshot, stats: { ...snapshot.stats, durationMs } });
+      expect(await readFile(graphPath, "utf8")).toBe(graphBefore);
+      const restored = await new AnalysisSnapshotCache(directory).load(
+        snapshot.workspaceId, settings, snapshot.roots, scope
+      );
+      expect(restored).toEqual({ ...snapshot, stats: { ...snapshot.stats, durationMs } });
+    }
+  });
+
+  it("ignores a previous task's duration after a newer graph is saved", async () => {
+    const directory = await createTemporaryDirectory();
+    const store = new AnalysisSnapshotCache(directory);
+    const first = createSnapshot("first");
+    await store.save(first, createSettings());
+    await store.saveDuration({ ...first, stats: { ...first.stats, durationMs: 6_000 } });
+    const next = createSnapshot("next");
+    await store.save(next, createSettings());
+    expect(await store.load(next.workspaceId, createSettings(), next.roots)).toEqual(next);
+  });
+
+  it.each(["not json", '{"durationMs":-1}', "x".repeat(1_025)])(
+    "keeps a usable snapshot when optional duration metadata is invalid (%#)",
+    async contents => {
+      const directory = await createTemporaryDirectory();
+      const store = new AnalysisSnapshotCache(directory);
+      const snapshot = createSnapshot("timed");
+      await store.save(snapshot, createSettings());
+      await writeFile(join(
+        codeAnalysisWorkspaceCacheDirectory(directory, snapshot.workspaceId),
+        "snapshot-workspace-duration.json"
+      ), contents);
+      expect(await store.load(snapshot.workspaceId, createSettings(), snapshot.roots)).toEqual(snapshot);
+    }
+  );
+
   it("recovers a newer scoped snapshot when the latest pointer was not updated", async () => {
     const directory = await createTemporaryDirectory();
     const store = new AnalysisSnapshotCache(directory);
@@ -576,6 +623,40 @@ describe("AnalysisSnapshotCache", () => {
       )
     ).resolves.toBeNull();
   });
+
+  it.each(["nodes", "edges", "sourceState"] as const)(
+    "still validates nested %s after the snapshot identity and configuration match",
+    async (field) => {
+      const directory = await createTemporaryDirectory();
+      const store = new AnalysisSnapshotCache(directory);
+      const snapshot = createSnapshot("invalid-nested-payload");
+      const settings = createSettings();
+      await store.save(snapshot, settings);
+      const path = join(
+        codeAnalysisWorkspaceCacheDirectory(directory, snapshot.workspaceId),
+        "snapshot-workspace.json"
+      );
+      const document = JSON.parse(await readFile(path, "utf8"));
+      if (field === "nodes") {
+        document.snapshot.nodes[0].location.line = "1";
+      } else if (field === "edges") {
+        document.snapshot.edges = [{
+          id: "edge", from: "node", to: "node",
+          kind: "invalid-kind", confidence: "exact"
+        }];
+      } else {
+        document.snapshot.sourceState = {
+          worktreeStatuses: [],
+          changedSourceFiles: [{ fingerprint: 42 }]
+        };
+      }
+      await writeFile(path, JSON.stringify(document), "utf8");
+
+      await expect(
+        store.load(snapshot.workspaceId, settings, snapshot.roots, "workspace")
+      ).resolves.toBeNull();
+    }
+  );
 
   it("does not read a snapshot above the safety limit", async () => {
     const directory = await createTemporaryDirectory();

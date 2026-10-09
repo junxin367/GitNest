@@ -123,6 +123,7 @@ export interface DeleteWorkspaceRequest {
 
 export interface AddWorkspaceDirectoryRequest {
   path: string;
+  expectedWorkspaceId?: string;
 }
 
 export interface AddWorkspaceDirectoryResultDto {
@@ -195,6 +196,14 @@ export interface WorkspaceOperationDto {
     | "worktree-move"
     | "worktree-repair"
     | "worktree-prune"
+    | "workflow"
+    | "ignore-file"
+    | "remote-add"
+    | "remote-set-url"
+    | "remote-remove"
+    | "tag-create"
+    | "tag-delete"
+    | "tag-push"
     | "worktree-remove";
   scope: "workspace" | "repository" | "worktree";
   targetIds: string[];

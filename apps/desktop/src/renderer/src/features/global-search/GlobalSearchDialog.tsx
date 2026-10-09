@@ -18,10 +18,8 @@ import type {
 import type { AppView } from "../../app/navigation";
 import type { RepositoryChangeLocation } from "../../entities/repository/changeSelection";
 import {
-  findTargetSnapshot,
   getSnapshotChangeCount,
-  listWorkspaceTargets,
-  resolveWorkspaceTarget
+  listWorkspaceTargets
 } from "../../entities/workspace/model";
 import {
   buildDiffViewerFiles,
@@ -74,6 +72,7 @@ type RepositorySearchResult = {
   subtitle: string;
   status: string;
   target: RepositoryTargetDto;
+  worktreePath: string;
   icon: "repository";
 };
 
@@ -93,6 +92,7 @@ type ChangeSearchResult = {
   subtitle: string;
   status: string;
   target: RepositoryTargetDto;
+  worktreePath: string;
   path: string;
   originalPath?: string;
   mode: DiffViewerFile["mode"];
@@ -103,6 +103,10 @@ type SearchResult =
   | ChangeSearchResult
   | RepositorySearchResult
   | CommandSearchResult;
+
+// Results are immutable and replaced when their source data changes. Keep
+// normalization lazy so an empty query and a filled result limit do no extra work.
+const searchableTextByResult = new WeakMap<SearchResult, string>();
 
 export function GlobalSearchDialog({
   workspace,
@@ -134,12 +138,15 @@ export function GlobalSearchDialog({
       return [];
     }
 
+    const repositories = indexFirst(workspace.repositories, (item) => item.id);
+    const worktrees = indexFirst(workspace.worktrees, (item) => item.id);
+    const snapshotsByTarget = indexFirst(snapshots, targetKey);
     return listWorkspaceTargets(workspace).map((target) => {
-      const resolved = resolveWorkspaceTarget(
-        workspace,
-        target
-      );
-      const snapshot = findTargetSnapshot(snapshots, target);
+      const resolved = {
+        repository: repositories.get(target.repositoryId),
+        worktree: worktrees.get(target.worktreeId)
+      };
+      const snapshot = snapshotsByTarget.get(targetKey(target));
       const repositoryName =
         resolved.repository?.name ?? target.repositoryId;
       const worktreeName = resolved.worktree?.name;
@@ -161,6 +168,7 @@ export function GlobalSearchDialog({
         subtitle: `${branch} · ${path}`,
         status: formatTargetStatus(snapshot),
         target,
+        worktreePath: path,
         icon: "repository"
       };
     });
@@ -192,6 +200,7 @@ export function GlobalSearchDialog({
           subtitle: `${repository.title} · ${repository.subtitle}`,
           status: formatChangeStatus(file),
           target: repository.target,
+          worktreePath: repository.worktreePath,
           path: file.path,
           ...(file.change.originalPath
             ? { originalPath: file.change.originalPath }
@@ -565,11 +574,6 @@ export function GlobalSearchDialog({
                           {result.status}
                         </span>
                       )}
-                      {selectedIndex === index && (
-                        <kbd className="global-search-result-key">
-                          Enter
-                        </kbd>
-                      )}
                     </span>
                   </Button>
                 </Fragment>
@@ -635,17 +639,43 @@ function matchesSearch(
     return true;
   }
 
-  const searchable = [
-    result.title,
-    result.subtitle,
-    result.kind === "command" ? "" : result.status,
-    result.kind === "change"
-      ? `${result.originalPath ?? ""} ${result.mode}`
-      : ""
-  ]
-    .join(" ");
+  let searchable = searchableTextByResult.get(result);
+  if (searchable === undefined) {
+    searchable = normalizeSearchText(
+      [
+        result.title,
+        result.subtitle,
+        result.kind === "command" ? "" : result.status,
+        result.kind === "change"
+          ? [
+              result.originalPath ?? "",
+              result.mode,
+              joinSearchPath(result.worktreePath, result.path),
+              result.originalPath
+                ? joinSearchPath(result.worktreePath, result.originalPath)
+                : ""
+            ].join(" ")
+          : ""
+      ].join(" ")
+    );
+    searchableTextByResult.set(result, searchable);
+  }
 
-  return normalizeSearchText(searchable).includes(query);
+  return searchable.includes(query);
+}
+
+function indexFirst<T>(
+  values: readonly T[],
+  key: (value: T) => string
+): Map<string, T> {
+  const index = new Map<string, T>();
+  for (const value of values) {
+    const valueKey = key(value);
+    if (!index.has(valueKey)) {
+      index.set(valueKey, value);
+    }
+  }
+  return index;
 }
 
 function takeMatchingResults<T extends SearchResult>(
@@ -667,7 +697,12 @@ function takeMatchingResults<T extends SearchResult>(
 }
 
 function normalizeSearchText(value: string): string {
-  return value.trim().toLowerCase().replaceAll("\\", "/");
+  return value.trim().toLowerCase().replaceAll("\\", "/")
+    .replace(/^\/+(?=[a-z]:\/)/u, "");
+}
+
+function joinSearchPath(worktreePath: string, relativePath: string): string {
+  return `${worktreePath.replace(/[\\/]+$/u, "")}/${relativePath.replace(/^[\\/]+/u, "")}`;
 }
 
 function resultGroupLabel(result: SearchResult): string {

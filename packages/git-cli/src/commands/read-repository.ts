@@ -1,3 +1,5 @@
+import type { CommitHistoryFilter } from "@gitnest/git-core";
+
 export const STATUS_ARGUMENTS = [
   "-c",
   "core.fsmonitor=false",
@@ -73,16 +75,20 @@ export function historyArguments(limit: number): string[] {
 export function historyPageArguments(
   limit: number,
   offset: number,
-  ref?: string
+  ref?: string,
+  search?: CommitHistoryFilter
 ): string[] {
   return [
+    ...(search?.path ? ["--literal-pathspecs"] : []),
     "log",
     `--max-count=${limit}`,
     `--skip=${offset}`,
     "--date=iso-strict",
     "--decorate=short",
     "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00",
-    ...(ref ? [ref] : [])
+    ...historySearchArguments(search),
+    ...(ref ? [ref] : []),
+    ...(search?.path ? ["--", search.path] : [])
   ];
 }
 
@@ -90,31 +96,51 @@ export function compareHistoryPageArguments(
   limit: number,
   offset: number,
   leftRef: string,
-  rightRef: string
+  rightRef: string,
+  search?: CommitHistoryFilter
 ): string[] {
   return [
+    ...(search?.path ? ["--literal-pathspecs"] : []),
     "log",
     `--max-count=${limit}`,
     `--skip=${offset}`,
     "--left-right",
-    "--boundary",
+    ...(search ? [] : ["--boundary"]),
     "--topo-order",
     "--date=iso-strict",
     "--decorate=short",
     "--format=%m%x00%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00",
-    `${leftRef}...${rightRef}`
+    ...historySearchArguments(search),
+    `${leftRef}...${rightRef}`,
+    ...(search?.path ? ["--", search.path] : [])
   ];
 }
 
 export function compareHistoryCountArguments(
   leftRef: string,
-  rightRef: string
+  rightRef: string,
+  search?: CommitHistoryFilter
 ): string[] {
   return [
+    ...(search?.path ? ["--literal-pathspecs"] : []),
     "rev-list",
     "--left-right",
     "--count",
-    `${leftRef}...${rightRef}`
+    ...historySearchArguments(search),
+    `${leftRef}...${rightRef}`,
+    ...(search?.path ? ["--", search.path] : [])
+  ];
+}
+
+function historySearchArguments(search?: CommitHistoryFilter): string[] {
+  if (!search) return [];
+  return [
+    "--fixed-strings",
+    "--regexp-ignore-case",
+    ...(search.keyword ? [`--grep=${search.keyword}`] : []),
+    ...(search.author ? [`--author=${search.author}`] : []),
+    ...(search.since ? [`--since-as-filter=${search.since}T00:00:00`] : []),
+    ...(search.until ? [`--until=${search.until}T23:59:59`] : [])
   ];
 }
 

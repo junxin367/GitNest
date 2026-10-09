@@ -15,16 +15,19 @@ import {
   parseDiffViewModel,
   type DiffSearchHit,
   type DiffViewerLayout,
-  type SplitDiffCell
+  type SplitDiffCell,
+  type UnifiedDiffLine
 } from "../../shared/model/diffViewModel";
 import { Icon } from "../../shared/ui/Icon";
-import { Skeleton } from "../../shared/ui/Skeleton";
+import { Skeleton, SkeletonSurface } from "../../shared/ui/Skeleton";
 import {
   DEFAULT_DIFF_CONTEXT_LINES,
   DIFF_CONTEXT_STEP,
   type DiffHunkContextControlsProps,
   type DiffPanelState
 } from "./DiffPanel.types";
+
+const EMPTY_SEARCH_HITS: readonly DiffSearchHit[] = [];
 
 const DIFF_CONTENT_SKELETON_ROWS = [
   "short",
@@ -215,10 +218,18 @@ export function DiffViewerState({
 }
 
 export function DiffContentSkeleton({
-  layout = "unified"
-}: { layout?: DiffViewerLayout }) {
+  layout = "unified",
+  wrap = false,
+  immediate = false
+}: { layout?: DiffViewerLayout; wrap?: boolean; immediate?: boolean }) {
   return (
-    <div aria-hidden="true" className="diff-content-skeleton" data-layout={layout}>
+    <SkeletonSurface
+      className="diff-content-skeleton"
+      data-layout={layout}
+      data-wrap={wrap}
+      label="正在读取文件内容"
+      immediate={immediate}
+    >
       {Array.from({ length: layout === "split" ? 2 : 1 }, (_, pane) => (
         <div className="diff-content-skeleton-pane" key={pane}>
           <div className="diff-workspace-skeleton-hunk">
@@ -237,22 +248,18 @@ export function DiffContentSkeleton({
           </div>
         </div>
       ))}
-    </div>
+    </SkeletonSurface>
   );
 }
 
 export const SplitDiff = memo(function SplitDiff({
   rows,
   hits,
-  activeSearchHit,
-  activeHunk,
   contextControls,
   wrap
 }: {
   rows: ReturnType<typeof parseDiffViewModel>["splitRows"];
   hits: ReadonlyMap<string, DiffSearchHit[]>;
-  activeSearchHit: number;
-  activeHunk: number;
   contextControls?: DiffHunkContextControlsProps | undefined;
   wrap: boolean;
 }) {
@@ -353,8 +360,6 @@ export const SplitDiff = memo(function SplitDiff({
             {rows.map((row) =>
               row.kind === "header" || row.kind === "meta" ? (
                 <SplitWideRow
-                  activeHunk={activeHunk}
-                  activeSearchHit={activeSearchHit}
                   contextControls={contextControls}
                   hits={hits}
                   key={row.key}
@@ -365,8 +370,6 @@ export const SplitDiff = memo(function SplitDiff({
           </div>
           <div className="diff-viewer-split-panes">
             <SplitPane
-              activeHunk={activeHunk}
-              activeSearchHit={activeSearchHit}
               contentRef={oldContentRef}
               contextControls={contextControls}
               hits={hits}
@@ -377,8 +380,6 @@ export const SplitDiff = memo(function SplitDiff({
               side="old"
             />
             <SplitPane
-              activeHunk={activeHunk}
-              activeSearchHit={activeSearchHit}
               contentRef={newContentRef}
               contextControls={contextControls}
               hits={hits}
@@ -420,20 +421,16 @@ export const SplitDiff = memo(function SplitDiff({
             key={row.key}
           >
             <SplitCell
-              activeSearchHit={activeSearchHit}
               cell={row.oldCell}
-              hits={hits.get(`${row.key}:old`) ?? []}
+              hits={hits.get(`${row.key}:old`) ?? EMPTY_SEARCH_HITS}
             />
             <SplitCell
-              activeSearchHit={activeSearchHit}
               cell={row.newCell}
-              hits={hits.get(`${row.key}:new`) ?? []}
+              hits={hits.get(`${row.key}:new`) ?? EMPTY_SEARCH_HITS}
             />
           </div>
         ) : (
           <SplitWideRow
-            activeHunk={activeHunk}
-            activeSearchHit={activeSearchHit}
             contextControls={contextControls}
             hits={hits}
             key={row.key}
@@ -448,8 +445,6 @@ export const SplitDiff = memo(function SplitDiff({
 function SplitPane({
   rows,
   hits,
-  activeSearchHit,
-  activeHunk,
   side,
   paneRef,
   contentRef,
@@ -459,8 +454,6 @@ function SplitPane({
 }: {
   rows: ReturnType<typeof parseDiffViewModel>["splitRows"];
   hits: ReadonlyMap<string, DiffSearchHit[]>;
-  activeSearchHit: number;
-  activeHunk: number;
   side: "old" | "new";
   paneRef: Ref<HTMLDivElement>;
   contentRef: Ref<HTMLDivElement>;
@@ -494,17 +487,14 @@ function SplitPane({
               key={row.key}
             >
               <SplitCell
-                activeSearchHit={activeSearchHit}
                 cell={
                   side === "old" ? row.oldCell : row.newCell
                 }
-                hits={hits.get(`${row.key}:${side}`) ?? []}
+                hits={hits.get(`${row.key}:${side}`) ?? EMPTY_SEARCH_HITS}
               />
             </div>
           ) : row.kind === "hunk" ? (
             <SplitWideRow
-              activeHunk={activeHunk}
-              activeSearchHit={activeSearchHit}
               contextControls={
                 showContextControls
                   ? contextControls
@@ -524,8 +514,6 @@ function SplitPane({
 function SplitWideRow({
   row,
   hits,
-  activeSearchHit,
-  activeHunk,
   contextControls
 }: {
   row: Exclude<
@@ -533,17 +521,11 @@ function SplitWideRow({
     { kind: "content" }
   >;
   hits: ReadonlyMap<string, DiffSearchHit[]>;
-  activeSearchHit: number;
-  activeHunk: number;
   contextControls?: DiffHunkContextControlsProps | undefined;
 }) {
   return (
     <div
-      className={`diff-viewer-wide-row ${row.kind}${
-        row.kind === "hunk" && row.hunkIndex === activeHunk
-          ? " current"
-          : ""
-      }`}
+      className={`diff-viewer-wide-row ${row.kind}`}
       data-diff-viewer-hunk={row.hunkIndex}
     >
       {row.kind === "hunk" ? <Icon name="diff" size={14} /> : null}
@@ -556,16 +538,14 @@ function SplitWideRow({
         >
           {highlightSearchHits(
             row.text ?? " ",
-            hits.get(`${row.key}:full`) ?? [],
-            activeSearchHit
+            hits.get(`${row.key}:full`) ?? EMPTY_SEARCH_HITS
           )}
         </DiffHunkContextTrigger>
       ) : (
         <code>
           {highlightSearchHits(
             row.text ?? " ",
-            hits.get(`${row.key}:full`) ?? [],
-            activeSearchHit
+            hits.get(`${row.key}:full`) ?? EMPTY_SEARCH_HITS
           )}
         </code>
       )}
@@ -573,14 +553,12 @@ function SplitWideRow({
   );
 }
 
-function SplitCell({
+const SplitCell = memo(function SplitCell({
   cell,
-  hits,
-  activeSearchHit
+  hits
 }: {
   cell: SplitDiffCell | undefined;
   hits: readonly DiffSearchHit[];
-  activeSearchHit: number;
 }) {
   const kind = cell?.kind ?? "empty";
   const marker =
@@ -599,118 +577,122 @@ function SplitCell({
           {cell
             ? highlightSearchHits(
                 cell.text || " ",
-                hits,
-                activeSearchHit
+                hits
               )
             : " "}
         </code>
       </span>
     </>
   );
-}
+});
 
 export const UnifiedDiff = memo(function UnifiedDiff({
   lines,
   hits,
-  activeSearchHit,
-  activeHunk,
   focusedLineKey,
   contextControls
 }: {
   lines: ReturnType<typeof parseDiffViewModel>["unifiedLines"];
   hits: ReadonlyMap<string, DiffSearchHit[]>;
-  activeSearchHit: number;
-  activeHunk: number;
   focusedLineKey?: string | null | undefined;
   contextControls?: DiffHunkContextControlsProps | undefined;
 }) {
   return (
     <div className="diff-viewer-unified">
-      {lines.map((line) => {
-        if (
-          line.kind === "hunk" ||
-          line.kind === "header" ||
-          line.kind === "meta"
-        ) {
-          return (
-            <div
-              className={`diff-viewer-wide-row ${line.kind}${
-                line.kind === "hunk" &&
-                line.hunkIndex === activeHunk
-                  ? " current"
-                  : ""
-              }`}
-              data-diff-viewer-hunk={line.hunkIndex}
-              key={line.key}
-            >
-              {line.kind === "hunk" ? (
-                <Icon name="diff" size={14} />
-              ) : null}
-              {line.kind === "hunk" &&
-              line.hunkIndex !== undefined &&
-              contextControls ? (
-                <DiffHunkContextTrigger
-                  {...contextControls}
-                  hunkIndex={line.hunkIndex}
-                >
-                  {highlightSearchHits(
-                    line.text || " ",
-                    hits.get(line.key) ?? [],
-                    activeSearchHit
-                  )}
-                </DiffHunkContextTrigger>
-              ) : (
-                <code>
-                  {highlightSearchHits(
-                    line.text || " ",
-                    hits.get(line.key) ?? [],
-                    activeSearchHit
-                  )}
-                </code>
-              )}
-            </div>
-          );
-        }
+      {lines.map((line) => (
+        <UnifiedLine
+          contextControls={line.kind === "hunk" ? contextControls : undefined}
+          focused={line.key === focusedLineKey}
+          hits={hits.get(line.key) ?? EMPTY_SEARCH_HITS}
+          key={line.key}
+          line={line}
+        />
+      ))}
+    </div>
+  );
+});
 
-        const marker =
-          line.kind === "removed"
-            ? "−"
-            : line.kind === "added"
-              ? "+"
-              : "";
-        const focused = line.key === focusedLineKey;
-        return (
-          <div
-            aria-current={focused ? "location" : undefined}
-            className={`diff-viewer-unified-line ${line.kind}${
-              focused ? " focus-target" : ""
-            }`}
-            data-diff-viewer-focus-line={
-              focused ? "true" : undefined
-            }
-            key={line.key}
+const UnifiedLine = memo(function UnifiedLine({
+  line,
+  hits,
+  focused,
+  contextControls
+}: {
+  line: UnifiedDiffLine;
+  hits: readonly DiffSearchHit[];
+  focused: boolean;
+  contextControls?: DiffHunkContextControlsProps | undefined;
+}) {
+  if (
+    line.kind === "hunk" ||
+    line.kind === "header" ||
+    line.kind === "meta"
+  ) {
+    return (
+      <div
+        className={`diff-viewer-wide-row ${line.kind}`}
+        data-diff-viewer-hunk={line.hunkIndex}
+      >
+        {line.kind === "hunk" ? (
+          <Icon name="diff" size={14} />
+        ) : null}
+        {line.kind === "hunk" &&
+        line.hunkIndex !== undefined &&
+        contextControls ? (
+          <DiffHunkContextTrigger
+            {...contextControls}
+            hunkIndex={line.hunkIndex}
           >
-            <span className={`diff-viewer-line-number ${line.kind}`}>
-              {line.oldLineNumber ?? ""}
-            </span>
-            <span className={`diff-viewer-line-number ${line.kind}`}>
-              {line.newLineNumber ?? ""}
-            </span>
-            <span className={`diff-viewer-change-marker ${line.kind}`}>
-              {marker}
-            </span>
-            <span className={`diff-viewer-code-cell ${line.kind}`}>
-              <code>
-                {highlightSearchHits(
-                  line.text || " ",
-                  hits.get(line.key) ?? [],
-                  activeSearchHit
-                )}
-              </code>
-            </span>
-          </div>
-        );
-      })}
+            {highlightSearchHits(
+              line.text || " ",
+              hits
+            )}
+          </DiffHunkContextTrigger>
+        ) : (
+          <code>
+            {highlightSearchHits(
+              line.text || " ",
+              hits
+            )}
+          </code>
+        )}
+      </div>
+    );
+  }
+
+  const marker =
+    line.kind === "removed"
+      ? "−"
+      : line.kind === "added"
+        ? "+"
+        : "";
+  return (
+    <div
+      aria-current={focused ? "location" : undefined}
+      className={`diff-viewer-unified-line ${line.kind}${
+        focused ? " focus-target" : ""
+      }`}
+      data-diff-viewer-focus-line={
+        focused ? "true" : undefined
+      }
+    >
+      <span className={`diff-viewer-line-number ${line.kind}`}>
+        {line.oldLineNumber ?? ""}
+      </span>
+      <span className={`diff-viewer-line-number ${line.kind}`}>
+        {line.newLineNumber ?? ""}
+      </span>
+      <span className={`diff-viewer-change-marker ${line.kind}`}>
+        {marker}
+      </span>
+      <span className={`diff-viewer-code-cell ${line.kind}`}>
+        <code>
+          {highlightSearchHits(
+            line.text || " ",
+            hits
+          )}
+        </code>
+      </span>
     </div>
   );
 });
@@ -787,8 +769,7 @@ export function groupSearchHits(
 
 function highlightSearchHits(
   text: string,
-  hits: readonly DiffSearchHit[],
-  activeSearchHit: number
+  hits: readonly DiffSearchHit[]
 ): ReactNode {
   if (hits.length === 0) {
     return text;
@@ -802,9 +783,7 @@ function highlightSearchHits(
     }
     parts.push(
       <mark
-        className={`diff-viewer-search-hit${
-          hit.index === activeSearchHit ? " current" : ""
-        }`}
+        className="diff-viewer-search-hit"
         data-diff-viewer-search-hit={hit.index}
         key={`${hit.index}:${hit.start}`}
       >

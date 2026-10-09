@@ -4,6 +4,49 @@
   min-height: 0;
 }
 
+.changes-page-with-workflow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.changes-page-with-workflow > .changes-layout {
+  flex: 1;
+  height: auto;
+}
+
+.repository-workflow-toolbar,
+.repository-workflow-feedback,
+.repository-workflow-conflict {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.repository-workflow-feedback,
+.repository-workflow-conflicts {
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-medium);
+}
+
+.repository-workflow-conflicts {
+  max-height: 35%;
+  overflow: auto;
+}
+
+.repository-workflow-conflict {
+  margin-block: var(--space-2);
+}
+
+.repository-workflow-conflict code {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
 .changes-layout {
   display: grid;
   grid-template-columns: clamp(240px, 26%, 300px) minmax(0, 1fr);

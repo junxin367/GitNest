@@ -44,6 +44,7 @@ interface RemoteGraphLink {
 interface HttpEndpointIndex {
   exactByMethodAndShape: Map<string, CodeGraphNode[]>;
   suffixByMethodAndShape: Map<string, CodeGraphNode[]>;
+  methodsByRouteShape: Map<string, string[]>;
   orderById: Map<string, number>;
 }
 
@@ -58,6 +59,13 @@ interface DeclarationSymbolBucket {
   byLine: Map<number, CodeGraphNode>;
   sorted?: DeclarationSymbolEntry[];
 }
+
+type ReceiverMatcher = (
+  name: string,
+  receiver: string,
+  sourceNode: CodeGraphNode,
+  language: CodeGraphNode["language"]
+) => CodeGraphNode[];
 
 function lowerBoundDeclarationLine(
   entries: readonly DeclarationSymbolEntry[],
@@ -100,6 +108,7 @@ export function buildCodeGraph(input: {
   const nodeById = new Map<string, CodeGraphNode>();
   const edgeById = new Map<string, CodeGraphEdge>();
   const diagnostics: CodeAnalysisDiagnostic[] = [];
+  const diagnosticIds = new Set<string>();
   const symbolNodesByFile = new Map<
     string,
     Map<string, CodeGraphNode>
@@ -198,9 +207,10 @@ export function buildCodeGraph(input: {
       diagnostic.message,
       ...diagnostic.relatedNodeIds
     );
-    if (diagnostics.some((item) => item.id === id)) {
+    if (diagnosticIds.has(id)) {
       return;
     }
+    diagnosticIds.add(id);
     diagnostics.push({ id, ...diagnostic });
   };
 
@@ -791,12 +801,21 @@ export function buildCodeGraph(input: {
     }
   }
 
+  const receiverMatches = createReceiverMatcher(symbolsByName);
   callFileLoop: for (const parsed of input.files) {
     const perFile = symbolNodesByFile.get(
       parsed.file.canonicalPath
     );
     if (!perFile) {
       continue;
+    }
+    // Index the final per-file values after endpoint/RPC conversions and
+    // duplicate symbol identities have settled, preserving Map order.
+    const localSymbolsByName = new Map<string, CodeGraphNode[]>();
+    for (const node of perFile.values()) {
+      if (isCallableNode(node)) {
+        appendMapValue(localSymbolsByName, node.name, node);
+      }
     }
     for (const symbol of parsed.symbols) {
       const sourceNode = findSymbolNodeForDeclaration(
@@ -813,16 +832,18 @@ export function buildCodeGraph(input: {
           sourceNode,
           parsed,
           perFile,
+          localSymbolsByName,
           symbolsByName,
-          symbolsByLocation
+          symbolsByLocation,
+          receiverMatches
         );
         if (!resolution) {
           const diagnostic = unresolvedCallDiagnostic(
             call,
             sourceNode,
             parsed,
-            symbolsByName,
-            symbolsByLocation
+            symbolsByLocation,
+            receiverMatches
           );
           if (diagnostic) {
             addDiagnostic(diagnostic);
@@ -1056,7 +1077,7 @@ export function buildCodeGraph(input: {
         message: `未找到 ${request.name} 的服务端端点`,
         evidence: explainUnmatchedHttpRequest(
           request,
-          endpoints
+          endpointIndex
         ),
         nodeId: request.id,
         relatedNodeIds: []
@@ -1413,11 +1434,13 @@ function resolveCallTarget(
   sourceNode: CodeGraphNode,
   parsed: ParsedSourceFile,
   perFile: Map<string, CodeGraphNode>,
+  localSymbolsByName: ReadonlyMap<string, CodeGraphNode[]>,
   symbolsByName: Map<string, CodeGraphNode[]>,
   symbolsByLocation: Map<
     string,
     Array<{ line: number; node: CodeGraphNode }>
-  >
+  >,
+  receiverMatches: ReceiverMatcher
 ):
   | {
       node: CodeGraphNode;
@@ -1464,19 +1487,11 @@ function resolveCallTarget(
   }
   const { name, receiver } = call;
   if (receiver && call.receiverType) {
-    const typedCandidates = (
-      symbolsByName.get(name) ?? []
-    ).filter(
-      (candidate) =>
-        candidate.id !== sourceNode.id &&
-        isCallableNode(candidate) &&
-        languageFamily(candidate.language) ===
-          languageFamily(parsed.file.language)
-    );
-    const typedMatches = bestReceiverMatches(
+    const typedMatches = receiverMatches(
+      name,
       call.receiverType,
-      typedCandidates,
-      sourceNode
+      sourceNode,
+      parsed.file.language
     );
     if (typedMatches.length === 1) {
       return {
@@ -1510,11 +1525,8 @@ function resolveCallTarget(
     }
   }
 
-  const local = [...perFile.values()].filter(
-    (node) =>
-      node.name === name &&
-      isCallableNode(node) &&
-      node.id !== sourceNode.id
+  const local = (localSymbolsByName.get(name) ?? []).filter(
+    (node) => node.id !== sourceNode.id
   );
   if (
     local.length === 1 &&
@@ -1531,37 +1543,35 @@ function resolveCallTarget(
     };
   }
 
-  const candidates = (symbolsByName.get(name) ?? []).filter(
-    (candidate) =>
-      candidate.id !== sourceNode.id &&
-      isCallableNode(candidate)
-  );
-  const compatibleLanguage = candidates.filter(
-    (candidate) =>
-      languageFamily(candidate.language) ===
-      languageFamily(parsed.file.language)
-  );
   if (receiver) {
-    const receiverMatches = bestReceiverMatches(
+    const matches = receiverMatches(
+      name,
       receiver,
-      compatibleLanguage,
-      sourceNode
+      sourceNode,
+      parsed.file.language
     );
-    if (receiverMatches.length === 1) {
+    if (matches.length === 1) {
       return {
-        node: receiverMatches[0] as CodeGraphNode,
+        node: matches[0] as CodeGraphNode,
         confidence: "probable",
         source: call.source ?? "builtin",
         evidence: mergeEvidence(
           call.evidence,
           `接收者 ${receiver} 与所有者 ${symbolOwner(
-            receiverMatches[0] as CodeGraphNode
+            matches[0] as CodeGraphNode
           ) ?? "未知"} 唯一匹配`
         )
       };
     }
     return undefined;
   }
+  const compatibleLanguage = (symbolsByName.get(name) ?? []).filter(
+    (candidate) =>
+      candidate.id !== sourceNode.id &&
+      isCallableNode(candidate) &&
+      languageFamily(candidate.language) ===
+        languageFamily(parsed.file.language)
+  );
   if (compatibleLanguage.length === 1) {
     return {
       node: compatibleLanguage[0] as CodeGraphNode,
@@ -1660,11 +1670,11 @@ function unresolvedCallDiagnostic(
   call: ParsedCall,
   sourceNode: CodeGraphNode,
   parsed: ParsedSourceFile,
-  symbolsByName: ReadonlyMap<string, CodeGraphNode[]>,
   symbolsByLocation: ReadonlyMap<
     string,
     Array<{ line: number; node: CodeGraphNode }>
-  >
+  >,
+  receiverMatches: ReceiverMatcher
 ): Omit<CodeAnalysisDiagnostic, "id"> | undefined {
   if (call.targetCanonicalPath) {
     const relatedNodeIds = (
@@ -1688,19 +1698,11 @@ function unresolvedCallDiagnostic(
   if (!call.receiverType) {
     return undefined;
   }
-  const candidates = (
-    symbolsByName.get(call.name) ?? []
-  ).filter(
-    (candidate) =>
-      candidate.id !== sourceNode.id &&
-      isCallableNode(candidate) &&
-      languageFamily(candidate.language) ===
-        languageFamily(parsed.file.language)
-  );
-  const matches = bestReceiverMatches(
+  const matches = receiverMatches(
+    call.name,
     call.receiverType,
-    candidates,
-    sourceNode
+    sourceNode,
+    parsed.file.language
   );
   if (matches.length === 1) {
     return undefined;
@@ -1744,42 +1746,57 @@ function allowsLocalNameFallback(
   );
 }
 
-function bestReceiverMatches(
-  receiver: string,
-  candidates: CodeGraphNode[],
-  sourceNode: CodeGraphNode
-): CodeGraphNode[] {
-  const ranked = candidates
-    .map((candidate) => ({
-      candidate,
-      rank: receiverOwnerRank(receiver, symbolOwner(candidate))
-    }))
-    .filter(({ rank }) => rank > 0);
-  const bestRank = Math.max(
-    0,
-    ...ranked.map(({ rank }) => rank)
-  );
-  const ownerMatches = ranked
-    .filter(({ rank }) => rank === bestRank)
-    .map(({ candidate }) => candidate);
-  if (ownerMatches.length <= 1) {
-    return ownerMatches;
-  }
-  const sourceModule = sourceModulePath(sourceNode.location.path);
-  if (!sourceModule) {
-    return ownerMatches;
-  }
-  const localMatches = ownerMatches.filter(
-    (candidate) =>
-      candidate.location.repositoryId ===
-        sourceNode.location.repositoryId &&
-      candidate.location.worktreeId ===
-        sourceNode.location.worktreeId &&
-      sourceModulePath(candidate.location.path) === sourceModule
-  );
-  return localMatches.length > 0
-    ? localMatches
-    : ownerMatches;
+function createReceiverMatcher(
+  symbolsByName: ReadonlyMap<string, CodeGraphNode[]>
+): ReceiverMatcher {
+  const byName = new Map<
+    string,
+    Map<string, Map<string, CodeGraphNode[]>>
+  >();
+  return (name, receiver, sourceNode, language) => {
+    let byLanguage = byName.get(name);
+    if (!byLanguage) {
+      byLanguage = new Map();
+      for (const candidate of symbolsByName.get(name) ?? []) {
+        if (!isCallableNode(candidate)) {
+          continue;
+        }
+        const owner = symbolOwner(candidate);
+        if (!owner) {
+          continue;
+        }
+        const family = languageFamily(candidate.language);
+        const byOwner = byLanguage.get(family) ?? new Map<string, CodeGraphNode[]>();
+        appendMapValue(byOwner, normalizeSymbolName(owner), candidate);
+        byLanguage.set(family, byOwner);
+      }
+      byName.set(name, byLanguage);
+    }
+    const byOwner = byLanguage.get(languageFamily(language));
+    const normalizedReceiver = normalizeSymbolName(receiver);
+    let matches = (byOwner?.get(normalizedReceiver) ?? []).filter(
+      (candidate) => candidate.id !== sourceNode.id
+    );
+    if (matches.length === 0) {
+      matches = (byOwner?.get(`${normalizedReceiver}impl`) ?? []).filter(
+        (candidate) => candidate.id !== sourceNode.id
+      );
+    }
+    if (matches.length <= 1) {
+      return matches;
+    }
+    const sourceModule = sourceModulePath(sourceNode.location.path);
+    if (!sourceModule) {
+      return matches;
+    }
+    const localMatches = matches.filter(
+      (candidate) =>
+        candidate.location.repositoryId === sourceNode.location.repositoryId &&
+        candidate.location.worktreeId === sourceNode.location.worktreeId &&
+        sourceModulePath(candidate.location.path) === sourceModule
+    );
+    return localMatches.length > 0 ? localMatches : matches;
+  };
 }
 
 function sourceModulePath(path: string): string | undefined {
@@ -1790,24 +1807,6 @@ function sourceModulePath(path: string): string | undefined {
   return sourceDirectoryIndex > 0
     ? normalized.slice(0, sourceDirectoryIndex)
     : undefined;
-}
-
-function receiverOwnerRank(
-  receiver: string,
-  owner: string | undefined
-): number {
-  if (!owner) {
-    return 0;
-  }
-  const normalizedReceiver = normalizeSymbolName(receiver);
-  const normalizedOwner = normalizeSymbolName(owner);
-  if (normalizedReceiver === normalizedOwner) {
-    return 2;
-  }
-  return normalizedOwner.endsWith("impl") &&
-    normalizedReceiver === normalizedOwner.slice(0, -4)
-    ? 1
-    : 0;
 }
 
 function symbolOwner(
@@ -1858,16 +1857,17 @@ function closestSymbolAtLine(
   }>,
   targetLine: number
 ): CodeGraphNode | undefined {
-  return candidates
-    .map((candidate) => ({
-      ...candidate,
-      distance: Math.abs(candidate.line - targetLine)
-    }))
-    .filter((candidate) => candidate.distance <= 2)
-    .sort(
-      (left, right) =>
-        left.distance - right.distance
-    )[0]?.node;
+  let closest: CodeGraphNode | undefined;
+  let closestDistance = 3;
+  for (const candidate of candidates) {
+    const distance = Math.abs(candidate.line - targetLine);
+    // A strict comparison retains the original stable-sort tie order.
+    if (distance <= 2 && distance < closestDistance) {
+      closest = candidate.node;
+      closestDistance = distance;
+    }
+  }
+  return closest;
 }
 
 function routeMatchConfidence(
@@ -1955,6 +1955,7 @@ function buildHttpEndpointIndex(
     CodeGraphNode[]
   >();
   const orderById = new Map<string, number>();
+  const methodsByRouteShape = new Map<string, string[]>();
   for (let index = 0; index < endpoints.length; index += 1) {
     const endpoint = endpoints[index];
     if (!endpoint) {
@@ -1962,8 +1963,15 @@ function buildHttpEndpointIndex(
     }
     orderById.set(endpoint.id, index);
     const method = String(endpoint.metadata.httpMethod ?? "");
+    const route = routeShape(String(endpoint.metadata.route ?? ""));
+    const diagnosticMethod = String(endpoint.metadata.httpMethod ?? "ANY");
+    const methods = methodsByRouteShape.get(route) ?? [];
+    if (!methods.includes(diagnosticMethod)) {
+      methods.push(diagnosticMethod);
+    }
+    methodsByRouteShape.set(route, methods);
     const segments = routeSegments(
-      routeShape(String(endpoint.metadata.route ?? ""))
+      route
     );
     const shape = segments.join("/");
     appendMapValue(
@@ -1989,6 +1997,7 @@ function buildHttpEndpointIndex(
   return {
     exactByMethodAndShape,
     suffixByMethodAndShape,
+    methodsByRouteShape,
     orderById
   };
 }
@@ -2288,7 +2297,7 @@ function httpMatchEvidence(
 
 function explainUnmatchedHttpRequest(
   request: CodeGraphNode,
-  endpoints: readonly CodeGraphNode[]
+  index: HttpEndpointIndex
 ): string {
   const requestMethod = String(
     request.metadata.httpMethod ?? ""
@@ -2296,17 +2305,8 @@ function explainUnmatchedHttpRequest(
   const requestShape = routeShape(
     String(request.metadata.route ?? "")
   );
-  const routeMatches = endpoints.filter(
-    (endpoint) =>
-      routeShape(String(endpoint.metadata.route ?? "")) ===
-      requestShape
-  );
-  if (routeMatches.length > 0) {
-    const methods = unique(
-      routeMatches.map((endpoint) =>
-        String(endpoint.metadata.httpMethod ?? "ANY")
-      )
-    );
+  const methods = index.methodsByRouteShape.get(requestShape);
+  if (methods && methods.length > 0) {
     return `规范化路由 ${requestShape} 存在端点，但方法不兼容：请求为 ${requestMethod}，候选为 ${methods.join(
       "、"
     )}。`;

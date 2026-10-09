@@ -73,6 +73,15 @@ describe("readBoundedSourceFile", () => {
     ).rejects.toThrow("changed after discovery");
   });
 
+  it("does not open a source when cancellation already occurred", async () => {
+    const file = await createSourceFile("export const value = 1;");
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled by test"));
+    await expect(
+      readBoundedSourceFile(file, file.size, controller.signal)
+    ).rejects.toThrow("cancelled by test");
+  });
+
   async function createSourceFile(
     content: string
   ): Promise<AnalysisSourceFile> {

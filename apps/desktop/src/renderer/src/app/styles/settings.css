@@ -2,14 +2,27 @@
   padding-bottom: var(--space-7);
 }
 
+.application-settings-skeleton,
+.application-settings-skeleton > .gn-auto-skeleton-content {
+  height: 100%;
+}
+
 .application-settings-page {
   width: 100%;
   min-width: 0;
 }
 
-.application-settings-page .page-heading {
-  align-items: center;
-  margin-bottom: var(--space-6);
+.settings-sidebar {
+  position: sticky;
+  top: 0;
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.settings-sidebar .page-heading {
+  align-items: flex-start;
+  margin: 0;
 }
 
 .settings-layout {
@@ -20,38 +33,10 @@
 }
 
 .settings-nav {
-  position: sticky;
-  top: var(--space-4);
   display: grid;
   align-content: start;
   gap: 2px;
   padding: var(--space-2);
-}
-
-.settings-nav-skeleton {
-  align-content: start;
-  gap: var(--space-1);
-}
-
-.settings-nav-skeleton > .gn-skeleton {
-  margin: var(--space-2) var(--space-3);
-}
-
-.settings-nav-skeleton-row {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-3);
-  min-height: 48px;
-  padding: var(--space-2) var(--space-3);
-}
-
-.settings-skeleton-control {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-4);
-  min-height: 48px;
 }
 
 .settings-nav-label {

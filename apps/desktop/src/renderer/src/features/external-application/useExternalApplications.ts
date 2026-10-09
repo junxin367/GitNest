@@ -3,7 +3,8 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState
+  useState,
+  useSyncExternalStore
 } from "react";
 
 import type {
@@ -19,6 +20,9 @@ import {
   rendererPreferenceKeys,
   writeRendererPreference
 } from "../../shared/lib/renderer-preferences";
+import { getExternalApplicationCatalog } from "./externalApplicationCatalog";
+
+const EMPTY_PROFILES: ExternalApplicationProfileDto[] = [];
 
 const APPLICATION_PRIORITY: ExternalApplicationKindDto[] = [
   "vscode",
@@ -89,19 +93,17 @@ export function useExternalApplications(
   );
   const currentScopeRef = useRef<typeof scope | null>(scope);
   currentScopeRef.current = scope;
-  const [profiles, setProfiles] = useState<
-    ExternalApplicationProfileDto[]
-  >([]);
+  const catalog = getExternalApplicationCatalog(window.gitnest.system);
+  const applicationState = useSyncExternalStore(catalog.subscribe, catalog.getSnapshot);
+  const profiles = applicationState.profiles ?? EMPTY_PROFILES;
   const [preferredKind, setPreferredKind] = useState<
     ExternalApplicationKindDto | undefined
   >(readPreferredApplication);
-  const [loading, setLoading] = useState(true);
   const [active, setActive] =
     useState<ExternalApplicationKindDto | null>(null);
   const [error, setError] =
     useState<GitReadErrorDto | null>(null);
   const generation = useRef(0);
-  const reloadSequence = useRef(0);
   const inFlight = useRef(false);
 
   useEffect(() => {
@@ -133,37 +135,9 @@ export function useExternalApplications(
     if (!stableContext || currentScopeRef.current !== scope) {
       return;
     }
-    const requestGeneration = generation.current;
-    const requestSequence = ++reloadSequence.current;
-    const isCurrent = () =>
-      requestGeneration === generation.current &&
-      currentScopeRef.current === scope &&
-      requestSequence === reloadSequence.current;
-    setLoading(true);
-    try {
-      const result =
-        await window.gitnest.system.listExternalApplications();
-      if (!isCurrent()) {
-        return;
-      }
-      if (result.ok) {
-        setProfiles(result.value);
-        setError(null);
-      } else {
-        setProfiles([]);
-        setError(result.error);
-      }
-    } catch (reason) {
-      if (isCurrent()) {
-        setProfiles([]);
-        setError(unexpectedExternalApplicationError(reason));
-      }
-    } finally {
-      if (isCurrent()) {
-        setLoading(false);
-      }
-    }
-  }, [scope, stableContext]);
+    setError(null);
+    await catalog.reload();
+  }, [catalog, scope, stableContext]);
 
   useEffect(() => {
     currentScopeRef.current = scope;
@@ -171,11 +145,8 @@ export function useExternalApplications(
     inFlight.current = false;
     setActive(null);
     setError(null);
-    if (!stableContext) {
-      setProfiles([]);
-      setLoading(false);
-    } else {
-      void reload();
+    if (stableContext || workspaceId) {
+      void catalog.ensureLoaded();
     }
     return () => {
       generation.current += 1;
@@ -183,7 +154,7 @@ export function useExternalApplications(
         currentScopeRef.current = null;
       }
     };
-  }, [scope, reload, stableContext]);
+  }, [catalog, scope, stableContext, workspaceId]);
 
   const openWithContext = useCallback(
     async (
@@ -269,7 +240,8 @@ export function useExternalApplications(
 
   const clearError = useCallback(() => {
     setError(null);
-  }, []);
+    catalog.clearError();
+  }, [catalog]);
 
   return {
     profiles,
@@ -277,9 +249,10 @@ export function useExternalApplications(
       profiles,
       preferredKind
     ),
-    loading,
+    loading: applicationState.loading ||
+      (applicationState.profiles === null && applicationState.error === null),
     active,
-    error,
+    error: error ?? (stableContext ? applicationState.error : null),
     reload,
     open,
     openFile,

@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useRef,
@@ -49,10 +50,7 @@ import { Button } from "../../shared/ui/Button";
 import { Icon, type IconName } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import { Select } from "../../shared/ui/Select";
-import {
-  Skeleton,
-  SkeletonBoundary
-} from "../../shared/ui/Skeleton";
+import { SkeletonBoundary } from "../../shared/ui/Skeleton";
 import { Textarea } from "../../shared/ui/Textarea";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import { SettingsPage as AccountAuthSettings } from "./SettingsPage";
@@ -220,7 +218,7 @@ const LANGUAGE_SERVER_CONFIGURATIONS = [
 type LanguageServerId =
   (typeof LANGUAGE_SERVER_CONFIGURATIONS)[number]["id"];
 
-export function ApplicationSettingsPage({
+export const ApplicationSettingsPage = memo(function ApplicationSettingsPage({
   gitEnvironment,
   terminalProfiles,
   appSettings,
@@ -815,13 +813,12 @@ export function ApplicationSettingsPage({
 
   return (
     <SkeletonBoundary
-      fallback={<ApplicationSettingsSkeleton />}
       hasContent={appSettings.loaded}
       label="正在读取应用设置"
       loading={appSettings.loading}
-      surfaceClassName="page-scroll settings-page-scroll gn-page-skeleton application-settings-skeleton"
+      surfaceClassName="application-settings-skeleton"
     >
-      {!appSettings.loaded ? (
+      {!appSettings.loaded && !appSettings.loading ? (
         <div className="page-scroll settings-page-scroll">
           <section className="page-heading">
             <div>
@@ -855,17 +852,8 @@ export function ApplicationSettingsPage({
         ref={settingsScrollRef}
       >
         <div className="application-settings-page">
-        <section className="page-heading">
-          <div>
-            <h1>设置</h1>
-            <p>
-              管理应用行为、AI、代码分析、Git 同步策略以及系统认证。
-            </p>
-          </div>
-        </section>
-
         <ToastViewport>
-          {(appSettings.error || appSettings.notice) && (
+          {appSettings.loaded && (appSettings.error || appSettings.notice) && (
             <Toast
               closeLabel="关闭设置提示"
               icon={appSettings.error ? "warning" : "check"}
@@ -902,82 +890,92 @@ export function ApplicationSettingsPage({
         </ToastViewport>
 
         <div className="settings-layout">
-          <nav
-            aria-label="设置分组"
-            className="panel settings-nav"
-          >
-            <div className="settings-nav-label">GitNest</div>
-            {SETTINGS_SECTIONS.map((item) => {
-              const active = section === item.id;
-              return (
-                <div
-                  className={`settings-nav-group${
-                    active ? " is-active" : ""
-                  }`}
-                  key={item.id}
-                >
-                  <button
-                    aria-controls={`settings-subnav-${item.id}`}
-                    aria-current={active ? "page" : undefined}
-                    aria-expanded={active}
-                    className={`settings-nav-item${
-                      active ? " active" : ""
+          <aside className="settings-sidebar">
+            <header className="page-heading">
+              <div>
+                <h1>设置</h1>
+                <p>
+                  管理应用行为、AI、代码分析、Git 同步策略以及系统认证。
+                </p>
+              </div>
+            </header>
+            <nav
+              aria-label="设置分组"
+              className="panel settings-nav"
+            >
+              <div className="settings-nav-label">GitNest</div>
+              {SETTINGS_SECTIONS.map((item) => {
+                const active = section === item.id;
+                return (
+                  <div
+                    className={`settings-nav-group${
+                      active ? " is-active" : ""
                     }`}
-                    onClick={() =>
-                      selectSettingsSection(item.id)
-                    }
-                    type="button"
+                    key={item.id}
                   >
-                    <Icon name={item.icon} size={16} />
-                    <span className="settings-nav-item-copy">
-                      <span className="settings-nav-item-title">
-                        {item.label}
-                      </span>
-                      <span className="settings-nav-item-subtitle">
-                        {item.subtitle}
-                      </span>
-                    </span>
-                    <span
-                      aria-hidden="true"
-                      className="settings-nav-item-chevron"
+                    <button
+                      aria-controls={`settings-subnav-${item.id}`}
+                      aria-current={active ? "page" : undefined}
+                      aria-expanded={active}
+                      className={`settings-nav-item${
+                        active ? " active" : ""
+                      }`}
+                      onClick={() =>
+                        selectSettingsSection(item.id)
+                      }
+                      type="button"
                     >
-                      <Icon name="chevron" size={14} />
-                    </span>
-                  </button>
-                  {active && (
-                    <div
-                      aria-label={`${item.label}卡片`}
-                      className="settings-nav-subnav"
-                      id={`settings-subnav-${item.id}`}
-                      role="group"
-                    >
-                      {item.cards.map((card) => (
-                        <button
-                          aria-current={
-                            settingsCard === card.id
-                              ? "location"
-                              : undefined
-                          }
-                          className={`settings-nav-subitem${
-                            settingsCard === card.id
-                              ? " active"
-                              : ""
-                          }`}
-                          key={card.id}
-                          onClick={() =>
-                            selectSettingsCard(card.id)
-                          }
-                          type="button"
-                        >
-                          {card.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </nav>
+                      <Icon name={item.icon} size={16} />
+                      <span className="settings-nav-item-copy">
+                        <span className="settings-nav-item-title">
+                          {item.label}
+                        </span>
+                        <span className="settings-nav-item-subtitle">
+                          {item.subtitle}
+                        </span>
+                      </span>
+                      <span
+                        aria-hidden="true"
+                        className="settings-nav-item-chevron"
+                      >
+                        <Icon name="chevron" size={14} />
+                      </span>
+                    </button>
+                    {active && (
+                      <div
+                        aria-label={`${item.label}卡片`}
+                        className="settings-nav-subnav"
+                        id={`settings-subnav-${item.id}`}
+                        role="group"
+                      >
+                        {item.cards.map((card) => (
+                          <button
+                            aria-current={
+                              settingsCard === card.id
+                                ? "location"
+                                : undefined
+                            }
+                            className={`settings-nav-subitem${
+                              settingsCard === card.id
+                                ? " active"
+                                : ""
+                            }`}
+                            key={card.id}
+                            onClick={() =>
+                              selectSettingsCard(card.id)
+                            }
+                            type="button"
+                          >
+                            {card.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </nav>
+          </aside>
 
           <section
             aria-live="polite"
@@ -1952,7 +1950,7 @@ export function ApplicationSettingsPage({
                   </div>
                 </SettingsCard>
 
-                <McpRegistrationPanel />
+                <McpRegistrationPanel enabled={appSettings.loaded} />
               </>
             )}
 
@@ -1972,59 +1970,7 @@ export function ApplicationSettingsPage({
       )}
     </SkeletonBoundary>
   );
-}
-
-function ApplicationSettingsSkeleton() {
-  return (
-    <div className="application-settings-page">
-      <div className="gn-skeleton-heading">
-        <Skeleton />
-        <Skeleton />
-        <Skeleton />
-      </div>
-      <div className="settings-layout">
-        <div className="panel settings-nav settings-nav-skeleton">
-          <Skeleton height={10} variant="text" width="36%" />
-          {Array.from({ length: 4 }, (_, index) => (
-            <div className="settings-nav-skeleton-row" key={index}>
-              <Skeleton height={18} variant="circle" width={18} />
-              <div className="gn-skeleton-row-copy">
-                <Skeleton height={10} />
-                <Skeleton height={8} variant="text" />
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="settings-content">
-          {Array.from({ length: 3 }, (_, index) => (
-            <div className="gn-skeleton-panel" key={index}>
-              <div className="gn-skeleton-panel-header">
-                <div className="gn-skeleton-row-copy">
-                  <Skeleton height={12} />
-                  <Skeleton height={9} variant="text" />
-                </div>
-              </div>
-              <div className="gn-skeleton-panel-body">
-                {Array.from({ length: 3 }, (_, rowIndex) => (
-                  <div
-                    className="settings-skeleton-control"
-                    key={rowIndex}
-                  >
-                    <div className="gn-skeleton-row-copy">
-                      <Skeleton height={10} />
-                      <Skeleton height={8} variant="text" />
-                    </div>
-                    <Skeleton height={32} width={96} />
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
+});
 
 function LanguageServerSettingsPanel({
   settings,
@@ -2579,7 +2525,7 @@ function formatAiSettingsError(
   return error.message;
 }
 
-function McpRegistrationPanel() {
+function McpRegistrationPanel({ enabled }: { enabled: boolean }) {
   const [status, setStatus] = useState<McpRegistrationStatusDto | null>(
     null
   );
@@ -2639,8 +2585,8 @@ function McpRegistrationPanel() {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (enabled) void load();
+  }, [enabled, load]);
 
   const toggle = async (registered: boolean) => {
     setBusy(true);
@@ -2710,7 +2656,7 @@ function McpRegistrationPanel() {
   return (
     <>
       <ToastViewport>
-        {feedback && (
+        {enabled && feedback && (
           <Toast
             closeLabel="关闭 MCP 注册提示"
             key="mcp-registration-feedback"

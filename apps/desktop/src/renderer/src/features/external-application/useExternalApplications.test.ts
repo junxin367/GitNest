@@ -158,6 +158,59 @@ describe("useExternalApplications interaction state", () => {
     expect(controllers[0]!.preferredProfile?.kind).toBe("git-bash");
   });
 
+  it("shares discovery across entry points and retains profiles when repository menus close or switch targets", async () => {
+    const discovery = deferred<unknown>();
+    listApplications.mockReturnValueOnce(discovery.promise);
+    const renderPair = async (context: Parameters<typeof useExternalApplications>[0]) => {
+      await act(async () => root.render(React.createElement(React.Fragment, null,
+        React.createElement(Harness, { context: { scope: "workspace" }, slot: 0 }),
+        React.createElement(Harness, { context, slot: 1 })
+      )));
+    };
+    await renderPair(repositoryContext);
+    expect(listApplications).toHaveBeenCalledTimes(1);
+    await act(async () => discovery.resolve({ ok: true, value: PROFILES }));
+    expect(controllers[0]!.profiles).toBe(controllers[1]!.profiles);
+    await renderPair(undefined);
+    expect(controllers[1]!.profiles).toEqual(PROFILES);
+    await renderPair({
+      scope: "repository",
+      target: { repositoryId: "other", worktreeId: "other-tree" }
+    });
+    expect(controllers[1]!.loading).toBe(false);
+    expect(controllers[1]!.profiles).toEqual(PROFILES);
+    expect(listApplications).toHaveBeenCalledTimes(1);
+    await act(async () => { await controllers[1]!.open("cursor"); });
+    expect(openApplication).toHaveBeenLastCalledWith({
+      context: { scope: "repository", target: { repositoryId: "other", worktreeId: "other-tree" } },
+      kind: "cursor"
+    });
+    const refreshed = [{ kind: "vscode", label: "VS Code" }];
+    listApplications.mockResolvedValueOnce({ ok: true, value: refreshed });
+    await act(async () => { await controllers[0]!.reload(); });
+    expect(controllers.map(controller => controller.profiles)).toEqual([refreshed, refreshed]);
+  });
+
+  it("keeps cached applications during a failed refresh and refreshes stale discovery in the background", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    await renderContext();
+    clock.mockReturnValue(31_000);
+    const refresh = deferred<unknown>();
+    listApplications.mockReturnValueOnce(refresh.promise);
+    await renderContext({
+      scope: "repository", target: { repositoryId: "other", worktreeId: "other" }
+    });
+    expect(listApplications).toHaveBeenCalledTimes(2);
+    expect(controllers[0]!.profiles).toEqual(PROFILES);
+    expect(controllers[0]!.loading).toBe(true);
+    await act(async () => refresh.resolve({
+      ok: false, error: { code: "COMMAND_FAILED", message: "Discovery unavailable", details: {} }
+    }));
+    expect(controllers[0]!.profiles).toEqual(PROFILES);
+    expect(controllers[0]!.loading).toBe(false);
+    expect(controllers[0]!.error?.message).toBe("Discovery unavailable");
+  });
+
   it.each(["directory", "file"] as const)(
     "blocks a same-tick second %s launch and permits retry after failure",
     async (secondKind) => {

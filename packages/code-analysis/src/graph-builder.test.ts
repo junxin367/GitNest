@@ -12,6 +12,91 @@ import type {
 import { parseSourceFile } from "./source-parser";
 
 describe("buildCodeGraph request chains", () => {
+  it("ranks exact receiver owners before local Impl candidates and excludes self", () => {
+    const caller = parseSourceFile(sourceFile("local/src/Caller.java", "java"), "");
+    caller.symbols = [{
+      name: "load", qualifiedName: "Service.load", kind: "method",
+      line: 1, endLine: 3, source: "builtin",
+      calls: [{name: "load", receiver: "service", receiverType: "Service", line: 2}]
+    }];
+    const localImpl = parseSourceFile(sourceFile("local/src/ServiceImpl.java", "java"), "");
+    localImpl.symbols = [{
+      name: "load", qualifiedName: "ServiceImpl.load", kind: "method",
+      line: 1, endLine: 3, source: "builtin", calls: []
+    }];
+    const exact = parseSourceFile(sourceFile("remote/src/Service.java", "java"), "");
+    exact.symbols = [{
+      name: "load", qualifiedName: "Service.load", kind: "method",
+      line: 1, endLine: 3, source: "builtin", calls: []
+    }];
+    for (const [files, targetPath] of [
+      [[caller, localImpl], "local/src/ServiceImpl.java"],
+      [[caller, localImpl, exact], "remote/src/Service.java"]
+    ] as const) {
+      const graph = buildCodeGraph({
+        files: [...files], scope: "workspace", graphDepth: 3
+      });
+      const call = graph.edges.find((edge) => edge.kind === "calls");
+      expect(graph.nodes.find((node) => node.id === call?.to)?.location.path)
+        .toBe(targetPath);
+      expect(call?.confidence).toBe("probable");
+    }
+  });
+
+  it("preserves exact diagnostic route shapes and first-seen method order", () => {
+    const parsed = parseSourceFile(sourceFile("routes.ts", "typescript"), "");
+    parsed.clientRequests = [{
+      method: "POST", route: "/API//users/", rawRoute: "/API//users/", line: 1
+    }];
+    parsed.serverEndpoints = [
+      ["PUT", "/api//users/"],
+      ["GET", "/api//users/"],
+      ["DELETE", "/api/users"],
+      ["PUT", "/api//users/"]
+    ].map(([method, route], index) => ({
+      method: method!, route: route!, rawRoute: route!,
+      line: index + 10, annotation: "mapping"
+    }));
+    const graph = buildCodeGraph({
+      files: [parsed], scope: "workspace", graphDepth: 3
+    });
+    expect(graph.requestChains).toHaveLength(0);
+    expect(graph.diagnostics).toHaveLength(1);
+    expect(graph.diagnostics[0]?.evidence).toBe(
+      "规范化路由 /api//users/ 存在端点，但方法不兼容：请求为 POST，候选为 PUT、GET。"
+    );
+  });
+
+  it("keeps the first LSP candidate when target distances tie", () => {
+    const parsed = parseSourceFile(sourceFile("locations.ts", "typescript"), "");
+    parsed.symbols = [
+      {
+        name: "target", qualifiedName: "Upper.target", kind: "method",
+        line: 12, endLine: 12, source: "lsp", calls: []
+      },
+      {
+        name: "target", qualifiedName: "Lower.target", kind: "method",
+        line: 10, endLine: 10, source: "lsp", calls: []
+      },
+      {
+        name: "caller", qualifiedName: "caller", kind: "function",
+        line: 20, endLine: 22, source: "lsp",
+        calls: [{
+          name: "target", line: 21,
+          targetCanonicalPath: parsed.file.canonicalPath,
+          targetLine: 11, source: "lsp"
+        }]
+      }
+    ];
+    const graph = buildCodeGraph({
+      files: [parsed], scope: "workspace", graphDepth: 3
+    });
+    const call = graph.edges.find((edge) => edge.kind === "calls");
+    expect(graph.nodes.find((node) => node.id === call?.to)?.qualifiedName)
+      .toBe("Upper.target");
+    expect(call?.confidence).toBe("exact");
+  });
+
   it("keeps every route and HTTP method mapped to a shared handler", () => {
     const controller = parseSourceFile(
       sourceFile("Controller.java", "java"),

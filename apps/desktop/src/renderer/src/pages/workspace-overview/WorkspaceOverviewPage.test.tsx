@@ -168,6 +168,223 @@ describe("Workspace overview interactions", () => {
     expect(recentBody?.hasAttribute("hidden")).toBe(true);
   });
 
+  it("retains status rows without rereading snapshots when either panel toggles or stable parent props render", () => {
+    const branch = vi.fn(() => "main");
+    const snapshot = createSnapshot("repository-a", "worktree-a");
+    Object.defineProperty(snapshot, "branch", { get: branch });
+    const props = {
+      workspace: createWorktreeWorkspace(),
+      snapshots: [snapshot],
+      busy: false,
+      error: null,
+      notice: null,
+      operation: null,
+      onClearFeedback: () => undefined,
+      onCreateWorkspace: async () => false,
+      onSelectTarget: vi.fn()
+    };
+    act(() => root.render(<WorkspaceOverviewPage {...props} />));
+    const rows = [...container.querySelectorAll(".repository-status-item")];
+    const distribution = container.querySelector(".workspace-branch-distribution");
+    branch.mockClear();
+
+    for (const id of ["repository-status", "recent-commits"]) {
+      const header = container.querySelector<HTMLButtonElement>(
+        `[aria-controls="workspace-overview-${id}"]`
+      )!;
+      const body = container.querySelector<HTMLElement>(
+        `#workspace-overview-${id}`
+      )!;
+      act(() => header.click());
+      expect(body.hidden).toBe(true);
+      expect(body.getAttribute("aria-hidden")).toBe("true");
+      act(() => header.click());
+      expect(body.hidden).toBe(false);
+      expect(header.getAttribute("aria-expanded")).toBe("true");
+    }
+    act(() => root.render(<WorkspaceOverviewPage {...props} />));
+
+    expect(branch).not.toHaveBeenCalled();
+    expect([...container.querySelectorAll(".repository-status-item")]).toEqual(rows);
+    expect(container.querySelector(".workspace-branch-distribution")).toBe(distribution);
+    act(() => container.querySelector<HTMLButtonElement>(
+      '.repository-status-row[aria-label^="Repository A，"]'
+    )!.click());
+    expect(props.onSelectTarget).toHaveBeenCalledWith({
+      repositoryId: "repository-a",
+      worktreeId: "worktree-a"
+    });
+  });
+
+  it("refreshes hidden panel contents and selection handlers before reopening", () => {
+    const workspace = createWorktreeWorkspace();
+    const originalSelect = vi.fn();
+    const updatedSelect = vi.fn();
+    const props = {
+      workspace,
+      snapshots: [createSnapshot("repository-a", "worktree-a")],
+      busy: false,
+      error: null,
+      notice: null,
+      operation: null,
+      onClearFeedback: () => undefined,
+      onCreateWorkspace: async () => false,
+      onSelectTarget: originalSelect
+    };
+    act(() => root.render(<WorkspaceOverviewPage {...props} />));
+    const repositoryHeader = container.querySelector<HTMLButtonElement>(
+      '[aria-controls="workspace-overview-repository-status"]'
+    )!;
+    const recentHeader = container.querySelector<HTMLButtonElement>(
+      '[aria-controls="workspace-overview-recent-commits"]'
+    )!;
+    act(() => {
+      repositoryHeader.click();
+      recentHeader.click();
+    });
+    act(() => root.render(
+      <WorkspaceOverviewPage
+        {...props}
+        workspace={{
+          ...workspace,
+          selectedTarget: { repositoryId: "repository-a", worktreeId: "worktree-a" }
+        }}
+        snapshots={[createSnapshot("repository-a", "worktree-a", {
+          branch: "feature/new",
+          unstaged: 3,
+          head: "newhead123",
+          refreshedAt: "2026-10-06T00:00:00.000Z"
+        })]}
+        onSelectTarget={updatedSelect}
+      />
+    ));
+    const repositoryBody = container.querySelector<HTMLElement>(
+      "#workspace-overview-repository-status"
+    )!;
+    const recentBody = container.querySelector<HTMLElement>(
+      "#workspace-overview-recent-commits"
+    )!;
+    expect(repositoryBody.hidden).toBe(true);
+    expect(recentBody.hidden).toBe(true);
+    expect(repositoryBody.textContent).toContain("feature/new");
+    expect(repositoryBody.textContent).toContain("3 变更");
+    expect(recentBody.textContent).toContain("newhead");
+    expect(container.querySelector(".workspace-branch-distribution")?.textContent)
+      .toContain("feature/new");
+    act(() => {
+      repositoryHeader.click();
+      recentHeader.click();
+    });
+    const selected = repositoryBody.querySelector<HTMLButtonElement>(
+      'button[aria-current="true"]'
+    )!;
+    act(() => selected.click());
+    expect(updatedSelect).toHaveBeenCalledWith({
+      repositoryId: "repository-a", worktreeId: "worktree-a"
+    });
+    expect(originalSelect).not.toHaveBeenCalled();
+  });
+
+  it("preserves focused row identity across large-list threshold and order changes", () => {
+    const workspace = createWorkspaceWithTargetCount(51);
+    const props = {
+      workspace,
+      snapshots: [],
+      busy: false,
+      error: null,
+      notice: null,
+      operation: null,
+      onClearFeedback: () => undefined,
+      onCreateWorkspace: async () => false,
+      onSelectTarget: vi.fn()
+    };
+    act(() => root.render(<WorkspaceOverviewPage {...props} />));
+    const row = container.querySelector<HTMLButtonElement>(
+      '.repository-status-row[aria-label^="Repository 51，"]'
+    )!;
+    row.focus();
+    act(() => root.render(
+      <WorkspaceOverviewPage
+        {...props}
+        workspace={{
+          ...workspace,
+          groups: [{
+            ...workspace.groups[0]!,
+            targets: workspace.groups[0]!.targets.slice(1)
+          }],
+          worktrees: workspace.worktrees.map((worktree) =>
+            worktree.id === "worktree-51"
+              ? { ...worktree, name: "A moved repository" }
+              : worktree
+          )
+        }}
+      />
+    ));
+    expect(document.activeElement).toBe(row);
+    expect(row.isConnected).toBe(true);
+    expect(container.querySelector(".repository-status-item button")).toBe(row);
+    expect(container.querySelectorAll('[role="listitem"]')).toHaveLength(50);
+    act(() => row.click());
+    expect(props.onSelectTarget).toHaveBeenCalledWith({
+      repositoryId: "repository-51", worktreeId: "worktree-51"
+    });
+  });
+
+  it("keeps the first duplicate target details and snapshot without quadratic resolution", () => {
+    const workspace = createWorkspaceWithTargetCount(60);
+    const repositoryIdRead = vi.fn();
+    const worktreeIdRead = vi.fn();
+    for (const repository of workspace.repositories) {
+      const id = repository.id;
+      Object.defineProperty(repository, "id", {
+        get: () => { repositoryIdRead(); return id; }
+      });
+    }
+    for (const worktree of workspace.worktrees) {
+      const id = worktree.id;
+      Object.defineProperty(worktree, "id", {
+        get: () => { worktreeIdRead(); return id; }
+      });
+    }
+    workspace.repositories.push({
+      ...workspace.repositories[0]!, name: "Duplicate repository"
+    });
+    workspace.worktrees.push({
+      ...workspace.worktrees[0]!, name: "Duplicate worktree",
+      canonicalPath: "c:\\wrong"
+    });
+    workspace.groups[0]!.targets.push({
+      repositoryId: "missing", worktreeId: "missing"
+    });
+    repositoryIdRead.mockClear();
+    worktreeIdRead.mockClear();
+    act(() => root.render(
+      <WorkspaceOverviewPage
+        workspace={workspace}
+        snapshots={[
+          createSnapshot("repository-1", "worktree-1", { branch: "first" }),
+          createSnapshot("repository-1", "worktree-1", { branch: "second" })
+        ]}
+        busy={false}
+        error={null}
+        notice={null}
+        operation={null}
+        onClearFeedback={() => undefined}
+        onCreateWorkspace={async () => false}
+        onSelectTarget={() => undefined}
+      />
+    ));
+    expect(container.querySelector(
+      '.repository-status-row[aria-label^="Repository 1，分支 first，"]'
+    )).not.toBeNull();
+    expect(container.querySelector(".repository-status-table")?.textContent)
+      .not.toContain("Duplicate");
+    expect(container.querySelector(".repository-status-table")?.textContent)
+      .toContain("未知仓库");
+    expect(repositoryIdRead.mock.calls.length).toBeLessThanOrEqual(120);
+    expect(worktreeIdRead.mock.calls.length).toBeLessThanOrEqual(120);
+  });
+
   it("reuses history by target identity and HEAD while refreshing only changed targets", async () => {
     const getHistory = vi.fn(async () => ({
       ok: true,
@@ -1394,6 +1611,87 @@ describe("Workspace overview interactions", () => {
       "不符合安全条件的项会保留"
     );
     expect(container.textContent).toContain("状态未就绪");
+  });
+
+  it("refreshes cross-repository deletion eligibility when snapshot readiness changes", () => {
+    const workspace = createMultiRepositoryWorkspace();
+    workspace.worktrees = workspace.worktrees.map((worktree) => ({
+      ...worktree,
+      isPrimary: false
+    }));
+    const render = (overrides: Partial<RepositoryStatusSnapshotDto> = {}) => {
+      act(() => root.render(
+        <WorkspaceCollectionPage busy={false} commands={workspacePruneCommands}
+          loading={false} onCreateWorkspace={async () => false}
+          onSelectTarget={() => undefined} tab="worktrees" workspace={workspace}
+          snapshots={[
+            createSnapshot("repository-a", "worktree-a", overrides),
+            createSnapshot("repository-b", "worktree-b", { unstaged: 1 })
+          ]} />
+      ));
+    };
+    render();
+    const linkedChip = [...container.querySelectorAll<HTMLButtonElement>(
+      ".worktree-filter-chip"
+    )].find((button) => button.textContent?.trim() === "已登记2");
+    act(() => linkedChip?.click());
+    const deleteButton = () => container.querySelector<HTMLButtonElement>(
+      '[aria-label="删除筛选中的 Worktree"]'
+    );
+    expect(deleteButton()?.disabled).toBe(false);
+
+    for (const overrides of [
+      { stale: true },
+      { refreshPending: true },
+      { operationState: "rebase" as const },
+      { error: { code: "COMMAND_FAILED" as const, message: "Refresh failed", details: {} } }
+    ]) {
+      render(overrides);
+      expect(deleteButton()?.disabled).toBe(true);
+      expect(container.querySelector(".worktree-summary-card")?.getAttribute("aria-label"))
+        .toContain("状态未就绪");
+      render();
+      expect(deleteButton()?.disabled).toBe(false);
+    }
+    act(() => deleteButton()?.click());
+    expect(workspacePruneCommands.request).toHaveBeenLastCalledWith([
+      { type: "remove", worktreeId: "worktree-a" }
+    ]);
+    render({ unstaged: 2 });
+    expect(deleteButton()?.disabled).toBe(true);
+    expect(container.querySelector(".worktree-change-count")?.textContent)
+      .toBe("2 项变更");
+  });
+
+  it("uses the refreshed navigation callback on retained cross-repository cards", () => {
+    const workspace = createMultiRepositoryWorkspace();
+    const snapshots = [
+      createSnapshot("repository-a", "worktree-a"),
+      createSnapshot("repository-b", "worktree-b")
+    ];
+    const firstSelect = vi.fn();
+    const latestSelect = vi.fn();
+    const render = (onSelectTarget: (target: RepositoryTargetDto) => void) => {
+      act(() => root.render(
+        <WorkspaceCollectionPage busy={false} commands={workspacePruneCommands}
+          loading={false} onCreateWorkspace={async () => false}
+          onSelectTarget={onSelectTarget} snapshots={snapshots}
+          tab="worktrees" workspace={workspace} />
+      ));
+    };
+    render(firstSelect);
+    const card = container.querySelector<HTMLElement>(".worktree-summary-card");
+    render(latestSelect);
+    expect(container.querySelector(".worktree-summary-card")).toBe(card);
+    act(() => card?.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      key: "Enter"
+    })));
+    expect(firstSelect).not.toHaveBeenCalled();
+    expect(latestSelect).toHaveBeenCalledExactlyOnceWith({
+      repositoryId: "repository-a",
+      worktreeId: "worktree-a"
+    });
   });
 
   it("removes only clean Worktrees from a cross-repository type filter", () => {

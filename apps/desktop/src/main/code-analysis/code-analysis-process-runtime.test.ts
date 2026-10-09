@@ -5,7 +5,7 @@ import type {
   CodeAnalysisSnapshot
 } from "@gitnest/code-analysis";
 import { MAX_ANALYSIS_SNAPSHOT_PAYLOAD_BYTES } from "@gitnest/code-analysis";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CODE_ANALYSIS_PROCESS_PROTOCOL_VERSION,
@@ -18,6 +18,107 @@ import {
 } from "./code-analysis-process-runtime";
 
 describe("startCodeAnalysisProcess", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("coalesces bursts while preserving stage starts and completions", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    const parentPort = new FakeParentPort();
+    startCodeAnalysisProcess(parentPort, {
+      createEngine: () => ({
+        analyze: async (input) => {
+          for (const stage of ["reading", "parsing"] as const) {
+            for (let completed = 0; completed <= 1000; completed += 1) {
+              input.onProgress?.({
+                stage, completed, total: 1000,
+                message: `${stage} ${completed}`
+              });
+            }
+          }
+          return createSnapshot("analysis-burst");
+        },
+        dispose: async () => undefined
+      })
+    });
+    parentPort.send({
+      version: CODE_ANALYSIS_PROCESS_PROTOCOL_VERSION,
+      type: "analyze",
+      analysisId: "analysis-burst",
+      input: createInput("analysis-burst")
+    });
+    await vi.waitFor(() => expect(parentPort.messages.at(-1)?.type).toBe("result"));
+    const progress = parentPort.messages.filter((message) => message.type === "progress");
+    expect(progress.map((message) => [message.progress.stage, message.progress.completed]))
+      .toEqual([["reading", 0], ["reading", 1000], ["parsing", 0], ["parsing", 1000]]);
+  });
+
+  it.each(["result", "error", "cancelled"] as const)(
+    "flushes the trailing progress within 100ms and clears timers on %s",
+    async (terminal) => {
+      vi.useFakeTimers();
+      const parentPort = new FakeParentPort();
+      let input: CodeAnalysisInput | undefined;
+      let resolve: ((snapshot: CodeAnalysisSnapshot) => void) | undefined;
+      let reject: ((reason: Error) => void) | undefined;
+      startCodeAnalysisProcess(parentPort, {
+        createEngine: () => ({
+          analyze: (value) => {
+            input = value;
+            return new Promise((onResolve, onReject) => {
+              resolve = onResolve;
+              reject = onReject;
+            });
+          },
+          dispose: async () => undefined
+        })
+      });
+      parentPort.send({
+        version: CODE_ANALYSIS_PROCESS_PROTOCOL_VERSION,
+        type: "analyze",
+        analysisId: "analysis-trailing",
+        input: createInput("analysis-trailing")
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const progress = (completed: number) => input!.onProgress!({
+        stage: "parsing", completed, total: 100, message: `file ${completed}`
+      });
+      progress(0);
+      await vi.advanceTimersByTimeAsync(20);
+      progress(1);
+      await vi.advanceTimersByTimeAsync(70);
+      progress(2);
+      const progressValues = () => parentPort.messages
+        .filter((message) => message.type === "progress")
+        .map((message) => message.progress.completed);
+      expect(progressValues()).toEqual([0]);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(progressValues()).toEqual([0, 2]);
+      progress(3);
+      if (terminal === "result") {
+        resolve!(createSnapshot("analysis-trailing"));
+      } else {
+        if (terminal === "cancelled") {
+          parentPort.send({
+            version: CODE_ANALYSIS_PROCESS_PROTOCOL_VERSION,
+            type: "cancel",
+            analysisId: "analysis-trailing",
+            reason: "Cancelled by test"
+          });
+          progress(4);
+        }
+        reject!(new Error("Interrupted"));
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(parentPort.messages.at(-1)?.type).toBe(terminal);
+      expect(progressValues()).toEqual(
+        terminal === "cancelled" ? [0, 2] : [0, 2, 3]
+      );
+      expect(vi.getTimerCount()).toBe(0);
+      const messageCount = parentPort.messages.length;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(parentPort.messages).toHaveLength(messageCount);
+    }
+  );
+
   it("publishes progress and results, then disposes the isolated engine", async () => {
     const parentPort = new FakeParentPort();
     const snapshot = createSnapshot("analysis-1");

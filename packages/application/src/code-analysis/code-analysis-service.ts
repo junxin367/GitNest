@@ -35,6 +35,11 @@ import {
 } from "@gitnest/workspace-core";
 
 import type { CodeAnalysisRunnerPort } from "./code-analysis-runner";
+import {
+  CodeAnalysisNodeViews,
+  type CodeAnalysisNodePage,
+  type CodeAnalysisNodeQuery
+} from "./code-analysis-node-view";
 
 interface WorkspaceReader {
   getCurrent(): Promise<Workspace>;
@@ -100,12 +105,14 @@ export interface CodeAnalysisFile {
 
 export type CodeAnalysisSnapshotDetail =
   | "navigation"
+  | "nodes"
   | "full";
 
 export type CodeAnalysisSnapshotView =
   CodeAnalysisSnapshot & {
     detailLevel?: CodeAnalysisSnapshotDetail;
     totalNodeCount?: number;
+    nodePage?: CodeAnalysisNodePage;
   };
 
 export interface CodeAnalysisServiceOptions {
@@ -124,6 +131,11 @@ export interface CodeAnalysisServiceOptions {
 type StateListener = (state: CodeAnalysisState) => void;
 const MAX_CODE_FILE_BYTES = 4 * 1_024 * 1_024;
 const MAX_CODE_FILE_LINES = 600;
+const REPOSITORY_STATE_CONCURRENCY = 4;
+
+function elapsedMilliseconds(startedAtMs: number): number {
+  return Math.max(0, Math.round(performance.now() - startedAtMs));
+}
 
 export class CodeAnalysisService {
   readonly #workspace: WorkspaceReader;
@@ -276,6 +288,7 @@ export class CodeAnalysisService {
 
     const analysisId = this.#idFactory();
     const controller = new AbortController();
+    const startedAtMs = performance.now();
     this.#active = {
       analysisId,
       selectionKey,
@@ -306,6 +319,7 @@ export class CodeAnalysisService {
         }
         await this.#run({
           analysisId,
+          startedAtMs,
           workspace,
           context,
           scope,
@@ -365,6 +379,7 @@ export class CodeAnalysisService {
     }
     const analysisId = this.#idFactory();
     const controller = new AbortController();
+    const startedAtMs = performance.now();
     const abort = () =>
       controller.abort(
         signal?.reason ??
@@ -390,6 +405,7 @@ export class CodeAnalysisService {
         }
         return this.#runBackground({
           analysisId,
+          startedAtMs,
           workspace,
           context,
           scope,
@@ -536,19 +552,28 @@ export class CodeAnalysisService {
   }
 
   async getSnapshot(
-    detail?: CodeAnalysisSnapshotDetail
+    detail?: CodeAnalysisSnapshotDetail,
+    query: CodeAnalysisNodeQuery = {}
   ): Promise<CodeAnalysisSnapshotView | null> {
     const currentSnapshot =
       await this.#readCurrentSnapshot();
     if (!currentSnapshot) {
       return null;
     }
-    const snapshot =
-      detail === "navigation"
+    let views = nodeViews.get(currentSnapshot);
+    if (detail && detail !== "full" && !views) {
+      views = new CodeAnalysisNodeViews(currentSnapshot);
+      nodeViews.set(currentSnapshot, views);
+    }
+    const snapshot = detail === "nodes"
+      ? await views!.read(query)
+      : detail === "navigation"
         ? createNavigationSnapshot(currentSnapshot)
         : currentSnapshot;
     const result = structuredClone(
-      snapshot
+      detail && detail !== "full"
+        ? { ...snapshot, sourceState: undefined }
+        : snapshot
     ) as CodeAnalysisSnapshotView;
     if (detail) {
       result.detailLevel = detail;
@@ -949,6 +974,7 @@ export class CodeAnalysisService {
 
   async #run(input: {
     analysisId: string;
+    startedAtMs: number;
     workspace: Workspace;
     context: AnalysisContext;
     scope: CodeAnalysisScope;
@@ -1001,11 +1027,13 @@ export class CodeAnalysisService {
         return;
       }
       let completedSnapshot = snapshot;
+      let snapshotSaved = false;
       try {
         await this.#snapshotStore.save(
           snapshot,
           input.settings
         );
+        snapshotSaved = true;
       } catch (error) {
         completedSnapshot = {
           ...snapshot,
@@ -1015,6 +1043,14 @@ export class CodeAnalysisService {
           ]
         };
       }
+      if (this.#active?.analysisId !== input.analysisId) {
+        return;
+      }
+      completedSnapshot = await this.#completeTiming(
+        completedSnapshot,
+        elapsedMilliseconds(input.startedAtMs),
+        snapshotSaved
+      );
       if (this.#active?.analysisId !== input.analysisId) {
         return;
       }
@@ -1090,6 +1126,7 @@ export class CodeAnalysisService {
 
   async #runBackground(input: {
     analysisId: string;
+    startedAtMs: number;
     workspace: Workspace;
     context: AnalysisContext;
     scope: CodeAnalysisScope;
@@ -1204,7 +1241,19 @@ export class CodeAnalysisService {
         return null;
       }
 
-      const currentSnapshot = snapshots.find(
+      const durationMs = elapsedMilliseconds(input.startedAtMs);
+      const completedSnapshots = await Promise.all(
+        snapshots.map(snapshot =>
+          this.#completeTiming(snapshot, durationMs, true)
+        )
+      );
+      if (
+        this.#background?.analysisId !== input.analysisId ||
+        input.controller.signal.aborted
+      ) {
+        return null;
+      }
+      const currentSnapshot = completedSnapshots.find(
         (candidate) => candidate.scope === currentScope
       );
       if (currentSnapshot) {
@@ -1240,6 +1289,28 @@ export class CodeAnalysisService {
     }
   }
 
+  async #completeTiming(
+    snapshot: CodeAnalysisSnapshot,
+    durationMs: number,
+    snapshotSaved: boolean
+  ): Promise<CodeAnalysisSnapshot> {
+    const completed = {
+      ...snapshot,
+      stats: { ...snapshot.stats, durationMs }
+    };
+    if (snapshotSaved && this.#snapshotStore.saveDuration) {
+      try {
+        await this.#snapshotStore.saveDuration(completed);
+      } catch (error) {
+        completed.warnings = [
+          ...completed.warnings,
+          `无法保存分析耗时：${errorMessage(error)}`
+        ];
+      }
+    }
+    return completed;
+  }
+
   async #loadWorkspaceSnapshotForRefresh(
     workspace: Workspace,
     context: AnalysisContext,
@@ -1272,6 +1343,55 @@ export class CodeAnalysisService {
     includeChangedPaths: boolean,
     signal: AbortSignal
   ) {
+    const snapshots: RepositorySnapshot[] = new Array(
+      roots.length
+    );
+    let nextRootIndex = 0;
+    let failure: { error: unknown } | undefined;
+    const failedReadController = new AbortController();
+    const readSignal = AbortSignal.any([
+      signal,
+      failedReadController.signal
+    ]);
+    // Keep results in root order even when independent Git reads finish
+    // out of order. Drain in-flight reads before allowing the next run.
+    await Promise.all(
+      Array.from(
+        {
+          length: Math.min(
+            roots.length,
+            REPOSITORY_STATE_CONCURRENCY
+          )
+        },
+        async () => {
+          while (!failure) {
+            const index = nextRootIndex++;
+            const root = roots[index];
+            if (!root) {
+              return;
+            }
+            try {
+              throwIfAborted(signal);
+              snapshots[index] =
+                await this.#git.readRepositorySnapshot(
+                  root.path,
+                  {
+                    includeChangeStats: false,
+                    signal: readSignal
+                  }
+                );
+            } catch (error) {
+              failure ??= { error };
+              failedReadController.abort(error);
+            }
+          }
+        }
+      )
+    );
+    if (failure) {
+      throw failure.error;
+    }
+    throwIfAborted(signal);
     const changedPaths: Array<{
       repositoryId: string;
       worktreeId: string;
@@ -1284,15 +1404,8 @@ export class CodeAnalysisService {
       fingerprint: string;
     }> = [];
     const revisions = new Map<string, string>();
-    for (const root of roots) {
-      throwIfAborted(signal);
-      const snapshot = await this.#git.readRepositorySnapshot(
-        root.path,
-        {
-          includeChangeStats: false,
-          signal
-        }
-      );
+    for (const [index, root] of roots.entries()) {
+      const snapshot = snapshots[index]!;
       revisions.set(
         repositoryTargetKey(root),
         snapshot.head
@@ -1462,9 +1575,11 @@ function snapshotMatchesContext(
   );
 }
 
+const nodeViews = new WeakMap<CodeAnalysisSnapshot, CodeAnalysisNodeViews>();
+
 function createNavigationSnapshot(
   snapshot: CodeAnalysisSnapshot
-): CodeAnalysisSnapshot {
+): CodeAnalysisSnapshotView {
   const nodeIds = new Set<string>();
   const edgeIds = new Set<string>();
 
@@ -1489,8 +1604,16 @@ function createNavigationSnapshot(
     nodeIds.add(edge.to);
   }
 
+  const preview = snapshot.nodes.slice(0, 120);
+  for (const node of preview) nodeIds.add(node.id);
   return {
     ...snapshot,
+    nodePage: {
+      query: "",
+      nodeIds: preview.map(node => node.id),
+      totalMatches: snapshot.nodes.length,
+      graphTruncated: false
+    },
     nodes: snapshot.nodes.filter((node) =>
       nodeIds.has(node.id)
     ),

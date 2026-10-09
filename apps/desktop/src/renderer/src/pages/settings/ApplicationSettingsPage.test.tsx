@@ -55,6 +55,8 @@ describe("ApplicationSettingsPage", () => {
         html,
         "text/html"
       );
+      expect(document.querySelector(".settings-sidebar h1")?.textContent).toBe("设置");
+      expect(document.querySelector(".settings-sidebar nav")).not.toBeNull();
       const navigationLabels = Array.from(
         document.querySelectorAll(
           'nav[aria-label="设置分组"] .settings-nav-item'
@@ -297,7 +299,7 @@ describe("ApplicationSettingsPage", () => {
     }
   });
 
-  it("uses the shared page skeleton before settings finish their first load", () => {
+  it("derives the first-load skeleton from the inert real settings layout", () => {
     vi.stubGlobal("React", React);
     try {
       const html = renderToStaticMarkup(
@@ -314,7 +316,9 @@ describe("ApplicationSettingsPage", () => {
       expect(html).toContain("gn-skeleton-surface");
       expect(html).toContain("application-settings-page");
       expect(html).toContain('aria-label="正在读取应用设置"');
-      expect(html).not.toContain("settings-nav-item-title");
+      expect(html).toContain("settings-nav-item-title");
+      expect(html).toContain('class="gn-auto-skeleton-content" inert="" aria-hidden="true"');
+      expect(html).not.toContain("应用设置读取失败");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -353,6 +357,108 @@ describe("ApplicationSettingsPage", () => {
       expect(retry).toBeDefined();
       act(() => retry?.click());
       expect(appSettings.reload).toHaveBeenCalledOnce();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("only shows the saved-terminal warning when an available fallback is selected", () => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const settings = createDefaultAppSettings();
+    settings.general.defaultTerminalKind = "git-bash";
+    const terminalLabel = "PowerShell 团队专用终端".repeat(8);
+    try {
+      act(() => root.render(
+        <ApplicationSettingsPage
+          appSettings={settingsController({ loaded: false, loading: true })}
+          gitEnvironment={null}
+          terminalProfiles={[]}
+        />
+      ));
+      expect(container.querySelector(".settings-inline-warning")).toBeNull();
+      expect(container.querySelector(".settings-terminal-note")).toBeNull();
+      act(() => root.render(
+        <ApplicationSettingsPage
+          appSettings={settingsController({ settings })}
+          gitEnvironment={null}
+          terminalProfiles={[{
+            kind: "powershell",
+            label: terminalLabel
+          }]}
+        />
+      ));
+      const warning = container.querySelector(".settings-inline-warning");
+      expect(warning?.textContent).toContain("已保存的终端当前不可用，暂时回退到");
+      expect(warning?.textContent).toContain(terminalLabel);
+      expect(warning?.textContent).toContain("原选择会被保留");
+      act(() => root.render(
+        <ApplicationSettingsPage
+          appSettings={settingsController({ settings })}
+          gitEnvironment={null}
+          terminalProfiles={[{ kind: "git-bash", label: "Git Bash" }]}
+        />
+      ));
+      expect(container.querySelector(".settings-inline-warning")).toBeNull();
+      act(() => root.render(
+        <ApplicationSettingsPage
+          appSettings={settingsController({ settings })}
+          gitEnvironment={null}
+          terminalProfiles={[]}
+        />
+      ));
+      expect(container.querySelector(".settings-inline-warning")).toBeNull();
+      act(() => root.render(
+        <ApplicationSettingsPage
+          appSettings={settingsController()}
+          gitEnvironment={null}
+          terminalProfiles={[{ kind: "powershell", label: terminalLabel }]}
+        />
+      ));
+      expect(container.querySelector(".settings-inline-warning")).toBeNull();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("defers analysis registration reads and portal feedback until settings are loaded", async () => {
+    vi.stubGlobal("React", React);
+    const getMcpRegistration = vi.fn(async () => ({
+      ok: false,
+      error: { code: "COMMAND_FAILED", message: "registration unavailable" }
+    }));
+    vi.stubGlobal("gitnest", { codeAnalysis: { getMcpRegistration } });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const render = (loaded: boolean) => root.render(
+      <ApplicationSettingsPage
+        appSettings={settingsController({
+          loaded,
+          loading: !loaded,
+          notice: "loaded feedback"
+        })}
+        gitEnvironment={null}
+        initialSection="analysis"
+        terminalProfiles={[]}
+      />
+    );
+    try {
+      await act(async () => render(false));
+      expect(container.querySelector("#settings-analysis-codex")).not.toBeNull();
+      expect(getMcpRegistration).not.toHaveBeenCalled();
+      expect(document.body.textContent).not.toContain("loaded feedback");
+      expect(container.querySelector(".gn-auto-skeleton-content")?.hasAttribute("inert")).toBe(true);
+      await act(async () => render(true));
+      expect(getMcpRegistration).toHaveBeenCalledOnce();
+      expect(document.body.textContent).toContain("registration unavailable");
+      expect(container.querySelector(".gn-auto-skeleton-content")?.hasAttribute("inert")).toBe(false);
     } finally {
       act(() => root.unmount());
       container.remove();
@@ -1915,6 +2021,9 @@ describe("ApplicationSettingsPage", () => {
           />
         ));
         const card = container.querySelector("#settings-analysis-codex")!;
+        expect(card.querySelectorAll(".mcp-registration-path")).toHaveLength(1);
+        expect(card.textContent).not.toContain("数据目录");
+        expect(card.textContent).not.toContain("读取后显示");
         expect(card.textContent).toContain("状态不可用");
         expect(document.body.textContent).toContain("Registration read failed");
         act(() => document.querySelector<HTMLButtonElement>(
@@ -1931,6 +2040,8 @@ describe("ApplicationSettingsPage", () => {
         act(() => retryButton!.click());
         expect(getMcpRegistration).toHaveBeenCalledTimes(2);
         expect(retryButton!.disabled).toBe(true);
+        expect(retryButton!.textContent?.trim()).toBe("正在读取…");
+        expect(card.querySelectorAll(".mcp-registration-path")).toHaveLength(1);
         expect(card.textContent).toContain("正在读取");
         act(() => retryButton!.click());
         expect(getMcpRegistration).toHaveBeenCalledTimes(2);
@@ -1951,6 +2062,11 @@ describe("ApplicationSettingsPage", () => {
         }));
         expect(card.textContent).toContain("未注册");
         expect(card.textContent).not.toContain("正在读取");
+        const directory = card.querySelectorAll(".mcp-registration-path")[1];
+        expect(directory?.textContent).toContain("数据目录");
+        expect(directory?.querySelector("code")?.textContent).toBe("C:\\GitNest\\user-data");
+        expect(retryButton?.isConnected).toBe(false);
+        expect(card.textContent).not.toContain("重新读取");
         const register = Array.from(
           card.querySelectorAll<HTMLButtonElement>("button")
         ).find((button) => button.textContent?.trim() === "一键注册");
@@ -2037,6 +2153,7 @@ describe("ApplicationSettingsPage", () => {
       expect(
         registrationActions?.querySelectorAll("button")
       ).toHaveLength(1);
+      expect(registrationActions?.textContent).not.toContain("重新读取");
       expect(registrationActions?.textContent).not.toContain("复制");
       expect(
         registrationPanel?.querySelector(

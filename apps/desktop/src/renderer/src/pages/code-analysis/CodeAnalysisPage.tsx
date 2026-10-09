@@ -2,6 +2,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -36,10 +37,8 @@ import {
   MenuItem,
   MenuPopover
 } from "../../shared/ui/Menu";
-import {
-  Skeleton,
-  SkeletonBoundary
-} from "../../shared/ui/Skeleton";
+import { SkeletonBoundary } from "../../shared/ui/Skeleton";
+import { CodeAnalysisSkeleton, CODE_ANALYSIS_SKELETON_CLASS } from "./CodeAnalysisSkeleton";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import {
   DiffPanel,
@@ -48,9 +47,11 @@ import {
 import { repositoryDiffWorkspaceConfiguration } from "../../widgets/diff-workspace/diffWorkspaceConfiguration";
 import {
   codeNodeDisplayName,
+  createCodeChainSearchIndex,
   createCodeNodeSearchIndex,
   deduplicateRequestChains,
-  filterChainsWithMetadata,
+  filterCodeChainIndexWithMetadata,
+  getCodeNodeLookup,
   MAX_VISIBLE_CODE_NODES,
   MAX_VISIBLE_REQUEST_CHAINS,
   searchCodeNodeIndexWithMetadata
@@ -70,6 +71,7 @@ interface CodeAnalysisPageProps {
 type AnalysisNavigationMode = "chains" | "symbols";
 
 interface AnalysisProgressPresentation {
+  analysisId: string | undefined;
   stage: string;
   message: string;
   startedAt: string | undefined;
@@ -136,6 +138,10 @@ export function CodeAnalysisPage({
   const [inspectedNodeId, setInspectedNodeId] = useState<
     string | null
   >(null);
+  const inspectedNodeIdRef = useRef(inspectedNodeId);
+  useLayoutEffect(() => {
+    inspectedNodeIdRef.current = inspectedNodeId;
+  }, [inspectedNodeId]);
   const [nodeFileExpanded, setNodeFileExpanded] =
     useState(false);
   const [graphFullscreen, setGraphFullscreen] =
@@ -162,6 +168,21 @@ export function CodeAnalysisPage({
       analysis.state.workspaceId
       ? availableSnapshot
       : null;
+  const nodeView = snapshot &&
+    analysis.nodeView?.analysisId === snapshot.analysisId &&
+    analysis.nodeView.workspaceId === snapshot.workspaceId &&
+    analysis.nodeView.scope === snapshot.scope &&
+    analysis.nodeView.generatedAt === snapshot.generatedAt
+      ? analysis.nodeView : null;
+  const graphSnapshot = useMemo(() => {
+    if (!snapshot || !nodeView) return snapshot;
+    return {
+      ...snapshot,
+      ...(nodeView.nodePage ? { nodePage: nodeView.nodePage } : {}),
+      nodes: [...new Map([...snapshot.nodes, ...nodeView.nodes].map(node => [node.id, node])).values()],
+      edges: [...new Map([...snapshot.edges, ...nodeView.edges].map(edge => [edge.id, edge])).values()]
+    };
+  }, [snapshot, nodeView]);
   const requestChains = useMemo(
     () =>
       deduplicateRequestChains(
@@ -169,11 +190,17 @@ export function CodeAnalysisPage({
       ),
     [snapshot?.requestChains]
   );
+  const chainSearchIndex = useMemo(
+    () => createCodeChainSearchIndex(
+      requestChains,
+      snapshot?.nodes ?? []
+    ),
+    [requestChains, snapshot?.nodes]
+  );
   const chainFilterResult = useMemo(
     () =>
-      filterChainsWithMetadata(
-        requestChains,
-        snapshot?.nodes ?? [],
+      filterCodeChainIndexWithMetadata(
+        chainSearchIndex,
         deferredChainQuery,
         method,
         MAX_VISIBLE_REQUEST_CHAINS
@@ -181,14 +208,13 @@ export function CodeAnalysisPage({
     [
       deferredChainQuery,
       method,
-      requestChains,
-      snapshot?.nodes
+      chainSearchIndex
     ]
   );
   const chains = chainFilterResult.chains;
   const nodeSearchIndex = useMemo(
-    () => createCodeNodeSearchIndex(snapshot?.nodes ?? []),
-    [snapshot?.nodes]
+    () => createCodeNodeSearchIndex(graphSnapshot?.nodes ?? []),
+    [graphSnapshot?.nodes]
   );
   const chainNodeMatch = useMemo(
     () =>
@@ -210,12 +236,20 @@ export function CodeAnalysisPage({
       ),
     [deferredNodeQuery, nodeSearchIndex]
   );
-  const nodeResults = nodeFilterResult.nodes;
+  const nodePage = nodeView?.nodePage ?? snapshot?.nodePage;
+  const nodeResults = useMemo(() => nodePage && graphSnapshot
+    ? nodePage.nodeIds.flatMap(id => {
+        const node = getCodeNodeLookup(graphSnapshot.nodes).get(id);
+        return node ? [node] : [];
+      })
+    : nodeFilterResult.nodes, [nodePage, graphSnapshot, nodeFilterResult.nodes]);
   const snapshotDetail = snapshot
     ? analysis.snapshotDetail
     : null;
   const fullSnapshotAvailable =
     snapshotDetail === "full";
+  const nodeQueryPending = !fullSnapshotAvailable &&
+    (analysis.loadingNodes || (nodePage?.query ?? "") !== nodeQuery.trim().slice(0, 256));
   const searchableNodeCount = snapshot
     ? snapshot.totalNodeCount ??
       nodeSearchIndex.length
@@ -237,12 +271,25 @@ export function CodeAnalysisPage({
       ? graphFocus.id
       : selectedChain?.clientNodeId ?? null;
   const graphFocusNode =
-    snapshot?.nodes.find(
-      (node) => node.id === graphFocusNodeId
-    ) ?? null;
-  const selectedNode = snapshot?.nodes.find(
-    (node) => node.id === inspectedNodeId
-  ) ?? null;
+    graphSnapshot && graphFocusNodeId
+      ? getCodeNodeLookup(graphSnapshot.nodes).get(graphFocusNodeId) ?? null
+      : null;
+  const resolvedSelectedNode = graphSnapshot && inspectedNodeId
+    ? getCodeNodeLookup(graphSnapshot.nodes).get(inspectedNodeId) ?? null
+    : null;
+  const inspectionKey = JSON.stringify([scopeWorkspaceId, scope, inspectedNodeId]);
+  const lastInspectedNodeRef = useRef<{ key: string; node: CodeGraphNodeDto } | null>(null);
+  const selectedNode = resolvedSelectedNode ?? (
+    snapshot && !fullSnapshotAvailable && !nodeView &&
+    lastInspectedNodeRef.current?.key === inspectionKey
+      ? lastInspectedNodeRef.current.node
+      : null
+  );
+  useLayoutEffect(() => {
+    // Keep the open details/drawer mounted while a new bounded node view loads.
+    // A completed response remains authoritative if the node was removed.
+    lastInspectedNodeRef.current = selectedNode ? { key: inspectionKey, node: selectedNode } : null;
+  }, [inspectionKey, selectedNode]);
   const selectedNodeDiffRefreshKey =
     createCodeNodeDiffRefreshKey(
       workspace,
@@ -338,18 +385,33 @@ export function CodeAnalysisPage({
     availableSnapshot?.scope
   ]);
 
+  const navigationSnapshotKey = JSON.stringify([
+    snapshot?.workspaceId, snapshot?.analysisId, snapshot?.scope, snapshot?.generatedAt
+  ]);
+  const navigationContextKey = JSON.stringify([scopeWorkspaceId, scope]);
+  const navigationContextRef = useRef<{ key: string; initialized: boolean } | null>(null);
   useEffect(() => {
-    setChainQuery("");
-    setNodeQuery("");
-    setMethod("all");
-    if (!snapshot) {
+    const context = navigationContextRef.current;
+    if (context?.key === navigationContextKey && context.initialized) {
+      return;
+    }
+    if (context?.key !== navigationContextKey) {
+      navigationContextRef.current = { key: navigationContextKey, initialized: false };
+      setChainQuery("");
+      setNodeQuery("");
+      setMethod("all");
       setGraphFocus(null);
       setGraphSelectionCleared(false);
       setInspectedNodeId(null);
       setNodeFileExpanded(false);
       setGraphFullscreen(false);
+    }
+    if (!snapshot) {
       return;
     }
+    // A new result revision refreshes data, not the user's navigation.
+    // Initialize only once per workspace/scope, including after a loading gap.
+    navigationContextRef.current = { key: navigationContextKey, initialized: true };
     setGraphFullscreen(false);
     const nextChain = requestChains[0];
     if (nextChain) {
@@ -361,15 +423,6 @@ export function CodeAnalysisPage({
       setGraphSelectionCleared(false);
       setInspectedNodeId(null);
       setNodeFileExpanded(false);
-      return;
-    }
-    if (!fullSnapshotAvailable) {
-      setNavigationMode("symbols");
-      setGraphFocus(null);
-      setGraphSelectionCleared(false);
-      setInspectedNodeId(null);
-      setNodeFileExpanded(false);
-      void analysis.loadFullSnapshot();
       return;
     }
     const nextNode =
@@ -390,12 +443,11 @@ export function CodeAnalysisPage({
     setGraphSelectionCleared(false);
     setInspectedNodeId(null);
     setNodeFileExpanded(false);
-  }, [snapshot?.analysisId, snapshot?.scope]);
+  }, [navigationContextKey, navigationSnapshotKey]);
 
   useEffect(() => {
     if (
       !snapshot ||
-      !fullSnapshotAvailable ||
       requestChains.length > 0 ||
       graphFocus !== null
     ) {
@@ -414,11 +466,41 @@ export function CodeAnalysisPage({
       });
     }
   }, [
-    fullSnapshotAvailable,
     graphFocus,
     requestChains.length,
     snapshot
   ]);
+
+  const requestedFocusNodeId = graphFocus?.kind === "node" ? graphFocus.id : undefined;
+  const lastNodeRequestRef = useRef<{ snapshotKey: string; focusNodeId: string | undefined } | null>(null);
+  const graphNeedsLoad = !fullSnapshotAvailable && Boolean(requestedFocusNodeId) &&
+    nodeView?.nodePage?.focusNodeId !== requestedFocusNodeId;
+  const graphLoadError = graphNeedsLoad && !analysis.loadingNodes &&
+    lastNodeRequestRef.current?.snapshotKey === navigationSnapshotKey &&
+    lastNodeRequestRef.current?.focusNodeId === requestedFocusNodeId
+      ? analysis.nodeViewError?.message : undefined;
+  const loadVisibleNodes = useCallback(() => {
+    const inspected = inspectedNodeIdRef.current;
+    return analysis.loadNodeView({
+      query: nodeQuery.trim().slice(0, 256),
+      ...(requestedFocusNodeId ? { focusNodeId: requestedFocusNodeId } : {}),
+      ...(inspected ? { inspectedNodeId: inspected } : {})
+    });
+  }, [analysis.loadNodeView, nodeQuery, requestedFocusNodeId]);
+  useEffect(() => {
+    if (!snapshot || fullSnapshotAvailable || navigationMode !== "symbols") return;
+    const request = () => {
+      lastNodeRequestRef.current = { snapshotKey: navigationSnapshotKey, focusNodeId: requestedFocusNodeId };
+      void loadVisibleNodes();
+    };
+    if (lastNodeRequestRef.current?.snapshotKey !== navigationSnapshotKey ||
+      lastNodeRequestRef.current?.focusNodeId !== requestedFocusNodeId) {
+      request();
+      return;
+    }
+    const timer = window.setTimeout(request, 150);
+    return () => window.clearTimeout(timer);
+  }, [navigationSnapshotKey, fullSnapshotAvailable, navigationMode, requestedFocusNodeId, loadVisibleNodes]);
 
   useEffect(() => {
     if (!graphFullscreen) {
@@ -462,6 +544,7 @@ export function CodeAnalysisPage({
   const progressPresentation: AnalysisProgressPresentation | null =
     progressVisible
       ? {
+          analysisId: analysis.state.analysisId,
           stage: progress
             ? stageLabel(progress.stage)
             : "准备分析",
@@ -506,13 +589,13 @@ export function CodeAnalysisPage({
   }, []);
   const inspectNode = useCallback(
     (nodeId: string) => {
-      if (nodeId !== inspectedNodeId) {
+      if (nodeId !== inspectedNodeIdRef.current) {
         setNodeFileExpanded(false);
       }
       setGraphSelectionCleared(false);
       setInspectedNodeId(nodeId);
     },
-    [inspectedNodeId]
+    []
   );
   const clearNodeInspection = useCallback(() => {
     setGraphSelectionCleared(true);
@@ -520,21 +603,14 @@ export function CodeAnalysisPage({
     setNodeFileExpanded(false);
   }, []);
   const showCodeNodes = useCallback(
-    async (query?: string) => {
+    (query?: string) => {
       if (query !== undefined) {
-        setNodeQuery(query);
+        setNodeQuery(query.slice(0, 256));
       }
       setNavigationMode("symbols");
-      const loaded =
-        fullSnapshotAvailable ||
-        (await analysis.loadFullSnapshot());
-      if (loaded) {
-        requestAnimationFrame(() =>
-          nodeFilterRef.current?.focus()
-        );
-      }
+      requestAnimationFrame(() => nodeFilterRef.current?.focus());
     },
-    [analysis.loadFullSnapshot, fullSnapshotAvailable]
+    []
   );
   const searchChainQueryInNodes = useCallback(() => {
     const query = chainQuery.trim();
@@ -710,6 +786,7 @@ export function CodeAnalysisPage({
             </Button>
             {running ? (
               <Button
+                className="analysis-run-action"
                 disabled={analysis.action === "cancelling"}
                 onClick={() => void analysis.cancel()}
                 size="small"
@@ -777,12 +854,6 @@ export function CodeAnalysisPage({
         </div>
       )}
 
-      {snapshot && progressPresentation && (
-        <AnalysisProgressPanel
-          presentation={progressPresentation}
-        />
-      )}
-
       {snapshot ? (
         <>
           <section
@@ -811,7 +882,8 @@ export function CodeAnalysisPage({
             />
           </section>
 
-          <section className="analysis-runtime-strip">
+          <div className="analysis-runtime-region" data-refreshing={Boolean(progressPresentation)}>
+          <section className="analysis-runtime-strip" aria-hidden={Boolean(progressPresentation)}>
             <span>
               分析时间{" "}
               {new Date(
@@ -928,6 +1000,10 @@ export function CodeAnalysisPage({
               )
             )}
           </section>
+          {progressPresentation && (
+            <AnalysisProgressPanel presentation={progressPresentation} />
+          )}
+          </div>
 
           <div
             aria-label="代码分析工作区"
@@ -990,12 +1066,22 @@ export function CodeAnalysisPage({
               ) : (
                 <>
                   <header>
-                <div>
+                <div className="analysis-navigation-heading">
                   <strong>代码导航</strong>
-                  <span>
-                    {navigationMode === "chains"
-                      ? `${chains.length} 条请求链`
-                      : `${nodeResults.length}/${searchableNodeCount} 个节点`}
+                  <span className="analysis-navigation-status" role="status">
+                    <Icon
+                      className={`analysis-navigation-spinner${navigationMode === "symbols" && nodeQueryPending ? " is-loading" : ""}`}
+                      name="refresh"
+                      size={12}
+                    />
+                    <span className="analysis-navigation-count">
+                      {navigationMode === "chains"
+                        ? `${chains.length} 条请求链`
+                        : `${nodeResults.length}/${searchableNodeCount} 个节点`}
+                    </span>
+                    {navigationMode === "symbols" && nodeQueryPending && (
+                      <span className="visually-hidden">正在查询代码节点…</span>
+                    )}
                   </span>
                 </div>
                 <div
@@ -1075,13 +1161,13 @@ export function CodeAnalysisPage({
                   <Input
                     aria-label="搜索代码节点"
                     clearLabel="清空代码节点筛选"
-                    disabled={!fullSnapshotAvailable}
                     fieldClassName="analysis-chain-filter"
                     fullWidth
                     leading={<Icon name="search" size={14} />}
                     onChange={(event) =>
                       setNodeQuery(event.target.value)
                     }
+                    maxLength={256}
                     {...(nodeQuery
                       ? {
                           onClear: () => {
@@ -1100,6 +1186,7 @@ export function CodeAnalysisPage({
                         return;
                       }
                       if (event.key === "Enter") {
+                        if (nodeQueryPending) return;
                         const firstResult =
                           deferredNodeQuery === nodeQuery
                             ? nodeResults[0]
@@ -1190,40 +1277,15 @@ export function CodeAnalysisPage({
                     )}
                   </>
                 ) : (
-                  !fullSnapshotAvailable ? (
-                    <div
-                      aria-busy={
-                        analysis.loadingFullSnapshot
-                      }
-                      className="analysis-list-empty"
-                      role="status"
-                    >
-                      <Icon name="refresh" size={20} />
-                      <strong>
-                        {analysis.loadingFullSnapshot
-                          ? "正在加载完整代码节点"
-                          : "完整代码节点尚未加载"}
-                      </strong>
-                      <p>
-                        {analysis.loadingFullSnapshot
-                          ? "请求链已可用，完整节点索引正在后台载入。"
-                          : "完整节点索引加载失败，可重新尝试。"}
-                      </p>
-                      {!analysis.loadingFullSnapshot && (
-                        <Button
-                          onClick={() =>
-                            void showCodeNodes()
-                          }
-                          size="small"
-                          type="button"
-                        >
-                          <Icon name="refresh" size={13} />
-                          重新加载
-                        </Button>
-                      )}
-                    </div>
-                  ) : (
                     <>
+                      {analysis.nodeViewError ? (
+                        <div className="analysis-list-limit" role="alert">
+                          节点加载失败：{analysis.nodeViewError.message}
+                          <Button onClick={() => void loadVisibleNodes()} size="small" type="button">
+                            重新加载
+                          </Button>
+                        </div>
+                      ) : null}
                       {nodeResults.map((node) => (
                         <button
                           aria-current={
@@ -1255,7 +1317,7 @@ export function CodeAnalysisPage({
                           </small>
                         </button>
                       ))}
-                      {nodeResults.length === 0 && (
+                      {nodeResults.length === 0 && !nodeQueryPending && !analysis.nodeViewError && (
                         <div className="analysis-list-empty">
                           <Icon name="search" size={20} />
                           <strong>没有匹配的代码节点</strong>
@@ -1264,8 +1326,12 @@ export function CodeAnalysisPage({
                           </p>
                         </div>
                       )}
+                      {(nodePage ? nodePage.totalMatches > nodeResults.length : nodeFilterResult.truncated) && (
+                        <div className="analysis-list-limit" role="status">
+                          仅显示前 {MAX_VISIBLE_CODE_NODES} 个节点；可搜索完整分析结果。
+                        </div>
+                      )}
                     </>
-                  )
                 )}
               </div>
                 </>
@@ -1351,12 +1417,15 @@ export function CodeAnalysisPage({
                   </div>
                 </header>
                 <CodeRelationGraph
+                  loading={graphNeedsLoad && !graphLoadError}
+                  error={graphLoadError}
+                  onRetry={loadVisibleNodes}
                   chain={selectedChain}
                   focusNodeId={graphFocusNodeId}
                   onClearSelection={clearNodeInspection}
                   onSelectNode={inspectNode}
                   selectedNodeId={graphSelectedNodeId}
-                  snapshot={snapshot}
+                  snapshot={graphSnapshot ?? snapshot}
                 />
               </section>
             </div>
@@ -1408,7 +1477,7 @@ export function CodeAnalysisPage({
       )}
       label="正在读取代码分析"
       loading={analysis.loading}
-      surfaceClassName="page-scroll code-analysis-page gn-page-skeleton analysis-page-skeleton"
+      surfaceClassName={CODE_ANALYSIS_SKELETON_CLASS}
     >
       {content}
     </SkeletonBoundary>
@@ -1424,7 +1493,8 @@ function AnalysisProgressPanel({
 }) {
   const percentage = Math.round(presentation.ratio * 100);
   const elapsedTime = useAnalysisElapsedTime(
-    presentation.startedAt
+    presentation.startedAt,
+    presentation.analysisId
   );
 
   return (
@@ -1480,28 +1550,30 @@ function AnalysisProgressPanel({
 }
 
 function useAnalysisElapsedTime(
-  startedAt?: string
+  startedAt?: string,
+  analysisId?: string
 ): number {
-  const [fallbackStartedAt] = useState(() => Date.now());
-  const [now, setNow] = useState(fallbackStartedAt);
+  const anchor = useMemo(() => {
+    const parsedStartedAt = startedAt ? Date.parse(startedAt) : Number.NaN;
+    return {
+      elapsed: Number.isFinite(parsedStartedAt)
+        ? Math.max(0, Date.now() - parsedStartedAt)
+        : 0,
+      monotonicTime: performance.now()
+    };
+  }, [startedAt, analysisId]);
+  const [tick, setTick] = useState({ anchor, elapsed: anchor.elapsed });
 
   useEffect(() => {
-    const update = () => setNow(Date.now());
+    const update = () => setTick({
+      anchor,
+      elapsed: anchor.elapsed + Math.max(0, performance.now() - anchor.monotonicTime)
+    });
     update();
     const timer = window.setInterval(update, 1_000);
     return () => window.clearInterval(timer);
-  }, []);
-
-  const parsedStartedAt = startedAt
-    ? Date.parse(startedAt)
-    : Number.NaN;
-  return Math.max(
-    0,
-    now -
-      (Number.isFinite(parsedStartedAt)
-        ? parsedStartedAt
-        : fallbackStartedAt)
-  );
+  }, [anchor]);
+  return tick.anchor === anchor ? tick.elapsed : anchor.elapsed;
 }
 
 function AnalysisIndexStatusMenu({
@@ -1593,136 +1665,6 @@ function diagnosticsForNode(
     (diagnostic) =>
       diagnostic.nodeId === nodeId ||
       diagnostic.relatedNodeIds.includes(nodeId)
-  );
-}
-
-function CodeAnalysisSkeleton() {
-  return (
-    <>
-      <header className="analysis-skeleton-header">
-        <div className="analysis-skeleton-title-row">
-          <Skeleton height={24} width={96} />
-          <div className="analysis-skeleton-actions">
-            <Skeleton height={38} width={178} />
-            <Skeleton height={32} width={88} />
-            <Skeleton height={32} width={96} />
-          </div>
-        </div>
-        <div className="analysis-skeleton-description">
-          <Skeleton height={10} variant="text" width={260} />
-        </div>
-      </header>
-
-      <section
-        aria-hidden="true"
-        className="analysis-skeleton-summary-grid"
-      >
-        {[56, 48, 52, 46, 50].map((width, index) => (
-          <article
-            className="gn-skeleton-card analysis-skeleton-summary-card"
-            key={index}
-          >
-            <div className="analysis-skeleton-summary-label">
-              <Skeleton
-                height={9}
-                variant="text"
-                width={`${width}%`}
-              />
-            </div>
-            <div className="analysis-skeleton-summary-value">
-              <Skeleton height={16} width="42%" />
-            </div>
-          </article>
-        ))}
-      </section>
-
-      <div
-        aria-hidden="true"
-        className="analysis-skeleton-runtime"
-      >
-        {[168, 72, 88, 118, 104].map((width) => (
-          <Skeleton height={28} key={width} width={width} />
-        ))}
-      </div>
-
-      <div
-        aria-hidden="true"
-        className="analysis-skeleton-workbench"
-      >
-        <aside className="gn-skeleton-panel analysis-skeleton-navigation">
-          <div className="analysis-skeleton-navigation-header">
-            <div className="analysis-skeleton-heading-row">
-              <Skeleton height={13} width={72} />
-              <Skeleton
-                height={9}
-                variant="text"
-                width={68}
-              />
-            </div>
-            <div className="analysis-skeleton-tabs">
-              <Skeleton height={28} />
-              <Skeleton height={28} />
-            </div>
-            <Skeleton height={32} />
-            <Skeleton height={32} />
-          </div>
-          <div className="analysis-skeleton-navigation-list">
-            {[76, 62, 82, 68, 72].map((width, index) => (
-              <div
-                className="analysis-skeleton-navigation-row"
-                key={index}
-              >
-                <div>
-                  <Skeleton height={18} width={42} />
-                  <Skeleton height={11} width={`${width}%`} />
-                </div>
-                <div className="analysis-skeleton-navigation-meta">
-                  <Skeleton
-                    height={9}
-                    variant="text"
-                    width={`${Math.max(44, width - 18)}%`}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        </aside>
-
-        <section className="gn-skeleton-panel analysis-skeleton-graph">
-          <div className="analysis-skeleton-graph-header">
-            <div className="analysis-skeleton-graph-heading">
-              <Skeleton height={13} width={58} />
-              <Skeleton
-                height={9}
-                variant="text"
-                width={148}
-              />
-            </div>
-            <Skeleton height={28} width={146} />
-            <Skeleton height={32} variant="circle" width={32} />
-          </div>
-          <div className="analysis-skeleton-graph-body">
-            {[2, 3, 2].map((nodeCount, columnIndex) => (
-              <div
-                className="analysis-skeleton-graph-column"
-                key={columnIndex}
-              >
-                {Array.from(
-                  { length: nodeCount },
-                  (_, nodeIndex) => (
-                    <Skeleton
-                      className="analysis-skeleton-graph-node"
-                      height={72}
-                      key={nodeIndex}
-                    />
-                  )
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
-    </>
   );
 }
 
@@ -2129,6 +2071,8 @@ function NodeDiffViewer({
         <DiffPanel
           binary={activeDiff?.diff.binary}
           className="analysis-node-diff-panel"
+          emptyStatsLabel=""
+          immediateLoadingSkeleton
           config={
             repositoryDiffWorkspaceConfiguration.document
           }
@@ -2136,7 +2080,6 @@ function NodeDiffViewer({
           deletions={activeDiff?.diff.deletions}
           additions={activeDiff?.diff.additions}
           focusLine={node.location.line}
-          keyboardShortcutsEnabled={false}
           maxLines={600}
           media={activeDiff?.diff.media}
           onSearchOpenChange={setSearchOpen}

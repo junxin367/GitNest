@@ -50,6 +50,8 @@ import {
   readTapdKeywordPreference
 } from "../../widgets/workspace-sidebar/tapdKeywordPreferences";
 import { getRendererPreferenceStorage } from "../../widgets/workspace-sidebar/sidebarPreferences";
+import type { RepositoryWorkflowController } from "../../features/repository-workflow/useRepositoryWorkflow";
+import type { RepositoryCommitActionHandler } from "../../features/repository-workflow/RepositoryCommitActions";
 
 export {
   RepositoryCommitDetail,
@@ -69,6 +71,9 @@ interface RepositoryPageProps {
   terminals: ExternalTerminalController;
   externalApplications: ExternalApplicationController;
   appSettings: AppSettingsController;
+  workflow?: RepositoryWorkflowController;
+  onCommitAction?: RepositoryCommitActionHandler;
+  actionBusy?: boolean;
   changeSelectionRequest?: RepositoryChangeSelectionRequest | null;
   onOpenTab(tab: RepositoryTab): void;
   onChangeSelectionHandled?(requestId: number): void;
@@ -88,6 +93,9 @@ export function RepositoryPage({
   terminals,
   externalApplications,
   appSettings,
+  workflow,
+  onCommitAction,
+  actionBusy,
   changeSelectionRequest,
   onOpenTab,
   onChangeSelectionHandled,
@@ -186,6 +194,7 @@ export function RepositoryPage({
   const handledCommandCompletion = useRef(
     commands.completionVersion
   );
+  const handledWorkflowCompletion = useRef(workflow?.completionVersion ?? 0);
   const handledWorktreeCommandCompletion = useRef(
     worktreeCommands.completionVersion
   );
@@ -363,6 +372,14 @@ export function RepositoryPage({
     },
     [target]
   );
+
+  useEffect(() => {
+    const completion = workflow?.completionVersion ?? 0;
+    if (handledWorkflowCompletion.current === completion) return;
+    handledWorkflowCompletion.current = completion;
+    details.invalidate();
+    void details.reload(tab);
+  }, [workflow?.completionVersion, details.invalidate, details.reload, tab]);
 
   useEffect(() => {
     if (
@@ -646,6 +663,8 @@ export function RepositoryPage({
       )}
       {tab === "changes" && (
         <RepositoryChanges
+          operations={operations}
+          {...(workflow ? { workflow } : {})}
           commands={commands}
           appSettings={appSettings}
           aiGenerating={aiGenerating}
@@ -675,6 +694,8 @@ export function RepositoryPage({
       )}
       {tab === "history" && (
         <RepositoryHistory
+          {...(workflow ? { workflow } : {})}
+          {...(onCommitAction ? { onCommitAction, actionBusy: actionBusy ?? false } : {})}
           branch={snapshot?.branch}
           controller={details}
           onCopyCommitId={copyCommitId}

@@ -1021,6 +1021,60 @@ describe("useRepositoryDetails", () => {
     }
   );
 
+  it("cancels obsolete history searches and restarts pagination with the active query", async () => {
+    type HistoryResult = Awaited<ReturnType<GitNestBridge["repository"]["getHistory"]>>;
+    let resolveObsolete!: (value: HistoryResult) => void;
+    const first = createCommitSummary();
+    const matching = { ...first, hash: "matching", subject: "Matching" };
+    const next = { ...first, hash: "next", subject: "Next match" };
+    const getHistory = vi.fn()
+      .mockResolvedValueOnce({ ok: true, value: { target: TARGET, page: { commits: [first], nextOffset: 50 } } })
+      .mockImplementationOnce(() => new Promise<HistoryResult>((resolve) => { resolveObsolete = resolve; }))
+      .mockResolvedValueOnce({ ok: true, value: { target: TARGET, page: { commits: [matching], nextOffset: 50 } } })
+      .mockResolvedValueOnce({ ok: true, value: { target: TARGET, page: { commits: [next] } } })
+      .mockResolvedValue({ ok: true, value: { target: TARGET, page: { commits: [] } } });
+    const cancelQuery = vi.fn(async () => ({ ok: true as const, value: undefined }));
+    installBridge({
+      getHistory, cancelQuery,
+      getBranches: vi.fn(async () => ({ ok: true as const, value: { target: TARGET, branches: [] } })),
+      getCommit: vi.fn(async () => ({
+        ok: false as const, error: { code: "COMMAND_CANCELLED" as const, message: "", details: {} }
+      }))
+    });
+    await act(async () => {
+      root.render(<Harness tab="history" onController={(value) => { controller = value; }} />);
+      await flushAsyncWork();
+    });
+    let obsolete: Promise<void> | undefined;
+    act(() => { obsolete = controller?.searchHistory({ keyword: "obsolete" }); });
+    const obsoleteRequest = getHistory.mock.calls[1]![0];
+    await act(async () => { await controller?.searchHistory({ keyword: "matching", path: "src" }); });
+    expect(cancelQuery).toHaveBeenCalledWith({ queryId: obsoleteRequest.queryId });
+    expect(getHistory.mock.calls[2]![0]).toMatchObject({
+      offset: 0, search: { keyword: "matching", path: "src" }
+    });
+    await act(async () => {
+      resolveObsolete({ ok: true, value: { target: TARGET, page: { commits: [first] } } });
+      await obsolete;
+    });
+    expect(controller?.history?.page.commits).toEqual([matching]);
+    await act(async () => { await controller?.loadMoreHistory(); });
+    expect(getHistory.mock.calls[3]![0]).toMatchObject({
+      offset: 50, search: { keyword: "matching", path: "src" }
+    });
+    expect(controller?.history?.page.commits).toEqual([matching, next]);
+    await act(async () => { await controller?.selectHistoryScope({ kind: "ref", ref: "refs/heads/topic" }); });
+    expect(getHistory.mock.calls[4]![0]).toMatchObject({
+      offset: 0, scope: { kind: "ref", ref: "refs/heads/topic" },
+      search: { keyword: "matching", path: "src" }
+    });
+    expect(controller?.history?.page.commits).toEqual([]);
+    await act(async () => { await controller?.searchHistory(null); });
+    expect(getHistory.mock.calls[5]![0]).not.toHaveProperty("search");
+    expect(controller?.historySearch).toBeNull();
+    expect(controller?.selectedCommitHash).toBeNull();
+  });
+
   it("keeps history details collapsed while loading the inspector commit", async () => {
     const summary = createCommitSummary();
     const getHistory = vi.fn(

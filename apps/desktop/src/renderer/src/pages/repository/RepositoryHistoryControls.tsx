@@ -6,6 +6,7 @@ import {
 
 import type {
   BranchDto,
+  RepositoryHistoryFilterDto,
   RepositoryHistoryScopeDto
 } from "@gitnest/contracts";
 
@@ -18,6 +19,80 @@ import {
   MenuPopover,
   MenuSeparator
 } from "../../shared/ui/Menu";
+
+export function HistorySearchControls({
+  search,
+  onSearch,
+  onClose
+}: {
+  search: RepositoryHistoryFilterDto | null;
+  onSearch(search: RepositoryHistoryFilterDto | null): void;
+  onClose(): void;
+}) {
+  const [draft, setDraft] = useState<RepositoryHistoryFilterDto>(search ?? {});
+  const [error, setError] = useState("");
+  return (
+    <form
+      aria-label="搜索完整提交历史"
+      className="history-search-form"
+      onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+        if (event.key === "Escape") {
+          event.preventDefault();
+          onClose();
+        }
+      }}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (draft.since && draft.until && draft.since > draft.until) {
+          setError("开始日期不能晚于结束日期。");
+          return;
+        }
+        setError("");
+        const next = Object.fromEntries(
+          Object.entries(draft)
+            .map(([key, value]) => [key, key === "path" ? value : value?.trim()])
+            .filter(([, value]) => Boolean(value))
+        );
+        onSearch(Object.keys(next).length ? next : null);
+      }}
+    >
+      {([
+        ["keyword", "提交说明", "搜索完整提交说明", "text"],
+        ["author", "作者", "姓名或邮箱", "text"],
+        ["since", "开始日期", "", "date"],
+        ["until", "结束日期", "", "date"],
+        ["path", "文件路径", "相对仓库的文件或目录路径", "text"]
+      ] as const).map(([key, label, placeholder, type]) => (
+        <label key={key}>
+          <span>{label}</span>
+          <Input
+            aria-label={key === "keyword" ? "筛选提交历史" : label}
+            autoFocus={key === "keyword"}
+            maxLength={4096}
+            onChange={(event) => setDraft((current) => ({
+              ...current,
+              [key]: event.target.value
+            }))}
+            placeholder={placeholder}
+            type={type}
+            value={draft[key] ?? ""}
+          />
+        </label>
+      ))}
+      <div className="history-search-actions">
+        <span>查询所选引用的完整历史；条件同时生效，日期按本地提交时间。</span>
+        <Button type="submit" size="small">搜索历史</Button>
+        <Button type="button" size="small" onClick={() => {
+          setDraft({});
+          setError("");
+          onSearch(null);
+        }}>清除条件</Button>
+      </div>
+      {error && <p role="alert">{error}</p>}
+    </form>
+  );
+}
 
 interface HistoryScopeControlsProps {
   branches: BranchDto[];

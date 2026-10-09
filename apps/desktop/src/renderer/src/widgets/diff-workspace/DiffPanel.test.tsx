@@ -12,6 +12,8 @@ import {
 } from "vitest";
 
 import { DiffPanel } from "./DiffPanel";
+import { scrollWithinContainer } from "../../shared/lib/scrollWithinContainer";
+import * as diffViewModel from "../../shared/model/diffViewModel";
 import {
   repositoryDiffWorkspaceConfiguration,
   standaloneDiffWorkspaceConfiguration
@@ -202,6 +204,103 @@ describe("DiffPanel configuration", () => {
       ).toHaveLength(1);
     }
   );
+
+  it.each([
+    ["unified", false],
+    ["split", false],
+    ["split", true]
+  ] as const)(
+    "does not revisit code text for %s wrap=%s navigation, context menus, or parent updates",
+    (layout, wrap) => {
+      const parse = diffViewModel.parseDiffViewModel;
+      let codeReads = 0;
+      const observeText = (record: { text: string }) => {
+        const text = record.text;
+        Object.defineProperty(record, "text", {
+          get: () => { codeReads += 1; return text; }
+        });
+      };
+      const parseSpy = vi.spyOn(diffViewModel, "parseDiffViewModel")
+        .mockImplementation((source) => {
+          const model = parse(source);
+          model.unifiedLines
+            .filter((line) => ["context", "added", "removed"].includes(line.kind))
+            .forEach(observeText);
+          model.splitRows.forEach((row) => {
+            if (row.oldCell) observeText(row.oldCell);
+            if (row.newCell) observeText(row.newCell);
+          });
+          return model;
+        });
+      const props = {
+        config: standaloneDiffWorkspaceConfiguration.document,
+        scopeKey: `stable-code-${layout}-${wrap}`,
+        path: "src/long.ts",
+        content: compactMultiHunkContent,
+        preferredLayout: layout,
+        preferredWrap: wrap
+      };
+      try {
+        act(() => root.render(<DiffPanel {...props} onContextRequest={vi.fn()} />));
+        setInputValue(openDiffSearch(container), "line");
+        expect(codeReads).toBeGreaterThan(0);
+        codeReads = 0;
+        const parseCalls = parseSpy.mock.calls.length;
+        act(() => container.querySelector<HTMLButtonElement>('[aria-label="下一个匹配"]')!.click());
+        act(() => container.querySelector<HTMLButtonElement>('[aria-label="下一处变更"]')!.click());
+        act(() => openHunkContextMenu(findHunkContextTrigger(container, 1, "expand")));
+        expect(readHunkContextMenuItems()).toHaveLength(1);
+        act(() => root.render(
+          <DiffPanel {...props} headerActions={<button>Updated action</button>}
+            onContextRequest={vi.fn()} />
+        ));
+        expect(codeReads).toBe(0);
+        expect(parseSpy).toHaveBeenCalledTimes(parseCalls);
+        expect(container.querySelectorAll(".diff-viewer-search-hit.current").length)
+          .toBeGreaterThan(0);
+        expect(container.querySelectorAll('.diff-viewer-wide-row.current[data-diff-viewer-hunk="1"]').length)
+          .toBe(layout === "split" && !wrap ? 2 : 1);
+      } finally {
+        parseSpy.mockRestore();
+      }
+    }
+  );
+
+  it("keeps exactly the selected search mark across repeated matches, layout remounts, and loading", () => {
+    const props = {
+      config: standaloneDiffWorkspaceConfiguration.document,
+      scopeKey: "selected-mark-remount",
+      path: "src/matches.ts",
+      content: "@@ -1 +1 @@\n-old old\n+new new",
+      onContextRequest: vi.fn()
+    };
+    act(() => root.render(<DiffPanel {...props} preferredLayout="unified" />));
+    setInputValue(openDiffSearch(container), "new");
+    const currentIndices = () => Array.from(
+      container.querySelectorAll(".diff-viewer-search-hit.current"),
+      (mark) => mark.getAttribute("data-diff-viewer-search-hit")
+    );
+    expect(currentIndices()).toEqual(["0"]);
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="下一个匹配"]')!.click());
+    expect(currentIndices()).toEqual(["1"]);
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="下一个匹配"]')!.click());
+    expect(currentIndices()).toEqual(["0"]);
+    act(() => root.render(<DiffPanel {...props} preferredLayout="split" />));
+    expect(currentIndices()).toEqual(["0"]);
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="下一个匹配"]')!.click());
+    act(() => root.render(<DiffPanel {...props} preferredLayout="split" preferredWrap />));
+    expect(currentIndices()).toEqual(["1"]);
+    act(() => root.render(<DiffPanel {...props} preferredLayout="split" preferredWrap
+      state={{ busy: true, icon: "refresh", title: "Loading", message: "Loading" }} />));
+    expect(currentIndices()).toEqual([]);
+    act(() => root.render(<DiffPanel {...props} preferredLayout="split" preferredWrap />));
+    expect(currentIndices()).toEqual(["1"]);
+    act(() => root.render(<DiffPanel {...props} preferredLayout="split" preferredWrap
+      content="@@ -1 +1 @@\n-old\n+new" />));
+    expect(currentIndices()).toEqual(["0"]);
+    act(() => root.render(<DiffPanel {...props} preferredLayout="split" preferredWrap content="" />));
+    expect(currentIndices()).toEqual([]);
+  });
 
   it("uses the refreshed compact hunk as the expansion and collapse baseline", () => {
     const props = {
@@ -438,10 +537,54 @@ describe("DiffPanel configuration", () => {
     expect(focusedRows[0]?.getAttribute("aria-current")).toBe(
       "location"
     );
-    expect(scrollIntoViewMock).toHaveBeenCalledWith({
-      block: "center",
-      inline: "nearest"
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+    const scroll = vi.mocked(HTMLElement.prototype.scrollTo);
+    expect(scroll.mock.instances).toContain(container.querySelector(".diff-viewer-code"));
+  });
+
+  it("reveals nested split-diff matches without scrolling the surrounding page", () => {
+    const boundary = document.createElement("div");
+    const vertical = document.createElement("div");
+    const horizontal = document.createElement("div");
+    const target = document.createElement("mark");
+    container.append(boundary);
+    boundary.append(vertical);
+    vertical.append(horizontal);
+    horizontal.append(target);
+    vertical.style.overflowY = "auto";
+    horizontal.style.overflowX = "auto";
+    Object.defineProperties(vertical, {
+      scrollHeight: { value: 1000 }, clientHeight: { value: 200 },
+      clientWidth: { value: 300 }
     });
+    Object.defineProperties(horizontal, {
+      scrollWidth: { value: 1000 }, clientWidth: { value: 300 }
+    });
+    boundary.getBoundingClientRect = () => new DOMRect(0, 100, 300, 200);
+    vertical.getBoundingClientRect = () => new DOMRect(0, 100, 300, 200);
+    horizontal.getBoundingClientRect = () => new DOMRect(0, 100, 300, 1000);
+    target.getBoundingClientRect = () => new DOMRect(
+      800 - horizontal.scrollLeft, 900 - vertical.scrollTop, 30, 20
+    );
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollTo")
+      .mockImplementation(function (this: HTMLElement, options: ScrollToOptions | number) {
+        if (typeof options === "object") {
+          this.scrollTop = options.top ?? this.scrollTop;
+          this.scrollLeft = options.left ?? this.scrollLeft;
+        }
+      });
+    container.scrollTop = 73;
+    scrollWithinContainer(boundary, target);
+    expect(horizontal.scrollLeft).toBe(530);
+    expect(vertical.scrollTop).toBe(710);
+    expect(container.scrollTop).toBe(73);
+    expect(scroll.mock.instances).not.toContain(container);
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+    scroll.mockClear();
+    scrollWithinContainer(boundary, container);
+    scrollWithinContainer(boundary, boundary);
+    expect(scroll).not.toHaveBeenCalled();
+    scroll.mockRestore();
   });
 
   it("renders a diff-shaped skeleton while content is loading", () => {
@@ -498,7 +641,7 @@ describe("DiffPanel configuration", () => {
     expect(container.querySelectorAll(".diff-content-skeleton-pane")).toHaveLength(1);
   });
 
-  it("omits the empty stats placeholder and its separator", () => {
+  it("shows stats and their separator only when available without an empty placeholder", () => {
     act(() => {
       root.render(
         <DiffPanel
@@ -523,12 +666,29 @@ describe("DiffPanel configuration", () => {
     expect(
       container.querySelector(".diff-viewer-stats.muted")
     ).toBeNull();
-    expect(
-      container.querySelector(
-        ".diff-viewer-file-header-separator"
-      )
-    ).toBeNull();
+    expect(container.querySelector(".diff-viewer-stats-slot")).toBeNull();
+    expect(container.querySelector(".diff-viewer-file-header-separator")).toBeNull();
     expect(findButton(container, "打开独立 Diff")).toBeDefined();
+    act(() => {
+      root.render(
+        <DiffPanel
+          config={repositoryDiffWorkspaceConfiguration.document}
+          emptyStatsLabel=""
+          headerActions={<button type="button">打开独立 Diff</button>}
+          path="src/App.tsx"
+          scopeKey="unstaged:src/App.tsx"
+          statsAvailable
+          additions={12345678}
+          deletions={4}
+          content={content}
+        />
+      );
+    });
+    expect(container.querySelector(".diff-viewer-stats-slot")).toBeNull();
+    expect(container.querySelector(".diff-viewer-stats")
+      ?.getAttribute("title")).toBe("新增 12345678 行，删除 4 行");
+    expect(container.querySelector<HTMLElement>(".diff-viewer-file-header-separator")
+      ?.style.visibility).toBe("");
   });
 
   it("remembers search queries for each repository scope", () => {

@@ -1,4 +1,5 @@
 import {
+  memo,
   useEffect,
   useRef,
   useState
@@ -8,6 +9,7 @@ import type {
   CommitHistoryComparisonSideDto,
   RepositoryHistoryPageDto,
   RepositoryHistoryScopeDto,
+  RepositoryHistoryFilterDto,
   RepositoryTargetDto
 } from "@gitnest/contracts";
 
@@ -15,7 +17,6 @@ import type { useRepositoryDetails } from "../../entities/repository/useReposito
 import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
 import { Button } from "../../shared/ui/Button";
 import { Icon } from "../../shared/ui/Icon";
-import { Input } from "../../shared/ui/Input";
 import {
   Skeleton,
   SkeletonBoundary
@@ -25,7 +26,9 @@ import {
   RepositoryCommitDetail,
   type RepositoryCommitDetailView
 } from "./RepositoryCommitDetail";
-import { HistoryScopeControls } from "./RepositoryHistoryControls";
+import { HistoryScopeControls, HistorySearchControls } from "./RepositoryHistoryControls";
+import type { RepositoryCommitActionHandler } from "../../features/repository-workflow/RepositoryCommitActions";
+import type { RepositoryWorkflowController } from "../../features/repository-workflow/useRepositoryWorkflow";
 
 export { RepositoryCommitDetail } from "./RepositoryCommitDetail";
 export {
@@ -38,12 +41,17 @@ export function RepositoryHistory({
   branch,
   controller,
   onCopyCommitId,
+  onCommitAction,
+  actionBusy,
   repositoryKey,
   target
 }: {
   branch: string | undefined;
   controller: ReturnType<typeof useRepositoryDetails>;
   onCopyCommitId(hash: string): Promise<void>;
+  onCommitAction?: RepositoryCommitActionHandler;
+  actionBusy?: boolean;
+  workflow?: RepositoryWorkflowController;
   repositoryKey: string;
   target: RepositoryTargetDto;
 }) {
@@ -87,15 +95,12 @@ export function RepositoryHistory({
         controller.loading.commit)
   );
   const [filterOpen, setFilterOpen] = useState(false);
-  const [filterQuery, setFilterQuery] = useState("");
   const filterTriggerRef = useRef<HTMLButtonElement>(null);
   const [commitDetailView, setCommitDetailView] =
     useState<RepositoryCommitDetailView>("details");
-  const scopeKey = historyScopeKey(controller.historyScope);
   useEffect(() => {
     setFilterOpen(false);
-    setFilterQuery("");
-  }, [repositoryKey, scopeKey]);
+  }, [repositoryKey]);
   useEffect(() => {
     setCommitDetailView("details");
   }, [
@@ -104,21 +109,7 @@ export function RepositoryHistory({
     repositoryKey,
     selected?.hash
   ]);
-  const normalizedFilter = filterQuery.trim().toLocaleLowerCase();
-  const visibleCommits = normalizedFilter
-    ? commits.filter((item) =>
-        [
-          item.subject,
-          item.authorName,
-          item.shortHash,
-          item.hash,
-          item.authoredAt,
-          ...(item.refs ?? [])
-        ].some((value) =>
-          value.toLocaleLowerCase().includes(normalizedFilter)
-        )
-      )
-    : commits;
+  const hasSearch = Object.values(controller.historySearch ?? {}).some(Boolean);
 
   if (
     !controller.loading.history &&
@@ -151,8 +142,8 @@ export function RepositoryHistory({
             </div>
             <span className="panel-caption">
               {loadingRegion === "content"
-                ? "正在读取所选引用…"
-                : historyScopeCaption(
+                ? "正在查询提交历史…"
+                : hasSearch ? `全历史搜索 · 已加载 ${commits.length} 条匹配提交` : historyScopeCaption(
                     controller.historyScope,
                     commits.length,
                     branch
@@ -169,49 +160,36 @@ export function RepositoryHistory({
                 scope={controller.historyScope}
               />
               <div className="history-filter-controls">
-                {filterOpen && (
-                  <Input
-                    appearance="unstyled"
-                    aria-label="筛选提交历史"
-                    autoFocus
-                    className="history-filter-input"
-                    onKeyDown={(event) => {
-                      if (
-                        event.key !== "Escape" ||
-                        event.nativeEvent.isComposing ||
-                        event.keyCode === 229
-                      ) {
-                        return;
-                      }
-                      event.preventDefault();
-                      setFilterOpen(false);
-                      setFilterQuery("");
-                      filterTriggerRef.current?.focus();
-                    }}
-                    onChange={(event) =>
-                      setFilterQuery(event.target.value)
-                    }
-                    placeholder="筛选提交、作者或 Hash"
-                    value={filterQuery}
-                  />
-                )}
                 <Button
                   aria-expanded={filterOpen}
+                  aria-pressed={hasSearch}
                   ref={filterTriggerRef}
                   className="panel-header-action"
                   onClick={() => {
-                    setFilterQuery("");
                     setFilterOpen((open) => !open);
                   }}
                   size="small"
                   type="button"
                 >
                   <Icon name="filter" size={13} />
-                  筛选
+                  筛选{hasSearch ? " · 已应用" : ""}
                 </Button>
               </div>
             </div>
           </header>
+          {filterOpen && (
+            <HistorySearchControls
+              key={repositoryKey}
+              search={controller.historySearch}
+              onSearch={(search: RepositoryHistoryFilterDto | null) =>
+                void controller.searchHistory(search)
+              }
+              onClose={() => {
+                setFilterOpen(false);
+                filterTriggerRef.current?.focus();
+              }}
+            />
+          )}
           <SkeletonBoundary
             fallback={<RepositoryHistoryRowsSkeleton />}
             hasContent={Boolean(history)}
@@ -239,142 +217,45 @@ export function RepositoryHistory({
                     </code>
                   </span>
                   <span className="history-comparison-note">
-                    仅显示差异提交与共同基点
+                    {hasSearch ? "仅显示匹配条件的差异提交" : "仅显示差异提交与共同基点"}
                   </span>
                 </div>
               )}
               <div className="commit-list">
-            {visibleCommits.map((item, index) => {
-              const displayRef = item.comparisonSide
-                ? comparisonSideLabel(
-                    item.comparisonSide,
-                    comparison
-                  )
-                : getPrimaryCommitRef(item.refs, branch);
-
-              return (
-                <div
-                  aria-current={
-                    controller.historyDetailOpen &&
-                    item.hash === controller.selectedCommitHash
-                      ? "true"
-                      : undefined
-                  }
-                  className={`commit-row${
-                    controller.historyDetailOpen &&
-                    item.hash === controller.selectedCommitHash
-                      ? " selected"
-                      : ""
-                  }${
-                    item.comparisonSide
-                      ? ` comparison-${item.comparisonSide}`
-                      : ""
-                  }`}
-                  key={item.hash}
-                  onClick={() =>
-                    void controller.selectCommit(item.hash)
-                  }
-                  onKeyDown={(event) => {
-                    if (
-                      event.key !== "Enter" &&
-                      event.key !== " "
-                    ) {
-                      return;
-                    }
-                    event.preventDefault();
-                    void controller.selectCommit(item.hash);
-                  }}
-                  role="button"
-                  tabIndex={0}
-                >
-                  <span
-                    className={`commit-graph ${
-                      item.comparisonSide
-                        ? `comparison-${item.comparisonSide}`
-                        : `${index === 2 ? "branch " : ""}lane-${index % 3}`
-                    }`}
-                  >
-                    <span className="commit-node" />
-                  </span>
-                  <span className="commit-message">
-                    <strong className="commit-subject">
-                      {item.subject}
-                    </strong>
-                    <span className="commit-meta">
-                      <span
-                        className={`ref-label${
-                          displayRef.startsWith("origin/")
-                            ? " remote"
-                            : ""
-                        }${
-                          item.comparisonSide
-                            ? ` comparison-${item.comparisonSide}`
-                            : ""
-                        }`}
-                        title={displayRef}
-                      >
-                        {displayRef}
-                      </span>
-                    </span>
-                  </span>
-                  <time
-                    className="commit-time"
-                    dateTime={item.authoredAt}
-                  >
-                    {formatCommitTimestamp(item.authoredAt)}
-                  </time>
-                  <span className="commit-author">
-                    {item.authorName}
-                  </span>
-                  <code
-                    className="commit-id"
-                    aria-label={`复制 Commit ID ${item.hash}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void onCopyCommitId(item.hash);
-                    }}
-                    onKeyDown={(event) => {
-                      if (
-                        event.key !== "Enter" &&
-                        event.key !== " "
-                      ) {
-                        return;
-                      }
-                      event.preventDefault();
-                      event.stopPropagation();
-                      void onCopyCommitId(item.hash);
-                    }}
-                    role="button"
-                    tabIndex={0}
-                    title={`点击复制 Commit ID ${item.hash}`}
-                  >
-                    {item.shortHash}
-                  </code>
-                </div>
-              );
-            })}
+            {commits.map((item, index) => (
+              <HistoryCommitRow
+                branch={branch}
+                comparison={comparison}
+                index={index}
+                item={item}
+                key={item.hash}
+                onCopyCommitId={onCopyCommitId}
+                onSelectCommit={controller.selectCommit}
+                selected={controller.historyDetailOpen && item.hash === controller.selectedCommitHash}
+              />
+            ))}
             {controller.error && !history ? (
               <div className="history-filter-empty error">
                 <Icon name="warning" size={18} />
                 <strong>提交历史切换失败</strong>
                 <span>{controller.error.message}</span>
               </div>
-            ) : visibleCommits.length === 0 ? (
+            ) : commits.length === 0 ? (
               <div className="history-filter-empty">
                 <Icon
-                  name={normalizedFilter ? "search" : "history"}
+                  name={hasSearch ? "search" : "history"}
                   size={18}
                 />
                 <strong>
-                  {normalizedFilter
+                  {hasSearch
                     ? "没有匹配的提交"
                     : comparison
                       ? "两个分支没有差异提交"
                       : "该引用暂无提交历史"}
                 </strong>
                 <span>
-                  {normalizedFilter
-                    ? "可修改筛选关键词后重试。"
+                  {hasSearch
+                    ? "已搜索所选引用的完整历史，可修改搜索条件后重试。"
                     : comparison
                       ? "双方当前指向相同历史，或没有可展示的独有提交。"
                       : "可选择其他本地或远程引用查看。"}
@@ -423,6 +304,7 @@ export function RepositoryHistory({
             >
               {selected ? (
                 <RepositoryCommitDetail
+                  {...(onCommitAction ? { onCommitAction, actionBusy: actionBusy ?? false } : {})}
                   commit={selected}
                   key={selected.hash}
                   target={target}
@@ -443,16 +325,125 @@ export function RepositoryHistory({
 }
 
 
-function historyScopeKey(
-  scope: RepositoryHistoryScopeDto | null
-): string {
-  if (!scope) {
-    return "head";
-  }
-  return scope.kind === "ref"
-    ? `ref:${scope.ref}`
-    : `compare:${scope.leftRef}:${scope.rightRef}`;
-}
+const HistoryCommitRow = memo(function HistoryCommitRow({
+  branch,
+  comparison,
+  index,
+  item,
+  onCopyCommitId,
+  onSelectCommit,
+  selected
+}: {
+  branch: string | undefined;
+  comparison: RepositoryHistoryPageDto["page"]["comparison"];
+  index: number;
+  item: RepositoryHistoryPageDto["page"]["commits"][number];
+  onCopyCommitId(hash: string): Promise<void>;
+  onSelectCommit(hash: string): Promise<void>;
+  selected: boolean;
+}) {
+  const displayRef = item.comparisonSide
+    ? comparisonSideLabel(item.comparisonSide, comparison)
+    : getPrimaryCommitRef(item.refs, branch);
+  return (
+    <div
+      aria-current={
+        selected
+          ? "true"
+          : undefined
+      }
+      className={`commit-row${
+        selected
+          ? " selected"
+          : ""
+      }${
+        item.comparisonSide
+          ? ` comparison-${item.comparisonSide}`
+          : ""
+      }`}
+      key={item.hash}
+      onClick={() =>
+        void onSelectCommit(item.hash)
+      }
+      onKeyDown={(event) => {
+        if (
+          event.key !== "Enter" &&
+          event.key !== " "
+        ) {
+          return;
+        }
+        event.preventDefault();
+        void onSelectCommit(item.hash);
+      }}
+      role="button"
+      tabIndex={0}
+    >
+      <span
+        className={`commit-graph ${
+          item.comparisonSide
+            ? `comparison-${item.comparisonSide}`
+            : `${index === 2 ? "branch " : ""}lane-${index % 3}`
+        }`}
+      >
+        <span className="commit-node" />
+      </span>
+      <span className="commit-message">
+        <strong className="commit-subject">
+          {item.subject}
+        </strong>
+        <span className="commit-meta">
+          <span
+            className={`ref-label${
+              displayRef.startsWith("origin/")
+                ? " remote"
+                : ""
+            }${
+              item.comparisonSide
+                ? ` comparison-${item.comparisonSide}`
+                : ""
+            }`}
+            title={displayRef}
+          >
+            {displayRef}
+          </span>
+        </span>
+      </span>
+      <time
+        className="commit-time"
+        dateTime={item.authoredAt}
+      >
+        {formatCommitTimestamp(item.authoredAt)}
+      </time>
+      <span className="commit-author">
+        {item.authorName}
+      </span>
+      <code
+        className="commit-id"
+        aria-label={`复制 Commit ID ${item.hash}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          void onCopyCommitId(item.hash);
+        }}
+        onKeyDown={(event) => {
+          if (
+            event.key !== "Enter" &&
+            event.key !== " "
+          ) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          void onCopyCommitId(item.hash);
+        }}
+        role="button"
+        tabIndex={0}
+        title={`点击复制 Commit ID ${item.hash}`}
+      >
+        {item.shortHash}
+      </code>
+    </div>
+  );
+});
 
 export function resolveHistoryLoadingRegion({
   hasCurrentHistory,

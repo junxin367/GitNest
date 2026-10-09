@@ -27,6 +27,29 @@ export function createGitNestBridge(
   ) => () => void = () => () => undefined
 ): GitNestBridge {
   return {
+    repositoryIgnore: {
+      preflight: (request) => invoke(IPC_CHANNELS.repositoryIgnorePreflight, request),
+      execute: (request) => invoke(IPC_CHANNELS.repositoryIgnoreExecute, request)
+    },
+    fileHistory: {
+      history: (request) => invoke(IPC_CHANNELS.fileHistoryHistory, request),
+      diff: (request) => invoke(IPC_CHANNELS.fileHistoryDiff, request),
+      cancel: (request) => invoke(IPC_CHANNELS.fileHistoryCancel, request)
+    },
+    repositoryWorkflow: {
+      inspect: (request) => invoke(IPC_CHANNELS.repositoryWorkflowInspect, request),
+      preflight: (request) => invoke(IPC_CHANNELS.repositoryWorkflowPreflight, request),
+      execute: (request) => invoke(IPC_CHANNELS.repositoryWorkflowExecute, request)
+    },
+    repositoryManagement: {
+      inspect: (request) => invoke(IPC_CHANNELS.repositoryManagementInspect, request),
+      preflight: (request) => invoke(IPC_CHANNELS.repositoryManagementPreflight, request),
+      execute: (request) => invoke(IPC_CHANNELS.repositoryManagementExecute, request),
+      create: (request) => invoke(IPC_CHANNELS.repositoryManagementCreate, request),
+      creationStatus: (request) => invoke(IPC_CHANNELS.repositoryManagementCreationStatus, request),
+      cancelCreation: (request) => invoke(IPC_CHANNELS.repositoryManagementCancelCreation, request),
+      openCommit: (request) => invoke(IPC_CHANNELS.repositoryManagementOpenCommit, request)
+    },
     update: {
       getState: () =>
         invoke(IPC_CHANNELS.updateGetState),

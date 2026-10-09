@@ -7,7 +7,7 @@ import {
   type ReactNode
 } from "react";
 
-import type { DiffFileViewDto } from "@gitnest/contracts";
+import type { DiffFileViewDto, RepositoryIgnoreScopeDto } from "@gitnest/contracts";
 
 import type { DiffViewerFile, DiffViewerLayout } from "../../shared/model/diffViewModel";
 import { Button } from "../../shared/ui/Button";
@@ -52,7 +52,11 @@ export interface DiffWorkspaceSkeletonProps {
   commitPanelHeight?: number | undefined;
   label?: string | undefined;
   layout?: DiffViewerLayout | undefined;
+  wrap?: boolean | undefined;
   showCommit?: boolean | undefined;
+  showAuxiliary?: boolean | undefined;
+  showToolbar?: boolean | undefined;
+  showStatusbar?: boolean | undefined;
 }
 
 export interface DiffWorkspaceAuxiliaryView {
@@ -76,6 +80,8 @@ export interface DiffWorkspaceProps {
   selectedFileKey?: string | undefined;
   selectionRevealKey?: string | undefined;
   onSelectedFileChange(file: DiffViewerFile): void;
+  onFileHistory?: ((file: DiffViewerFile) => void) | undefined;
+  onIgnoreFile?: ((file: DiffViewerFile, scope: RepositoryIgnoreScopeDto) => void) | undefined;
   onStageFile?:
     | ((
         file: DiffViewerFile
@@ -146,6 +152,8 @@ export function DiffWorkspace({
   selectedFileKey,
   selectionRevealKey,
   onSelectedFileChange,
+  onFileHistory,
+  onIgnoreFile,
   onStageFile,
   onUnstageFile,
   onDiscardFile,
@@ -231,12 +239,12 @@ export function DiffWorkspace({
         createDiffFileContextMenuState(
           file,
           event.clientX,
-          event.clientY
+          event.clientY,
+          52 + (onFileHistory ? 36 : 0) + (onIgnoreFile && file.mode === "untracked" ? 108 : 0)
         )
       );
-      selectFile(file, "user");
     },
-    [selectFile]
+    [onFileHistory, onIgnoreFile]
   );
   const requestDiscardFile = useCallback(
     (file: DiffViewerFile) => {
@@ -456,6 +464,9 @@ export function DiffWorkspace({
       <DiffFileContextMenu
         applications={externalApplications}
         contextMenu={fileContextMenu}
+        mutationBusy={mutationBusy}
+        onFileHistory={onFileHistory}
+        onIgnoreFile={onIgnoreFile}
         onClose={closeFileContextMenu}
       />
       {discardRequest && discardTargetsCurrent ? (
@@ -484,7 +495,11 @@ export function DiffWorkspaceSkeleton({
   commitPanelHeight,
   label = "正在读取工作区变更…",
   layout = "unified",
-  showCommit = false
+  wrap = false,
+  showCommit = false,
+  showAuxiliary = false,
+  showToolbar = false,
+  showStatusbar = false
 }: DiffWorkspaceSkeletonProps) {
   return (
     <SkeletonSurface
@@ -492,6 +507,7 @@ export function DiffWorkspaceSkeleton({
       className={[
         "diff-workspace",
         "diff-workspace-skeleton",
+        showStatusbar ? "with-statusbar" : "",
         className
       ]
         .filter(Boolean)
@@ -502,7 +518,8 @@ export function DiffWorkspaceSkeleton({
         aria-hidden="true"
         className={[
           "diff-workspace-sidebar",
-          showCommit ? "with-commit" : ""
+          showCommit ? "with-commit" : "",
+          showAuxiliary ? "with-auxiliary-view" : ""
         ]
           .filter(Boolean)
           .join(" ")}
@@ -520,6 +537,11 @@ export function DiffWorkspaceSkeleton({
             rows={DIFF_WORKSPACE_SKELETON_FILE_ROWS.slice(3)}
           />
         </div>
+        {showAuxiliary && (
+          <div className="diff-workspace-auxiliary-entry diff-workspace-skeleton-auxiliary">
+            <Skeleton height={12} width="48%" />
+          </div>
+        )}
         {showCommit && (
           <div
             className="diff-workspace-skeleton-commit"
@@ -546,15 +568,60 @@ export function DiffWorkspaceSkeleton({
       </aside>
       <div
         aria-hidden="true"
-        className="diff-workspace-content diff-workspace-skeleton-content"
+        className={`diff-workspace-content diff-workspace-skeleton-content${showToolbar ? " with-toolbar" : ""}`}
       >
+        {showToolbar && (
+          <div className="diff-viewer-toolbar diff-workspace-skeleton-toolbar">
+            <div className="diff-viewer-toolbar-spacer" />
+            <div className="diff-viewer-segmented">
+              <Button className="gn-skeleton" disabled size="small" variant="toolbar">
+                并排
+              </Button>
+              <Button className="gn-skeleton" disabled size="small" variant="toolbar">
+                统一
+              </Button>
+            </div>
+            <Button
+              className="diff-viewer-wrap-button gn-skeleton"
+              disabled
+              icon={<Icon name="wrap" size={14} />}
+              size="small"
+              variant="toolbar"
+            >
+              自动换行
+            </Button>
+            <span className="diff-viewer-toolbar-separator" />
+            <div className="diff-viewer-hunk-navigation">
+              <Button
+                className="gn-skeleton"
+                disabled
+                icon={<Icon name="arrowUp" size={14} />}
+                size="small"
+                variant="icon"
+              />
+              <span className="diff-viewer-hunk-count gn-skeleton">0 / 0</span>
+              <Button
+                className="gn-skeleton"
+                disabled
+                icon={<Icon name="arrowDown" size={14} />}
+                size="small"
+                variant="icon"
+              />
+            </div>
+          </div>
+        )}
         <div className="diff-workspace-skeleton-document-header">
           <Skeleton className="diff-workspace-skeleton-document-title" />
           <Skeleton className="diff-workspace-skeleton-document-stat" />
           <Skeleton className="diff-workspace-skeleton-square" />
         </div>
-        <DiffContentSkeleton layout={layout} />
+        <DiffContentSkeleton layout={layout} wrap={wrap} />
       </div>
+      {showStatusbar && (
+        <footer className="diff-workspace-statusbar">
+          <Skeleton height={10} width={160} />
+        </footer>
+      )}
     </SkeletonSurface>
   );
 }
