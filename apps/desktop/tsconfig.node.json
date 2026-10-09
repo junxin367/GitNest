@@ -6,7 +6,8 @@
     ],
     "types": [
       "node",
-      "electron-vite/node"
+      "electron-vite/node",
+      "vite/client"
     ]
   },
   "include": [

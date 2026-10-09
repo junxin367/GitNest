@@ -4,6 +4,10 @@ export function resolvePreloadPath(mainOutputDirectory: string): string {
   return join(mainOutputDirectory, "../preload/index.js");
 }
 
+export function resolveTrayMenuPreloadPath(mainOutputDirectory: string): string {
+  return join(mainOutputDirectory, "../preload/tray-menu.js");
+}
+
 export function resolveRendererPath(mainOutputDirectory: string): string {
   return join(mainOutputDirectory, "../renderer/index.html");
 }

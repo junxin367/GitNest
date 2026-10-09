@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolvePreloadPath,
+  resolveTrayMenuPreloadPath,
   resolveRendererPath
 } from "./window-paths";
 
@@ -20,6 +21,12 @@ describe("desktop build paths", () => {
 
     expect(resolveRendererPath(mainOutputDirectory)).toBe(
       join("C:", "GitNest", "out", "renderer", "index.html")
+    );
+  });
+
+  it("loads the isolated tray menu preload from packaged output", () => {
+    expect(resolveTrayMenuPreloadPath(join("C:", "GitNest", "out", "main"))).toBe(
+      join("C:", "GitNest", "out", "preload", "tray-menu.js")
     );
   });
 });

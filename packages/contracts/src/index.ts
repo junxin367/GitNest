@@ -1,4 +1,5 @@
 export { IPC_CHANNELS, IPC_EVENTS } from "./channels";
+export { TRAY_MENU_IPC } from "./tray-menu.contracts";
 export {
   DEFAULT_CODE_ANALYSIS_DIAGNOSTICS,
   DEFAULT_CODE_ANALYSIS_AUTO_REFRESH_DEBOUNCE_MS,

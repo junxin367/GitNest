@@ -1,8 +1,10 @@
 import {
   mkdir,
   mkdtemp,
+  link,
   readFile,
   rm,
+  symlink,
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,7 +23,7 @@ import {
 } from "vitest";
 
 import {
-  ExternalLanguageServerPool,
+  ExternalLanguageServerPool as ProductionLanguageServerPool,
   JsonRpcClient,
   orderLanguageServerDocuments,
   parseDocumentSymbols,
@@ -42,6 +44,180 @@ import type {
   LspDocumentSymbol
 } from "./model";
 import { createLspAnalysisPolicy, lspConfigurationSection } from "./lsp-analysis-policy";
+import { AnalysisPathMap, prepareIsolatedAnalysisProject } from "./isolated-analysis-project";
+import { spawn, execFileSync } from "node:child_process";
+
+// Protocol fixtures deliberately run without project import. Native isolation
+// is exercised separately below; production never selects this adapter.
+class ExternalLanguageServerPool extends ProductionLanguageServerPool {
+  constructor(idleMs?: number) {
+    super(idleMs, async () => undefined);
+  }
+}
+
+describe("isolated analysis projects", () => {
+  it("maps protocol locations without altering code, Markdown, or opaque server data", () => {
+    const original = resolve("original");
+    const copy = resolve("copy");
+    const map = new AnalysisPathMap([{ original, copy }]);
+    const uri = pathToFileURL(join(original, "space name.java")).toString();
+    const data = { uri, path: join(original, "internal") };
+    const input = { uri, text: uri, contents: { uri }, data, textDocument: { uri } };
+    const mapped = map.message(input, "toCopy");
+    expect(mapped).toEqual({
+      uri: pathToFileURL(join(copy, "space name.java")).toString(),
+      text: uri, contents: { uri }, data,
+      textDocument: { uri: pathToFileURL(join(copy, "space name.java")).toString() }
+    });
+    expect(map.message(mapped, "toOriginal")).toEqual(input);
+    expect(map.path(`${original}-sibling`, "toCopy")).toBe(`${original}-sibling`);
+  });
+
+  it("restores project import only with a protected project", () => {
+    const policy = createLspAnalysisPolicy("java", "runtime", "project", true);
+    expect(lspConfigurationSection(policy.settings, "java.autobuild.enabled")).toBe(true);
+    expect(lspConfigurationSection(policy.settings, "java.import.maven.enabled")).toBe(true);
+    expect(lspConfigurationSection(policy.settings, "java.import.gradle.enabled")).toBe(true);
+    expect(policy.limitation).toBeUndefined();
+    expect(createLspAnalysisPolicy("csharp", "runtime", "project", true).unavailableReason).toBeUndefined();
+  });
+
+  it("keeps runtime and executable paths outside the admitted project unmapped", () => {
+    const workspace = resolve("workspace");
+    const source = join(workspace, "repo");
+    const copy = resolve("copy");
+    const map = new AnalysisPathMap([{ original: workspace, copy }], [source], workspace);
+    expect(map.path(workspace, "toCopy")).toBe(copy);
+    expect(map.path(join(source, "Source.java"), "toCopy")).toBe(join(copy, "repo", "Source.java"));
+    expect(map.path(join(workspace, "runtime", "java.exe"), "toCopy")).toBe(join(workspace, "runtime", "java.exe"));
+  });
+
+  it.skipIf(process.platform !== "win32")("refuses overlapping runtime paths and junctions before running a server", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gitnest-copy-boundary-"));
+    const project = join(root, "project");
+    await mkdir(project);
+    try {
+      const input = { workspaceRootPath: project, workspaceFolders: [project], documents: [] };
+      await expect(prepareIsolatedAnalysisProject({ ...input, dataDirectory: join(project, "runtime") }))
+        .rejects.toThrow("必须位于原项目目录之外");
+      await symlink(project, join(project, "loop"), "junction");
+      await expect(prepareIsolatedAnalysisProject({ ...input, dataDirectory: join(root, "runtime") }))
+        .rejects.toThrow("符号链接或目录联接");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.skipIf(process.platform !== "win32")("copies working files and prevents parent and child writes to the original", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gitnest-native-isolation-"));
+    const project = join(root, "project");
+    const source = join(project, "Source.java");
+    await mkdir(project);
+    await writeFile(source, "original");
+    let isolated: Awaited<ReturnType<typeof prepareIsolatedAnalysisProject>> | undefined;
+    try {
+      isolated = await prepareIsolatedAnalysisProject({
+        workspaceRootPath: project, workspaceFolders: [project],
+        dataDirectory: join(root, "runtime"),
+        documents: [{ file: { absolutePath: source }, content: "unsaved snapshot" }]
+      });
+      expect(await readFile(isolated.toCopy(source), "utf8")).toBe("unsaved snapshot");
+      const cache = isolated.environment.GRADLE_USER_HOME!;
+      await mkdir(cache, { recursive: true });
+      await link(source, join(cache, "linked-original"));
+      const script = `
+        const fs=require("node:fs"),cp=require("node:child_process");
+        const original=${JSON.stringify(source)};
+        let denied=false;
+        try{fs.writeFileSync(original,"BAD")}catch(e){denied=e.code==="EPERM"||e.code==="EACCES"}
+        fs.writeFileSync("own-output","ok");
+        fs.writeFileSync("Source.java","modified copy");
+        const child=cp.spawnSync(process.execPath,["-e", "require('node:fs').writeFileSync("+JSON.stringify(original)+",'BAD CHILD')"],{encoding:"utf8",timeout:5000});
+        console.log(JSON.stringify({denied,childDenied:child.status!==0&&/EPERM|EACCES/.test(child.stderr),cwd:process.cwd()}));
+      `;
+      const launch = isolated.launch(process.execPath, ["-e", script], project);
+      const output = await new Promise<string>((done, reject) => {
+        const child = spawn(launch.command, launch.args, {
+          cwd: isolated!.toCopy(project), windowsHide: true,
+          env: { ...process.env, ...isolated!.environment }, stdio: ["pipe", "pipe", "pipe"]
+        });
+        let stdout = "", stderr = "";
+        child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+        child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+        child.once("error", reject);
+        child.once("exit", (code) => code === 0 ? done(stdout) : reject(new Error(stderr)));
+      });
+      expect(JSON.parse(output)).toEqual({ denied: true, childDenied: true, cwd: isolated.toCopy(project) });
+      expect(await readFile(source, "utf8")).toBe("original");
+      expect(await readFile(join(isolated.toCopy(project), "own-output"), "utf8")).toBe("ok");
+      expect(await readFile(isolated.toCopy(source), "utf8")).toBe("modified copy");
+      // MIC protection is a precondition, not an assumption about every disk.
+      execFileSync("icacls.exe", [project, "/setintegritylevel", "(OI)(CI)L"], { windowsHide: true, stdio: "pipe" });
+      const refused = await new Promise<{ code: number | null; stderr: string }>((done, reject) => {
+        const child = spawn(launch.command, launch.args, {
+          cwd: isolated!.toCopy(project), windowsHide: true,
+          env: { ...process.env, ...isolated!.environment }, stdio: ["pipe", "pipe", "pipe"]
+        });
+        let stderr = "";
+        child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+        child.once("error", reject);
+        child.once("exit", (code) => done({ code, stderr }));
+      });
+      expect(refused.code).toBe(127);
+      expect(refused.stderr).toContain("Original has no Medium write boundary");
+      expect(await readFile(source, "utf8")).toBe("original");
+    } finally {
+      await isolated?.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform !== "win32")("terminates detached build descendants when the analysis host is cancelled", async () => {
+    const root = await mkdtemp(join(tmpdir(), "gitnest-job-cleanup-"));
+    const project = join(root, "project");
+    await mkdir(project);
+    const isolated = await prepareIsolatedAnalysisProject({
+      workspaceRootPath: project, workspaceFolders: [project],
+      dataDirectory: join(root, "runtime"), documents: []
+    });
+    let descendant: number | undefined;
+    const script = `
+      const child=require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore",detached:true});
+      console.log(child.pid);setInterval(()=>{},1000);
+    `;
+    const launch = isolated.launch(process.execPath, ["-e", script], project);
+    const host = spawn(launch.command, launch.args, {
+      cwd: isolated.toCopy(project), windowsHide: true,
+      env: { ...process.env, ...isolated.environment }, stdio: ["pipe", "pipe", "pipe"]
+    });
+    const exited = new Promise<void>((done) => host.once("exit", () => done()));
+    try {
+      descendant = await new Promise<number>((done, reject) => {
+        let stdout = "", stderr = "";
+        const timer = setTimeout(() => reject(new Error(`Child startup timed out: ${stderr}`)), 5000);
+        host.stdout.on("data", (chunk: Buffer) => {
+          stdout += chunk.toString();
+          if (stdout.includes("\n")) { clearTimeout(timer); done(Number(stdout.trim())); }
+        });
+        host.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+        host.once("error", (error) => { clearTimeout(timer); reject(error); });
+      });
+      expect(Number.isSafeInteger(descendant)).toBe(true);
+      const alive = () => { try { process.kill(descendant!, 0); return true; } catch { return false; } };
+      expect(alive()).toBe(true);
+      host.kill();
+      await exited;
+      for (let attempt = 0; attempt < 50 && alive(); attempt++) {
+        await new Promise<void>((done) => setTimeout(done, 20));
+      }
+      expect(alive()).toBe(false);
+    } finally {
+      host.kill();
+      await exited;
+      if (descendant) { try { process.kill(descendant); } catch { /* Already killed by job. */ } }
+      await isolated.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
 
 describe("analysis-only language server policies", () => {
   it("refuses a custom Java workspace that may contain previously imported build projects", async () => {
@@ -1660,7 +1836,7 @@ describe("language server documentation", () => {
     }
   });
 
-  it("shares semantic request budgets across files and reports skipped coverage", async () => {
+  it.each([false, true])("shares semantic budgets and continues batches for full projects (%s)", async (completeProject) => {
     const root = await mkdtemp(
       join(tmpdir(), "gitnest-lsp-fair-budget-")
     );
@@ -1710,6 +1886,7 @@ describe("language server documentation", () => {
         workspaceFolders: [projectRoot],
         lspDataDirectory: join(root, "lsp"),
         settings,
+        completeProject,
         documents: files.map((file) => ({
           file,
           content: "export const FIRST = 1;\nexport const SECOND = 2;"
@@ -1730,6 +1907,17 @@ describe("language server documentation", () => {
         (event) =>
           event.method === "textDocument/references"
       );
+      if (completeProject) {
+        expect(referenceEvents).toHaveLength(6);
+        expect(new Set(referenceEvents.map((event) => event.uri)).size).toBe(3);
+        expect(result.statuses).toContainEqual(expect.objectContaining({
+          language: "typescript", state: "connected", documentsAnalyzed: 3, skippedDocuments: 0,
+          requestBudgetExhausted: false
+        }));
+        expect(result.symbolsByPath.get(files[2]!.canonicalPath)?.map((symbol) => symbol.name))
+          .toEqual(["FIRST", "SECOND"]);
+        return;
+      }
 
       expect(referenceEvents).toEqual([
         {

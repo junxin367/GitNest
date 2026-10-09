@@ -209,6 +209,10 @@ export class CodeAnalysisEngine {
         lspDataDirectory: input.lspDataDirectory,
         settings: input.settings,
         documents: lspDocuments,
+        completeProject: input.scope === "workspace",
+        onProgress: (completed, total, message) => input.onProgress?.({
+          stage: "lsp", completed, total, message
+        }),
         priorityPaths: new Set(
           [...parsedByPath.values()]
             .filter(

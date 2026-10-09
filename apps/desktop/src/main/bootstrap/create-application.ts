@@ -68,6 +68,7 @@ export async function createApplication(): Promise<void> {
 
   await createOrShowMainWindow();
   applicationTray = createApplicationTray({
+    diagnostics: services.diagnostics,
     quitApplication: () => app.quit(),
     showMainWindow: () => {
       void createOrShowMainWindow().catch(
@@ -111,7 +112,10 @@ export async function createApplication(): Promise<void> {
     })
     .catch(() => undefined);
 
-  app.on("browser-window-focus", () => {
+  app.on("browser-window-focus", (_event, window) => {
+    if (!(window instanceof BrowserWindow)) {
+      return;
+    }
     void services.workspace
       .setForeground(true)
       .catch((error) =>

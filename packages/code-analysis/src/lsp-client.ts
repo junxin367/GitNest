@@ -26,6 +26,11 @@ import {
 
 import { MAX_CODE_DOCUMENTATION_CHARACTERS } from "./model";
 import {
+  prepareIsolatedAnalysisProject,
+  type IsolatedAnalysisProject,
+  type PrepareAnalysisProject
+} from "./isolated-analysis-project";
+import {
   createLspAnalysisPolicy,
   LSP_ANALYSIS_POLICY_VERSION,
   lspConfigurationSection,
@@ -49,6 +54,19 @@ import type {
 interface SourceDocument {
   file: AnalysisSourceFile;
   content: string;
+}
+
+interface LanguageServerAnalysisInput {
+  sessionPrefix: string;
+  workspaceRootPath: string;
+  workspaceFolders: string[];
+  lspDataDirectory: string;
+  settings: CodeAnalysisSettings;
+  documents: SourceDocument[];
+  priorityPaths?: ReadonlySet<string>;
+  completeProject?: boolean;
+  onProgress?: (completed: number, total: number, message: string) => void;
+  signal?: AbortSignal;
 }
 
 interface LspDocumentResponse {
@@ -266,21 +284,40 @@ export class ExternalLanguageServerPool {
   readonly #sessions = new Map<string, PooledSession>();
   readonly #sessionTails = new Map<string, Promise<void>>();
   readonly #idleMs: number;
+  readonly #prepareProject: PrepareAnalysisProject;
 
-  constructor(idleMs = 5 * 60_000) {
+  constructor(
+    idleMs = 5 * 60_000,
+    prepareProject: PrepareAnalysisProject = prepareIsolatedAnalysisProject
+  ) {
     this.#idleMs = idleMs;
+    this.#prepareProject = prepareProject;
   }
 
-  async analyze(input: {
-    sessionPrefix: string;
-    workspaceRootPath: string;
-    workspaceFolders: string[];
-    lspDataDirectory: string;
-    settings: CodeAnalysisSettings;
-    documents: SourceDocument[];
-    priorityPaths?: ReadonlySet<string>;
-    signal?: AbortSignal;
-  }): Promise<LspAnalysisResult> {
+  async analyze(input: LanguageServerAnalysisInput): Promise<LspAnalysisResult> {
+    let projectTask: Promise<IsolatedAnalysisProject | undefined> | undefined;
+    try {
+      return await this.#analyzeLanguages(input, () => {
+        projectTask ??= this.#prepareProject({
+          workspaceRootPath: input.workspaceRootPath,
+          workspaceFolders: input.workspaceFolders,
+          dataDirectory: input.lspDataDirectory,
+          documents: input.documents,
+          ...(input.signal ? { signal: input.signal } : {}),
+          onProgress: (message) => input.onProgress?.(0, input.documents.length, message)
+        });
+        return projectTask;
+      });
+    } finally {
+      const project = await projectTask?.catch(() => undefined);
+      await project?.dispose();
+    }
+  }
+
+  async #analyzeLanguages(
+    input: LanguageServerAnalysisInput,
+    prepareProject: () => Promise<IsolatedAnalysisProject | undefined>
+  ): Promise<LspAnalysisResult> {
     const symbolsByPath = new Map<
       string,
       LspDocumentSymbol[]
@@ -288,7 +325,6 @@ export class ExternalLanguageServerPool {
     const statuses: LanguageServerStatus[] = [];
     const warnings: string[] = [];
     const semanticRelations: LspSemanticRelation[] = [];
-
     for (const descriptor of LANGUAGE_SERVER_DESCRIPTORS) {
       const language = descriptor.language;
       const sessionKey = `${input.sessionPrefix}:${language}`;
@@ -388,14 +424,21 @@ export class ExternalLanguageServerPool {
       const documentLimit = commandSettings.maxDocuments;
       const selectedDocuments = orderedDocuments.slice(
         0,
-        documentLimit
+        input.completeProject && documentLimit > 0 ? undefined : documentLimit
       );
       let releaseSession: (() => void) | undefined;
+      let project: IsolatedAnalysisProject | undefined;
       try {
         releaseSession = await this.#acquireSession(
           sessionKey,
           input.signal
         );
+        if (language === "java" && hasJavaDataArgument(commandSettings.args)) {
+          throw new Error("Java 分析必须使用 GitNest 管理的独立工作区，请移除自定义 -data 参数，避免复用可执行构建的工程索引。");
+        }
+        project = await prepareProject();
+        // A fresh snapshot is immutable to the host until its process tree exits.
+        if (project) await this.#disposeSession(sessionKey);
         const firstDocument = selectedDocuments[0]!;
         const firstDocumentUri = pathToFileURL(
           firstDocument.file.absolutePath
@@ -420,7 +463,8 @@ export class ExternalLanguageServerPool {
               rootPath: workspace.rootPath,
               workspaceFolders:
                 workspace.workspaceFolders,
-              dataDirectory: input.lspDataDirectory,
+              dataDirectory: project?.dataDirectory ?? input.lspDataDirectory,
+              ...(project ? { project } : {}),
               timeoutMs: startupTimeoutMs,
               workspaceReadyTimeoutMs,
               ...(input.signal
@@ -494,7 +538,7 @@ export class ExternalLanguageServerPool {
         const preparedDocuments: PreparedLspDocument[] = [];
         const analyzedPaths = new Set<string>();
         const remainingDocumentResults =
-          await mapWithConcurrency(
+          await mapInBatches(
             selectedDocuments.slice(1),
             input.settings.readConcurrency,
             async (document): Promise<LspDocumentResponse> => {
@@ -536,7 +580,12 @@ export class ExternalLanguageServerPool {
                   failure: errorMessage(error)
                 };
               }
-            }
+            },
+            documentLimit,
+            (completed) => input.onProgress?.(
+              completed + 1, selectedDocuments.length,
+              `${descriptor.displayName} 文件分析 ${completed + 1}/${selectedDocuments.length}`
+            )
           );
         const documentResults: LspDocumentResponse[] = [
           {
@@ -625,6 +674,8 @@ export class ExternalLanguageServerPool {
 
         const documentation = session.hoverSupported
           ? await enrichDocumentation({
+              completeProject: input.completeProject ?? false,
+              onProgress: (completed, total) => input.onProgress?.(completed, total, `${descriptor.displayName} 文档增强 ${completed}/${total}`),
               session,
               documents: preparedDocuments,
               budget:
@@ -640,6 +691,8 @@ export class ExternalLanguageServerPool {
 
         const hierarchy = session.callHierarchySupported
           ? await enrichCallHierarchy({
+              completeProject: input.completeProject ?? false,
+              onProgress: (completed, total) => input.onProgress?.(completed, total, `${descriptor.displayName} 调用关系 ${completed}/${total}`),
               session,
               documents: preparedDocuments,
               budget:
@@ -662,6 +715,8 @@ export class ExternalLanguageServerPool {
 
         const references = session.referencesSupported
           ? await enrichReferences({
+              completeProject: input.completeProject ?? false,
+              onProgress: (completed, total) => input.onProgress?.(completed, total, `${descriptor.displayName} 引用关系 ${completed}/${total}`),
               session,
               documents: preparedDocuments,
               budget:
@@ -678,6 +733,8 @@ export class ExternalLanguageServerPool {
         session.referencesSupported = references.supported;
 
         const typeRelations = await enrichTypeRelations({
+          completeProject: input.completeProject ?? false,
+          onProgress: (completed, total) => input.onProgress?.(completed, total, `${descriptor.displayName} 类型关系 ${completed}/${total}`),
           session,
           documents: preparedDocuments,
           budget:
@@ -753,6 +810,7 @@ export class ExternalLanguageServerPool {
           semanticEnrichmentStoppedEarly ||
           semanticEnrichmentIncomplete ||
           requiredSemanticCapabilityMissing ||
+          session.client.projectHasErrors ||
           Boolean(session.policyLimitation)
             ? "partial"
             : "complete";
@@ -772,6 +830,8 @@ export class ExternalLanguageServerPool {
                 ? "已自动重建 Java 索引，"
                 : ""
             }已连接并增强 ${preparedDocuments.length} 个文件，补充 ${documentation.documented} 条文档、${hierarchy.callCount} 条调用关系、${typeRelations.relationCount} 条类型关系、${references.referenceCount} 条引用关系。${session.policyLimitation ?? ""}${
+              session.client.projectHasErrors ? " 工程导入或源码诊断存在错误，语义结果可能不完整。" : ""
+            }${
               skippedByLimitCount > 0
                 ? ` 另有 ${skippedByLimitCount} 个文件因 maxDocuments=${documentLimit} 未进入 Language Server 增强。`
                 : ""
@@ -868,7 +928,12 @@ export class ExternalLanguageServerPool {
         );
         await this.#disposeSession(sessionKey);
       } finally {
-        releaseSession?.();
+        try {
+          if (project) {
+            // Closing the native host kills the entire build tree before cleanup.
+            await this.#disposeSession(sessionKey);
+          }
+        } finally { releaseSession?.(); }
       }
     }
 
@@ -938,13 +1003,17 @@ export class ExternalLanguageServerPool {
     dataDirectory: string;
     timeoutMs: number;
     workspaceReadyTimeoutMs: number;
+    project?: IsolatedAnalysisProject;
     signal?: AbortSignal;
   }): Promise<PooledSession> {
     const policy = createLspAnalysisPolicy(
-      input.language, input.dataDirectory, input.rootPath
+      input.language, input.dataDirectory, input.rootPath, Boolean(input.project)
     );
     if (policy.unavailableReason) {
       throw new LanguageServerPolicyError(policy.unavailableReason);
+    }
+    if (input.project) {
+      policy.environment = { ...policy.environment, ...input.project.environment };
     }
     const rootPath = resolve(input.rootPath);
     const workspaceFolders = uniqueResolvedPaths(
@@ -1019,6 +1088,7 @@ export class ExternalLanguageServerPool {
       return session;
     } catch (error) {
       if (
+        input.project ||
         !javaDataWorkspace ||
         !isRecoverableJavaStartupError(error, input.signal)
       ) {
@@ -1069,6 +1139,7 @@ export class ExternalLanguageServerPool {
       commandSettings: LanguageServerCommandSettings;
       timeoutMs: number;
       workspaceReadyTimeoutMs: number;
+      project?: IsolatedAnalysisProject;
       signal?: AbortSignal;
     },
     plan: LanguageServerLaunchPlan,
@@ -1079,7 +1150,8 @@ export class ExternalLanguageServerPool {
       input.commandSettings.command,
       plan.args,
       plan.rootPath,
-      { policy, workspaceFolders: plan.workspaceFolders }
+      { policy, workspaceFolders: plan.workspaceFolders,
+        ...(input.project ? { project: input.project } : {}) }
     );
     let hoverSupported = false;
     let referencesSupported = false;
@@ -1746,6 +1818,8 @@ async function enrichCallHierarchy(input: {
   concurrency: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  completeProject?: boolean;
+  onProgress?: (completed: number, total: number) => void;
 }): Promise<CallHierarchyEnrichmentResult> {
   let attempted = 0;
   let callCount = 0;
@@ -1764,8 +1838,9 @@ async function enrichCallHierarchy(input: {
           symbol.kind === 12
       )
   );
-  const budget = Math.max(0, Math.floor(input.budget));
-  await mapWithConcurrency(
+  const batchSize = Math.max(0, Math.floor(input.budget));
+  const budget = input.completeProject && batchSize > 0 ? workItems.length : batchSize;
+  await mapInBatches(
     workItems.slice(0, budget),
     input.concurrency,
     async ({ uri, symbol }) => {
@@ -1859,7 +1934,9 @@ async function enrichCallHierarchy(input: {
           stopRequested = true;
         }
       }
-    }
+    },
+    batchSize,
+    input.onProgress
   );
   return {
     attempted,
@@ -1883,6 +1960,8 @@ async function enrichReferences(input: {
   concurrency: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  completeProject?: boolean;
+  onProgress?: (completed: number, total: number) => void;
 }): Promise<ReferenceEnrichmentResult> {
   let attempted = 0;
   let referenceCount = 0;
@@ -1906,8 +1985,9 @@ async function enrichReferences(input: {
             left.character - right.character
         )
   );
-  const budget = Math.max(0, Math.floor(input.budget));
-  await mapWithConcurrency(
+  const batchSize = Math.max(0, Math.floor(input.budget));
+  const budget = input.completeProject && batchSize > 0 ? workItems.length : batchSize;
+  await mapInBatches(
     workItems.slice(0, budget),
     input.concurrency,
     async ({ uri, symbol }) => {
@@ -1975,7 +2055,9 @@ async function enrichReferences(input: {
           stopRequested = true;
         }
       }
-    }
+    },
+    batchSize,
+    input.onProgress
   );
   return {
     attempted,
@@ -1998,6 +2080,8 @@ async function enrichTypeRelations(input: {
   concurrency: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  completeProject?: boolean;
+  onProgress?: (completed: number, total: number) => void;
 }): Promise<TypeRelationEnrichmentResult> {
   const initiallySupported =
     input.session.typeHierarchySupported ||
@@ -2058,8 +2142,9 @@ async function enrichTypeRelations(input: {
     relations.push(relation);
   };
 
-  const budget = Math.max(0, Math.floor(input.budget));
-  await mapWithConcurrency(
+  const batchSize = Math.max(0, Math.floor(input.budget));
+  const budget = input.completeProject && batchSize > 0 ? workItems.length : batchSize;
+  await mapInBatches(
     workItems.slice(0, budget),
     input.concurrency,
     async ({ uri, symbol }) => {
@@ -2234,7 +2319,9 @@ async function enrichTypeRelations(input: {
         stoppedEarly = true;
         stopRequested = true;
       }
-    }
+    },
+    batchSize,
+    input.onProgress
   );
   const hasTypeWork = workItems.some(({ symbol }) =>
     isTypeSymbolKind(symbol.kind)
@@ -2273,6 +2360,8 @@ async function enrichDocumentation(input: {
   concurrency: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  completeProject?: boolean;
+  onProgress?: (completed: number, total: number) => void;
 }): Promise<DocumentationEnrichmentResult> {
   let attempted = 0;
   let documented = 0;
@@ -2303,8 +2392,9 @@ async function enrichDocumentation(input: {
             Number(right.kind === 5)
         )
   );
-  const budget = Math.max(0, Math.floor(input.budget));
-  await mapWithConcurrency(
+  const batchSize = Math.max(0, Math.floor(input.budget));
+  const budget = input.completeProject && batchSize > 0 ? workItems.length : batchSize;
+  await mapInBatches(
     workItems.slice(0, budget),
     input.concurrency,
     async ({ uri, symbol }) => {
@@ -2348,7 +2438,9 @@ async function enrichDocumentation(input: {
           stopRequested = true;
         }
       }
-    }
+    },
+    batchSize,
+    input.onProgress
   );
   return {
     attempted,
@@ -2841,6 +2933,7 @@ export class JsonRpcClient {
   readonly #context: {
     policy: LspAnalysisPolicy;
     workspaceFolders: string[];
+    project?: IsolatedAnalysisProject;
   } | undefined;
   #process: ChildProcessWithoutNullStreams | undefined;
   #buffer = Buffer.alloc(0);
@@ -2868,12 +2961,14 @@ export class JsonRpcClient {
   #stderr = "";
   #writeTail: Promise<void> = Promise.resolve();
   #queuedWriteBytes = 0;
+  readonly #diagnosticErrors = new Set<string>();
+  #projectImportError = false;
 
   constructor(
     command: string,
     args: string[],
     cwd: string,
-    context?: { policy: LspAnalysisPolicy; workspaceFolders: string[] }
+    context?: { policy: LspAnalysisPolicy; workspaceFolders: string[]; project?: IsolatedAnalysisProject }
   ) {
     this.#command = command;
     this.#args = args;
@@ -2889,19 +2984,26 @@ export class JsonRpcClient {
     );
   }
 
+  get projectHasErrors(): boolean {
+    return this.#projectImportError || this.#diagnosticErrors.size > 0;
+  }
+
   async start(signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
-    const launch = await resolveLaunchCommand(
+    let launch = await resolveLaunchCommand(
       this.#command,
       this.#args
     );
     this.#expectsJavaServiceReady =
       isJdtlsLaunch(this.#command, this.#args) ||
       isJdtlsLaunch(launch.command, launch.args);
+    if (this.#context?.project) {
+      launch = this.#context.project.launch(launch.command, launch.args, this.#cwd);
+    }
     throwIfAborted(signal);
     await new Promise<void>((resolvePromise, rejectPromise) => {
       const child = spawn(launch.command, launch.args, {
-        cwd: this.#cwd,
+        cwd: this.#context?.project?.toCopy(this.#cwd) ?? this.#cwd,
         env: { ...process.env, ...this.#context?.policy.environment },
         shell: false,
         windowsHide: true,
@@ -3145,7 +3247,7 @@ export class JsonRpcClient {
       throw new Error("LSP 进程当前不可用。");
     }
     const body = Buffer.from(
-      JSON.stringify(message),
+      JSON.stringify(this.#context?.project?.mapMessage(message, "toCopy") ?? message),
       "utf8"
     );
     if (body.byteLength > MAX_LSP_MESSAGE_BYTES) {
@@ -3350,6 +3452,7 @@ export class JsonRpcClient {
     let message: unknown;
     try {
       message = JSON.parse(body);
+      if (this.#context?.project) message = this.#context.project.mapMessage(message, "toOriginal");
     } catch {
       return;
     }
@@ -3426,6 +3529,15 @@ export class JsonRpcClient {
     method: string,
     params: unknown
   ): void {
+    if (params && typeof params === "object") {
+      const value = params as Record<string, unknown>;
+      if (method === "window/showMessage" && value.type === 1) this.#projectImportError = true;
+      if (method === "textDocument/publishDiagnostics" && typeof value.uri === "string" && Array.isArray(value.diagnostics)) {
+        if (value.diagnostics.some((item: unknown) => item && typeof item === "object" && (item as Record<string, unknown>).severity === 1)) {
+          this.#diagnosticErrors.add(value.uri);
+        } else this.#diagnosticErrors.delete(value.uri);
+      }
+    }
     if (method === "tsserver/request") {
       const requestId = vueTsserverRequestId(params);
       if (requestId !== undefined) {
@@ -4663,6 +4775,25 @@ function delayWithSignal(
       once: true
     });
   });
+}
+
+async function mapInBatches<Item, Result>(
+  items: readonly Item[],
+  concurrency: number,
+  worker: (item: Item) => Promise<Result>,
+  requestedBatchSize: number,
+  onProgress?: (completed: number, total: number) => void
+): Promise<Result[]> {
+  const batchSize = Math.max(1, Math.floor(requestedBatchSize));
+  const results: Result[] = [];
+  for (let offset = 0; offset < items.length; offset += batchSize) {
+    results.push(...await mapWithConcurrency(items.slice(offset, offset + batchSize), concurrency, worker));
+    onProgress?.(results.length, items.length);
+    // Full-project enrichment runs in the analysis worker. Yield between
+    // batches so cancellation and progress messages are serviced promptly.
+    await new Promise<void>((done) => setImmediate(done));
+  }
+  return results;
 }
 
 async function mapWithConcurrency<Item, Result>(

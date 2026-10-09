@@ -119,7 +119,8 @@ export default defineConfig({
       sourcemap: !releaseBuild,
       rollupOptions: {
         input: {
-          index: resolve(desktopRoot, "src/preload/index.ts")
+          index: resolve(desktopRoot, "src/preload/index.ts"),
+          "tray-menu": resolve(desktopRoot, "src/preload/tray-menu.ts")
         },
         output: {
           format: "cjs",

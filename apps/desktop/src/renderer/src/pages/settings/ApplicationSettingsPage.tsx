@@ -2137,13 +2137,13 @@ function LanguageServerSettingsPanel({
             <div className="settings-lsp-budget-heading">
               <h4>高级预算</h4>
               <p>
-                控制该语言每轮分析的文档覆盖和语义请求数量；达到上限后会在分析状态中提示。
+                全工程分析按以下批次大小持续处理；变更分析以此为本轮上限。单文件符号和单符号引用仍有总量限制。
               </p>
             </div>
             <div className="analysis-settings-number-grid">
               <Input
                 fullWidth
-                helpText="本轮最多送入该 Language Server 的文件数。"
+                helpText="全工程分析每批处理的文件数；变更分析为本轮文件上限。"
                 id={`lsp-max-documents-${fieldId}`}
                 label="文档上限"
                 max={MAX_LSP_DOCUMENTS}
@@ -2180,7 +2180,7 @@ function LanguageServerSettingsPanel({
               />
               <Input
                 fullWidth
-                helpText="限制调用层级查询次数，0 表示本轮不发起调用层级查询。"
+                helpText="每批查询的调用符号数量，0 表示不查询调用层级。"
                 id={`lsp-max-call-hierarchy-${fieldId}`}
                 label="调用层级请求上限"
                 max={MAX_LSP_REQUESTS}
@@ -2201,7 +2201,7 @@ function LanguageServerSettingsPanel({
               />
               <Input
                 fullWidth
-                helpText="限制类型层级和实现关系查询次数，0 表示本轮不补充继承、实现和重写关系。"
+                helpText="每批查询的类型或方法数量，0 表示不补充继承、实现和重写关系。"
                 id={`lsp-max-type-hierarchy-${fieldId}`}
                 label="类型关系请求上限"
                 max={MAX_LSP_REQUESTS}
@@ -2223,7 +2223,7 @@ function LanguageServerSettingsPanel({
               />
               <Input
                 fullWidth
-                helpText="限制查找引用请求次数，0 表示本轮不发起引用查询。"
+                helpText="每批查找引用的符号数量，0 表示不查询引用。"
                 id={`lsp-max-reference-requests-${fieldId}`}
                 label="引用查询请求上限"
                 max={MAX_LSP_REQUESTS}
@@ -2242,7 +2242,7 @@ function LanguageServerSettingsPanel({
               />
               <Input
                 fullWidth
-                helpText="限制悬停文档查询次数，0 表示本轮不补充文档说明。"
+                helpText="每批查询文档的符号数量，0 表示不补充文档说明。"
                 id={`lsp-max-documentation-${fieldId}`}
                 label="文档查询请求上限"
                 max={MAX_LSP_REQUESTS}

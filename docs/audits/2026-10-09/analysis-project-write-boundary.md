@@ -1,5 +1,8 @@
 # 代码分析对被分析项目的写入边界
 
+本文件记录导入禁用阶段的修复和证据。后续隔离副本方案见同目录
+`isolated-project-analysis.md`。
+
 ## 已确认的问题
 
 GitNest 向 JDT LS 传入真实项目目录，却未在 initialize 阶段关闭自动构建。
