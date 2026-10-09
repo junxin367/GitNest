@@ -476,7 +476,7 @@ describe("AnalysisSnapshotCache", () => {
     ).toBeNull();
   });
 
-  it("loads a legacy revision-coupled snapshot after the Worktree revision changes", async () => {
+  it("invalidates snapshots created before the analysis-only LSP policy", async () => {
     const directory = await createTemporaryDirectory();
     const store = new AnalysisSnapshotCache(directory);
     const settings = createSettings();
@@ -516,7 +516,7 @@ describe("AnalysisSnapshotCache", () => {
         })),
         "workspace"
       )
-    ).resolves.toEqual(snapshot);
+    ).resolves.toBeNull();
   });
 
   it("includes every configurable analysis budget in the snapshot key", () => {

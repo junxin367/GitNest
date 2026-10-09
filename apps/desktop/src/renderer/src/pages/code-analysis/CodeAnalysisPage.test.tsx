@@ -2523,6 +2523,9 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
       ).not.toBeNull();
       expect(container.textContent).toContain("newValue");
     });
+    // The rows commit before the passive effect registers the find shortcut.
+    // Flush pending React work before sending keyboard input.
+    await act(async () => {});
     const focusedRows = container.querySelectorAll<HTMLElement>(
       '[data-diff-viewer-focus-line="true"]'
     );

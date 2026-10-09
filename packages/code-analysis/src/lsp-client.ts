@@ -25,6 +25,12 @@ import {
 } from "node:url";
 
 import { MAX_CODE_DOCUMENTATION_CHARACTERS } from "./model";
+import {
+  createLspAnalysisPolicy,
+  LSP_ANALYSIS_POLICY_VERSION,
+  lspConfigurationSection,
+  type LspAnalysisPolicy
+} from "./lsp-analysis-policy";
 import type {
   AnalysisSourceFile,
   CodeAnalysisLanguage,
@@ -89,6 +95,7 @@ interface PooledSession {
   implementationSupported: boolean;
   workspaceSymbolSupported: boolean;
   semanticCapabilityRejected: boolean;
+  policyLimitation?: string;
   idleTimer?: NodeJS.Timeout;
 }
 
@@ -745,7 +752,8 @@ export class ExternalLanguageServerPool {
           semanticRequestBudgetExhausted ||
           semanticEnrichmentStoppedEarly ||
           semanticEnrichmentIncomplete ||
-          requiredSemanticCapabilityMissing
+          requiredSemanticCapabilityMissing ||
+          Boolean(session.policyLimitation)
             ? "partial"
             : "complete";
 
@@ -763,7 +771,7 @@ export class ExternalLanguageServerPool {
               session.recoveredJavaWorkspace
                 ? "已自动重建 Java 索引，"
                 : ""
-            }已连接并增强 ${preparedDocuments.length} 个文件，补充 ${documentation.documented} 条文档、${hierarchy.callCount} 条调用关系、${typeRelations.relationCount} 条类型关系、${references.referenceCount} 条引用关系。${
+            }已连接并增强 ${preparedDocuments.length} 个文件，补充 ${documentation.documented} 条文档、${hierarchy.callCount} 条调用关系、${typeRelations.relationCount} 条类型关系、${references.referenceCount} 条引用关系。${session.policyLimitation ?? ""}${
               skippedByLimitCount > 0
                 ? ` 另有 ${skippedByLimitCount} 个文件因 maxDocuments=${documentLimit} 未进入 Language Server 增强。`
                 : ""
@@ -828,15 +836,12 @@ export class ExternalLanguageServerPool {
         );
       } catch (error) {
         if (input.signal?.aborted) {
-          const session = this.#sessions.get(sessionKey);
-          if (session?.client.alive) {
-            this.#scheduleIdle(sessionKey, session);
-          } else {
-            await this.#disposeSession(sessionKey);
-          }
+          await this.#disposeSession(sessionKey);
           throwIfAborted(input.signal);
         }
-        const unavailable = isCommandUnavailable(error);
+        const unavailable =
+          error instanceof LanguageServerPolicyError ||
+          isCommandUnavailable(error);
         statuses.push({
           language,
           state: unavailable ? "unavailable" : "failed",
@@ -935,11 +940,22 @@ export class ExternalLanguageServerPool {
     workspaceReadyTimeoutMs: number;
     signal?: AbortSignal;
   }): Promise<PooledSession> {
+    const policy = createLspAnalysisPolicy(
+      input.language, input.dataDirectory, input.rootPath
+    );
+    if (policy.unavailableReason) {
+      throw new LanguageServerPolicyError(policy.unavailableReason);
+    }
     const rootPath = resolve(input.rootPath);
     const workspaceFolders = uniqueResolvedPaths(
       input.workspaceFolders
     );
     const configuredArgs = [...input.commandSettings.args];
+    if (input.language === "java" && hasJavaDataArgument(configuredArgs)) {
+      throw new Error(
+        "Java 分析必须使用 GitNest 管理的独立工作区，请移除自定义 -data 参数，避免复用可执行构建的工程索引。"
+      );
+    }
     const resolvedLaunch = await resolveLaunchCommand(
       input.commandSettings.command,
       configuredArgs
@@ -950,12 +966,13 @@ export class ExternalLanguageServerPool {
     const javaDataBaseDirectory = managesJavaData
       ? join(
           input.dataDirectory,
-          "java",
+          `java-analysis-only-v${LSP_ANALYSIS_POLICY_VERSION}`,
           stablePathSegment(
             JSON.stringify({
               key: input.key,
               command: resolvedLaunch.command,
               args: resolvedLaunch.args,
+              policyVersion: LSP_ANALYSIS_POLICY_VERSION,
               rootPath,
               workspaceFolders: [...workspaceFolders].sort(
                 pathComparison
@@ -995,7 +1012,8 @@ export class ExternalLanguageServerPool {
       const session = await this.#startSession(
         input,
         plan,
-        false
+        false,
+        policy
       );
       this.#sessions.set(input.key, session);
       return session;
@@ -1021,7 +1039,8 @@ export class ExternalLanguageServerPool {
         const session = await this.#startSession(
           input,
           recoveryPlan,
-          true
+          true,
+          policy
         );
         this.#sessions.set(input.key, session);
         return session;
@@ -1053,12 +1072,14 @@ export class ExternalLanguageServerPool {
       signal?: AbortSignal;
     },
     plan: LanguageServerLaunchPlan,
-    recoveredJavaWorkspace: boolean
+    recoveredJavaWorkspace: boolean,
+    policy: LspAnalysisPolicy
   ): Promise<PooledSession> {
     const client = new JsonRpcClient(
       input.commandSettings.command,
       plan.args,
-      plan.rootPath
+      plan.rootPath,
+      { policy, workspaceFolders: plan.workspaceFolders }
     );
     let hoverSupported = false;
     let referencesSupported = false;
@@ -1079,6 +1100,7 @@ export class ExternalLanguageServerPool {
             version: "1.0.0"
           },
           rootUri,
+          initializationOptions: policy.initializationOptions,
           workspaceFolders: plan.workspaceFolders.map(
             (folder) => ({
               uri: pathToFileURL(folder).toString(),
@@ -1109,6 +1131,7 @@ export class ExternalLanguageServerPool {
               }
             },
             workspace: {
+              configuration: true,
               workspaceFolders: true,
               symbol: {
                 resolveSupport: {
@@ -1135,6 +1158,11 @@ export class ExternalLanguageServerPool {
       workspaceSymbolSupported =
         serverSupportsWorkspaceSymbols(initializeResult);
       client.notify("initialized", {});
+      if (Object.keys(policy.settings).length > 0) {
+        client.notify("workspace/didChangeConfiguration", {
+          settings: policy.settings
+        });
+      }
       if (input.language === "java") {
         await client.waitForJavaServiceReady(
           input.workspaceReadyTimeoutMs,
@@ -1170,7 +1198,8 @@ export class ExternalLanguageServerPool {
       typeHierarchySupported,
       implementationSupported,
       workspaceSymbolSupported,
-      semanticCapabilityRejected: false
+      semanticCapabilityRejected: false,
+      ...(policy.limitation ? { policyLimitation: policy.limitation } : {})
     };
   }
 
@@ -1219,6 +1248,10 @@ export class ExternalLanguageServerPool {
       }
       try {
         closeUnusedDocuments(session, retainedUris);
+        if (retainedUris.size === 0) {
+          await this.#disposeSession(key);
+          return;
+        }
         this.#scheduleIdle(key, session);
       } catch {
         await this.#disposeSession(key);
@@ -1235,6 +1268,8 @@ class LanguageServerTerminationError extends Error {
     this.name = "LanguageServerTerminationError";
   }
 }
+
+class LanguageServerPolicyError extends Error {}
 
 function createLanguageServerLaunchPlan(input: {
   command: string;
@@ -2803,6 +2838,10 @@ export class JsonRpcClient {
   readonly #command: string;
   readonly #args: string[];
   readonly #cwd: string;
+  readonly #context: {
+    policy: LspAnalysisPolicy;
+    workspaceFolders: string[];
+  } | undefined;
   #process: ChildProcessWithoutNullStreams | undefined;
   #buffer = Buffer.alloc(0);
   #bufferOffset = 0;
@@ -2830,10 +2869,16 @@ export class JsonRpcClient {
   #writeTail: Promise<void> = Promise.resolve();
   #queuedWriteBytes = 0;
 
-  constructor(command: string, args: string[], cwd: string) {
+  constructor(
+    command: string,
+    args: string[],
+    cwd: string,
+    context?: { policy: LspAnalysisPolicy; workspaceFolders: string[] }
+  ) {
     this.#command = command;
     this.#args = args;
     this.#cwd = cwd;
+    this.#context = context;
   }
 
   get alive(): boolean {
@@ -2857,6 +2902,7 @@ export class JsonRpcClient {
     await new Promise<void>((resolvePromise, rejectPromise) => {
       const child = spawn(launch.command, launch.args, {
         cwd: this.#cwd,
+        env: { ...process.env, ...this.#context?.policy.environment },
         shell: false,
         windowsHide: true,
         stdio: ["pipe", "pipe", "pipe"]
@@ -3351,7 +3397,8 @@ export class JsonRpcClient {
     const response = serverRequestResponse(
       input.method,
       input.params,
-      this.#cwd
+      this.#cwd,
+      this.#context
     );
     try {
       if (response.ok) {
@@ -3640,10 +3687,19 @@ async function resolveJdtlsExtensionLaunch(
           "-Djdk.xml.totalEntitySizeLimit=0"
         ]
       : [];
+  const lombokDirectory = join(extensionDirectory, "lombok");
+  const lombokJars = (await readdir(lombokDirectory, { withFileTypes: true })
+    .catch(() => []))
+    .filter((entry) => entry.isFile() && /^lombok(?:-[\w.-]+)?\.jar$/i.test(entry.name))
+    .map((entry) => entry.name)
+    .sort((left, right) => compareNumericVersions(right, left));
   return {
     command: javaCommand,
     args: [
       ...compatibilityArgs,
+      ...(lombokJars[0]
+        ? [`-javaagent:${join(lombokDirectory, lombokJars[0])}`]
+        : []),
       "-Declipse.application=org.eclipse.jdt.ls.core.id1",
       "-Dosgi.bundles.defaultStartLevel=4",
       "-Declipse.product=org.eclipse.jdt.ls.core.product",
@@ -3651,6 +3707,7 @@ async function resolveJdtlsExtensionLaunch(
       `-Dosgi.sharedConfiguration.area=${configurationDirectory}`,
       "-Dosgi.sharedConfiguration.area.readOnly=true",
       "-Dosgi.configuration.cascaded=true",
+      "-Djava.import.generatesMetadataFilesAtProjectRoot=false",
       "-Xms100m",
       "-Xmx2G",
       "--add-modules=ALL-SYSTEM",
@@ -3896,29 +3953,35 @@ export async function resolveNodeCommandShim(
 function serverRequestResponse(
   method: string,
   params: unknown,
-  cwd: string
+  cwd: string,
+  context?: { policy: LspAnalysisPolicy; workspaceFolders: string[] }
 ):
   | { ok: true; result: unknown }
   | { ok: false } {
   if (method === "workspace/configuration") {
-    const itemCount =
+    const items =
       isRecord(params) && Array.isArray(params.items)
-        ? params.items.length
-        : 0;
+        ? params.items
+        : [];
     return {
       ok: true,
-      result: Array.from({ length: itemCount }, () => null)
+      result: items.map((item: unknown) => {
+        return context
+          ? lspConfigurationSection(
+              context.policy.settings,
+              isRecord(item) ? item.section : undefined
+            )
+          : null;
+      })
     };
   }
   if (method === "workspace/workspaceFolders") {
     return {
       ok: true,
-      result: [
-        {
-          uri: pathToFileURL(cwd).toString(),
-          name: basename(cwd)
-        }
-      ]
+      result: (context?.workspaceFolders ?? [cwd]).map((folder) => ({
+        uri: pathToFileURL(folder).toString(),
+        name: basename(folder)
+      }))
     };
   }
   if (method === "workspace/applyEdit") {

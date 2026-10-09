@@ -41,6 +41,88 @@ import type {
   LanguageServerCommandSettings,
   LspDocumentSymbol
 } from "./model";
+import { createLspAnalysisPolicy, lspConfigurationSection } from "./lsp-analysis-policy";
+
+describe("analysis-only language server policies", () => {
+  it("refuses a custom Java workspace that may contain previously imported build projects", async () => {
+    const pool = new ExternalLanguageServerPool();
+    try {
+      const result = await pool.analyze({
+        sessionPrefix: "unsafe-java-data",
+        workspaceRootPath: resolve("project"),
+        workspaceFolders: [resolve("project")],
+        lspDataDirectory: resolve("runtime"),
+        settings: analysisSettings("must-not-start.mjs", ["-data", resolve("shared-java-workspace")]),
+        documents: [{ file: sourceFile(resolve("project"), "java"), content: "class Source {}" }]
+      });
+      expect(result.statuses).toContainEqual(expect.objectContaining({
+        language: "java", state: "failed", message: expect.stringContaining("请移除自定义 -data")
+      }));
+    } finally {
+      await pool.disposeAll();
+    }
+  });
+
+  it("keeps Rust build output outside the project and prevents Cargo execution paths", () => {
+    const policy = createLspAnalysisPolicy("rust", resolve("runtime/lsp"), resolve("project"));
+    expect(policy.initializationOptions).toMatchObject({
+      checkOnSave: false,
+      cargo: {
+        buildScripts: { enable: false, rebuildOnSave: false },
+        extraArgs: ["--frozen"]
+      },
+      procMacro: { enable: false }
+    });
+    expect(policy.environment.CARGO_TARGET_DIR).toMatch(/runtime[\\/]lsp[\\/]rust[\\/]/);
+    expect(lspConfigurationSection(policy.settings, "rust-analyzer.cargo.targetDir"))
+      .toBe(policy.environment.CARGO_TARGET_DIR);
+    expect(createLspAnalysisPolicy("rust", resolve("runtime/lsp"), resolve("another-project"))
+      .environment.CARGO_TARGET_DIR).not.toBe(policy.environment.CARGO_TARGET_DIR);
+  });
+
+  it("preserves enforced settings for whole, nested, and unknown configuration sections", () => {
+    const { settings } = createLspAnalysisPolicy("java", "runtime", "project");
+    expect(lspConfigurationSection(settings, undefined)).toEqual(settings);
+    expect(lspConfigurationSection(settings, "java.autobuild.enabled")).toBe(false);
+    expect(lspConfigurationSection(settings, "java.import.gradle.enabled")).toBe(false);
+    expect(lspConfigurationSection(settings, "java.import.maven.enabled")).toBe(false);
+    expect(lspConfigurationSection(settings, "java.import.exclusions")).toEqual(["**"]);
+    expect(lspConfigurationSection(settings, "unknown")).toBeNull();
+    expect(lspConfigurationSection(settings, "__proto__")).toBeNull();
+    expect(createLspAnalysisPolicy("go", "runtime", "project").initializationOptions)
+      .toEqual({ buildFlags: ["-mod=readonly"] });
+    expect(createLspAnalysisPolicy("typescript", "runtime", "project").initializationOptions)
+      .toEqual({ disableAutomaticTypingAcquisition: true });
+  });
+
+  it.each(["kotlin", "csharp"] as const)(
+    "does not launch %s importers that can write to the project",
+    async (language) => {
+      const pool = new ExternalLanguageServerPool();
+      const settings = optionalLanguageAnalysisSettings("python", "must-not-start.mjs");
+      settings.python!.enabled = false;
+      settings[language] = serverSettings({
+        enabled: true, command: "must-not-start", args: []
+      });
+      try {
+        const result = await pool.analyze({
+          sessionPrefix: "blocked-importer",
+          workspaceRootPath: resolve("project"),
+          workspaceFolders: [resolve("project")],
+          lspDataDirectory: resolve("runtime"),
+          settings,
+          documents: [{ file: sourceFile(resolve("project"), language), content: "source" }]
+        });
+        expect(result.statuses).toContainEqual(expect.objectContaining({
+          language, state: "unavailable", message: expect.stringContaining("尚未隔离其项目写入")
+        }));
+        expect(result.warnings).toContainEqual(expect.stringContaining("已使用内置分析器"));
+      } finally {
+        await pool.disposeAll();
+      }
+    }
+  );
+});
 
 describe("language server message identity and coverage", () => {
   const directories: string[] = [];
@@ -664,6 +746,9 @@ describe("resolveWindowsEditorJdtls", () => {
       "redhat.java-1.54.0-win32-x64",
       "21.0.10-win32-x86_64"
     );
+    await mkdir(join(newest, "lombok"));
+    await writeFile(join(newest, "lombok/lombok-1.18.9.jar"), "");
+    await writeFile(join(newest, "lombok/lombok-1.18.39.jar"), "");
 
     const launch = await resolveWindowsEditorJdtls(
       ["-data", "C:\\GitNest\\jdtls"],
@@ -682,6 +767,8 @@ describe("resolveWindowsEditorJdtls", () => {
         )}`,
         "-Xms100m",
         "-Xmx2G",
+        `-javaagent:${join(newest, "lombok/lombok-1.18.39.jar")}`,
+        "-Djava.import.generatesMetadataFilesAtProjectRoot=false",
         "-jar",
         resolve(
           newest,
@@ -691,6 +778,8 @@ describe("resolveWindowsEditorJdtls", () => {
         "C:\\GitNest\\jdtls"
       ])
     );
+    expect(launch!.args.findIndex((arg) => arg.startsWith("-javaagent:")))
+      .toBeLessThan(launch!.args.indexOf("-jar"));
   });
 
   it("skips an incomplete newer extension", async () => {
@@ -1836,7 +1925,7 @@ describe("non-Java language server resilience", () => {
     }
   });
 
-  it("closes documents that leave the analyzed scope while reusing a session", async () => {
+  it.each(["empty scope", "disabled server"])("closes documents and stops the session for %s", async (reason) => {
     const root = await mkdtemp(
       join(tmpdir(), "gitnest-lsp-document-lifecycle-")
     );
@@ -1898,7 +1987,12 @@ describe("non-Java language server resilience", () => {
       });
       await pool.analyze({
         ...baseInput,
-        documents: []
+        settings: reason === "disabled server"
+          ? { ...settings, typescript: { ...settings.typescript, enabled: false } }
+          : settings,
+        documents: reason === "empty scope"
+          ? []
+          : [{ file: second, content: "export const second = 2;" }]
       });
       await new Promise((resolvePromise) =>
         setTimeout(resolvePromise, 50)
@@ -1925,6 +2019,7 @@ describe("non-Java language server resilience", () => {
         pathToFileURL(firstPath).toString(),
         pathToFileURL(secondPath).toString()
       ]);
+      expect(events).toContainEqual({ method: "shutdown" });
     } finally {
       await pool.disposeAll();
     }
@@ -3409,7 +3504,8 @@ let buffer = Buffer.alloc(0);
 function record(message) {
   if (
     message.method === "textDocument/didOpen" ||
-    message.method === "textDocument/didClose"
+    message.method === "textDocument/didClose" ||
+    message.method === "shutdown"
   ) {
     appendFileSync(
       eventsPath,
@@ -3491,6 +3587,8 @@ function fakeJdtlsServerSource(): string {
   return String.raw`
 let buffer = Buffer.alloc(0);
 let ready = false;
+let policyReady = false;
+let configurationReceived = false;
 
 function send(message) {
   const body = Buffer.from(JSON.stringify(message), "utf8");
@@ -3505,7 +3603,26 @@ function respond(id, result) {
 }
 
 function handle(message) {
+  if (message.method === "workspace/didChangeConfiguration") {
+    configurationReceived = message.params?.settings?.java?.autobuild?.enabled === false;
+    return;
+  }
+  if (message.id === "policy" && !message.method) {
+    policyReady = message.result?.[0]?.autobuild?.enabled === false &&
+      message.result?.[1] === false && message.result?.[2] === null;
+    return;
+  }
   if (message.method === "initialize") {
+    const java = message.params?.initializationOptions?.settings?.java;
+    if (java?.autobuild?.enabled !== false ||
+        java?.import?.gradle?.enabled !== false ||
+        java?.import?.maven?.enabled !== false ||
+        java?.import?.exclusions?.[0] !== "**" ||
+        !process.env.JAVA_TOOL_OPTIONS?.includes("-Djava.import.generatesMetadataFilesAtProjectRoot=false")) {
+      send({ jsonrpc: "2.0", id: message.id,
+        error: { code: -32001, message: "Unsafe Java initialization" } });
+      return;
+    }
     respond(message.id, {
       capabilities: {
         documentSymbolProvider: true,
@@ -3515,8 +3632,12 @@ function handle(message) {
     return;
   }
   if (message.method === "initialized") {
+    send({ jsonrpc: "2.0", id: "policy", method: "workspace/configuration",
+      params: { items: [
+        { section: "java" }, { section: "java.autobuild.enabled" }, { section: "unknown" }
+      ] } });
     setTimeout(() => {
-      ready = true;
+      ready = policyReady && configurationReceived;
       send({
         jsonrpc: "2.0",
         method: "language/status",

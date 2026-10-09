@@ -11,6 +11,7 @@ import {
   writeFile
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { LSP_ANALYSIS_POLICY_VERSION } from "./lsp-analysis-policy";
 
 import type {
   AnalysisRoot,
@@ -626,6 +627,7 @@ function settingsKey(
     .update(
       JSON.stringify({
         parserVersion: PARSER_VERSION,
+        lspPolicyVersion: LSP_ANALYSIS_POLICY_VERSION,
         profiles: BUILTIN_ANALYSIS_PROFILE_VERSIONS,
         maxTotalSourceBytes: settings.maxTotalSourceBytes,
         maxFiles: settings.maxFiles,
@@ -670,6 +672,7 @@ function snapshotConfigurationKey(
     .update(
       JSON.stringify({
         snapshotVersion: SNAPSHOT_CACHE_SCHEMA_VERSION,
+        lspPolicyVersion: LSP_ANALYSIS_POLICY_VERSION,
         parserVersion: PARSER_VERSION,
         graphVersion: GRAPH_VERSION,
         profiles: BUILTIN_ANALYSIS_PROFILE_VERSIONS,
