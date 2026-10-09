@@ -33,6 +33,7 @@ export interface RepositoryHistoryRequest
 }
 
 export interface RepositoryHistoryFilterDto {
+  /** Literal, case-insensitive match in the full message, author name or email. */
   keyword?: string;
   author?: string;
   since?: string;

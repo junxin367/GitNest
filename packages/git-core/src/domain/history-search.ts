@@ -2,6 +2,7 @@ import { GitError } from "../errors/git-errors";
 
 /** Dates are inclusive local calendar days, applied to Git committer dates. */
 export interface CommitHistoryFilter {
+  /** Literal, case-insensitive match in the full message, author name or email. */
   keyword?: string;
   author?: string;
   since?: string;

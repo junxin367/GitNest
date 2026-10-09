@@ -36,7 +36,7 @@ export function AppTitlebar({
   const fileTriggerRef = useRef<HTMLButtonElement>(null);
   const helpTriggerRef = useRef<HTMLButtonElement>(null);
   const menuSurfaceRef = useRef<HTMLDivElement>(null);
-  const appVersion = runtimeInfo?.appVersion ?? "0.0.1";
+  const appVersion = runtimeInfo?.appVersion ?? "0.0.2";
   const toggleMenu = (menu: Exclude<OpenMenu, null>) =>
     setOpenMenu((current) =>
       current === menu ? null : menu
@@ -115,7 +115,7 @@ export function AppTitlebar({
         </span>
         <span className="brand-name">GitNest</span>
         <span className="build-pill">
-          v{runtimeInfo?.appVersion ?? "0.0.1"}
+          v{runtimeInfo?.appVersion ?? "0.0.2"}
         </span>
       </div>
 
@@ -211,11 +211,11 @@ export function AppTitlebar({
 
       <div className="titlebar-drag-region" />
 
-      <div className="titlebar-runtime" aria-label="运行时信息">
-        {runtimeInfo
-          ? "本地优先 · 数据留在设备"
-          : "正在连接本地服务…"}
-      </div>
+      {!runtimeInfo && (
+        <div className="titlebar-runtime" aria-label="运行时信息">
+          正在连接本地服务…
+        </div>
+      )}
 
       <Button variant="unstyled"
         aria-controls="global-search-dialog"

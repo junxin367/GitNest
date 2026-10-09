@@ -576,7 +576,7 @@ describe("RepositoryCommitDetail", () => {
     expect(container.querySelectorAll(".commit-row")).toHaveLength(2);
   });
 
-  it("submits combined full-history criteria, preserves applied search on close and clears to page one", async () => {
+  it("uses one message, author and email search, preserves it on close and clears to page one", async () => {
     const getHistory = vi.fn(async ({ target, search }) => ({
       ok: true as const,
       value: { target, page: { commits: search ? [] : [COMMIT] } }
@@ -600,21 +600,20 @@ describe("RepositoryCommitDetail", () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
       input.dispatchEvent(new Event("input", { bubbles: true }));
     }
-    act(() => {
-      edit("筛选提交历史", " old message ");
-      edit("作者", "Alice");
-      edit("开始日期", "2026-02-02");
-      edit("结束日期", "2026-02-01");
-      edit("文件路径", "src/[literal].ts");
-    });
-    act(() => findButtonByText(container, "搜索历史").click());
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("开始日期不能晚于");
+    expect(container.querySelectorAll(".history-search-form input")).toHaveLength(1);
+    expect(container.querySelector(".history-search-form label")).toBeNull();
+    expect(container.querySelector(".history-search-field .gn-input")?.getAttribute("data-size")).toBe("small");
+    expect(container.querySelector<HTMLInputElement>('[aria-label="筛选提交历史"]')?.placeholder)
+      .toBe("搜索提交说明、作者或邮箱");
+    for (const label of ["作者", "开始日期", "结束日期", "文件路径"]) {
+      expect(container.querySelector(`[aria-label="${label}"]`)).toBeNull();
+    }
+    act(() => edit("筛选提交历史", " alice@example.test "));
     expect(getHistory).toHaveBeenCalledTimes(1);
-    act(() => edit("结束日期", "2026-02-03"));
     await act(async () => findButtonByText(container, "搜索历史").click());
     expect(getHistory.mock.calls.at(-1)![0]).toMatchObject({
       offset: 0,
-      search: { keyword: "old message", author: "Alice", since: "2026-02-02", until: "2026-02-03", path: "src/[literal].ts" }
+      search: { keyword: "alice@example.test" }
     });
     expect(container.textContent).toContain("已搜索所选引用的完整历史");
     act(() => findButtonByText(container, "筛选 · 已应用").click());
@@ -622,7 +621,7 @@ describe("RepositoryCommitDetail", () => {
     expect(getHistory).toHaveBeenCalledTimes(2);
     expect(container.textContent).toContain("没有匹配的提交");
     act(() => findButtonByText(container, "筛选 · 已应用").click());
-    expect(container.querySelector<HTMLInputElement>('[aria-label="作者"]')?.value).toBe("Alice");
+    expect(container.querySelector<HTMLInputElement>('[aria-label="筛选提交历史"]')?.value).toBe("alice@example.test");
     await act(async () => findButtonByText(container, "清除条件").click());
     expect(getHistory.mock.calls.at(-1)![0]).not.toHaveProperty("search");
     expect(container.querySelectorAll(".commit-row")).toHaveLength(1);

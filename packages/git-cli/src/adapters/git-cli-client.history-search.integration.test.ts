@@ -15,18 +15,20 @@ describe("full repository history search", () => {
     await git(["config", "user.email", "history@example.test"]);
     await writeFile(join(fixture.path, "literal[1].txt"), "old\n");
     await git(["add", "--", "literal[1].txt"]);
-    await git(["commit", "-m", "Ancient first", "-m", "needle[body] --all"], "2020-01-02T12:00:00");
+    await git(["commit", "--author", "History [Author] Union[author] <history@example.test>",
+      "-m", "Ancient first", "-m", "needle[body] --all union[author]"], "2020-01-02T12:00:00");
     await git(["branch", "base"]);
     await writeFile(join(fixture.path, "literal1.txt"), "different\n");
     await git(["add", "--", "literal1.txt"]);
-    await git(["commit", "-m", "Ancient second needle[body]"], "2020-01-03T12:00:00");
-    for (let index = 0; index < 52; index += 1) {
+    await git(["commit", "--author", "Union[author] Writer <union@example.test>",
+      "-m", "Ancient second needle[body]"], "2020-01-03T12:00:00");
+    for (let index = 0; index < 205; index += 1) {
       await git(["commit", "--allow-empty", "-m", `Recent ${index}`], "2026-01-01T12:00:00");
     }
     await git(["switch", "-c", "topic", "base"]);
-    await git(["commit", "--allow-empty", "-m", "Topic needle[body]"], "2020-01-04T12:00:00");
+    await git(["commit", "--allow-empty", "-m", "Topic needle[body]", "-m", "union[author]"], "2020-01-04T12:00:00");
     await git(["switch", "main"]);
-  }, 30_000);
+  }, 60_000);
   afterAll(async () => fixture.dispose());
 
   it("searches commit bodies beyond the first page and paginates matching commits", async () => {
@@ -45,7 +47,7 @@ describe("full repository history search", () => {
     expect((await client.readCommitHistory(fixture.path, {
       search: { keyword: "no such message" }
     })).commits).toEqual([]);
-  });
+  }, 15_000);
 
   it("intersects literal author, local inclusive dates and literal path filters", async () => {
     const result = await client.readCommitHistory(fixture.path, {
@@ -61,7 +63,45 @@ describe("full repository history search", () => {
     expect((await client.readCommitHistory(fixture.path, {
       search: { keyword: "--all" }
     })).commits.map((commit) => commit.subject)).toEqual(["Ancient first"]);
-  });
+  }, 15_000);
+
+  it("matches message OR author OR email across scan batches and paginates without duplicates", async () => {
+    for (const keyword of ["WRITER", "UNION@EXAMPLE.TEST"]) {
+      const result = await client.readCommitHistory(fixture.path, { search: { keyword } });
+      expect(result.commits.map(commit => commit.subject)).toEqual(["Ancient second needle[body]"]);
+    }
+    const first = await client.readCommitHistory(fixture.path, {
+      limit: 1, search: { keyword: "UNION[AUTHOR]" }
+    });
+    const second = await client.readCommitHistory(fixture.path, {
+      limit: 1, offset: first.nextOffset!, search: { keyword: "UNION[AUTHOR]" }
+    });
+    expect(first.commits.map(commit => commit.subject)).toEqual(["Ancient second needle[body]"]);
+    expect(second.commits.map(commit => commit.subject)).toEqual(["Ancient first"]);
+    expect(second.nextOffset).toBeUndefined();
+    expect((await client.readCommitHistory(fixture.path, {
+      search: { keyword: "union.*" }
+    })).commits).toEqual([]);
+  }, 15_000);
+
+  it("keeps unified-search comparison counts and ref scopes consistent with the results", async () => {
+    const scope = { kind: "compare" as const, leftRef: "refs/heads/main", rightRef: "refs/heads/topic" };
+    const first = await client.readCommitHistory(fixture.path, {
+      scope, search: { keyword: "union[author]" }, limit: 1
+    });
+    const next = await client.readCommitHistory(fixture.path, {
+      scope, search: { keyword: "union[author]" }, limit: 1, offset: first.nextOffset!
+    });
+    expect([...first.commits, ...next.commits].map(commit => commit.subject).sort())
+      .toEqual(["Ancient second needle[body]", "Topic needle[body]"]);
+    expect(first.comparison).toMatchObject({ leftOnly: 1, rightOnly: 1 });
+    expect(next.comparison).toEqual(first.comparison);
+    expect(next.nextOffset).toBeUndefined();
+    const scoped = await client.readCommitHistory(fixture.path, {
+      scope: { kind: "ref", ref: "refs/heads/topic" }, search: { keyword: "WRITER" }
+    });
+    expect(scoped.commits).toEqual([]);
+  }, 15_000);
 
   it("keeps ref and comparison scopes, and excludes nonmatching boundary commits", async () => {
     const result = await client.readCommitHistory(fixture.path, {
@@ -85,7 +125,7 @@ describe("full repository history search", () => {
       scope: { kind: "compare", leftRef: "refs/heads/main", rightRef: "refs/heads/topic" },
       search: { keyword: "no matches" }
     })).commits).toEqual([]);
-  });
+  }, 15_000);
 
   it("rejects malformed dates, ranges, controls and escaping paths before Git", async () => {
     for (const search of [

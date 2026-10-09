@@ -1,6 +1,6 @@
 {
   "name": "gitnest",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "A local-first multi-repository Git workspace for Windows.",
   "type": "module",

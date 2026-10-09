@@ -62,6 +62,8 @@ import {
   type CommitDetails,
   type CommitDiff,
   type CommitHistoryPage,
+  type CommitHistoryFilter,
+  type CommitHistoryScope,
   type RepositoryDiff,
   type RepositoryIdentity,
   type RepositoryInspection,
@@ -478,6 +480,13 @@ export class GitCliClient
         }))
       ) {
         return { commits: [] };
+      }
+
+      if (search?.keyword) {
+        const unified = await readUnifiedHistory(
+          commandOptions, search, limit, offset, options.scope
+        );
+        if (unified) return unified;
       }
 
       if (options.scope?.kind === "compare") {
@@ -3084,6 +3093,111 @@ function assertReadNotCancelled(signal?: AbortSignal): void {
       "The Git command was cancelled."
     );
   }
+}
+
+async function readUnifiedHistory(
+  options: CommandOptions,
+  search: CommitHistoryFilter,
+  limit: number,
+  offset: number,
+  scope?: CommitHistoryScope
+): Promise<CommitHistoryPage | undefined> {
+  const { keyword = "", ...filters } = search;
+  const needle = keyword.toLowerCase();
+  const comparing = scope?.kind === "compare";
+  const refs = comparing
+    ? [scope.leftRef, scope.rightRef]
+    : [scope?.kind === "ref" ? scope.ref : "HEAD"];
+  await Promise.all(refs.map(async ref => {
+    if (ref !== "HEAD") await resolveHistoryRef(options, ref);
+  }));
+  let revisions = refs;
+  if (comparing && refs[0] === refs[1]) {
+    throw new GitError("INVALID_REQUEST", "Compared history requires two different refs.");
+  }
+  const pageArguments = (size: number, skip: number, criteria: CommitHistoryFilter) =>
+    comparing
+      ? compareHistoryPageArguments(size, skip, revisions[0]!, revisions[1]!, criteria)
+      : historyPageArguments(size, skip, revisions[0]!, criteria);
+
+  // Keep Git's direct message search for queries that do not match any author.
+  if (!filters.author) {
+    const authorProbe = await runProcess({
+      ...options, args: pageArguments(1, 0, { ...filters, author: keyword }),
+      outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
+    });
+    if (!authorProbe.stdout.trim()) return undefined;
+  }
+
+  revisions = await Promise.all(refs.map(async ref => {
+    const result = await runProcess({
+      ...options, args: resolveRevisionArguments(ref), outputLimitBytes: 4096
+    });
+    return validateCommitHash(result.stdout.trim());
+  }));
+  const commits: CommitHistoryPage["commits"] = [];
+  let matched = 0;
+  let leftOnly = 0;
+  let rightOnly = 0;
+  const batchSize = 200;
+  for (let scanOffset = 0; ; scanOffset += batchSize) {
+    assertReadNotCancelled(options.signal);
+    const result = await runProcess({
+      ...options, args: pageArguments(batchSize, scanOffset, filters),
+      outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
+    });
+    const batch = comparing
+      ? parseComparedCommitHistory(result.stdout)
+      : parseCommitHistory(result.stdout);
+    if (!batch.length) break;
+    const matches = new Set(batch.filter(commit =>
+      commit.authorName.toLowerCase().includes(needle) ||
+      commit.authorEmail.toLowerCase().includes(needle)
+    ).map(commit => commit.hash));
+    const remaining = batch.filter(commit => !matches.has(commit.hash));
+    if (remaining.length) {
+      // Ask Git to match full messages without transferring unbounded commit bodies.
+      // Restrict it to this batch; union by hash prevents duplicate results.
+      const messages = await runProcess({
+        ...options,
+        args: ["log", "--no-walk=unsorted", "--format=%H",
+          "--fixed-strings", "--regexp-ignore-case", `--grep=${keyword}`,
+          ...remaining.map(commit => validateCommitHash(commit.hash)), "--"],
+        outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
+      });
+      for (const hash of messages.stdout.trim().split(/\r?\n/)) {
+        if (hash) matches.add(hash);
+      }
+    }
+    // Preserve Git's original traversal order, including topological comparison order.
+    for (const commit of batch) {
+      if (!matches.has(commit.hash)) continue;
+      if (matched >= offset && commits.length < limit) commits.push(commit);
+      matched += 1;
+      if ("comparisonSide" in commit && commit.comparisonSide === "left") leftOnly += 1;
+      if ("comparisonSide" in commit && commit.comparisonSide === "right") rightOnly += 1;
+    }
+    if ((!comparing && matched > offset + limit) || batch.length < batchSize) break;
+  }
+  const page: CommitHistoryPage = {
+    commits,
+    ...(matched > offset + limit ? { nextOffset: offset + limit } : {})
+  };
+  if (comparing) {
+    const mergeBase = await runProcess({
+      ...options, args: compareHistoryMergeBaseArguments(revisions[0]!, revisions[1]!),
+      allowFailure: true, outputLimitBytes: 4096
+    });
+    assertAllowFailureIsRepository(mergeBase);
+    if (mergeBase.exitCode !== 0 && !(mergeBase.exitCode === 1 && !mergeBase.stderr.trim())) {
+      throw commandFailure("Git merge-base", mergeBase);
+    }
+    page.comparison = {
+      leftRef: refs[0]!, rightRef: refs[1]!, leftOnly, rightOnly,
+      ...(mergeBase.exitCode === 0 ? { mergeBase: mergeBase.stdout.trim() } : {})
+    };
+  }
+  return page;
 }
 
 async function resolveHistoryRef(
