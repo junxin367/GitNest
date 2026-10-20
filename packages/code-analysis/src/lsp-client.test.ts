@@ -20,6 +20,7 @@ import {
   describe,
   expect,
   it,
+  beforeAll,
   afterEach
 } from "vitest";
 
@@ -58,6 +59,10 @@ class ExternalLanguageServerPool extends ProductionLanguageServerPool {
 }
 
 describe("isolated analysis projects", () => {
+  beforeAll(async () => {
+    await mkdir(resolve("temp"), { recursive: true });
+  });
+
   it("restores project import only with a protected project", () => {
     const policy = createLspAnalysisPolicy("java", "runtime", "project", true);
     expect(lspConfigurationSection(policy.settings, "java.autobuild.enabled")).toBe(true);
@@ -338,7 +343,12 @@ describe("isolated analysis projects", () => {
   it.skipIf(process.platform !== "win32")("checks long source and retained cache paths without weakening original write protection", async () => {
     const root = await mkdtemp(join(resolve("temp"), "gitnest-long-path-"));
     const project = join(root, "project");
-    const source = join(project, `长目录-${"nested-".repeat(20)}`, ".anchors", "414920e699bae883bde8af86e588abe585a5e58fa3.json");
+    const fileName = "414920e699bae883bde8af86e588abe585a5e58fa3.json";
+    let sourceDirectory = join(project, "长目录");
+    while (join(sourceDirectory, ".anchors", fileName).length <= 260) {
+      sourceDirectory = join(sourceDirectory, "nested-path");
+    }
+    const source = join(sourceDirectory, ".anchors", fileName);
     await mkdir(dirname(source), { recursive: true });
     await writeFile(source, "original");
     const input = {
