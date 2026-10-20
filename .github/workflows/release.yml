@@ -53,6 +53,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Prepare test temporary directory
+        run: New-Item -ItemType Directory -Path temp -Force | Out-Null
+
       - name: Test
         env:
           TEMP: ${{ runner.temp }}
