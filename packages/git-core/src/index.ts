@@ -37,6 +37,7 @@ export type {
   RepositoryIdentity,
   RepositoryInspection,
   RepositorySnapshot,
+  RepositorySnapshotProgress,
   RepositoryTopology,
   Worktree
 } from "./domain/repository";

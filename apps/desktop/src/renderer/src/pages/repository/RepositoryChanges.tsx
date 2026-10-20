@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState
 } from "react";
 
@@ -21,6 +22,7 @@ import {
   type useRepositoryMutations
 } from "../../entities/repository/useRepositoryMutations";
 import type { ExternalApplicationController } from "../../features/external-application/useExternalApplications";
+import { useChangedDiffSearch } from "../../features/diff-search/useChangedDiffSearch";
 import type { RepositoryCommandController } from "../../features/repository-command/useRepositoryCommands";
 import type { AppSettingsController } from "../../features/settings/useAppSettings";
 import { resolveRepositoryFileBrowsing } from "../../features/settings/settingsRuntime";
@@ -30,11 +32,13 @@ import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import {
   DEFAULT_DIFF_CONTEXT_LINES,
   type DiffContextRequest,
+  type DiffPanelSearchRequest,
   type DiffPanelState
 } from "../../widgets/diff-workspace/DiffPanel";
 import {
   DiffWorkspace,
   DiffWorkspaceSkeleton,
+  type DiffWorkspaceContentSearchSelection,
   parseCommitMessage
 } from "../../widgets/diff-workspace/DiffWorkspace";
 import { repositoryDiffWorkspaceConfiguration } from "../../widgets/diff-workspace/diffWorkspaceConfiguration";
@@ -113,8 +117,13 @@ export function RepositoryChanges({
       ? controller.changes
       : null;
   const changes = currentChanges?.snapshot.changes ?? [];
+  const previousFilesRef = useRef<DiffViewerFile[]>([]);
   const files = useMemo(
-    () => buildDiffViewerFiles(changes),
+    () => {
+      const nextFiles = buildDiffViewerFiles(changes, previousFilesRef.current);
+      previousFilesRef.current = nextFiles;
+      return nextFiles;
+    },
     [changes]
   );
   const selectedFileKey = controller.selectedChange
@@ -164,6 +173,38 @@ export function RepositoryChanges({
       selectedDiff?.mode,
       selectedDiff?.path
     ]
+  );
+  const [fileFilter, setFileFilter] = useState("");
+  const [panelSearchRequest, setPanelSearchRequest] =
+    useState<DiffPanelSearchRequest | undefined>();
+  const panelSearchRequestSequenceRef = useRef(0);
+  const diffSearch = useChangedDiffSearch({
+    files: workspaceFiles,
+    query: fileFilter,
+    revision: currentChanges?.snapshot.refreshedAt ?? "",
+    target
+  });
+  const updateFileFilter = useCallback(
+    (value: string) => {
+      setFileFilter(value);
+      setPanelSearchRequest((current) => {
+        if (
+          !current?.query ||
+          current.query === value.trim()
+        ) {
+          return current;
+        }
+        return {
+          key:
+            `${changesScopeKey}\u0000clear\u0000${value}\u0000${
+              ++panelSearchRequestSequenceRef.current
+            }`,
+          query: "",
+          open: false
+        };
+      });
+    },
+    [changesScopeKey]
   );
   const [diffViewerOpening, setDiffViewerOpening] =
     useState(false);
@@ -258,8 +299,28 @@ export function RepositoryChanges({
     [mutations.discardChanges]
   );
   const selectFile = useCallback(
-    (file: DiffViewerFile) => void controller.selectChange(file.change, file.mode),
-    [controller.selectChange]
+    (
+      file: DiffViewerFile,
+      contentSearch?: DiffWorkspaceContentSearchSelection
+    ) => {
+      setPanelSearchRequest((current) => {
+        const query = contentSearch?.query ?? "";
+        if (!query && !current?.query) {
+          return current;
+        }
+        const open = contentSearch?.open ?? false;
+        return {
+          key:
+            `${changesScopeKey}\u0000${file.key}\u0000${query}\u0000${
+              open ? "open" : "highlight"
+            }\u0000${++panelSearchRequestSequenceRef.current}`,
+          query,
+          open
+        };
+      });
+      void controller.selectChange(file.change, file.mode);
+    },
+    [changesScopeKey, controller.selectChange]
   );
 
   if (showChangesSkeleton) {
@@ -474,6 +535,14 @@ export function RepositoryChanges({
         }}
         configuration={repositoryDiffWorkspaceConfiguration}
         externalApplications={externalApplications}
+        fileSearch={{
+          matches: diffSearch.matches,
+          loading: diffSearch.loading,
+          incomplete: diffSearch.incomplete,
+          minimumQueryLength:
+            diffSearch.minimumQueryLength,
+          onQueryChange: updateFileFilter
+        }}
         fileView={fileBrowsing.fileView}
         files={workspaceFiles}
         mutationBusy={
@@ -524,6 +593,7 @@ export function RepositoryChanges({
           truncated: selectedDiff?.truncated,
           preferredLayout: appSettings.settings.diff.layout,
           preferredWrap: appSettings.settings.diff.wrap,
+          searchRequest: panelSearchRequest,
           onLayoutPreferenceChange: (layout) =>
             void appSettings.update(
               { diff: { layout } },

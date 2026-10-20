@@ -157,7 +157,12 @@ export function NodeSourceViewer({
     if (!source.file) {
       return;
     }
-    scrollWithinContainer(viewportRef.current, targetLineRef.current);
+    scrollWithinContainer(
+      viewportRef.current,
+      targetLineRef.current,
+      "center",
+      "start"
+    );
   }, [source.file, targetLine]);
 
   useLayoutEffect(() => {

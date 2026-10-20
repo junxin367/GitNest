@@ -226,6 +226,9 @@ export class CodeAnalysisEngine {
         ...(input.signal ? { signal: input.signal } : {})
       });
       languageServers = lspResult.statuses;
+      for (const generated of lspResult.generatedSources ?? []) {
+        parsedByPath.set(generated.file.canonicalPath, parseSourceFile(generated.file, generated.content));
+      }
       for (const warning of lspResult.warnings) {
         addWarning(warning);
       }
@@ -296,6 +299,9 @@ export class CodeAnalysisEngine {
         : cacheRevisionMatches
           ? { ...cacheDocument.files }
           : {};
+    for (const [path, cached] of Object.entries(cacheFiles)) {
+      if (cached.parsed.file.generatedContent !== undefined) delete cacheFiles[path];
+    }
     if (input.scope === "changed") {
       for (const path of changedCanonicalPaths({
         ...input,
@@ -436,7 +442,11 @@ export class CodeAnalysisEngine {
         fullIndexRevisions: currentRootRevisions,
         dirtyPaths: currentDirtyPaths,
         ...(lastFullIndexAt ? { lastFullIndexAt } : {}),
-        files: cacheFiles,
+        files: Object.fromEntries(
+          Object.entries(cacheFiles).filter(
+            ([, cached]) => cached.parsed.file.generatedContent === undefined
+          )
+        ),
         updatedAt: generatedAt
       });
       input.onProgress?.({

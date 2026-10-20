@@ -70,6 +70,7 @@ import {
   type RepositoryMediaKind,
   type RepositoryMediaPreview,
   type RepositorySnapshot,
+  type RepositorySnapshotProgress,
   type RepositoryTopology,
   type StashDiff,
   type StashFiles,
@@ -158,6 +159,8 @@ const WRITE_OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024;
 const DEFAULT_WRITE_TIMEOUT_MS = 60_000;
 const DEFAULT_COMMIT_TIMEOUT_MS = 120_000;
 const DEFAULT_NETWORK_TIMEOUT_MS = 180_000;
+const UNTRACKED_STATS_CONCURRENCY = 4;
+const CHANGE_STATS_PUBLISH_INTERVAL_MS = 1_000;
 const REMOTE_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024;
 const MAX_MUTATION_PATHS = 200;
 const MAX_RELATIVE_PATH_LENGTH = 4_096;
@@ -371,7 +374,8 @@ export class GitCliClient
           priority: options.priority,
           timeoutMs: options.timeoutMs
         },
-        options.includeChangeStats ?? false
+        options.includeChangeStats ?? false,
+        options.onProgress
       );
     } catch (error) {
       throw mapRepositoryError(error, worktreePath);
@@ -2845,76 +2849,129 @@ async function assertRestorePathScope(
 async function reconcileRepositorySnapshot(
   snapshot: RepositorySnapshot,
   options: CommandOptions,
-  includeChangeStats: boolean
+  includeChangeStats: boolean,
+  onProgress?: (progress: RepositorySnapshotProgress) => void
 ): Promise<RepositorySnapshot> {
+  const total = snapshot.changes.length;
+  let completed = 0;
+  assertReadNotCancelled(options.signal);
+  if (includeChangeStats) {
+    onProgress?.({ kind: "snapshot", snapshot, completed, total });
+  }
+  let updates: ChangedPath[] = [];
+  let pendingCount = 0;
+  let finished = false;
+  let publishTimer: ReturnType<typeof setTimeout> | undefined;
+  const flushStats = () => {
+    publishTimer = undefined;
+    if (finished || options.signal?.aborted || pendingCount === 0) return;
+    const changes = updates;
+    updates = [];
+    completed += pendingCount;
+    pendingCount = 0;
+    onProgress?.({ kind: "stats", changes, completed, total });
+  };
+  const publishStats = (changes: ChangedPath[], count = changes.length) => {
+    if (finished) return;
+    assertReadNotCancelled(options.signal);
+    if (!onProgress || count === 0) return;
+    for (const change of changes) updates.push(change);
+    pendingCount += count;
+    publishTimer ??= setTimeout(flushStats, CHANGE_STATS_PUBLISH_INTERVAL_MS);
+  };
   const hasOrdinaryWorktreeModification =
     snapshot.changes.some(
       (change) =>
         change.kind === "ordinary" &&
         change.worktreeStatus === "M"
     );
-  const needsUnstagedStats =
-    (includeChangeStats || hasOrdinaryWorktreeModification) &&
-    snapshot.unstaged > 0;
-  // Upstream display-name reconciliation does not affect which files need
-  // stats. Read both from Git together instead of adding a serial round trip.
-  const [upstreamSnapshot, stagedResult, unstagedResult, untrackedStats] =
-    await Promise.all([
-      reconcileSnapshotUpstream(snapshot, options),
-      includeChangeStats && snapshot.staged > 0
-        ? runProcess({
-            ...options,
-            args: STAGED_DIFF_STAT_ARGUMENTS
-          })
-        : undefined,
-      needsUnstagedStats
-        ? runProcess({
-            ...options,
-            args: UNSTAGED_DIFF_PATH_ARGUMENTS
-          })
-        : undefined,
+  // Publish status before any content reads. Numstat is still required to
+  // reconcile metadata-only changes correctly (name-only can retain CRLF noise).
+  const tracked = Promise.all([
+    reconcileSnapshotUpstream(snapshot, options),
+    includeChangeStats && snapshot.staged > 0
+      ? runProcess({
+          ...options,
+          ...(onProgress ? { priority: "background" as const } : {}),
+          args: STAGED_DIFF_STAT_ARGUMENTS
+        })
+      : undefined,
+    (includeChangeStats || hasOrdinaryWorktreeModification) && snapshot.unstaged > 0
+      ? runProcess({
+          ...options,
+          ...(onProgress ? { priority: "background" as const } : {}),
+          args: UNSTAGED_DIFF_PATH_ARGUMENTS
+        })
+      : undefined
+  ]).then(([upstreamSnapshot, staged, unstaged]) => {
+    const stagedStats = parseSimpleDiffStats(staged?.stdout ?? "");
+    const unstagedStats = parseSimpleDiffStats(unstaged?.stdout ?? "");
+    const value = hasOrdinaryWorktreeModification
+      ? reconcileStatOnlyUnstagedChanges(upstreamSnapshot, [...unstagedStats.keys()])
+      : upstreamSnapshot;
+    if (!includeChangeStats) return value;
+    const emptyStats = new Map<string, ChangedPathStats>();
+    const trackedChanges = value.changes
+      .filter((change) => change.kind !== "untracked")
+      .map((change) => attachChangeStats(change, stagedStats, unstagedStats, emptyStats));
+    publishStats(
+      trackedChanges,
+      snapshot.changes.filter((change) => change.kind !== "untracked").length
+    );
+    const byPath = new Map(trackedChanges.map((change) => [change.path, change]));
+    return {
+      ...value,
+      changes: value.changes.map((change) => byPath.get(change.path) ?? change)
+    };
+  });
+  let reconciledSnapshot: RepositorySnapshot;
+  let untrackedStats: Map<string, ChangedPathStats>;
+  try {
+    [reconciledSnapshot, untrackedStats] = await Promise.all([
+      tracked,
       includeChangeStats
         ? readUntrackedChangeStats(
             options.cwd,
             snapshot.changes,
-            options.signal
+            options.signal,
+            onProgress ? (change) => publishStats([change]) : undefined
           )
         : new Map<string, ChangedPathStats>()
     ]);
-  snapshot = upstreamSnapshot;
-  if (!includeChangeStats && !hasOrdinaryWorktreeModification) {
-    return snapshot;
+    assertReadNotCancelled(options.signal);
+    if (publishTimer !== undefined) clearTimeout(publishTimer);
+    flushStats();
+  } finally {
+    finished = true;
+    if (publishTimer !== undefined) clearTimeout(publishTimer);
   }
-
-  const stagedStats = parseSimpleDiffStats(
-    stagedResult?.stdout ?? ""
-  );
-  const unstagedStats = parseSimpleDiffStats(
-    unstagedResult?.stdout ?? ""
-  );
-  const reconciledSnapshot =
-    hasOrdinaryWorktreeModification
-      ? reconcileStatOnlyUnstagedChanges(
-          snapshot,
-          [...unstagedStats.keys()]
-        )
-      : snapshot;
-
-  if (!includeChangeStats) {
-    return reconciledSnapshot;
-  }
-
-  return {
+  if (!includeChangeStats) return reconciledSnapshot;
+  const result: RepositorySnapshot = {
     ...reconciledSnapshot,
     changes: reconciledSnapshot.changes.map((change) =>
-      attachChangeStats(
-        change,
-        stagedStats,
-        unstagedStats,
-        untrackedStats
-      )
+      change.kind === "untracked"
+        ? {
+            ...change,
+            untrackedStats: untrackedStats.get(change.path) ?? { additions: 0, deletions: 0 }
+          }
+        : change
     )
   };
+  // Status may contain metadata-only modifications or a shortened upstream ref.
+  // Correct those rows after stats finish without delaying the initial list.
+  if (
+    result.changes.length !== snapshot.changes.length ||
+    result.unstaged !== snapshot.unstaged ||
+    result.upstream !== snapshot.upstream
+  ) {
+    onProgress?.({
+      kind: "snapshot",
+      snapshot: result,
+      completed: result.changes.length,
+      total: result.changes.length
+    });
+  }
+  return result;
 }
 
 async function reconcileSnapshotUpstream(
@@ -2995,27 +3052,40 @@ function attachChangeStats(
 async function readUntrackedChangeStats(
   worktreePath: string,
   changes: readonly ChangedPath[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProgress?: (change: ChangedPath) => void
 ): Promise<Map<string, ChangedPathStats>> {
   const stats = new Map<string, ChangedPathStats>();
-
-  for (const change of changes) {
-    if (change.kind !== "untracked") {
-      continue;
+  const pending = changes.filter((change) => change.kind === "untracked");
+  let cursor = 0;
+  let failed = false;
+  const worker = async () => {
+    while (!failed) {
+      assertReadNotCancelled(signal);
+      const change = pending[cursor++];
+      if (!change) return;
+      try {
+        const value = await readUntrackedFileStats(
+          resolve(worktreePath, validateRelativePathspec(change.path)),
+          signal
+        );
+        assertReadNotCancelled(signal);
+        if (failed) return;
+        stats.set(change.path, value);
+        onProgress?.({ ...change, untrackedStats: value });
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
     }
-
-    assertReadNotCancelled(signal);
-    stats.set(
-      change.path,
-      await readUntrackedFileStats(
-        resolve(
-          worktreePath,
-          validateRelativePathspec(change.path)
-        ),
-        signal
-      )
-    );
-  }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(UNTRACKED_STATS_CONCURRENCY, pending.length) },
+      worker
+    )
+  );
+  assertReadNotCancelled(signal);
 
   return stats;
 }

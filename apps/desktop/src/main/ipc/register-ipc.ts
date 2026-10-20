@@ -849,9 +849,25 @@ export function registerIpcHandlers(
 
   registerHandler(
     IPC_CHANNELS.repositoryGetChanges,
-    (_event, request) =>
+    (event, request) =>
       captureGitRead(() => {
         const input = validateRepositoryChangesRequest(request);
+        if (input.progressive) {
+          return services.repositoryQueries.getChanges(
+            input.queryId,
+            input.target,
+            input.includeChangeStats,
+            (progress) => {
+              if (!event.sender.isDestroyed()) {
+                event.sender.send(IPC_EVENTS.repositoryChangesProgress, {
+                  ...progress,
+                  queryId: input.queryId,
+                  target: input.target
+                });
+              }
+            }
+          );
+        }
         return services.repositoryQueries.getChanges(
           input.queryId,
           input.target,
@@ -927,7 +943,8 @@ export function registerIpcHandlers(
           input.target,
           input.path,
           input.mode,
-          input.contextLines
+          input.contextLines,
+          input.intent
         );
       })
   );
@@ -2484,6 +2501,10 @@ export function validateRepositoryChangesRequest(
     "includeChangeStats" in request
       ? request.includeChangeStats
       : undefined;
+  const progressive =
+    request && typeof request === "object" && "progressive" in request
+      ? request.progressive
+      : undefined;
 
   if (
     includeChangeStats !== undefined &&
@@ -2494,12 +2515,19 @@ export function validateRepositoryChangesRequest(
       "Repository change stats selection must be boolean when provided."
     );
   }
+  if (progressive !== undefined && typeof progressive !== "boolean") {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Repository changes progress selection must be boolean when provided."
+    );
+  }
 
   return {
     ...base,
     ...(includeChangeStats === undefined
       ? {}
-      : { includeChangeStats })
+      : { includeChangeStats }),
+    ...(progressive === undefined ? {} : { progressive })
   };
 }
 
@@ -2528,6 +2556,10 @@ export function validateRepositoryDiffRequest(
     "contextLines" in request
       ? request.contextLines
       : undefined;
+  const intent =
+    "intent" in request
+      ? request.intent
+      : undefined;
   if (
     contextLines !== undefined &&
     (typeof contextLines !== "number" ||
@@ -2539,6 +2571,16 @@ export function validateRepositoryDiffRequest(
       "Diff context lines must be a non-negative integer."
     );
   }
+  if (
+    intent !== undefined &&
+    (typeof intent !== "string" ||
+      !["display", "search"].includes(intent))
+  ) {
+    throw new GitError(
+      "INVALID_REQUEST",
+      "Diff query intent must be display or search when provided."
+    );
+  }
 
   return {
     ...base,
@@ -2546,7 +2588,12 @@ export function validateRepositoryDiffRequest(
     mode: request.mode as RepositoryDiffRequest["mode"],
     ...(contextLines === undefined
       ? {}
-      : { contextLines })
+      : { contextLines }),
+    ...(intent === undefined
+      ? {}
+      : {
+          intent: intent as NonNullable<RepositoryDiffRequest["intent"]>
+        })
   };
 }
 

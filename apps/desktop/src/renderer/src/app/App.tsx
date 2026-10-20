@@ -951,7 +951,7 @@ export function App() {
       {versionDialogOpen && (
         <VersionDialog
           fallbackVersion={
-            runtimeInfo?.appVersion ?? "0.0.2"
+            runtimeInfo?.appVersion ?? "0.0.3"
           }
           state={applicationUpdate.state}
           onAcknowledgePrompt={(version) =>

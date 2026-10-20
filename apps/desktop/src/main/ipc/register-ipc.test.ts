@@ -832,6 +832,14 @@ describe("repository changes IPC validation", () => {
     worktreeId: "worktree"
   };
 
+  it("accepts progressive stats requests and rejects non-boolean flags", () => {
+    expect(validateRepositoryChangesRequest({
+      queryId: "progressive", target, progressive: true
+    })).toEqual({ queryId: "progressive", target, progressive: true });
+    expect(() => validateRepositoryChangesRequest({
+      queryId: "progressive_invalid", target, progressive: "true"
+    })).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
+  });
   it("preserves an explicit lightweight stats selection", () => {
     expect(
       validateRepositoryChangesRequest({
@@ -890,6 +898,49 @@ describe("repository diff IPC validation", () => {
       mode: "unstaged",
       contextLines: 13
     });
+  });
+
+  it("accepts search intent and rejects unsupported Diff intent", () => {
+    expect(
+      validateRepositoryDiffRequest({
+        queryId: "diff_search_1",
+        target,
+        path: "src/App.tsx",
+        mode: "unstaged",
+        contextLines: 3,
+        intent: "search"
+      })
+    ).toEqual({
+      queryId: "diff_search_1",
+      target,
+      path: "src/App.tsx",
+      mode: "unstaged",
+      contextLines: 3,
+      intent: "search"
+    });
+
+    expect(() =>
+      validateRepositoryDiffRequest({
+        queryId: "diff_bad_intent",
+        target,
+        path: "src/App.tsx",
+        mode: "unstaged",
+        intent: "bulk"
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+    expect(() =>
+      validateRepositoryDiffRequest({
+        queryId: "diff_non_string_intent",
+        target,
+        path: "src/App.tsx",
+        mode: "unstaged",
+        intent: { toString: () => "search" }
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
   });
 
   it("accepts a safe commit file diff request", () => {

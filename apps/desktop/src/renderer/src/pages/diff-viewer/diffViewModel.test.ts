@@ -4,12 +4,27 @@ import {
   buildLocalizedDiffContent,
   buildDiffViewerFiles,
   collectDiffViewerSearchHits,
+  createDiffContentSearchIndex,
   createDiffContentSnapshot,
+  findDiffContentMatch,
+  findIndexedDiffContentMatch,
   matchesDiffViewerFileFilter,
   parseDiffViewModel
 } from "../../shared/model/diffViewModel";
 
 describe("Diff viewer model", () => {
+  it("reuses unchanged file rows when one progressive stats batch arrives", () => {
+    const first = { path: "first.txt", kind: "untracked" as const, indexStatus: "?", worktreeStatus: "?" };
+    const second = { ...first, path: "second.txt" };
+    const previous = buildDiffViewerFiles([first, second]);
+    const next = buildDiffViewerFiles([
+      { ...first, untrackedStats: { additions: 4, deletions: 0 } },
+      second
+    ], previous);
+    expect(next[0]).not.toBe(previous[0]);
+    expect(next[0]?.additions).toBe(4);
+    expect(next[1]).toBe(previous[1]);
+  });
   it("keeps repeated sign prefixes inside hunks as numbered content", () => {
     const model = parseDiffViewModel(
       "@@ -1,2 +1,2 @@\n---old\n+++new\n tail"
@@ -372,5 +387,66 @@ describe("Diff viewer model", () => {
     expect(matchesDiffViewerFileFilter(file!, "deleted")).toBe(
       false
     );
+  });
+
+  it("searches code lines in Diff content without matching file headers", () => {
+    const content = [
+      "diff --git a/src/addTaskAidFilter.ts b/src/addTaskAidFilter.ts",
+      "--- a/src/addTaskAidFilter.ts",
+      "+++ b/src/addTaskAidFilter.ts",
+      "@@ -10,2 +10,2 @@",
+      "-const oldValue = buildFilter();",
+      "+const nextValue = addTaskAidFilter(searchArg);",
+      " return nextValue;"
+    ].join("\n");
+
+    expect(
+      findDiffContentMatch(content, "addTaskAidFilter")
+    ).toEqual({
+      preview:
+        "const nextValue = addTaskAidFilter(searchArg);"
+    });
+    expect(
+      findDiffContentMatch(
+        content,
+        "src/addTaskAidFilter.ts"
+      )
+    ).toBeNull();
+    expect(
+      findDiffContentMatch(content, "BUILDfilter")
+    ).toEqual({
+      preview: "const oldValue = buildFilter();"
+    });
+  });
+
+  it("reuses a compiled Diff content index across queries", () => {
+    const index = createDiffContentSearchIndex([
+      "--- a/src/search.ts",
+      "+++ b/src/search.ts",
+      "-const oldValue = buildFilter();",
+      "+const nextValue = addTaskAidFilter(searchArg);",
+      " return nextValue;"
+    ].join("\n"));
+
+    expect(
+      findIndexedDiffContentMatch(index, "BUILDfilter")
+    ).toEqual({
+      preview: "const oldValue = buildFilter();"
+    });
+    expect(
+      findIndexedDiffContentMatch(index, "addTaskAidFilter")
+    ).toEqual({
+      preview:
+        "const nextValue = addTaskAidFilter(searchArg);"
+    });
+    expect(
+      findIndexedDiffContentMatch(
+        index,
+        "buildFilter();\nconst nextValue"
+      )
+    ).toBeNull();
+    expect(
+      findIndexedDiffContentMatch(index, "src/search.ts")
+    ).toBeNull();
   });
 });

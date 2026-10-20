@@ -9,7 +9,11 @@ import {
 
 import type { DiffFileViewDto, RepositoryIgnoreScopeDto } from "@gitnest/contracts";
 
-import type { DiffViewerFile, DiffViewerLayout } from "../../shared/model/diffViewModel";
+import type {
+  DiffViewerContentMatch,
+  DiffViewerFile,
+  DiffViewerLayout
+} from "../../shared/model/diffViewModel";
 import { Button } from "../../shared/ui/Button";
 import { Icon } from "../../shared/ui/Icon";
 import {
@@ -68,6 +72,19 @@ export interface DiffWorkspaceAuxiliaryView {
   onToggle(): void;
 }
 
+export interface DiffWorkspaceFileSearch {
+  matches: readonly DiffViewerContentMatch[];
+  loading: boolean;
+  incomplete: boolean;
+  minimumQueryLength: number;
+  onQueryChange(query: string): void;
+}
+
+export interface DiffWorkspaceContentSearchSelection {
+  query: string;
+  open: boolean;
+}
+
 interface DiffDiscardRequest {
   kind: "file" | "group";
   files: readonly DiffViewerFile[];
@@ -79,7 +96,11 @@ export interface DiffWorkspaceProps {
   files: readonly DiffViewerFile[];
   selectedFileKey?: string | undefined;
   selectionRevealKey?: string | undefined;
-  onSelectedFileChange(file: DiffViewerFile): void;
+  fileSearch?: DiffWorkspaceFileSearch | undefined;
+  onSelectedFileChange(
+    file: DiffViewerFile,
+    contentSearch?: DiffWorkspaceContentSearchSelection
+  ): void;
   onFileHistory?: ((file: DiffViewerFile) => void) | undefined;
   onIgnoreFile?: ((file: DiffViewerFile, scope: RepositoryIgnoreScopeDto) => void) | undefined;
   onStageFile?:
@@ -151,6 +172,7 @@ export function DiffWorkspace({
   files,
   selectedFileKey,
   selectionRevealKey,
+  fileSearch,
   onSelectedFileChange,
   onFileHistory,
   onIgnoreFile,
@@ -212,7 +234,8 @@ export function DiffWorkspace({
   const selectFile = useCallback(
     (
       file: DiffViewerFile,
-      origin: DiffFileSelectionOrigin
+      origin: DiffFileSelectionOrigin,
+      contentMatch?: DiffViewerContentMatch
     ) => {
       if (
         origin === "user" &&
@@ -220,7 +243,14 @@ export function DiffWorkspace({
       ) {
         auxiliaryView.onToggle();
       }
-      onSelectedFileChange(file);
+      if (contentMatch) {
+        onSelectedFileChange(file, {
+          query: contentMatch.query,
+          open: origin === "user"
+        });
+      } else {
+        onSelectedFileChange(file);
+      }
     },
     [
       auxiliaryView?.active,
@@ -367,10 +397,17 @@ export function DiffWorkspace({
           changesError={changesError}
           changesLoading={changesLoading}
           configuration={configuration.navigation}
+          contentMatches={fileSearch?.matches}
+          contentSearchIncomplete={fileSearch?.incomplete}
+          contentSearchLoading={fileSearch?.loading}
+          contentSearchMinimumQueryLength={
+            fileSearch?.minimumQueryLength
+          }
           files={files}
           mutationBusy={mutationBusy}
           onFileContextMenu={openFileContextMenu}
           onRefresh={onRefresh}
+          onFilterChange={fileSearch?.onQueryChange}
           onSelectedFileChange={selectFile}
           onStageFile={onStageFile}
           onUnstageFile={onUnstageFile}

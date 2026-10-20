@@ -306,6 +306,7 @@ function isAllowedAsarEntry(entry) {
     ) ||
     entry === "out/preload" ||
     entry === "out/preload/index.js" ||
+    entry === "out/preload/tray-menu.js" ||
     entry === "out/renderer" ||
     entry === "out/renderer/index.html" ||
     entry === "out/renderer/assets" ||

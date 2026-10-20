@@ -2,7 +2,8 @@
 export function scrollWithinContainer(
   boundary: HTMLElement | null,
   target: HTMLElement | null | undefined,
-  block: "start" | "center" = "center"
+  block: "start" | "center" = "center",
+  inline: "start" | "nearest" = "nearest"
 ): void {
   if (!boundary || !target || boundary === target || !boundary.contains(target)) return;
 
@@ -17,9 +18,9 @@ export function scrollWithinContainer(
       const rect = target.getBoundingClientRect();
       const leftEdge = view.left + viewport.clientLeft;
       const rightEdge = leftEdge + viewport.clientWidth;
-      let left = viewport.scrollLeft;
+      let left = scrollX && inline === "start" ? 0 : viewport.scrollLeft;
       // Keep horizontal position when the target already spans the viewport.
-      if (scrollX && !(rect.left < leftEdge && rect.right > rightEdge)) {
+      if (scrollX && inline === "nearest" && !(rect.left < leftEdge && rect.right > rightEdge)) {
         if (rect.left < leftEdge) left += rect.left - leftEdge;
         else if (rect.right > rightEdge) left += rect.right - rightEdge;
       }

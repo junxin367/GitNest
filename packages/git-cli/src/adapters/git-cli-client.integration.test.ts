@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import {
   mkdir,
+  open,
   readFile,
   rm,
   truncate,
@@ -10,7 +11,7 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { GitError } from "@gitnest/git-core";
+import { GitError, type RepositorySnapshotProgress } from "@gitnest/git-core";
 import {
   createGitRepositoryFixture,
   createTemporaryDirectoryFixture,
@@ -20,6 +21,11 @@ import {
 
 import { GitCliClient } from "./git-cli-client";
 import * as processRunner from "../process/git-process-runner";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
 
 describe("GitCliClient integration", () => {
   let fixture: GitRepositoryFixture;
@@ -150,6 +156,107 @@ describe("GitCliClient integration", () => {
         })
       ])
     );
+  });
+
+  it("publishes files immediately and batches independent stats at one second intervals", async () => {
+    const original = processRunner.runProcess;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const events: RepositorySnapshotProgress[] = [];
+    const eventTimes: number[] = [];
+    const commands = vi.spyOn(processRunner, "runProcess").mockImplementation(async (request) => {
+      if (request.args.includes("--numstat")) await gate;
+      return original(request);
+    });
+    const pending = client.readRepositorySnapshot(fixture.repositoryPath, {
+      includeChangeStats: true,
+      onProgress: (progress) => {
+        events.push(progress);
+        eventTimes.push(performance.now());
+      }
+    });
+    try {
+      await vi.waitFor(() => expect(events[0]?.kind).toBe("snapshot"));
+      const initial = events[0]!;
+      expect(initial.kind === "snapshot" && initial.snapshot.changes).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "未跟踪 file.txt" })])
+      );
+      if (initial.kind === "snapshot") {
+        expect(initial.snapshot.changes.every((change) =>
+          !change.stagedStats && !change.unstagedStats && !change.untrackedStats)).toBe(true);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 850));
+      expect(events).toHaveLength(1);
+      await vi.waitFor(() => expect(events.some((event) =>
+        event.kind === "stats" && event.changes.some((change) =>
+          change.untrackedStats?.additions === 1))).toBe(true), { timeout: 2_000 });
+      expect(eventTimes[1]! - eventTimes[0]!).toBeGreaterThanOrEqual(990);
+    } finally {
+      release();
+      await expect(pending).resolves.toMatchObject({ untracked: 1 });
+      commands.mockRestore();
+    }
+    expect(events.at(-1)).toMatchObject({ kind: "stats", completed: 3, total: 3 });
+  });
+
+  it.each([false, true])("bounds concurrent untracked reads and stops updates when cancelled=%s", async (cancel) => {
+    const directory = await createTemporaryDirectoryFixture("parallel-change-stats");
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let active = 0;
+    let maximum = 0;
+    let opened = 0;
+    const events: RepositorySnapshotProgress[] = [];
+    const controller = new AbortController();
+    try {
+      await runGit(directory.path, ["init", "--initial-branch=main", "."]);
+      await Promise.all(Array.from({ length: 12 }, (_, index) =>
+        writeFile(join(directory.path, `${index}.txt`), "first\nsecond\n")));
+      vi.mocked(open).mockImplementation(async (path, flags, mode) => {
+        if (!String(path).startsWith(directory.path)) return actual.open(path, flags, mode);
+        active += 1;
+        opened += 1;
+        maximum = Math.max(maximum, active);
+        try {
+          await gate;
+          return await actual.open(path, flags, mode);
+        } finally {
+          active -= 1;
+        }
+      });
+      const pending = client.readRepositorySnapshot(directory.path, {
+        includeChangeStats: true,
+        signal: controller.signal,
+        onProgress: (progress) => events.push(progress)
+      });
+      // Attach rejection handling before cancellation to avoid an unhandled promise.
+      const result = pending.then((value) => ({ value }), (error: unknown) => ({ error }));
+      try {
+        await vi.waitFor(() => expect(opened).toBe(4));
+        expect(maximum).toBe(4);
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({ kind: "snapshot", completed: 0, total: 12 });
+        if (cancel) controller.abort();
+      } finally {
+        release();
+      }
+      const settled = await result;
+      if (cancel) {
+        expect(settled).toMatchObject({ error: { code: "COMMAND_CANCELLED" } });
+        expect(events).toHaveLength(1);
+        expect(opened).toBe(4);
+      } else {
+        expect("value" in settled && settled.value.changes.every((change) =>
+          change.untrackedStats?.additions === 2)).toBe(true);
+        expect(maximum).toBeLessThanOrEqual(4);
+        expect(events.at(-1)).toMatchObject({ kind: "stats", completed: 12, total: 12 });
+      }
+    } finally {
+      release();
+      vi.mocked(open).mockImplementation(actual.open);
+      await directory.dispose();
+    }
   });
 
   it("starts snapshot stats while upstream reconciliation is still pending", async () => {
@@ -530,6 +637,16 @@ describe("GitCliClient integration", () => {
         staged: 0,
         unstaged: 0,
         changes: []
+      });
+
+      const progress: RepositorySnapshotProgress[] = [];
+      await expect(client.readRepositorySnapshot(normalizedFixture.path, {
+        includeChangeStats: true,
+        onProgress: (event) => progress.push(event)
+      })).resolves.toMatchObject({ unstaged: 0, changes: [] });
+      expect(progress.at(-1)).toMatchObject({
+        kind: "snapshot", snapshot: { unstaged: 0, changes: [] },
+        completed: 0, total: 0
       });
 
       await writeFile(

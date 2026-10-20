@@ -132,6 +132,7 @@ export interface AnalysisSourceFile {
   modifiedAtMs: number;
   fingerprint: string;
   changed: boolean;
+  generatedContent?: string;
 }
 
 export interface ParsedCall {
@@ -468,4 +469,5 @@ export interface LspAnalysisResult {
   semanticRelations?: LspSemanticRelation[];
   statuses: LanguageServerStatus[];
   warnings: string[];
+  generatedSources?: Array<{ file: AnalysisSourceFile; content: string }>;
 }

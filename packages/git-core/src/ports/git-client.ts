@@ -3,7 +3,8 @@ import type { CommitHistoryFilter } from "../domain/history-search";
 import type {
   Branch,
   RepositoryInspection,
-  RepositorySnapshot
+  RepositorySnapshot,
+  RepositorySnapshotProgress
 } from "../domain/repository";
 import type {
   CommitHistoryScope,
@@ -31,6 +32,7 @@ export interface InspectRepositoryOptions extends GitReadOptions {
 export interface ReadRepositorySnapshotOptions
   extends GitReadOptions {
   includeChangeStats?: boolean;
+  onProgress?: (progress: RepositorySnapshotProgress) => void;
 }
 
 export interface ReadRepositoryDiffOptions extends GitReadOptions {

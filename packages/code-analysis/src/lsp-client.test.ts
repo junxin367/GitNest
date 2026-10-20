@@ -7,6 +7,7 @@ import {
   symlink,
   writeFile
 } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import {
   dirname,
@@ -43,9 +44,10 @@ import type {
   LanguageServerCommandSettings,
   LspDocumentSymbol
 } from "./model";
-import { createLspAnalysisPolicy, lspConfigurationSection } from "./lsp-analysis-policy";
-import { AnalysisPathMap, prepareIsolatedAnalysisProject } from "./isolated-analysis-project";
-import { spawn, execFileSync } from "node:child_process";
+import { createLspAnalysisPolicy, LSP_ANALYSIS_POLICY_VERSION, lspConfigurationSection } from "./lsp-analysis-policy";
+import { prepareIsolatedAnalysisProject } from "./isolated-analysis-project";
+import { prepareJavaAnalysisLaunch, readJavaAnalysisErrors } from "./java-analysis-runtime";
+import { spawn, spawnSync, execFileSync } from "node:child_process";
 
 // Protocol fixtures deliberately run without project import. Native isolation
 // is exercised separately below; production never selects this adapter.
@@ -56,23 +58,6 @@ class ExternalLanguageServerPool extends ProductionLanguageServerPool {
 }
 
 describe("isolated analysis projects", () => {
-  it("maps protocol locations without altering code, Markdown, or opaque server data", () => {
-    const original = resolve("original");
-    const copy = resolve("copy");
-    const map = new AnalysisPathMap([{ original, copy }]);
-    const uri = pathToFileURL(join(original, "space name.java")).toString();
-    const data = { uri, path: join(original, "internal") };
-    const input = { uri, text: uri, contents: { uri }, data, textDocument: { uri } };
-    const mapped = map.message(input, "toCopy");
-    expect(mapped).toEqual({
-      uri: pathToFileURL(join(copy, "space name.java")).toString(),
-      text: uri, contents: { uri }, data,
-      textDocument: { uri: pathToFileURL(join(copy, "space name.java")).toString() }
-    });
-    expect(map.message(mapped, "toOriginal")).toEqual(input);
-    expect(map.path(`${original}-sibling`, "toCopy")).toBe(`${original}-sibling`);
-  });
-
   it("restores project import only with a protected project", () => {
     const policy = createLspAnalysisPolicy("java", "runtime", "project", true);
     expect(lspConfigurationSection(policy.settings, "java.autobuild.enabled")).toBe(true);
@@ -82,31 +67,104 @@ describe("isolated analysis projects", () => {
     expect(createLspAnalysisPolicy("csharp", "runtime", "project", true).unavailableReason).toBeUndefined();
   });
 
-  it("keeps runtime and executable paths outside the admitted project unmapped", () => {
-    const workspace = resolve("workspace");
-    const source = join(workspace, "repo");
-    const copy = resolve("copy");
-    const map = new AnalysisPathMap([{ original: workspace, copy }], [source], workspace);
-    expect(map.path(workspace, "toCopy")).toBe(copy);
-    expect(map.path(join(source, "Source.java"), "toCopy")).toBe(join(copy, "repo", "Source.java"));
-    expect(map.path(join(workspace, "runtime", "java.exe"), "toCopy")).toBe(join(workspace, "runtime", "java.exe"));
+  it("keeps Java import exclusions inside selected roots and escapes literal directory names", () => {
+    const root = resolve("fixtures", "workspace [one]");
+    const prefix = root.replaceAll("\\", "/").replace("[one]", "\\[one\\]");
+    const policy = createLspAnalysisPolicy("java", "runtime", root, true, {
+      workspaceFolders: [root], ignoreDirectories: [" temp ", "BUILD", "cache[old]", "nested/path", ""]
+    });
+    const exclusions = lspConfigurationSection(policy.settings, "java.import.exclusions") as string[];
+    expect(exclusions).toContain(`${prefix}/temp`);
+    expect(exclusions).toContain(`${prefix}/**/temp/**`);
+    expect(exclusions).toContain(`${prefix}/build/**`);
+    expect(exclusions).toContain(`${prefix}/cache\\[old\\]`);
+    expect(exclusions).not.toContain("**/temp/**");
+    expect(exclusions.some(pattern => pattern.includes("nested/path"))).toBe(false);
   });
 
-  it.skipIf(process.platform !== "win32")("refuses overlapping runtime paths and junctions before running a server", async () => {
+  it("keeps explicitly selected Java roots below ignored directories without including their own ignored children", () => {
+    const root = resolve("fixtures", "workspace");
+    const selected = join(root, "temp", "selected");
+    const workspace = resolveLanguageServerWorkspace("java", [
+      { file: sourceFile(root, "java") },
+      { file: sourceFile(selected, "java") }
+    ], root, [root, selected], ["temp"]);
+    expect(workspace.workspaceFolders).toEqual([root, selected]);
+    const policy = createLspAnalysisPolicy("java", "runtime", root, true, {
+      workspaceFolders: workspace.workspaceFolders, ignoreDirectories: ["temp"]
+    });
+    const exclusions = lspConfigurationSection(policy.settings, "java.import.exclusions") as string[];
+    const parentPattern = `${root.replaceAll("\\", "/")}/temp/**`;
+    const selectionPattern = `!${selected.replaceAll("\\", "/")}/**`;
+    const childPattern = `${selected.replaceAll("\\", "/")}/temp/**`;
+    expect(exclusions.indexOf(selectionPattern)).toBeGreaterThan(exclusions.indexOf(parentPattern));
+    expect(exclusions.indexOf(childPattern)).toBeGreaterThan(exclusions.indexOf(selectionPattern));
+  });
+
+  it("rejects opaque Java launchers rather than silently dropping output isolation", async () => {
+    await expect(prepareJavaAnalysisLaunch(
+      { command: "launcher.exe", args: [] }, "runtime", "configuration"
+    )).rejects.toThrow("不能使用隐藏实际 JVM 参数的启动脚本");
+  });
+
+  it("reports internal Java import and generation errors even without protocol diagnostics", async () => {
+    const root = await mkdtemp(join(resolve("temp"), "gitnest-java-errors-"));
+    try {
+      await mkdir(join(root, "workspace", ".metadata"), { recursive: true });
+      await writeFile(join(root, "workspace", ".metadata", ".log"), [
+        "!ENTRY org.eclipse.jdt.apt.core 4 1 2026-10-13",
+        "!MESSAGE Failed to create generated sources",
+        "!ENTRY org.eclipse.jdt.ls.core 1 0 2026-10-13",
+        "!MESSAGE ServiceReady",
+        "!SUBENTRY 1 org.eclipse.core.resources 4 77 2026-10-13",
+        "!MESSAGE Cannot create output folder"
+      ].join("\n"));
+      expect(await readJavaAnalysisErrors(root)).toEqual([
+        "Failed to create generated sources", "Cannot create output folder"
+      ]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("retains Java errors after Eclipse rotates its log files", async () => {
+    const root = await mkdtemp(join(resolve("temp"), "gitnest-java-rotated-errors-"));
+    const metadata = join(root, "workspace", ".metadata");
+    try {
+      await mkdir(metadata, { recursive: true });
+      await writeFile(join(metadata, ".log"), "!ENTRY org.eclipse.jdt.ls.core 1 0\n!MESSAGE ServiceReady");
+      await writeFile(join(metadata, ".bak_0.log"), "!ENTRY org.eclipse.jdt.core 4 4\n!MESSAGE Original output was not writable");
+      await writeFile(join(metadata, ".bak_1.log"), [
+        "!ENTRY org.eclipse.jdt.core 4 4",
+        "!MESSAGE Original output was not writable",
+        "!SUBENTRY 1 org.eclipse.core.resources 4 77",
+        "!MESSAGE Project import failed"
+      ].join("\n"));
+      await writeFile(join(metadata, "other.log"), "!ENTRY other 4 4\n!MESSAGE Unrelated log");
+      const errors = await readJavaAnalysisErrors(root);
+      expect(errors).toHaveLength(2);
+      expect(errors).toEqual(expect.arrayContaining(["Original output was not writable", "Project import failed"]));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.skipIf(process.platform !== "win32")("refuses overlapping runtime paths and checks linked targets without following cycles forever", async () => {
     const root = await mkdtemp(join(tmpdir(), "gitnest-copy-boundary-"));
     const project = join(root, "project");
     await mkdir(project);
+    let isolated: Awaited<ReturnType<typeof prepareIsolatedAnalysisProject>> | undefined;
     try {
       const input = { workspaceRootPath: project, workspaceFolders: [project], documents: [] };
       await expect(prepareIsolatedAnalysisProject({ ...input, dataDirectory: join(project, "runtime") }))
         .rejects.toThrow("必须位于原项目目录之外");
       await symlink(project, join(project, "loop"), "junction");
-      await expect(prepareIsolatedAnalysisProject({ ...input, dataDirectory: join(root, "runtime") }))
-        .rejects.toThrow("符号链接或目录联接");
-    } finally { await rm(root, { recursive: true, force: true }); }
+      isolated = await prepareIsolatedAnalysisProject({ ...input, dataDirectory: join(root, "runtime") });
+      const launch = isolated.launch(process.execPath, ["-e", "console.log('ready')"], project);
+      expect(execFileSync(launch.command, launch.args, { encoding: "utf8", windowsHide: true, timeout: 10_000 }).trim()).toBe("ready");
+    } finally {
+      await isolated?.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
-  it.skipIf(process.platform !== "win32")("copies working files and prevents parent and child writes to the original", async () => {
+  it.skipIf(process.platform !== "win32")("reads original files without copying and prevents parent and child writes", async () => {
     const root = await mkdtemp(join(tmpdir(), "gitnest-native-isolation-"));
     const project = join(root, "project");
     const source = join(project, "Source.java");
@@ -119,7 +177,8 @@ describe("isolated analysis projects", () => {
         dataDirectory: join(root, "runtime"),
         documents: [{ file: { absolutePath: source }, content: "unsaved snapshot" }]
       });
-      expect(await readFile(isolated.toCopy(source), "utf8")).toBe("unsaved snapshot");
+      expect(await readFile(source, "utf8")).toBe("original");
+      await expect(readFile(join(isolated.workingDirectory, "Source.java"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
       const cache = isolated.environment.GRADLE_USER_HOME!;
       await mkdir(cache, { recursive: true });
       await link(source, join(cache, "linked-original"));
@@ -136,7 +195,7 @@ describe("isolated analysis projects", () => {
       const launch = isolated.launch(process.execPath, ["-e", script], project);
       const output = await new Promise<string>((done, reject) => {
         const child = spawn(launch.command, launch.args, {
-          cwd: isolated!.toCopy(project), windowsHide: true,
+          cwd: isolated!.workingDirectory, windowsHide: true,
           env: { ...process.env, ...isolated!.environment }, stdio: ["pipe", "pipe", "pipe"]
         });
         let stdout = "", stderr = "";
@@ -145,15 +204,15 @@ describe("isolated analysis projects", () => {
         child.once("error", reject);
         child.once("exit", (code) => code === 0 ? done(stdout) : reject(new Error(stderr)));
       });
-      expect(JSON.parse(output)).toEqual({ denied: true, childDenied: true, cwd: isolated.toCopy(project) });
+      expect(JSON.parse(output)).toEqual({ denied: true, childDenied: true, cwd: isolated.workingDirectory });
       expect(await readFile(source, "utf8")).toBe("original");
-      expect(await readFile(join(isolated.toCopy(project), "own-output"), "utf8")).toBe("ok");
-      expect(await readFile(isolated.toCopy(source), "utf8")).toBe("modified copy");
+      expect(await readFile(join(isolated.workingDirectory, "own-output"), "utf8")).toBe("ok");
+      expect(await readFile(join(isolated.workingDirectory, "Source.java"), "utf8")).toBe("modified copy");
       // MIC protection is a precondition, not an assumption about every disk.
       execFileSync("icacls.exe", [project, "/setintegritylevel", "(OI)(CI)L"], { windowsHide: true, stdio: "pipe" });
       const refused = await new Promise<{ code: number | null; stderr: string }>((done, reject) => {
         const child = spawn(launch.command, launch.args, {
-          cwd: isolated!.toCopy(project), windowsHide: true,
+          cwd: isolated!.workingDirectory, windowsHide: true,
           env: { ...process.env, ...isolated!.environment }, stdio: ["pipe", "pipe", "pipe"]
         });
         let stderr = "";
@@ -166,6 +225,64 @@ describe("isolated analysis projects", () => {
       expect(await readFile(source, "utf8")).toBe("original");
     } finally {
       await isolated?.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform !== "win32")("checks the real write boundary behind junctions and still refuses runtime junctions", async () => {
+    const root = await mkdtemp(join(resolve("temp"), "gitnest-junction-boundary-"));
+    const project = join(root, "project"), library = join(root, "library");
+    await mkdir(project);
+    await mkdir(library);
+    await writeFile(join(library, "dependency.txt"), "dependency");
+    await symlink(library, join(project, "library"), "junction");
+    const isolated = await prepareIsolatedAnalysisProject({
+      workspaceRootPath: project, workspaceFolders: [project], dataDirectory: join(root, "runtime"), documents: []
+    });
+    try {
+      const alias = join(project, "library", "dependency.txt");
+      const launch = isolated.launch(process.execPath, ["-e", `
+        const fs=require("node:fs"),cp=require("node:child_process"),path=${JSON.stringify(alias)};
+        let denied=false;
+        try{fs.writeFileSync(path,"BAD")}catch(e){denied=/EPERM|EACCES/.test(e.code)}
+        const child=cp.spawnSync(process.execPath,["-e","require('node:fs').writeFileSync("+JSON.stringify(path)+",'BAD CHILD')"],{encoding:"utf8",windowsHide:true});
+        console.log(JSON.stringify({value:fs.readFileSync(path,"utf8"),denied,childDenied:child.status!==0&&/EPERM|EACCES/.test(child.stderr)}));
+      `], project);
+      const invoke = () => spawnSync(launch.command, launch.args, { encoding: "utf8", windowsHide: true, timeout: 10_000 });
+      const valid = invoke();
+      expect(valid.status).toBe(0);
+      expect(JSON.parse(valid.stdout)).toEqual({ value: "dependency", denied: true, childDenied: true });
+      await symlink(isolated.environment.TEMP!, join(project, "unsafe"), "junction");
+      const unsafe = invoke();
+      expect(unsafe.status).toBe(127);
+      expect(unsafe.stderr).toContain("Original has no Medium write boundary");
+      await symlink(library, join(isolated.workingDirectory, "escape"), "junction");
+      const runtimeLink = invoke();
+      expect(runtimeLink.status).toBe(127);
+      expect(runtimeLink.stderr).toContain("reparse point");
+      expect(await readFile(join(library, "dependency.txt"), "utf8")).toBe("dependency");
+    } finally {
+      await isolated.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform !== "win32")("uses project Maven settings without modifying the source configuration", async () => {
+    const root = await mkdtemp(join(resolve("temp"), "gitnest-maven-settings-"));
+    const project = join(root, "project"), source = join(project, "Source.java");
+    await mkdir(project);
+    await writeFile(source, "class Source {}");
+    const settings = '<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"><offline>true</offline></settings>';
+    await writeFile(join(project, "settings.xml"), settings);
+    const isolated = await prepareIsolatedAnalysisProject({
+      workspaceRootPath: project, workspaceFolders: [project], dataDirectory: join(root, "runtime"),
+      documents: [{ file: { absolutePath: source }, content: "class Source {}" }]
+    });
+    try {
+      expect(await readFile(join(isolated.environment.MAVEN_USER_HOME!, "settings.xml"), "utf8")).toBe(settings);
+      expect(await readFile(join(project, "settings.xml"), "utf8")).toBe(settings);
+    } finally {
+      await isolated.dispose();
       await rm(root, { recursive: true, force: true });
     }
   }, 30_000);
@@ -185,7 +302,7 @@ describe("isolated analysis projects", () => {
     `;
     const launch = isolated.launch(process.execPath, ["-e", script], project);
     const host = spawn(launch.command, launch.args, {
-      cwd: isolated.toCopy(project), windowsHide: true,
+      cwd: isolated.workingDirectory, windowsHide: true,
       env: { ...process.env, ...isolated.environment }, stdio: ["pipe", "pipe", "pipe"]
     });
     const exited = new Promise<void>((done) => host.once("exit", () => done()));
@@ -214,6 +331,102 @@ describe("isolated analysis projects", () => {
       await exited;
       if (descendant) { try { process.kill(descendant); } catch { /* Already killed by job. */ } }
       await isolated.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform !== "win32")("checks long source and retained cache paths without weakening original write protection", async () => {
+    const root = await mkdtemp(join(resolve("temp"), "gitnest-long-path-"));
+    const project = join(root, "project");
+    const source = join(project, `长目录-${"nested-".repeat(20)}`, ".anchors", "414920e699bae883bde8af86e588abe585a5e58fa3.json");
+    await mkdir(dirname(source), { recursive: true });
+    await writeFile(source, "original");
+    const input = {
+      workspaceRootPath: project, workspaceFolders: [project],
+      dataDirectory: join(root, "runtime"),
+      documents: [{ file: { absolutePath: source }, content: "snapshot" }]
+    };
+    let first: Awaited<ReturnType<typeof prepareIsolatedAnalysisProject>> | undefined;
+    let second: Awaited<ReturnType<typeof prepareIsolatedAnalysisProject>> | undefined;
+    try {
+      expect(source.length).toBeGreaterThan(260);
+      first = await prepareIsolatedAnalysisProject(input);
+      expect(await readFile(source, "utf8")).toBe("original");
+      const cacheFile = join(first.environment.GRADLE_USER_HOME!, "cache-".repeat(24), "dependency.json");
+      await mkdir(dirname(cacheFile), { recursive: true });
+      await writeFile(cacheFile, "cached");
+      expect(cacheFile.length).toBeGreaterThan(260);
+      second = await prepareIsolatedAnalysisProject(input);
+      const outputFile = join(second.workingDirectory, "own-output");
+      const launch = second.launch(process.execPath, ["-e", `
+        const fs=require("node:fs");
+        let denied=false;
+        try{fs.writeFileSync(${JSON.stringify(source)},"BAD")}catch(e){denied=e.code==="EPERM"||e.code==="EACCES"}
+        const before=fs.readFileSync(${JSON.stringify(source)},"utf8");
+        fs.writeFileSync(${JSON.stringify(outputFile)},"private output");
+        console.log(JSON.stringify({denied,before,cache:fs.readFileSync(${JSON.stringify(cacheFile)},"utf8")}));
+      `], project);
+      const output = execFileSync(launch.command, launch.args, {
+        cwd: second.workingDirectory, windowsHide: true, timeout: 10_000,
+        env: { ...process.env, ...second.environment }, encoding: "utf8", stdio: "pipe"
+      });
+      expect(JSON.parse(output)).toEqual({ denied: true, before: "original", cache: "cached" });
+      expect(await readFile(outputFile, "utf8")).toBe("private output");
+      expect(await readFile(source, "utf8")).toBe("original");
+    } finally {
+      await second?.dispose();
+      await first?.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform !== "win32")("leaves incompatible legacy isolation directories untouched", async () => {
+    const root = await mkdtemp(join(resolve("temp"), "gitnest-legacy-isolation-"));
+    const project = join(root, "project");
+    const runtime = join(root, "runtime");
+    const key = createHash("sha256").update(JSON.stringify([project.toLowerCase()])).digest("hex").slice(0, 16);
+    const legacy = join(runtime, "isolated-projects-v2", key, "writable");
+    const legacyFile = join(legacy, "runs", "project-old", "legacy.txt");
+    await mkdir(project);
+    await mkdir(dirname(legacyFile), { recursive: true });
+    await writeFile(legacyFile, "legacy snapshot");
+    const permissions = execFileSync("icacls.exe", [legacy], { windowsHide: true, stdio: "pipe" });
+    let isolated: Awaited<ReturnType<typeof prepareIsolatedAnalysisProject>> | undefined;
+    try {
+      isolated = await prepareIsolatedAnalysisProject({
+        workspaceRootPath: project, workspaceFolders: [project],
+        dataDirectory: runtime, documents: []
+      });
+      expect(isolated.workingDirectory).toContain(join(runtime, `isolated-analysis-v${LSP_ANALYSIS_POLICY_VERSION}`));
+      expect(await readFile(legacyFile, "utf8")).toBe("legacy snapshot");
+      expect(execFileSync("icacls.exe", [legacy], { windowsHide: true, stdio: "pipe" })).toEqual(permissions);
+    } finally {
+      await isolated?.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it.skipIf(process.platform !== "win32")("reports native isolation diagnostics as UTF-8", async () => {
+    const root = await mkdtemp(join(resolve("temp"), "gitnest-native-encoding-"));
+    const project = join(root, "project");
+    await mkdir(project);
+    let isolated: Awaited<ReturnType<typeof prepareIsolatedAnalysisProject>> | undefined;
+    try {
+      isolated = await prepareIsolatedAnalysisProject({
+        workspaceRootPath: project, workspaceFolders: [project],
+        dataDirectory: join(root, "runtime"), documents: []
+      });
+      const host = isolated.launch(process.execPath, [], project).command;
+      const result = spawnSync(host, ["--prepare", join(root, "不存在的目录")], {
+        windowsHide: true, timeout: 10_000, stdio: "pipe"
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(127);
+      const diagnostics = new TextDecoder("utf-8", { fatal: true }).decode(result.stderr);
+      expect(diagnostics).toContain("GitNest isolation refused:");
+      expect(diagnostics).toContain("不存在的目录");
+    } finally {
+      await isolated?.dispose();
       await rm(root, { recursive: true, force: true });
     }
   }, 30_000);

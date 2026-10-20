@@ -36,7 +36,7 @@ export function AppTitlebar({
   const fileTriggerRef = useRef<HTMLButtonElement>(null);
   const helpTriggerRef = useRef<HTMLButtonElement>(null);
   const menuSurfaceRef = useRef<HTMLDivElement>(null);
-  const appVersion = runtimeInfo?.appVersion ?? "0.0.2";
+  const appVersion = runtimeInfo?.appVersion ?? "0.0.3";
   const toggleMenu = (menu: Exclude<OpenMenu, null>) =>
     setOpenMenu((current) =>
       current === menu ? null : menu
@@ -115,7 +115,7 @@ export function AppTitlebar({
         </span>
         <span className="brand-name">GitNest</span>
         <span className="build-pill">
-          v{runtimeInfo?.appVersion ?? "0.0.2"}
+          v{runtimeInfo?.appVersion ?? "0.0.3"}
         </span>
       </div>
 

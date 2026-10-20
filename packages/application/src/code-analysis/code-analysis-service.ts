@@ -641,6 +641,23 @@ export class CodeAnalysisService {
       );
     }
 
+    if (node.location.path.startsWith(".gitnest-generated/")) {
+      const generated = snapshot.nodes.find(candidate =>
+        candidate.kind === "file" &&
+        candidate.location.repositoryId === node.location.repositoryId &&
+        candidate.location.worktreeId === node.location.worktreeId &&
+        candidate.location.path === node.location.path
+      )?.metadata.generatedSource;
+      if (typeof generated !== "string" || Buffer.byteLength(generated) > MAX_CODE_FILE_BYTES || generated.includes("\0")) {
+        throw new WorkspaceError("DIRECTORY_UNAVAILABLE", "生成源码未保留在当前分析快照中，请重新分析。");
+      }
+      return {
+        nodeId: node.id, path: node.location.path, language: node.language,
+        ...createCodeFilePreview(generated, node.location.line,
+          typeof node.metadata.endLine === "number" ? node.metadata.endLine : node.location.line)
+      };
+    }
+
     let canonicalRoot: string;
     let canonicalFile: string;
     let fileStats;

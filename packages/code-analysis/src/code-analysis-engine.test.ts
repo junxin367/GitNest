@@ -28,9 +28,54 @@ import {
   type CodeAnalysisSettings
 } from "./index";
 import type { LspDocumentSymbol } from "./model";
+import { AnalysisCache } from "./analysis-cache";
 import * as sourceReader from "./source-reader";
 
 describe("CodeAnalysisEngine", () => {
+  it("keeps generated source in the snapshot without persisting it as an input file", async () => {
+    const fixture = await createFixture();
+    const pool = new ExternalLanguageServerPool();
+    const engine = new CodeAnalysisEngine(pool);
+    const relativePath = ".gitnest-generated/generated-main/Generated.java";
+    const absolutePath = join(fixture.backendRoot.path, relativePath);
+    const canonicalPath = process.platform === "win32" ? absolutePath.toLowerCase() : absolutePath;
+    const content = "public class Generated { public int value() { return 42; } }\n";
+    const analyze = vi.spyOn(pool, "analyze").mockResolvedValue({
+      symbolsByPath: new Map(),
+      statuses: [],
+      warnings: [],
+      generatedSources: [{
+        content,
+        file: {
+          absolutePath, canonicalPath, relativePath,
+          repositoryId: fixture.backendRoot.repositoryId,
+          worktreeId: fixture.backendRoot.worktreeId,
+          rootPath: fixture.backendRoot.path,
+          language: "java", size: Buffer.byteLength(content),
+          modifiedAtMs: 0, fingerprint: content,
+          changed: false, generatedContent: content
+        }
+      }]
+    });
+    const input = analysisInput(fixture, {
+      analysisId: "generated-source-cache", scope: "workspace", changedPaths: []
+    });
+    try {
+      const snapshot = await engine.analyze(input);
+      expect(snapshot.nodes.find(node =>
+        node.kind === "file" && node.location.path === relativePath
+      )?.metadata.generatedSource).toBe(content);
+      const cache = await new AnalysisCache(fixture.cacheDirectory, input.workspaceId)
+        .load(input.settings, input.roots);
+      expect(cache.files[canonicalPath]).toBeUndefined();
+      expect(Object.keys(cache.files).length).toBeGreaterThan(0);
+    } finally {
+      analyze.mockRestore();
+      await engine.dispose();
+      await fixture.dispose();
+    }
+  });
+
   it.each([false, true])("reuses verified discovery bytes and detects preserved-mtime edits with semantic pass enabled=%s", async (enabled) => {
     const fixture = await createFixture();
     const engine = new CodeAnalysisEngine();

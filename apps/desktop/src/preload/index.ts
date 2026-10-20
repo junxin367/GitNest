@@ -10,6 +10,7 @@ import type {
   AppSettingsDto,
   CodeAnalysisStateDto,
   IpcInvoke,
+  RepositoryChangesProgressDto,
   WorkspaceRuntimeStateDto
 } from "@gitnest/contracts";
 
@@ -104,6 +105,16 @@ const bridge = createGitNestBridge(
         IPC_EVENTS.windowMaximizedChanged,
         handler
       );
+    };
+  },
+  (listener) => {
+    const handler = (
+      _event: IpcRendererEvent,
+      progress: RepositoryChangesProgressDto
+    ) => listener(progress);
+    ipcRenderer.on(IPC_EVENTS.repositoryChangesProgress, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC_EVENTS.repositoryChangesProgress, handler);
     };
   }
 );

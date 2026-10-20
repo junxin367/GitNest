@@ -35,6 +35,20 @@ export interface RepositorySnapshot {
   refreshedAt: string;
 }
 
+export type RepositorySnapshotProgress =
+  | {
+      kind: "snapshot";
+      snapshot: RepositorySnapshot;
+      completed: number;
+      total: number;
+    }
+  | {
+      kind: "stats";
+      changes: ChangedPath[];
+      completed: number;
+      total: number;
+    };
+
 export interface Branch {
   fullName: string;
   name: string;

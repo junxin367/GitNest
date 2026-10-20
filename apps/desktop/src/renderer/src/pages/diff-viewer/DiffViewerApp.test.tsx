@@ -15,6 +15,8 @@ import {
   createDefaultAppSettings,
   type AppSettingsDto,
   type RepositoryStatusSnapshotDto,
+  type RepositoryChangesProgressDto,
+  type RepositoryChangesDto,
   type UpdateAppSettingsRequest
 } from "@gitnest/contracts";
 
@@ -82,6 +84,43 @@ describe("DiffViewerApp", () => {
       .querySelectorAll(".menu-surface, .toast-viewport")
       .forEach((element) => element.remove());
     vi.unstubAllGlobals();
+  });
+
+  it("shows the file list while stats remain pending and updates row counts progressively", async () => {
+    let emit!: (progress: RepositoryChangesProgressDto) => void;
+    const pending = deferred<{ ok: true; value: RepositoryChangesDto }>();
+    const unsubscribe = vi.fn();
+    vi.mocked(window.gitnest.repository.getChanges).mockReturnValue(pending.promise);
+    window.gitnest.repository.onChangesProgress = (listener) => { emit = listener; return unsubscribe; };
+    await act(async () => { root.render(<DiffViewerApp />); });
+    const request = vi.mocked(window.gitnest.repository.getChanges).mock.calls[0]![0];
+    const target = request.target;
+    const first = { path: "src/main/java/App.java", kind: "ordinary" as const, indexStatus: ".", worktreeStatus: "M" };
+    const second = { path: "progressive-new.txt", kind: "untracked" as const, indexStatus: "?", worktreeStatus: "?" };
+    const snapshot = {
+      head: "head", branch: "main", ahead: 0, behind: 0, staged: 0, unstaged: 1,
+      untracked: 1, conflicted: 0, changes: [first, second], refreshedAt: "2026-10-20T00:00:00.000Z"
+    };
+    await act(async () => {
+      emit({ kind: "snapshot", queryId: request.queryId, target, snapshot, completed: 0, total: 2 });
+    });
+    const row = () => Array.from(container.querySelectorAll<HTMLElement>("[data-diff-file-key]"))
+      .find((element) => element.dataset.diffFileKey === "untracked\u0001progressive-new.txt");
+    expect(row()).toBeDefined();
+    expect(container.textContent).not.toContain("正在统计行数");
+    expect(container.querySelector(".diff-workspace-skeleton")).toBeNull();
+    const diffCalls = vi.mocked(window.gitnest.repository.getDiff).mock.calls.length;
+    const updated = { ...second, untrackedStats: { additions: 23, deletions: 0 } };
+    await act(async () => {
+      emit({ kind: "stats", queryId: request.queryId, target, changes: [updated], completed: 1, total: 2 });
+    });
+    expect(row()?.textContent).toContain("+23");
+    expect(window.gitnest.repository.getDiff).toHaveBeenCalledTimes(diffCalls);
+    await act(async () => {
+      pending.resolve({ ok: true, value: { target, snapshot: { ...snapshot, changes: [first, updated] } } });
+    });
+    expect(container.textContent).not.toContain("正在统计行数");
+    expect(unsubscribe).toHaveBeenCalled();
   });
 
   it("shows the restore icon while the window is maximized", async () => {
@@ -973,6 +1012,7 @@ function createBridge(): typeof window.gitnest {
       })
     },
     repository: {
+      onChangesProgress: vi.fn(() => () => undefined),
       getChanges: vi.fn().mockResolvedValue({
         ok: true,
         value: {

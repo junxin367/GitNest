@@ -24,6 +24,18 @@ export interface DiffViewerFile {
   deletions?: number;
 }
 
+export interface DiffViewerContentMatch {
+  fileKey: string;
+  preview: string;
+  query: string;
+}
+
+export interface DiffContentSearchIndex {
+  normalizedContent: string;
+  lineStartOffsets: readonly number[];
+  previews: readonly string[];
+}
+
 export interface UnifiedDiffLine {
   key: string;
   kind: DiffLineKind;
@@ -67,27 +79,33 @@ export interface DiffSearchHit {
 }
 
 export function buildDiffViewerFiles(
-  changes: readonly ChangedPathDto[]
+  changes: readonly ChangedPathDto[],
+  previousFiles: readonly DiffViewerFile[] = []
 ): DiffViewerFile[] {
   const staged: DiffViewerFile[] = [];
   const unstaged: DiffViewerFile[] = [];
   const untracked: DiffViewerFile[] = [];
+  const previous = new Map(previousFiles.map((file) => [file.key, file]));
+  const viewerFile = (change: ChangedPathDto, mode: DiffViewerMode) => {
+    const cached = previous.get(`${mode}\u0001${change.path}`);
+    return cached?.change === change ? cached : toViewerFile(change, mode);
+  };
 
   for (const change of changes) {
     if (
       change.kind !== "untracked" &&
       change.indexStatus !== "."
     ) {
-      staged.push(toViewerFile(change, "staged"));
+      staged.push(viewerFile(change, "staged"));
     }
     if (
       change.kind !== "untracked" &&
       change.worktreeStatus !== "."
     ) {
-      unstaged.push(toViewerFile(change, "unstaged"));
+      unstaged.push(viewerFile(change, "unstaged"));
     }
     if (change.kind === "untracked") {
-      untracked.push(toViewerFile(change, "untracked"));
+      untracked.push(viewerFile(change, "untracked"));
     }
   }
 
@@ -112,6 +130,69 @@ export function matchesDiffViewerFileFilter(
   ].some((value) =>
     value.toLocaleLowerCase().includes(normalizedQuery)
   );
+}
+
+export function findDiffContentMatch(
+  content: string,
+  query: string
+): Pick<DiffViewerContentMatch, "preview"> | null {
+  return findIndexedDiffContentMatch(
+    createDiffContentSearchIndex(content),
+    query
+  );
+}
+
+export function createDiffContentSearchIndex(
+  content: string
+): DiffContentSearchIndex {
+  const searchableLines: string[] = [];
+  const previews: string[] = [];
+
+  for (const line of content.split(/\r?\n/)) {
+    if (!isSearchableDiffContentLine(line)) {
+      continue;
+    }
+    const text = line.slice(1);
+    if (!text) {
+      continue;
+    }
+
+    searchableLines.push(text);
+    previews.push(createDiffContentPreview(text));
+  }
+
+  const normalizedContent = searchableLines
+    .join("\n")
+    .toLocaleLowerCase();
+  return {
+    normalizedContent,
+    lineStartOffsets:
+      collectDiffSearchLineStartOffsets(normalizedContent),
+    previews
+  };
+}
+
+export function findIndexedDiffContentMatch(
+  index: DiffContentSearchIndex,
+  query: string
+): Pick<DiffViewerContentMatch, "preview"> | null {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  if (!normalizedQuery || normalizedQuery.includes("\n")) {
+    return null;
+  }
+
+  const matchOffset =
+    index.normalizedContent.indexOf(normalizedQuery);
+  if (matchOffset < 0) {
+    return null;
+  }
+
+  const lineIndex = findSearchIndexLine(
+    index.lineStartOffsets,
+    matchOffset
+  );
+  const preview = index.previews[lineIndex];
+  return preview === undefined ? null : { preview };
 }
 
 export function parseDiffViewModel(
@@ -283,6 +364,64 @@ export function parseDiffViewModel(
     splitRows,
     hunkCount: hunkIndex + 1
   };
+}
+
+function isSearchableDiffContentLine(line: string): boolean {
+  if (
+    line.startsWith("+++ ") ||
+    line.startsWith("--- ")
+  ) {
+    return false;
+  }
+
+  return (
+    line.startsWith("+") ||
+    line.startsWith("-") ||
+    line.startsWith(" ")
+  );
+}
+
+function createDiffContentPreview(text: string): string {
+  const preview = text.trim();
+  return preview.length > 160
+    ? `${preview.slice(0, 159)}…`
+    : preview;
+}
+
+function findSearchIndexLine(
+  lineStartOffsets: readonly number[],
+  matchOffset: number
+): number {
+  let start = 0;
+  let end = lineStartOffsets.length;
+  while (start < end) {
+    const middle = Math.floor((start + end) / 2);
+    if (lineStartOffsets[middle]! <= matchOffset) {
+      start = middle + 1;
+    } else {
+      end = middle;
+    }
+  }
+  return start - 1;
+}
+
+function collectDiffSearchLineStartOffsets(
+  normalizedContent: string
+): number[] {
+  if (!normalizedContent) {
+    return [];
+  }
+
+  const lineStartOffsets = [0];
+  let newlineOffset = normalizedContent.indexOf("\n");
+  while (newlineOffset >= 0) {
+    lineStartOffsets.push(newlineOffset + 1);
+    newlineOffset = normalizedContent.indexOf(
+      "\n",
+      newlineOffset + 1
+    );
+  }
+  return lineStartOffsets;
 }
 
 export function buildLocalizedDiffContent(

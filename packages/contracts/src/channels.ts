@@ -94,6 +94,7 @@ export const IPC_CHANNELS = {
 } as const;
 
 export const IPC_EVENTS = {
+  repositoryChangesProgress: "repository:changes-progress",
   settingsChanged: "settings:changed",
   workspaceStateChanged: "workspace:state-changed",
   codeAnalysisStateChanged: "code-analysis:state-changed",

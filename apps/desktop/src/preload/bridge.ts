@@ -5,6 +5,7 @@ import {
   type CodeAnalysisStateDto,
   type GitNestBridge,
   type IpcInvoke,
+  type RepositoryChangesProgressDto,
   type WorkspaceRuntimeStateDto
 } from "@gitnest/contracts";
 
@@ -24,6 +25,9 @@ export function createGitNestBridge(
   ) => () => void = () => () => undefined,
   subscribeWindowMaximized: (
     listener: (maximized: boolean) => void
+  ) => () => void = () => () => undefined,
+  subscribeRepositoryChangesProgress: (
+    listener: (progress: RepositoryChangesProgressDto) => void
   ) => () => void = () => () => undefined
 ): GitNestBridge {
   return {
@@ -154,6 +158,7 @@ export function createGitNestBridge(
         invoke(IPC_CHANNELS.gitInspectRepository, request)
     },
     repository: {
+      onChangesProgress: subscribeRepositoryChangesProgress,
       getChanges: (request) =>
         invoke(IPC_CHANNELS.repositoryGetChanges, request),
       getDiff: (request) =>

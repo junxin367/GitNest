@@ -1,5 +1,6 @@
 import type {
   BranchDto,
+  ChangedPathDto,
   CommitSummaryDto,
   GitReadErrorDto,
   RepositorySnapshotDto
@@ -15,6 +16,7 @@ export interface RepositoryQueryRequest {
 export interface RepositoryChangesRequest
   extends RepositoryQueryRequest {
   includeChangeStats?: boolean;
+  progressive?: boolean;
 }
 
 export interface RepositoryDiffRequest
@@ -22,6 +24,7 @@ export interface RepositoryDiffRequest
   path: string;
   mode: "unstaged" | "staged" | "untracked";
   contextLines?: number;
+  intent?: "display" | "search";
 }
 
 export interface RepositoryHistoryRequest
@@ -119,7 +122,21 @@ export interface CreateRepositoryCommitRequest {
 export interface RepositoryChangesDto {
   target: RepositoryTargetDto;
   snapshot: RepositorySnapshotDto;
+  statsProgress?: RepositoryChangeStatsProgressDto | undefined;
 }
+
+export interface RepositoryChangeStatsProgressDto {
+  completed: number;
+  total: number;
+}
+
+export type RepositoryChangesProgressDto = {
+  queryId: string;
+  target: RepositoryTargetDto;
+} & RepositoryChangeStatsProgressDto & (
+  | { kind: "snapshot"; snapshot: RepositorySnapshotDto }
+  | { kind: "stats"; changes: ChangedPathDto[] }
+);
 
 export type RepositoryMediaKindDto =
   | "image"

@@ -8,7 +8,8 @@ import {
   useState,
   useSyncExternalStore,
   type MouseEvent,
-  type ReactNode
+  type ReactNode,
+  type RefObject
 } from "react";
 
 import type { DiffFileViewDto } from "@gitnest/contracts";
@@ -21,6 +22,7 @@ import {
 } from "../../shared/model/changeTree";
 import {
   matchesDiffViewerFileFilter,
+  type DiffViewerContentMatch,
   type DiffViewerFile,
   type DiffViewerMode
 } from "../../shared/model/diffViewModel";
@@ -35,6 +37,11 @@ import { DiffViewerState } from "./DiffPanel";
 import type {
   DiffNavigationFeatureConfig
 } from "./diffWorkspaceConfiguration";
+import {
+  VirtualDiffSection,
+  VIRTUAL_DIFF_FILE_THRESHOLD,
+  type DiffSelectionReveal
+} from "./VirtualDiffSection";
 
 interface DiffFileSection {
   title: string;
@@ -61,11 +68,6 @@ type DiffFileSectionCollapseState = Record<
 interface DiffFileNavigatorState {
   filter: string;
   collapsedSections: DiffFileSectionCollapseState;
-}
-
-interface PendingSelectionReveal {
-  fileKey: string;
-  requestKey: string;
 }
 
 // A directory only needs its own collapsed flag. Keep subscriptions local so
@@ -103,6 +105,13 @@ function createDirectoryCollapseStore() {
       if (previous === next) {
         return;
       }
+      if (previous.size === next.size) {
+        let equal = true;
+        for (const key of previous) {
+          if (!next.has(key)) { equal = false; break; }
+        }
+        if (equal) return;
+      }
       snapshot = next;
       for (const [key, subscribers] of directoryListeners) {
         if (previous.has(key) !== next.has(key)) {
@@ -128,6 +137,7 @@ const DEFAULT_NAVIGATOR_STATE: DiffFileNavigatorState = {
   filter: "",
   collapsedSections: DEFAULT_COLLAPSED_SECTIONS
 };
+const EMPTY_CONTENT_MATCHES: readonly DiffViewerContentMatch[] = [];
 const navigatorStateByScope = new Map<
   string,
   DiffFileNavigatorState
@@ -155,6 +165,10 @@ export interface DiffFileNavigatorProps {
   mutationBusy?: boolean | undefined;
   changesLoading?: boolean | undefined;
   changesError?: DiffWorkspaceMessage | undefined;
+  contentMatches?: readonly DiffViewerContentMatch[] | undefined;
+  contentSearchLoading?: boolean | undefined;
+  contentSearchIncomplete?: boolean | undefined;
+  contentSearchMinimumQueryLength?: number | undefined;
   treePreference?: DiffWorkspaceTreePreference | undefined;
   fileView?: DiffFileViewDto | undefined;
   onFileViewChange?:
@@ -162,8 +176,10 @@ export interface DiffFileNavigatorProps {
     | undefined;
   onSelectedFileChange(
     file: DiffViewerFile,
-    origin: DiffFileSelectionOrigin
+    origin: DiffFileSelectionOrigin,
+    contentMatch?: DiffViewerContentMatch
   ): void;
+  onFilterChange?: ((value: string) => void) | undefined;
   onStageFile?:
     | ((
         file: DiffViewerFile
@@ -220,10 +236,15 @@ export function DiffFileNavigator({
   mutationBusy = false,
   changesLoading = false,
   changesError,
+  contentMatches = EMPTY_CONTENT_MATCHES,
+  contentSearchLoading = false,
+  contentSearchIncomplete = false,
+  contentSearchMinimumQueryLength = 2,
   treePreference,
   fileView,
   onFileViewChange,
   onSelectedFileChange,
+  onFilterChange,
   onStageFile,
   onUnstageFile,
   onDiscardFile,
@@ -258,7 +279,7 @@ export function DiffFileNavigator({
   );
   const setCollapsedDirectories = directoryCollapseStore.update;
   const [pendingSelectionReveal, setPendingSelectionReveal] =
-    useState<PendingSelectionReveal | null>(null);
+    useState<DiffSelectionReveal | null>(null);
   const viewMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const viewMenuRef = useRef<HTMLDivElement>(null);
   const fileListRef = useRef<HTMLDivElement>(null);
@@ -268,13 +289,25 @@ export function DiffFileNavigator({
   const knownDirectoryKeysRef = useRef<Set<string>>(new Set());
   const requestedSelectionRef = useRef("");
   const revealedSelectionRef = useRef("");
+  const reportedContentMatchRef = useRef("");
 
+  const contentMatchesByFileKey = useMemo(
+    () =>
+      new Map(
+        contentMatches.map((match) => [
+          match.fileKey,
+          match
+        ])
+      ),
+    [contentMatches]
+  );
   const filteredFiles = useMemo(
     () =>
-      files.filter((file) =>
-        matchesDiffViewerFileFilter(file, filter)
+      !filter && contentMatchesByFileKey.size === 0 ? files : files.filter((file) =>
+        matchesDiffViewerFileFilter(file, filter) ||
+        contentMatchesByFileKey.has(file.key)
       ),
-    [files, filter]
+    [contentMatchesByFileKey, files, filter]
   );
   const sections = useMemo<DiffFileSection[]>(
     () =>
@@ -293,6 +326,13 @@ export function DiffFileNavigator({
         .filter((section) => section.files.length > 0),
     [filteredFiles]
   );
+  const structureKey = useMemo(
+    () => filteredFiles.map((file) => file.key).join("\0"),
+    [filteredFiles]
+  );
+  // Stats patches replace file objects while preserving paths, modes and order.
+  // Keep structural inputs stable so they do not rebuild the tree or its counts.
+  const structuralFiles = useMemo(() => filteredFiles, [structureKey]);
   const selectedFile = useMemo(
     () =>
       filteredFiles.find(
@@ -300,23 +340,36 @@ export function DiffFileNavigator({
       ) ?? filteredFiles[0],
     [filteredFiles, selectedFileKey]
   );
+  const selectedContentMatch = selectedFile
+    ? contentMatchesByFileKey.get(selectedFile.key)
+    : undefined;
   const selectedPath = selectedFile?.path;
   const selectedMode = selectedFile?.mode;
   const directoryKeys = useMemo(
     () =>
       [
         ...new Set(
-          sections.flatMap((section) =>
-            section.files.flatMap((file) =>
-              changeTreeDirectoryPaths(file.path).map(
-                (path) => `${section.mode}:${path}`
-              )
+          structuralFiles.flatMap((file) =>
+            changeTreeDirectoryPaths(file.path).map(
+              (path) => `${file.mode}:${path}`
             )
           )
         )
       ].sort(),
-    [sections]
+    [structuralFiles]
   );
+  const treeNodesByMode = useMemo(() => {
+    const nodes = new Map<DiffViewerMode, ChangeTreeNode[]>();
+    if (viewMode !== "tree") return nodes;
+    for (const mode of ["staged", "unstaged", "untracked"] as const) {
+      const changes = structuralFiles.filter((file) => file.mode === mode)
+        .map((file) => file.change);
+      if (changes.length > 0) {
+        nodes.set(mode, compactChangeTreeNodes(buildChangeTree(changes)));
+      }
+    }
+    return nodes;
+  }, [structuralFiles, viewMode]);
   const sectionTrees = useMemo<
     ReadonlyMap<DiffViewerMode, DiffFileSectionTree>
   >(() => {
@@ -340,16 +393,12 @@ export function DiffFileNavigator({
           section.mode,
           {
             filesByPath,
-            nodes: compactChangeTreeNodes(
-              buildChangeTree(
-                section.files.map((file) => file.change)
-              )
-            )
+            nodes: treeNodesByMode.get(section.mode) ?? []
           }
         ] as const;
       })
     );
-  }, [sections, viewMode]);
+  }, [sections, treeNodesByMode, viewMode]);
   const canToggleDirectories =
     viewMode === "tree" && directoryKeys.length > 0;
   const hasExpandedDirectories = directoryKeys.some(
@@ -365,10 +414,22 @@ export function DiffFileNavigator({
       return;
     }
     requestedSelectionRef.current = selectedFile.key;
-    onSelectedFileChange(selectedFile, "automatic");
+    if (selectedContentMatch) {
+      reportedContentMatchRef.current =
+        `${selectedFile.key}\u0000${selectedContentMatch.query}`;
+      onSelectedFileChange(
+        selectedFile,
+        "automatic",
+        selectedContentMatch
+      );
+    } else {
+      reportedContentMatchRef.current = "";
+      onSelectedFileChange(selectedFile, "automatic");
+    }
   }, [
     onSelectedFileChange,
     selectedFile,
+    selectedContentMatch,
     selectedFileKey
   ]);
 
@@ -377,6 +438,39 @@ export function DiffFileNavigator({
       requestedSelectionRef.current = "";
     }
   }, [selectedFile?.key, selectedFileKey]);
+
+  useEffect(() => {
+    if (
+      !selectedFile ||
+      !selectedContentMatch
+    ) {
+      reportedContentMatchRef.current = "";
+      return;
+    }
+    if (selectedFile.key !== selectedFileKey) {
+      return;
+    }
+    const requestKey =
+      `${selectedFile.key}\u0000${selectedContentMatch.query}`;
+    if (reportedContentMatchRef.current === requestKey) {
+      return;
+    }
+    reportedContentMatchRef.current = requestKey;
+    onSelectedFileChange(
+      selectedFile,
+      "automatic",
+      selectedContentMatch
+    );
+  }, [
+    onSelectedFileChange,
+    selectedContentMatch,
+    selectedFile,
+    selectedFileKey
+  ]);
+
+  useEffect(() => {
+    onFilterChange?.(filter);
+  }, [filter, onFilterChange]);
 
   useEffect(() => {
     if (!viewMenuOpen) {
@@ -623,6 +717,13 @@ export function DiffFileNavigator({
     setPendingSelectionReveal(null);
   }, [pendingSelectionReveal]);
 
+  const finishSelectionReveal = useCallback((requestKey: string) => {
+    revealedSelectionRef.current = requestKey;
+    setPendingSelectionReveal((current) =>
+      current?.requestKey === requestKey ? null : current
+    );
+  }, []);
+
   const renderFileRow = useCallback((
     file: DiffViewerFile,
     depth = 0
@@ -632,6 +733,7 @@ export function DiffFileNavigator({
       file={file}
       depth={depth}
       selected={file.key === selectedFile?.key}
+      contentMatch={contentMatchesByFileKey.get(file.key)}
       mutationBusy={mutationBusy}
       onSelectedFileChange={onSelectedFileChange}
       onFileContextMenu={onFileContextMenu}
@@ -643,6 +745,7 @@ export function DiffFileNavigator({
       canDiscardFile={canDiscardFile}
     />;
   }, [
+    contentMatchesByFileKey,
     selectedFile?.key,
     mutationBusy,
     onSelectedFileChange,
@@ -658,18 +761,22 @@ export function DiffFileNavigator({
     section: DiffFileSection
   ): ReactNode => {
     const stagedSection = section.mode === "staged";
-    const toggleCandidates = stagedSection
-      ? section.files.filter(
-          (file) => canUnstageFile?.(file) ?? true
-        )
-      : section.files.filter(
-          (file) => canStageFile?.(file) ?? true
-        );
-    const discardCandidates = stagedSection
-      ? []
-      : section.files.filter(
-          (file) => canDiscardFile?.(file) ?? true
-        );
+    const toggleCandidates: DiffViewerFile[] = [];
+    const discardCandidates: DiffViewerFile[] = [];
+    for (const file of section.files) {
+      if (
+        toggleCandidates.length <= MAX_GROUP_MUTATION_PATHS &&
+        (stagedSection ? canUnstageFile?.(file) ?? true : canStageFile?.(file) ?? true)
+      ) toggleCandidates.push(file);
+      if (
+        !stagedSection && discardCandidates.length <= MAX_GROUP_MUTATION_PATHS &&
+        (canDiscardFile?.(file) ?? true)
+      ) discardCandidates.push(file);
+      if (
+        toggleCandidates.length > MAX_GROUP_MUTATION_PATHS &&
+        (stagedSection || discardCandidates.length > MAX_GROUP_MUTATION_PATHS)
+      ) break;
+    }
     const canToggleGroup =
       toggleCandidates.length > 0 &&
       toggleCandidates.length <= MAX_GROUP_MUTATION_PATHS &&
@@ -750,6 +857,7 @@ export function DiffFileNavigator({
         <div className="diff-workspace-sidebar-tools">
           <Input
             aria-label="筛选变更文件"
+            aria-busy={contentSearchLoading}
             className="diff-workspace-file-filter"
             fieldClassName="diff-workspace-file-filter-field"
             fullWidth
@@ -760,7 +868,7 @@ export function DiffFileNavigator({
                   onClear: () => setFilter("")
                 }
               : {})}
-            placeholder="筛选变更…"
+            placeholder="筛选文件或 Diff…"
             size="small"
             spellCheck={false}
             value={filter}
@@ -857,6 +965,7 @@ export function DiffFileNavigator({
         </div>
       </header>
       <div
+        aria-busy={contentSearchLoading}
         className="diff-workspace-file-list"
         ref={fileListRef}
       >
@@ -868,10 +977,25 @@ export function DiffFileNavigator({
             message="当前工作区没有可查看的本地变更。"
             title="工作区干净"
           />
+        ) : filter &&
+          sections.length === 0 &&
+          contentSearchLoading ? (
+          <DiffViewerState
+            icon="refresh"
+            message="正在读取变更文件的 Diff 文本。"
+            title="搜索 Diff…"
+          />
         ) : filter && sections.length === 0 && !changesLoading ? (
           <DiffViewerState
-            icon="search"
-            message="尝试文件名、目录或状态。"
+            icon={contentSearchIncomplete ? "warning" : "search"}
+            message={
+              filter.trim().length <
+              contentSearchMinimumQueryLength
+                ? `尝试文件名、目录或状态；输入至少 ${contentSearchMinimumQueryLength} 个字符可搜索 Diff 内容。`
+                : contentSearchIncomplete
+                  ? "已搜索可读取的 Diff；部分文件内容未能完整建立索引。"
+                  : "尝试文件名、目录、状态或 Diff 代码内容。"
+            }
             title="没有匹配的变更"
           />
         ) : (
@@ -935,6 +1059,11 @@ export function DiffFileNavigator({
                       tree={sectionTrees.get(section.mode)}
                       directoryCollapseStore={directoryCollapseStore}
                       renderFileRow={renderFileRow}
+                      scrollContainer={fileListRef}
+                      selectionReveal={pendingSelectionReveal}
+                      onSelectionRevealed={finishSelectionReveal}
+                      scopeKey={navigatorScopeKey}
+                      layoutKey={Object.values(collapsedSections).join(":")}
                     />
                   </div>
                 )}
@@ -953,13 +1082,50 @@ const DiffSectionRows = memo(function DiffSectionRows({
   section,
   tree,
   directoryCollapseStore,
-  renderFileRow
+  renderFileRow,
+  scrollContainer,
+  selectionReveal,
+  onSelectionRevealed,
+  scopeKey,
+  layoutKey
 }: {
   section: DiffFileSection;
   tree: DiffFileSectionTree | undefined;
   directoryCollapseStore: DirectoryCollapseStore;
   renderFileRow: FileRowRenderer;
+  scrollContainer: RefObject<HTMLDivElement | null>;
+  selectionReveal: DiffSelectionReveal | null;
+  onSelectionRevealed(requestKey: string): void;
+  scopeKey: string;
+  layoutKey: string;
 }) {
+  if (section.files.length >= VIRTUAL_DIFF_FILE_THRESHOLD) {
+    return (
+      <VirtualDiffSection
+        key={scopeKey}
+        files={section.files}
+        nodes={tree?.nodes}
+        mode={section.mode}
+        directoryState={directoryCollapseStore}
+        scrollContainer={scrollContainer}
+        layoutKey={layoutKey}
+        selectionReveal={selectionReveal}
+        onSelectionRevealed={onSelectionRevealed}
+        renderFile={renderFileRow}
+        renderDirectory={(node, depth) => tree ? (
+          <DiffTreeDirectory
+            node={node}
+            mode={section.mode}
+            filesByPath={tree.filesByPath}
+            depth={depth}
+            directoryCollapseStore={directoryCollapseStore}
+            renderFileRow={renderFileRow}
+            renderChildren={false}
+          />
+        ) : null}
+      />
+    );
+  }
   return tree ? (
     <DiffTreeRows
       nodes={tree.nodes}
@@ -996,8 +1162,9 @@ const DiffTreeRows = memo(function DiffTreeRows({
 
 const DiffTreeDirectory = memo(function DiffTreeDirectory({
   node,
+  renderChildren = true,
   ...props
-}: Omit<DiffTreeRowsProps, "nodes"> & { node: ChangeTreeNode }) {
+}: Omit<DiffTreeRowsProps, "nodes"> & { node: ChangeTreeNode; renderChildren?: boolean }) {
   const { mode, depth, directoryCollapseStore } = props;
   const key = `${mode}:${node.path}`;
   const subscribe = useCallback(
@@ -1009,12 +1176,16 @@ const DiffTreeDirectory = memo(function DiffTreeDirectory({
     subscribe,
     () => directoryCollapseStore.getSnapshot().has(key)
   );
+  const fileCount = useMemo(
+    () => depth === 0 ? countTreeFiles(node.children) : undefined,
+    [depth, node]
+  );
   return (
     <>
       <Button
         variant="unstyled"
         aria-expanded={!collapsed}
-        className={`diff-workspace-tree-directory${collapsed ? " collapsed" : ""}`}
+        className={`diff-workspace-tree-directory${collapsed ? " collapsed" : ""}${depth === 0 ? " has-count" : ""}`}
         onClick={() => directoryCollapseStore.update((current) => {
           const next = new Set(current);
           if (next.has(key)) {
@@ -1031,19 +1202,38 @@ const DiffTreeDirectory = memo(function DiffTreeDirectory({
       >
         <Icon className="diff-workspace-tree-directory-chevron" name="collapse" size={13} />
         <Icon className="diff-workspace-tree-directory-folder" name="folder" size={13} />
-        <span title={node.path}>{node.name}</span>
+        <span className="diff-workspace-tree-directory-label" title={node.path}>{node.name}</span>
+        {fileCount !== undefined ? (
+          <span className="diff-workspace-file-section-count diff-workspace-tree-directory-count">
+            {fileCount}
+          </span>
+        ) : null}
       </Button>
-      {collapsed ? null : (
+      {collapsed || !renderChildren ? null : (
         <DiffTreeRows nodes={node.children} {...props} depth={depth + 1} />
       )}
     </>
   );
 });
 
+const treeFileCounts = new WeakMap<readonly ChangeTreeNode[], number>();
+
+function countTreeFiles(nodes: readonly ChangeTreeNode[]): number {
+  const previous = treeFileCounts.get(nodes);
+  if (previous !== undefined) return previous;
+  const count = nodes.reduce(
+    (count, node) => count + (node.directory ? countTreeFiles(node.children) : 1),
+    0
+  );
+  treeFileCounts.set(nodes, count);
+  return count;
+}
+
 const DiffFileRow = memo(function DiffFileRow({
   file,
   depth,
   selected,
+  contentMatch,
   mutationBusy,
   onSelectedFileChange,
   onFileContextMenu,
@@ -1066,6 +1256,7 @@ const DiffFileRow = memo(function DiffFileRow({
   file: DiffViewerFile;
   depth: number;
   selected: boolean;
+  contentMatch?: DiffViewerContentMatch | undefined;
   mutationBusy: boolean;
 }) {
   const staged = file.mode === "staged";
@@ -1106,7 +1297,17 @@ const DiffFileRow = memo(function DiffFileRow({
         aria-current={selected ? "true" : undefined}
         aria-label={displayName}
         className="diff-workspace-file-select"
-        onClick={() => onSelectedFileChange(file, "user")}
+        onClick={() => {
+          if (contentMatch) {
+            onSelectedFileChange(
+              file,
+              "user",
+              contentMatch
+            );
+          } else {
+            onSelectedFileChange(file, "user");
+          }
+        }}
         type="button"
       >
         <strong title={file.path}>{displayName}</strong>
@@ -1117,6 +1318,14 @@ const DiffFileRow = memo(function DiffFileRow({
           >
             {file.status}
           </span>
+          {contentMatch ? (
+            <small
+              className="diff-workspace-file-content-match"
+              title={contentMatch.preview}
+            >
+              匹配：{contentMatch.preview}
+            </small>
+          ) : null}
           {file.change.originalPath ? (
             <small>
               原路径：{file.change.originalPath}

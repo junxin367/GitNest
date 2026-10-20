@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { LanguageServerLanguage } from "./model";
 
-export const LSP_ANALYSIS_POLICY_VERSION = 2;
+export const LSP_ANALYSIS_POLICY_VERSION = 5;
 
 export interface LspAnalysisPolicy {
   initializationOptions: Record<string, unknown>;
@@ -13,12 +13,16 @@ export interface LspAnalysisPolicy {
 }
 
 // The default disables known build paths. Import/build settings are enabled
-// only after the pool has prepared an OS-protected project copy.
+// only after the pool has prepared an OS-protected runtime.
 export function createLspAnalysisPolicy(
   language: LanguageServerLanguage,
   dataDirectory: string,
   rootPath: string,
-  isolated = false
+  isolated = false,
+  projectScope?: {
+    workspaceFolders: readonly string[];
+    ignoreDirectories: readonly string[];
+  }
 ): LspAnalysisPolicy {
   const policy: LspAnalysisPolicy = {
     initializationOptions: {},
@@ -33,9 +37,21 @@ export function createLspAnalysisPolicy(
           configuration: { updateBuildConfiguration: isolated ? "automatic" : "disabled" },
           // Import itself can run tools even when autobuild is disabled.
           import: {
-            gradle: { enabled: isolated },
+            gradle: {
+              enabled: isolated,
+              ...(isolated ? {
+                arguments: ["--init-script", join(dataDirectory, "gradle-init.gradle"),
+                  "--project-cache-dir", join(dataDirectory, "gradle-project-cache")],
+                jvmArguments: [`-Dgitnest.analysis.run=${dataDirectory}`]
+              } : {})
+            },
             maven: { enabled: isolated },
-            exclusions: isolated ? [] : ["**"]
+            exclusions: isolated
+              ? javaImportExclusions(
+                  projectScope?.workspaceFolders.length ? projectScope.workspaceFolders : [rootPath],
+                  projectScope?.ignoreDirectories ?? []
+                )
+              : ["**"]
           },
           maven: { updateSnapshots: false },
           saveActions: { organizeImports: false }
@@ -81,7 +97,7 @@ export function createLspAnalysisPolicy(
       break;
     }
     case "go":
-      policy.settings = { gopls: { buildFlags: [isolated ? "-mod=mod" : "-mod=readonly"] } };
+      policy.settings = { gopls: { buildFlags: ["-mod=readonly"] } };
       policy.initializationOptions = policy.settings.gopls as Record<string, unknown>;
       break;
     case "kotlin":
@@ -92,6 +108,29 @@ export function createLspAnalysisPolicy(
       break;
   }
   return policy;
+}
+
+function javaImportExclusions(roots: readonly string[], ignoredDirectories: readonly string[]): string[] {
+  const ignored = [...new Set(ignoredDirectories.map(value => value.trim().toLocaleLowerCase("en-US")))]
+    .filter(value => value && value !== "." && value !== ".." && !/[\\/]/.test(value));
+  const folders = [...new Set(roots.map(root => resolve(root)))].sort((left, right) => left.length - right.length);
+  const escapeGlob = (value: string) => value.replace(/[\\*?[\]{}]/g, "\\$&");
+  const patterns: string[] = [];
+  for (const [index, root] of folders.entries()) {
+    const prefix = escapeGlob(root.replaceAll("\\", "/").replace(/\/$/, ""));
+    const explicitlyIncluded = folders.slice(0, index).some(parent => {
+      const path = relative(parent, root);
+      return path !== "" && !path.startsWith("..") && !isAbsolute(path) &&
+        path.split(/[\\/]/).some(part => ignored.includes(part.toLocaleLowerCase("en-US")));
+    });
+    if (explicitlyIncluded) patterns.push(`!${prefix}`, `!${prefix}/**`);
+    for (const name of ignored) {
+      const directory = escapeGlob(name);
+      patterns.push(`${prefix}/${directory}`, `${prefix}/${directory}/**`,
+        `${prefix}/**/${directory}`, `${prefix}/**/${directory}/**`);
+    }
+  }
+  return patterns;
 }
 
 export function lspConfigurationSection(

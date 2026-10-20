@@ -124,6 +124,8 @@ export type {
   CreateRepositoryCommitRequest,
   RepositoryBranchesDto,
   RepositoryChangesDto,
+  RepositoryChangeStatsProgressDto,
+  RepositoryChangesProgressDto,
   RepositoryChangesRequest,
   RepositoryCommandDto,
   RepositoryCommandExecuteRequest,

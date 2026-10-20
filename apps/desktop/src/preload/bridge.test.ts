@@ -6,12 +6,31 @@ import {
   type AppSettingsDto,
   type CodeAnalysisStateDto,
   type IpcInvoke,
+  type RepositoryChangesProgressDto,
   type WorkspaceRuntimeStateDto
 } from "@gitnest/contracts";
 
 import { createGitNestBridge } from "./bridge";
 
 describe("createGitNestBridge", () => {
+  it("subscribes to repository progress and releases the subscription", () => {
+    let listener: ((progress: RepositoryChangesProgressDto) => void) | undefined;
+    const bridge = createGitNestBridge(
+      (() => Promise.resolve({ ok: true, value: undefined })) as IpcInvoke,
+      undefined, undefined, undefined, undefined, undefined,
+      (next) => { listener = next; return () => { listener = undefined; }; }
+    );
+    const received: RepositoryChangesProgressDto[] = [];
+    const unsubscribe = bridge.repository.onChangesProgress((progress) => received.push(progress));
+    const progress: RepositoryChangesProgressDto = {
+      queryId: "stats", target: { repositoryId: "repository", worktreeId: "worktree" },
+      kind: "stats", changes: [], completed: 0, total: 1
+    };
+    listener?.(progress);
+    expect(received).toEqual([progress]);
+    unsubscribe();
+    expect(listener).toBeUndefined();
+  });
   it("forwards file history and ignore requests through their typed channels", async () => {
     const calls: Array<{ channel: string; args: unknown[] }> = [];
     const response = { ok: true, value: true };

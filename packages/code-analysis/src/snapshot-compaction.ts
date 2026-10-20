@@ -369,6 +369,8 @@ function compactNodeMetadata(
     string | number | boolean
   > = {};
   for (const [key, value] of Object.entries(metadata)) {
+    // Generated files have no on-disk fallback; never present truncated code as source.
+    if (key === "generatedSource") continue;
     if (key === "semanticId") {
       continue;
     }

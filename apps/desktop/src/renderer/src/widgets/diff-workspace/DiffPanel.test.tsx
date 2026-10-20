@@ -739,6 +739,48 @@ describe("DiffPanel configuration", () => {
     );
   });
 
+  it("applies a file-filter search request without stealing focus until explicitly opened", () => {
+    const renderPanel = (
+      key: string,
+      open: boolean
+    ) => {
+      act(() => {
+        root.render(
+          <DiffPanel
+            config={repositoryDiffWorkspaceConfiguration.document}
+            content={content}
+            path="src/App.tsx"
+            scopeKey="unstaged:src/App.tsx"
+            searchRequest={{
+              key,
+              query: "newValue",
+              open
+            }}
+          />
+        );
+      });
+    };
+
+    renderPanel("filter-highlight", false);
+    expect(
+      container.querySelector(
+        'input[aria-label="搜索文本"]'
+      )
+    ).toBeNull();
+    expect(
+      container.querySelector(
+        '[data-diff-viewer-search-hit="0"]'
+      )
+    ).not.toBeNull();
+
+    renderPanel("filter-open", true);
+    expect(
+      container.querySelector<HTMLInputElement>(
+        'input[aria-label="搜索文本"]'
+      )?.value
+    ).toBe("newValue");
+  });
+
   it("toggles ten context lines around only the selected hunk", () => {
     const onContextRequest = vi.fn();
 

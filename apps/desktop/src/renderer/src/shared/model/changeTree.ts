@@ -1,5 +1,10 @@
 import type { ChangedPathDto } from "@gitnest/contracts";
 
+const changeTreeNameCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base"
+});
+
 export interface ChangeTreeNode {
   name: string;
   path: string;
@@ -124,10 +129,7 @@ function sortChangeTreeNodes(
       if (left.directory !== right.directory) {
         return left.directory ? -1 : 1;
       }
-      return left.name.localeCompare(right.name, undefined, {
-        numeric: true,
-        sensitivity: "base"
-      });
+      return changeTreeNameCollator.compare(left.name, right.name);
     })
     .map((node) => ({
       ...node,

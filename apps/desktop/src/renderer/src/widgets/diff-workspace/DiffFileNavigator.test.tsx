@@ -653,7 +653,200 @@ describe("DiffFileNavigator selection reveal", () => {
     expect(container.querySelectorAll('[data-diff-file-key]')).toHaveLength(2);
   });
 
-  it("reuses derived trees for menu state and rebuilds for files, filters, and tree view changes", () => {
+  it.each(["list", "tree"] as const)(
+    "bounds mounted rows for 20000 files in %s view and keeps scrolled stats and actions current",
+    async (fileView) => {
+      const originalBounds = HTMLElement.prototype.getBoundingClientRect;
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains("diff-workspace-file-list")) return new DOMRect(0, 0, 300, 600);
+        if (this.classList.contains("diff-workspace-virtual-list")) {
+          const scroller = this.closest<HTMLElement>(".diff-workspace-file-list")!;
+          return new DOMRect(0, 28 - scroller.scrollTop, 300, Number.parseFloat(this.style.height));
+        }
+        return originalBounds.call(this);
+      });
+      let files = Array.from({ length: 20_000 }, (_, index) => {
+        const path = `src/file-${String(index).padStart(5, "0")}.ts`;
+        return file(`unstaged\u0001${path}`, path);
+      });
+      const onStageFile = vi.fn();
+      const render = () => root.render(
+        <DiffFileNavigator
+          configuration={repositoryDiffWorkspaceConfiguration.navigation}
+          fileView={fileView}
+          files={files}
+          selectedFileKey={files[0]!.key}
+          onSelectedFileChange={vi.fn()}
+          onStageFile={onStageFile}
+          treePreference={{ initiallyCollapsed: false, scopeKey: `virtual-${fileView}` }}
+        />
+      );
+      act(render);
+      const mountedRows = () => container.querySelectorAll<HTMLElement>("[data-diff-file-key]");
+      expect(mountedRows().length).toBeGreaterThan(0);
+      expect(mountedRows().length).toBeLessThan(80);
+      expect(container.querySelector(".diff-workspace-file-section-count")?.textContent).toBe("20000");
+      if (fileView === "tree") {
+        expect(container.querySelector(".diff-workspace-tree-directory-count")?.textContent).toBe("20000");
+      }
+      const builds = changeTreeCalls.build.mock.calls.length;
+      const scroller = container.querySelector<HTMLElement>(".diff-workspace-file-list")!;
+      await act(async () => {
+        scroller.scrollTop = 18_000 * 44;
+        scroller.dispatchEvent(new Event("scroll"));
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+      expect(mountedRows().length).toBeGreaterThan(0);
+      expect(mountedRows().length).toBeLessThan(80);
+      expect(mountedRows()[0]!.dataset.diffFileKey).not.toBe(files[0]!.key);
+      const scrollTop = scroller.scrollTop;
+      changeTreeCalls.fileButton.mockClear();
+      files = files.map((item) => ({ ...item, additions: 9, deletions: 2 }));
+      act(render);
+      expect(changeTreeCalls.build).toHaveBeenCalledTimes(builds);
+      expect(changeTreeCalls.fileButton.mock.calls.length).toBeLessThan(80);
+      expect(scroller.scrollTop).toBe(scrollTop);
+      expect(mountedRows()[0]?.querySelector('[aria-label="新增 9 行，删除 2 行"]')).not.toBeNull();
+      const visibleKey = mountedRows()[0]?.dataset.diffFileKey;
+      const visibleFile = files.find((item) => item.key === visibleKey)!;
+      act(() => mountedRows()[0]!.querySelector<HTMLButtonElement>(".diff-workspace-stage-toggle")!.click());
+      expect(onStageFile).toHaveBeenCalledWith(visibleFile);
+    }
+  );
+
+  it("reveals and focuses an offscreen file in a collapsed 10000-file tree without mounting the whole branch", async () => {
+    const files = Array.from({ length: 10_000 }, (_, index) => {
+      const path = `src/file-${String(index).padStart(5, "0")}.ts`;
+      return file(`unstaged\u0001${path}`, path);
+    });
+    let selectedFileKey = files[0]!.key;
+    let selectionRevealKey: string | undefined;
+    const render = () => root.render(
+      <DiffFileNavigator
+        configuration={repositoryDiffWorkspaceConfiguration.navigation}
+        fileView="tree"
+        files={files}
+        selectedFileKey={selectedFileKey}
+        selectionRevealKey={selectionRevealKey}
+        onSelectedFileChange={vi.fn()}
+        treePreference={{ initiallyCollapsed: true, scopeKey: "virtual-selected-reveal" }}
+      />
+    );
+    act(render);
+    expect(container.querySelectorAll("[data-diff-file-key]")).toHaveLength(0);
+    expect(container.querySelector(".diff-workspace-tree-directory-count")?.textContent).toBe("10000");
+    selectedFileKey = files.at(-1)!.key;
+    selectionRevealKey = "reveal-last-virtual-file";
+    await act(async () => {
+      render();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    const mounted = Array.from(container.querySelectorAll<HTMLElement>("[data-diff-file-key]"));
+    expect(mounted.length).toBeGreaterThan(0);
+    expect(mounted.length).toBeLessThan(80);
+    const selected = mounted.find((element) => element.dataset.diffFileKey === selectedFileKey);
+    expect(selected?.classList.contains("selected")).toBe(true);
+    expect(document.activeElement).toBe(selected?.querySelector(".diff-workspace-file-select"));
+    expect(container.querySelector<HTMLElement>(".diff-workspace-file-list")!.scrollTop).toBeGreaterThan(0);
+  });
+
+  it("renders the correct virtual section after scrolling past another large section", async () => {
+    const files = Array.from({ length: 1000 }, (_, index) => {
+      const path = `src/file-${String(index).padStart(4, "0")}.ts`;
+      return file(`unstaged\u0001${path}`, path);
+    });
+    const staged = files.map((item) => ({
+      ...item, key: `staged\u0001${item.path}`, mode: "staged" as const,
+      change: { ...item.change, indexStatus: "M", worktreeStatus: "." }
+    }));
+    const originalBounds = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("diff-workspace-file-list")) return new DOMRect(0, 0, 300, 600);
+      if (this.classList.contains("diff-workspace-virtual-list")) {
+        const scroller = this.closest<HTMLElement>(".diff-workspace-file-list")!;
+        const hosts = Array.from(scroller.querySelectorAll<HTMLElement>(".diff-workspace-virtual-list"));
+        const index = hosts.indexOf(this);
+        const before = hosts.slice(0, index).reduce((sum, host) => sum + Number.parseFloat(host.style.height), 0);
+        return new DOMRect(0, (index + 1) * 28 + before - scroller.scrollTop, 300, Number.parseFloat(this.style.height));
+      }
+      return originalBounds.call(this);
+    });
+    act(() => root.render(
+      <DiffFileNavigator
+        configuration={repositoryDiffWorkspaceConfiguration.navigation}
+        fileView="tree" files={[...staged, ...files]}
+        selectedFileKey={staged[0]!.key}
+        onSelectedFileChange={vi.fn()}
+        treePreference={{ initiallyCollapsed: false, scopeKey: "virtual-multiple-sections" }}
+      />
+    ));
+    expect(container.querySelectorAll("[data-diff-file-key]").length).toBeLessThan(80);
+    const scroller = container.querySelector<HTMLElement>(".diff-workspace-file-list")!;
+    const firstHost = scroller.querySelector<HTMLElement>(".diff-workspace-virtual-list")!;
+    await act(async () => {
+      scroller.scrollTop = Number.parseFloat(firstHost.style.height) + 56;
+      scroller.dispatchEvent(new Event("scroll"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    const visible = Array.from(container.querySelectorAll<HTMLElement>("[data-diff-file-key]"));
+    expect(visible.length).toBeGreaterThan(0);
+    expect(visible.length).toBeLessThan(80);
+    expect(visible.every((row) => row.dataset.diffFileKey?.startsWith("unstaged\u0001"))).toBe(true);
+    expect(visible[0]?.dataset.diffFileKey).toBe(files[0]!.key);
+  });
+
+  it("measures variable row heights when typography changes without mounting all files", () => {
+    let resized!: ResizeObserverCallback;
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: ResizeObserverCallback) { resized = callback; }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    let rowHeight = 58;
+    const originalBounds = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("diff-workspace-file-list")) return new DOMRect(0, 0, 300, 600);
+      const scroller = this.closest<HTMLElement>(".diff-workspace-file-list");
+      if (scroller && this.classList.contains("diff-workspace-virtual-list")) {
+        return new DOMRect(0, 28 - scroller.scrollTop, 300, Number.parseFloat(this.style.height));
+      }
+      if (scroller && this.classList.contains("diff-workspace-virtual-row")) {
+        const offset = Number(this.style.transform.match(/translateY\(([\d.]+)px\)/)?.[1] ?? 0);
+        const height = this.querySelector(".diff-workspace-tree-directory") ? 32 : rowHeight;
+        return new DOMRect(0, 28 + offset - scroller.scrollTop, 300, height);
+      }
+      return originalBounds.call(this);
+    });
+    const files = Array.from({ length: 1000 }, (_, index) => {
+      const path = `src/file-${String(index).padStart(4, "0")}.ts`;
+      return file(`unstaged\u0001${path}`, path);
+    });
+    act(() => root.render(
+      <DiffFileNavigator
+        configuration={repositoryDiffWorkspaceConfiguration.navigation}
+        fileView="tree" files={files}
+        selectedFileKey={files[0]!.key}
+        onSelectedFileChange={vi.fn()}
+        treePreference={{ initiallyCollapsed: false, scopeKey: "virtual-row-measurements" }}
+      />
+    ));
+    const host = container.querySelector<HTMLElement>(".diff-workspace-virtual-list")!;
+    const before = Number.parseFloat(host.style.height);
+    rowHeight = 76;
+    act(() => resized([], {} as ResizeObserver));
+    expect(Number.parseFloat(host.style.height)).toBeGreaterThan(before);
+    const visible = Array.from(host.querySelectorAll<HTMLElement>(".diff-workspace-virtual-row"));
+    expect(visible.length).toBeLessThan(80);
+    for (let index = 1; index < visible.length; index++) {
+      const previous = visible[index - 1]!.getBoundingClientRect();
+      const current = visible[index]!.getBoundingClientRect();
+      expect(current.top).toBeGreaterThanOrEqual(previous.bottom);
+    }
+    expect(container.querySelector(".diff-workspace-tree-directory-count")?.textContent).toBe("1000");
+  });
+
+  it("reuses derived trees for stats and menu state and rebuilds for paths, filters, and tree view changes", () => {
     const onSelectedFileChange = vi.fn();
     let files = FILES;
     let fileView: "list" | "tree" = "tree";
@@ -677,6 +870,12 @@ describe("DiffFileNavigator selection reveal", () => {
     act(render);
     expect(changeTreeCalls.build).toHaveBeenCalledTimes(1);
     expect(changeTreeCalls.compact).toHaveBeenCalledTimes(1);
+
+    files = files.map((item) => ({ ...item, additions: 13, deletions: 2 }));
+    act(render);
+    expect(changeTreeCalls.build).toHaveBeenCalledTimes(1);
+    expect(changeTreeCalls.compact).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[aria-label="新增 13 行，删除 2 行"]')).not.toBeNull();
 
     const viewMenu = container.querySelector<HTMLButtonElement>(
       'button[aria-label="打开变更文件视图菜单"]'

@@ -55,6 +55,12 @@ export interface DiffPanelState {
   busy?: boolean;
 }
 
+export interface DiffPanelSearchRequest {
+  key: string;
+  query: string;
+  open: boolean;
+}
+
 export interface DiffPanelProps {
   config: DiffDocumentFeatureConfig;
   scopeKey: string;
@@ -77,6 +83,7 @@ export interface DiffPanelProps {
   className?: string | undefined;
   keyboardShortcutsEnabled?: boolean | undefined;
   searchOpen?: boolean | undefined;
+  searchRequest?: DiffPanelSearchRequest | undefined;
   onSearchOpenChange?(open: boolean): void;
   onPathCopyStatusChange?(
     status: DiffPathCopyStatus

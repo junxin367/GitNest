@@ -50,6 +50,7 @@ export type {
   DiffContextDirection,
   DiffContextRequest,
   DiffPanelProps,
+  DiffPanelSearchRequest,
   DiffPanelState,
   DiffPathCopyStatus
 } from "./DiffPanel.types";
@@ -105,6 +106,7 @@ export function DiffPanel({
   className,
   keyboardShortcutsEnabled = true,
   searchOpen: controlledSearchOpen,
+  searchRequest,
   onSearchOpenChange,
   onPathCopyStatusChange,
   preferredLayout,
@@ -211,6 +213,7 @@ export function DiffPanel({
   const hunkContextMenuRef = useRef<HTMLDivElement>(null);
   const hunkContextMenuReturnFocusRef =
     useRef<HTMLButtonElement | null>(null);
+  const handledSearchRequestRef = useRef("");
   const pendingHunkContextFocusRef =
     useRef<PendingDiffHunkFocus | null>(null);
   const compactContentRef = useRef({
@@ -806,6 +809,25 @@ export function DiffPanel({
     resolvedSearchScopeKey,
     setSearchOpen,
     scopeKey
+  ]);
+
+  useEffect(() => {
+    if (
+      !searchRequest ||
+      handledSearchRequestRef.current === searchRequest.key
+    ) {
+      return;
+    }
+    handledSearchRequestRef.current = searchRequest.key;
+    setSearchQuery(searchRequest.query);
+    setActiveSearchHit(0);
+    setSearchOpen(
+      searchRequest.open && Boolean(searchRequest.query)
+    );
+  }, [
+    searchRequest,
+    setSearchOpen,
+    setSearchQuery
   ]);
 
   useEffect(() => {

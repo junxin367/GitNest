@@ -11,6 +11,7 @@ import type {
   RepositoryDiff,
   RepositoryDiffMode,
   RepositorySnapshot,
+  RepositorySnapshotProgress,
   StashDiff,
   StashFiles,
   StashSummary
@@ -95,7 +96,8 @@ export class RepositoryQueryService {
   getChanges(
     queryId: string,
     target: RepositoryTarget,
-    includeChangeStats = true
+    includeChangeStats = true,
+    onProgress?: (progress: RepositorySnapshotProgress) => void
   ): Promise<RepositoryChangesResult> {
     return this.#runQuery(queryId, async (signal) => {
       const path = await this.#resolveTargetPath(target);
@@ -104,7 +106,8 @@ export class RepositoryQueryService {
         snapshot:
           await this.#gitClient.readRepositorySnapshot(path, {
             includeChangeStats,
-            signal
+            signal,
+            ...(onProgress ? { onProgress } : {})
           })
       };
     });
@@ -115,10 +118,12 @@ export class RepositoryQueryService {
     target: RepositoryTarget,
     path: string,
     mode: RepositoryDiffMode,
-    contextLines?: number
+    contextLines?: number,
+    intent: "display" | "search" = "display"
   ): Promise<RepositoryDiffResult> {
     return this.#runQuery(queryId, async (signal) => {
       const worktreePath = await this.#resolveTargetPath(target);
+      const search = intent === "search";
       return {
         target,
         diff: await this.#gitClient.readRepositoryDiff(
@@ -129,8 +134,8 @@ export class RepositoryQueryService {
             ...(contextLines === undefined
               ? {}
               : { contextLines }),
-            includeMedia: true,
-            priority: "interactive",
+            includeMedia: !search,
+            priority: search ? "background" : "interactive",
             signal
           }
         )
@@ -345,6 +350,7 @@ export class RepositoryQueryService {
     try {
       return await query(controller.signal);
     } finally {
+      controller.abort();
       this.#queries.delete(id);
     }
   }

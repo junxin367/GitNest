@@ -30,6 +30,7 @@ import {
   type IsolatedAnalysisProject,
   type PrepareAnalysisProject
 } from "./isolated-analysis-project";
+import { collectJavaGeneratedSources, prepareJavaAnalysisLaunch, readJavaAnalysisErrors } from "./java-analysis-runtime";
 import {
   createLspAnalysisPolicy,
   LSP_ANALYSIS_POLICY_VERSION,
@@ -325,6 +326,7 @@ export class ExternalLanguageServerPool {
     const statuses: LanguageServerStatus[] = [];
     const warnings: string[] = [];
     const semanticRelations: LspSemanticRelation[] = [];
+    const generatedSources: NonNullable<LspAnalysisResult["generatedSources"]> = [];
     for (const descriptor of LANGUAGE_SERVER_DESCRIPTORS) {
       const language = descriptor.language;
       const sessionKey = `${input.sessionPrefix}:${language}`;
@@ -400,7 +402,8 @@ export class ExternalLanguageServerPool {
         language,
         documents,
         input.workspaceRootPath,
-        input.workspaceFolders
+        input.workspaceFolders,
+        input.settings.ignoreDirectories
       );
       const requestTimeoutMs = input.settings.lspTimeoutMs;
       const startupTimeoutMs =
@@ -437,7 +440,7 @@ export class ExternalLanguageServerPool {
           throw new Error("Java 分析必须使用 GitNest 管理的独立工作区，请移除自定义 -data 参数，避免复用可执行构建的工程索引。");
         }
         project = await prepareProject();
-        // A fresh snapshot is immutable to the host until its process tree exits.
+        // Each import uses a fresh runtime; no build state survives a branch switch.
         if (project) await this.#disposeSession(sessionKey);
         const firstDocument = selectedDocuments[0]!;
         const firstDocumentUri = pathToFileURL(
@@ -463,6 +466,7 @@ export class ExternalLanguageServerPool {
               rootPath: workspace.rootPath,
               workspaceFolders:
                 workspace.workspaceFolders,
+              ignoreDirectories: input.settings.ignoreDirectories,
               dataDirectory: project?.dataDirectory ?? input.lspDataDirectory,
               ...(project ? { project } : {}),
               timeoutMs: startupTimeoutMs,
@@ -803,6 +807,35 @@ export class ExternalLanguageServerPool {
           hierarchy.incomplete ||
           references.incomplete ||
           typeRelations.incomplete;
+        let javaErrors: string[] = [];
+        if (project && language === "java") {
+          try {
+            const generated = await collectJavaGeneratedSources(project.dataDirectory, documents, input.settings);
+            generatedSources.push(...generated.sources);
+            for (const [physical, canonical] of generated.paths) {
+              const response = await session.client.request("textDocument/documentSymbol", {
+                textDocument: { uri: pathToFileURL(physical).toString() }
+              }, requestTimeoutMs, input.signal);
+              const parsed = parseDocumentSymbols(response, commandSettings.maxSymbolsPerDocument);
+              symbolsByPath.set(canonical, parsed.symbols);
+              if (parsed.truncated) javaErrors.push("生成源码符号超过当前每文件上限。");
+            }
+            const mapLocations = (value: unknown): void => {
+              if (!value || typeof value !== "object") return;
+              for (const [key, child] of Object.entries(value)) {
+                if ((key === "targetCanonicalPath" || key === "sourceCanonicalPath") && typeof child === "string") {
+                  const target = generated.paths.get(child);
+                  if (target) (value as Record<string, unknown>)[key] = target;
+                } else if (child && typeof child === "object") mapLocations(child);
+              }
+            };
+            for (const symbols of symbolsByPath.values()) mapLocations(symbols);
+            mapLocations(semanticRelations);
+          } catch (error) { javaErrors.push(errorMessage(error)); }
+          await this.#disposeSession(sessionKey);
+          javaErrors.push(...await readJavaAnalysisErrors(project.dataDirectory));
+          if (javaErrors.length) warnings.push(`Java 工程导入或代码生成失败：${javaErrors.slice(0, 3).join("；")}`);
+        }
         const semanticCoverage =
           uncoveredDocumentCount > 0 ||
           truncatedSymbolDocuments > 0 ||
@@ -811,6 +844,7 @@ export class ExternalLanguageServerPool {
           semanticEnrichmentIncomplete ||
           requiredSemanticCapabilityMissing ||
           session.client.projectHasErrors ||
+          javaErrors.length > 0 ||
           Boolean(session.policyLimitation)
             ? "partial"
             : "complete";
@@ -830,7 +864,8 @@ export class ExternalLanguageServerPool {
                 ? "已自动重建 Java 索引，"
                 : ""
             }已连接并增强 ${preparedDocuments.length} 个文件，补充 ${documentation.documented} 条文档、${hierarchy.callCount} 条调用关系、${typeRelations.relationCount} 条类型关系、${references.referenceCount} 条引用关系。${session.policyLimitation ?? ""}${
-              session.client.projectHasErrors ? " 工程导入或源码诊断存在错误，语义结果可能不完整。" : ""
+              session.client.projectHasErrors || javaErrors.length > 0
+                ? ` 工程导入、编译或源码诊断存在错误，语义结果可能不完整。${[...javaErrors, ...session.client.projectErrorMessages].slice(0, 2).join("；")}` : ""
             }${
               skippedByLimitCount > 0
                 ? ` 另有 ${skippedByLimitCount} 个文件因 maxDocuments=${documentLimit} 未进入 Language Server 增强。`
@@ -890,7 +925,7 @@ export class ExternalLanguageServerPool {
           requestBudgetExhausted,
           enrichmentStoppedEarly
         });
-        this.#scheduleIdle(
+        if (!project) this.#scheduleIdle(
           sessionKey,
           session
         );
@@ -940,6 +975,7 @@ export class ExternalLanguageServerPool {
     return {
       symbolsByPath,
       semanticRelations,
+      generatedSources,
       statuses,
       warnings
     };
@@ -1000,6 +1036,7 @@ export class ExternalLanguageServerPool {
     commandSettings: LanguageServerCommandSettings;
     rootPath: string;
     workspaceFolders: string[];
+    ignoreDirectories: readonly string[];
     dataDirectory: string;
     timeoutMs: number;
     workspaceReadyTimeoutMs: number;
@@ -1007,7 +1044,8 @@ export class ExternalLanguageServerPool {
     signal?: AbortSignal;
   }): Promise<PooledSession> {
     const policy = createLspAnalysisPolicy(
-      input.language, input.dataDirectory, input.rootPath, Boolean(input.project)
+      input.language, input.dataDirectory, input.rootPath, Boolean(input.project),
+      { workspaceFolders: input.workspaceFolders, ignoreDirectories: input.ignoreDirectories }
     );
     if (policy.unavailableReason) {
       throw new LanguageServerPolicyError(policy.unavailableReason);
@@ -1150,7 +1188,7 @@ export class ExternalLanguageServerPool {
       input.commandSettings.command,
       plan.args,
       plan.rootPath,
-      { policy, workspaceFolders: plan.workspaceFolders,
+      { policy, language: input.language, workspaceFolders: plan.workspaceFolders,
         ...(input.project ? { project: input.project } : {}) }
     );
     let hoverSupported = false;
@@ -1166,7 +1204,9 @@ export class ExternalLanguageServerPool {
       const initializeResult = await client.request(
         "initialize",
         {
-          processId: process.pid,
+          // The native host owns parent monitoring; Low integrity JVMs cannot
+          // reliably inspect a Medium integrity Electron/Node parent.
+          processId: input.project ? null : process.pid,
           clientInfo: {
             name: "GitNest",
             version: "1.0.0"
@@ -1541,7 +1581,8 @@ export function resolveLanguageServerWorkspace(
   language: LanguageServerLanguage,
   documents: ReadonlyArray<{ file: AnalysisSourceFile }>,
   fallbackRootPath: string,
-  fallbackWorkspaceFolders: string[]
+  fallbackWorkspaceFolders: string[],
+  ignoreDirectories: readonly string[] = []
 ): { rootPath: string; workspaceFolders: string[] } {
   if (language !== "java") {
     return {
@@ -1551,13 +1592,15 @@ export function resolveLanguageServerWorkspace(
   }
 
   const workspaceFolders = collapseNestedResolvedPaths(
-    documents.map((document) => document.file.rootPath)
+    documents.map((document) => document.file.rootPath),
+    ignoreDirectories
   );
   if (workspaceFolders.length === 0) {
     return {
       rootPath: fallbackRootPath,
       workspaceFolders: collapseNestedResolvedPaths(
-        fallbackWorkspaceFolders
+        fallbackWorkspaceFolders,
+        ignoreDirectories
       )
     };
   }
@@ -1610,7 +1653,8 @@ function uniqueResolvedPaths(paths: readonly string[]): string[] {
 }
 
 function collapseNestedResolvedPaths(
-  paths: readonly string[]
+  paths: readonly string[],
+  ignoreDirectories: readonly string[] = []
 ): string[] {
   const candidates = uniqueResolvedPaths(paths).sort(
     (left, right) =>
@@ -1618,10 +1662,12 @@ function collapseNestedResolvedPaths(
       pathComparison(left, right)
   );
   const roots: string[] = [];
+  const ignored = new Set(ignoreDirectories.map(value => value.trim().toLocaleLowerCase("en-US")));
   for (const candidate of candidates) {
     if (
       roots.some((root) =>
-        isSameOrDescendantPath(root, candidate)
+        isSameOrDescendantPath(root, candidate) &&
+        !relative(root, candidate).split(/[\\/]/).some(part => ignored.has(part.toLocaleLowerCase("en-US")))
       )
     ) {
       continue;
@@ -2932,6 +2978,7 @@ export class JsonRpcClient {
   readonly #cwd: string;
   readonly #context: {
     policy: LspAnalysisPolicy;
+    language?: LanguageServerLanguage;
     workspaceFolders: string[];
     project?: IsolatedAnalysisProject;
   } | undefined;
@@ -2962,13 +3009,14 @@ export class JsonRpcClient {
   #writeTail: Promise<void> = Promise.resolve();
   #queuedWriteBytes = 0;
   readonly #diagnosticErrors = new Set<string>();
+  readonly #diagnosticMessages = new Map<string, string>();
   #projectImportError = false;
 
   constructor(
     command: string,
     args: string[],
     cwd: string,
-    context?: { policy: LspAnalysisPolicy; workspaceFolders: string[]; project?: IsolatedAnalysisProject }
+    context?: { policy: LspAnalysisPolicy; language?: LanguageServerLanguage; workspaceFolders: string[]; project?: IsolatedAnalysisProject }
   ) {
     this.#command = command;
     this.#args = args;
@@ -2988,6 +3036,10 @@ export class JsonRpcClient {
     return this.#projectImportError || this.#diagnosticErrors.size > 0;
   }
 
+  get projectErrorMessages(): string[] {
+    return [...this.#diagnosticMessages.values()];
+  }
+
   async start(signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
     let launch = await resolveLaunchCommand(
@@ -2998,12 +3050,17 @@ export class JsonRpcClient {
       isJdtlsLaunch(this.#command, this.#args) ||
       isJdtlsLaunch(launch.command, launch.args);
     if (this.#context?.project) {
+      if (this.#context.language === "java") {
+        launch = await prepareJavaAnalysisLaunch(
+          launch, this.#context.project.toolingDirectory, this.#context.project.javaConfiguration, signal
+        );
+      }
       launch = this.#context.project.launch(launch.command, launch.args, this.#cwd);
     }
     throwIfAborted(signal);
     await new Promise<void>((resolvePromise, rejectPromise) => {
       const child = spawn(launch.command, launch.args, {
-        cwd: this.#context?.project?.toCopy(this.#cwd) ?? this.#cwd,
+        cwd: this.#context?.project?.workingDirectory ?? this.#cwd,
         env: { ...process.env, ...this.#context?.policy.environment },
         shell: false,
         windowsHide: true,
@@ -3247,7 +3304,7 @@ export class JsonRpcClient {
       throw new Error("LSP 进程当前不可用。");
     }
     const body = Buffer.from(
-      JSON.stringify(this.#context?.project?.mapMessage(message, "toCopy") ?? message),
+      JSON.stringify(message),
       "utf8"
     );
     if (body.byteLength > MAX_LSP_MESSAGE_BYTES) {
@@ -3452,7 +3509,6 @@ export class JsonRpcClient {
     let message: unknown;
     try {
       message = JSON.parse(body);
-      if (this.#context?.project) message = this.#context.project.mapMessage(message, "toOriginal");
     } catch {
       return;
     }
@@ -3531,11 +3587,20 @@ export class JsonRpcClient {
   ): void {
     if (params && typeof params === "object") {
       const value = params as Record<string, unknown>;
-      if (method === "window/showMessage" && value.type === 1) this.#projectImportError = true;
+      if ((method === "window/showMessage" || method === "window/logMessage") && value.type === 1) this.#projectImportError = true;
       if (method === "textDocument/publishDiagnostics" && typeof value.uri === "string" && Array.isArray(value.diagnostics)) {
         if (value.diagnostics.some((item: unknown) => item && typeof item === "object" && (item as Record<string, unknown>).severity === 1)) {
           this.#diagnosticErrors.add(value.uri);
-        } else this.#diagnosticErrors.delete(value.uri);
+          const diagnostic = value.diagnostics.find((item: unknown) =>
+            item && typeof item === "object" && (item as Record<string, unknown>).severity === 1
+          ) as { message?: unknown };
+          if (typeof diagnostic.message === "string" && this.#diagnosticMessages.size < 20) {
+            this.#diagnosticMessages.set(value.uri, diagnostic.message.slice(0, 500));
+          }
+        } else {
+          this.#diagnosticErrors.delete(value.uri);
+          this.#diagnosticMessages.delete(value.uri);
+        }
       }
     }
     if (method === "tsserver/request") {

@@ -259,6 +259,7 @@ export function buildCodeGraph(input: {
       confidence: "exact",
       metadata: {
         size: parsed.file.size,
+        ...(parsed.file.generatedContent !== undefined ? { generatedSource: parsed.file.generatedContent } : {}),
         testCode: isTestCodePath(
           parsed.file.relativePath
         )

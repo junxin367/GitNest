@@ -1035,6 +1035,32 @@ describe("CodeAnalysisService launch validation", () => {
 });
 
 describe("CodeAnalysisService node source", () => {
+  it("reads generated source from its snapshot after the analysis runtime was removed", async () => {
+    const rootPath = await createTemporaryWorktree();
+    const path = ".gitnest-generated/lib/generated-main/Generated.java";
+    const snapshot = createSnapshotWithNode(rootPath, { path, line: 1, endLine: 1 });
+    snapshot.nodes.push({
+      ...snapshot.nodes[0]!, id: "generated_file", kind: "file",
+      metadata: { generatedSource: "class Generated { static int value() { return 42; } }\n" }
+    });
+    const service = createService(createWorkspaceAt(rootPath), createSnapshotStore(snapshot), createEngine());
+    try {
+      await expect(service.readFile("function_source")).resolves.toMatchObject({
+        path, content: "class Generated { static int value() { return 42; } }\n"
+      });
+    } finally { await service.dispose(); }
+  });
+
+  it("does not fall back to disk for generated source omitted from a compacted snapshot", async () => {
+    const rootPath = await createTemporaryWorktree();
+    const path = ".gitnest-generated/lib/generated-main/Generated.java";
+    const snapshot = createSnapshotWithNode(rootPath, { path, line: 1, endLine: 1 });
+    const service = createService(createWorkspaceAt(rootPath), createSnapshotStore(snapshot), createEngine());
+    try {
+      await expect(service.readFile("function_source")).rejects.toThrow("生成源码未保留");
+    } finally { await service.dispose(); }
+  });
+
   it("reads the analyzed file and returns the lines around the node", async () => {
     const rootPath = await createTemporaryWorktree();
     const sourcePath = join(rootPath, "src", "service.ts");

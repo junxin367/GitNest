@@ -33,6 +33,7 @@ import type {
   CreateRepositoryCommitRequest,
   RepositoryBranchesDto,
   RepositoryChangesDto,
+  RepositoryChangesProgressDto,
   RepositoryChangesRequest,
   RepositoryCommandExecuteRequest,
   RepositoryCommandExecutionDto,
@@ -283,6 +284,9 @@ export interface GitNestBridge {
     ): () => void;
   };
   repository: {
+    onChangesProgress(
+      listener: (progress: RepositoryChangesProgressDto) => void
+    ): () => void;
     getChanges(
       request: RepositoryChangesRequest
     ): Promise<GitReadResult<RepositoryChangesDto>>;

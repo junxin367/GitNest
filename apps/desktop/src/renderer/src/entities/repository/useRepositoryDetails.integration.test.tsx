@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { act } from "react";
+import { act, StrictMode } from "react";
 import {
   createRoot,
   type Root
@@ -19,6 +19,7 @@ import type {
   CommitSummaryDto,
   GitNestBridge,
   RepositoryChangesDto,
+  RepositoryChangesProgressDto,
   RepositoryCommitDto,
   RepositoryDiffDto,
   RepositoryHistoryPageDto,
@@ -69,6 +70,227 @@ describe("useRepositoryDetails", () => {
     vi.restoreAllMocks();
   });
 
+  async function renderTarget(
+    target = TARGET,
+    revision = "unchanged",
+    tab: RepositoryTab = "changes"
+  ) {
+    await act(async () => {
+      root.render(
+        <Harness target={target} revision={revision} tab={tab}
+          onController={(value) => { controller = value; }} />
+      );
+      await flushAsyncWork();
+    });
+  }
+
+  it.each(["repository", "worktree"] as const)(
+    "reuses completed change stats after switching %s away and back",
+    async (scope) => {
+      const nextTarget = {
+        repositoryId: scope === "repository" ? "repository-b" : TARGET.repositoryId,
+        worktreeId: "worktree-b"
+      };
+      const initial = createChanges([{ ...CHANGE, unstagedStats: { additions: 7, deletions: 2 } }]);
+      const getChanges = vi.fn<GitNestBridge["repository"]["getChanges"]>(async ({ target }) => ({
+        ok: true, value: { ...initial, target }
+      }));
+      installBridge({
+        getChanges,
+        getDiff: vi.fn(async () => ({ ok: true as const, value: createDiff("diff") }))
+      });
+      await renderTarget();
+      const loaded = controller?.changes;
+      await renderTarget(nextTarget);
+      expect(controller?.changes?.target).toEqual(nextTarget);
+      await renderTarget();
+      expect(getChanges).toHaveBeenCalledTimes(2);
+      expect(controller?.changes).toBe(loaded);
+      expect(controller?.loading.changes).toBe(false);
+    }
+  );
+
+  it.each([false, true])(
+    "reuses a background stats query when it completes before returning=%s",
+    async (finishInBackground) => {
+      const nextTarget = { repositoryId: "repository-b", worktreeId: "worktree-b" };
+      const listeners: Array<(progress: RepositoryChangesProgressDto) => void> = [];
+      let finish!: (result: { ok: true; value: RepositoryChangesDto }) => void;
+      const pending = new Promise<{ ok: true; value: RepositoryChangesDto }>((resolve) => { finish = resolve; });
+      const initial = createChanges([CHANGE, SECOND_CHANGE]);
+      const updated = { ...CHANGE, unstagedStats: { additions: 11, deletions: 2 } };
+      const getChanges = vi.fn<GitNestBridge["repository"]["getChanges"]>(({ target }) =>
+        target.repositoryId === TARGET.repositoryId
+          ? pending
+          : Promise.resolve({ ok: true, value: { ...createChanges([SECOND_CHANGE]), target } })
+      );
+      const cancelQuery = vi.fn(async () => ({ ok: true as const, value: undefined }));
+      installBridge({
+        getChanges, cancelQuery,
+        getDiff: vi.fn(async () => ({ ok: true as const, value: createDiff("diff") })),
+        onChangesProgress: (listener) => {
+          listeners.push(listener);
+          return vi.fn();
+        }
+      });
+      await renderTarget();
+      const queryId = getChanges.mock.calls[0]![0].queryId;
+      await act(async () => {
+        listeners[0]!({
+          kind: "snapshot", queryId, target: TARGET, snapshot: initial.snapshot, completed: 0, total: 2
+        });
+        await flushAsyncWork();
+      });
+      await renderTarget(nextTarget);
+      expect(cancelQuery).not.toHaveBeenCalledWith({ queryId });
+      await act(async () => {
+        listeners[0]!({
+          kind: "stats", queryId, target: TARGET, changes: [updated], completed: 1, total: 2
+        });
+        if (finishInBackground) finish({ ok: true, value: createChanges([updated, SECOND_CHANGE]) });
+        await flushAsyncWork();
+      });
+      expect(controller?.changes?.target).toEqual(nextTarget);
+      await renderTarget();
+      expect(getChanges).toHaveBeenCalledTimes(2);
+      expect(controller?.changes?.snapshot.changes[0]).toEqual(updated);
+      expect(controller?.loading.changes).toBe(false);
+      await act(async () => {
+        if (!finishInBackground) finish({ ok: true, value: createChanges([updated, SECOND_CHANGE]) });
+        await flushAsyncWork();
+      });
+      expect(controller?.changes?.statsProgress).toBeUndefined();
+    }
+  );
+
+  it("reuses change stats after returning from another repository tab", async () => {
+    const getChanges = vi.fn(async () => ({ ok: true as const, value: createChanges([CHANGE]) }));
+    installBridge({
+      getChanges,
+      getDiff: vi.fn(async () => ({ ok: true as const, value: createDiff("diff") })),
+      getHistory: vi.fn(async () => ({ ok: true as const, value: { target: TARGET, page: { commits: [] } } })),
+      getBranches: vi.fn(async () => ({ ok: true as const, value: { target: TARGET, branches: [] } }))
+    });
+    await renderTarget();
+    await renderTarget(TARGET, "unchanged", "history");
+    await renderTarget();
+    expect(getChanges).toHaveBeenCalledTimes(1);
+    expect(controller?.changes?.snapshot.changes).toEqual([CHANGE]);
+  });
+
+  it("refreshes cached stats when content changes while another repository is visible", async () => {
+    const nextTarget = { repositoryId: "repository-b", worktreeId: "worktree-b" };
+    const getChanges = vi.fn<GitNestBridge["repository"]["getChanges"]>(async ({ target }) => ({
+      ok: true, value: { ...createChanges([CHANGE]), target }
+    }));
+    installBridge({
+      getChanges,
+      getDiff: vi.fn(async () => ({ ok: true as const, value: createDiff("diff") }))
+    });
+    await renderTarget();
+    await renderTarget(nextTarget);
+    await renderTarget(TARGET, "changed");
+    await renderTarget(nextTarget);
+    await renderTarget(TARGET, "changed");
+    expect(getChanges).toHaveBeenCalledTimes(3);
+  });
+
+  it("refreshes stats on explicit reload and after mutation invalidation", async () => {
+    const getChanges = vi.fn(async () => ({ ok: true as const, value: createChanges([CHANGE]) }));
+    installBridge({
+      getChanges,
+      getDiff: vi.fn(async () => ({ ok: true as const, value: createDiff("diff") }))
+    });
+    await renderTarget();
+    await act(async () => { await controller?.reload("changes"); });
+    act(() => controller?.invalidate());
+    await act(async () => { await controller?.reload("changes"); });
+    expect(getChanges).toHaveBeenCalledTimes(3);
+  });
+
+  it("cancels hidden stats queries when the repository page unmounts", async () => {
+    const nextTarget = { repositoryId: "repository-b", worktreeId: "worktree-b" };
+    const getChanges = vi.fn<GitNestBridge["repository"]["getChanges"]>(() => new Promise(() => {}));
+    const cancelQuery = vi.fn(async () => ({ ok: true as const, value: undefined }));
+    installBridge({ getChanges, cancelQuery });
+    await renderTarget();
+    await renderTarget(nextTarget);
+    const firstId = getChanges.mock.calls[0]![0].queryId;
+    expect(cancelQuery).not.toHaveBeenCalledWith({ queryId: firstId });
+    act(() => root.render(null));
+    for (const [request] of getChanges.mock.calls) {
+      expect(cancelQuery).toHaveBeenCalledWith({ queryId: request.queryId });
+    }
+  });
+
+  it("starts only one stats query when StrictMode replays mount effects", async () => {
+    const getChanges = vi.fn(async () => ({ ok: true as const, value: createChanges([CHANGE]) }));
+    installBridge({
+      getChanges,
+      getDiff: vi.fn(async () => ({ ok: true as const, value: createDiff("diff") }))
+    });
+    await act(async () => {
+      root.render(
+        <StrictMode>
+          <Harness onController={(value) => { controller = value; }} />
+        </StrictMode>
+      );
+      await flushAsyncWork();
+    });
+    expect(getChanges).toHaveBeenCalledTimes(1);
+    expect(controller?.changes?.snapshot.changes).toEqual([CHANGE]);
+    expect(controller?.loading.changes).toBe(false);
+  });
+
+  it("retries failed stats queries after returning to a repository", async () => {
+    const nextTarget = { repositoryId: "repository-b", worktreeId: "worktree-b" };
+    const getChanges = vi.fn<GitNestBridge["repository"]["getChanges"]>()
+      .mockResolvedValueOnce({
+        ok: false, error: { code: "COMMAND_FAILED", message: "读取失败", details: {} }
+      })
+      .mockImplementation(async ({ target }) => ({
+        ok: true, value: { ...createChanges([CHANGE]), target }
+      }));
+    installBridge({
+      getChanges,
+      getDiff: vi.fn(async () => ({ ok: true as const, value: createDiff("diff") }))
+    });
+    await renderTarget();
+    expect(controller?.error?.message).toBe("读取失败");
+    await renderTarget(nextTarget);
+    await renderTarget();
+    expect(getChanges).toHaveBeenCalledTimes(3);
+    expect(controller?.error).toBeNull();
+    expect(controller?.changes?.snapshot.changes).toEqual([CHANGE]);
+  });
+
+  it("ignores queued stats events after a completed query is cached", async () => {
+    const nextTarget = { repositoryId: "repository-b", worktreeId: "worktree-b" };
+    const listeners: Array<(progress: RepositoryChangesProgressDto) => void> = [];
+    const initial = createChanges([{ ...CHANGE, unstagedStats: { additions: 3, deletions: 1 } }]);
+    const getChanges = vi.fn<GitNestBridge["repository"]["getChanges"]>(async ({ target }) => ({
+      ok: true, value: { ...initial, target }
+    }));
+    installBridge({
+      getChanges,
+      getDiff: vi.fn(async () => ({ ok: true as const, value: createDiff("diff") })),
+      onChangesProgress: (listener) => { listeners.push(listener); return vi.fn(); }
+    });
+    await renderTarget();
+    const queryId = getChanges.mock.calls[0]![0].queryId;
+    await renderTarget(nextTarget);
+    act(() => {
+      listeners[0]!({
+        kind: "stats", queryId, target: TARGET,
+        changes: [{ ...CHANGE, unstagedStats: { additions: 999, deletions: 0 } }],
+        completed: 1, total: 1
+      });
+    });
+    await renderTarget();
+    expect(getChanges).toHaveBeenCalledTimes(2);
+    expect(controller?.changes?.snapshot.changes[0]?.unstagedStats).toEqual({ additions: 3, deletions: 1 });
+  });
+
   it.each(["overview", "history", "branches"] as const)(
     "refreshes visible %s after a status revision from another operation",
     async (tab) => {
@@ -104,6 +326,91 @@ describe("useRepositoryDetails", () => {
       expect(tab === "branches" ? getBranches : getHistory).toHaveBeenCalledTimes(2);
     }
   );
+
+  it("publishes the file list and selected diff before stats finish, then merges batches", async () => {
+    let emit!: (progress: RepositoryChangesProgressDto) => void;
+    let finish!: (result: { ok: true; value: RepositoryChangesDto }) => void;
+    const pending = new Promise<{ ok: true; value: RepositoryChangesDto }>((resolve) => { finish = resolve; });
+    const unsubscribe = vi.fn();
+    const initial = createChanges([CHANGE, SECOND_CHANGE]);
+    const getChanges = vi.fn<GitNestBridge["repository"]["getChanges"]>(() => pending);
+    const getDiff = vi.fn<GitNestBridge["repository"]["getDiff"]>(async ({ path, mode }) => ({
+      ok: true as const, value: createDiff("selected diff", path, mode)
+    }));
+    installBridge({
+      getChanges, getDiff,
+      onChangesProgress: (listener) => { emit = listener; return unsubscribe; }
+    });
+    await act(async () => {
+      root.render(<Harness tab="changes" onController={(value) => { controller = value; }} />);
+      await flushAsyncWork();
+    });
+    const queryId = getChanges.mock.calls[0]![0]?.queryId;
+    await act(async () => {
+      emit({ kind: "snapshot", queryId, target: TARGET, snapshot: initial.snapshot, completed: 0, total: 2 });
+      await flushAsyncWork();
+    });
+    expect(controller?.changes?.snapshot.changes).toEqual(initial.snapshot.changes);
+    expect(controller?.loading.changes).toBe(false);
+    expect(controller?.diff?.diff.content).toBe("selected diff");
+    expect(controller?.changes?.statsProgress).toEqual({ completed: 0, total: 2 });
+    const updated = { ...CHANGE, unstagedStats: { additions: 7, deletions: 2 } };
+    await act(async () => {
+      emit({ kind: "stats", queryId, target: TARGET, changes: [updated], completed: 1, total: 2 });
+    });
+    expect(controller?.changes?.snapshot.changes[0]).toEqual(updated);
+    expect(controller?.changes?.snapshot.changes[1]).toBe(SECOND_CHANGE);
+    expect(getDiff).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await controller?.selectChange(SECOND_CHANGE);
+      emit({ kind: "snapshot", queryId, target: TARGET, snapshot: createChanges([SECOND_CHANGE]).snapshot, completed: 1, total: 1 });
+      finish({ ok: true, value: createChanges([SECOND_CHANGE]) });
+      await flushAsyncWork();
+    });
+    expect(controller?.selectedChange?.path).toBe(SECOND_CHANGE.path);
+    expect(controller?.changes?.snapshot.changes).toEqual([SECOND_CHANGE]);
+    expect(controller?.changes?.statsProgress).toBeUndefined();
+    expect(unsubscribe).toHaveBeenCalled();
+    expect(getDiff).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores old stats batches after refreshing and unsubscribes on unmount", async () => {
+    const listeners: Array<(progress: RepositoryChangesProgressDto) => void> = [];
+    const unsubscribes: Array<ReturnType<typeof vi.fn>> = [];
+    const getChanges = vi.fn<GitNestBridge["repository"]["getChanges"]>(() => new Promise(() => {}));
+    installBridge({
+      getChanges,
+      getDiff: vi.fn(async () => ({ ok: true as const, value: createDiff("diff") })),
+      onChangesProgress: (listener) => {
+        listeners.push(listener);
+        const unsubscribe = vi.fn();
+        unsubscribes.push(unsubscribe);
+        return unsubscribe;
+      }
+    });
+    await act(async () => {
+      root.render(<Harness tab="changes" revision="one" onController={(value) => { controller = value; }} />);
+      await flushAsyncWork();
+    });
+    const firstId = getChanges.mock.calls[0]![0].queryId;
+    await act(async () => {
+      listeners[0]!({ kind: "snapshot", queryId: firstId, target: TARGET, snapshot: createChanges([CHANGE]).snapshot, completed: 0, total: 1 });
+      await flushAsyncWork();
+      root.render(<Harness tab="changes" revision="two" onController={(value) => { controller = value; }} />);
+      await flushAsyncWork();
+    });
+    const nextId = getChanges.mock.calls[1]![0].queryId;
+    await act(async () => {
+      listeners[1]!({ kind: "snapshot", queryId: nextId, target: TARGET, snapshot: createChanges([SECOND_CHANGE]).snapshot, completed: 0, total: 1 });
+      listeners[0]!({ kind: "stats", queryId: firstId, target: TARGET, changes: [{ ...CHANGE, unstagedStats: { additions: 999, deletions: 0 } }], completed: 1, total: 1 });
+      listeners[1]!({ kind: "stats", queryId: firstId, target: TARGET, changes: [CHANGE], completed: 1, total: 1 });
+      await flushAsyncWork();
+    });
+    expect(controller?.changes?.snapshot.changes).toEqual([SECOND_CHANGE]);
+    expect(unsubscribes[0]).toHaveBeenCalled();
+    act(() => root.render(null));
+    expect(unsubscribes[1]).toHaveBeenCalled();
+  });
 
   it.each(["overview", "history", "branches"] as const)(
     "keeps visible %s data when operation-triggered refresh fails",
@@ -1463,6 +1770,7 @@ function installBridge(
     configurable: true,
     value: {
       repository: {
+        onChangesProgress: vi.fn(() => () => undefined),
         cancelQuery: vi.fn(async () => ({
           ok: true as const,
           value: undefined

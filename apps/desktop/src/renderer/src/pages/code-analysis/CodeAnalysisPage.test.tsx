@@ -190,6 +190,62 @@ describe("CodeAnalysisPage relationship graph workspace", () => {
     expect(container.querySelector(".analysis-node-source-code")?.getAttribute("aria-busy")).toBe("true");
   });
 
+  it("opens wide source rows at the left edge and resets horizontal scroll only when locating a new node", async () => {
+    const initialNode = createSnapshot().nodes[1]!;
+    const node = { ...initialNode, location: { ...initialNode.location, line: 35 } };
+    const content = Array.from({ length: 60 }, (_, index) => `const line${index} = "${"wide ".repeat(80)}";`).join("\n");
+    let finishRead: (() => void) | undefined;
+    vi.mocked(window.gitnest.codeAnalysis.readFile).mockImplementation(async ({ nodeId }) => {
+      await new Promise<void>((done) => { finishRead = done; });
+      return { ok: true, value: {
+        nodeId, path: "src/wide.ts", language: "typescript", content,
+        startLine: 1, endLine: 60, totalLines: 60, truncated: false
+      } };
+    });
+    await act(async () => {
+      root.render(<NodeSourceViewer node={node} onClose={vi.fn()} />);
+      await flushAsyncWork();
+    });
+    const viewport = container.querySelector<HTMLDivElement>(".analysis-node-source-code")!;
+    Object.defineProperties(viewport, {
+      clientWidth: { configurable: true, value: 500 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollWidth: { configurable: true, value: 1800 },
+      scrollHeight: { configurable: true, value: 1200 }
+    });
+    vi.spyOn(viewport, "scrollTo").mockImplementation((options: ScrollToOptions | number) => {
+      if (typeof options === "object") {
+        viewport.scrollTop = options.top ?? viewport.scrollTop;
+        viewport.scrollLeft = options.left ?? viewport.scrollLeft;
+      }
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === viewport) return new DOMRect(0, 0, 500, 200);
+      const line = Number(this.dataset.sourceLine ?? 1);
+      return new DOMRect(-viewport.scrollLeft, (line - 1) * 20 - viewport.scrollTop, 1800, 20);
+    });
+    await act(async () => {
+      finishRead!();
+      await flushAsyncWork();
+    });
+    expect(viewport.scrollTop).toBeGreaterThan(0);
+    expect(viewport.scrollLeft).toBe(0);
+
+    viewport.scrollLeft = 400;
+    act(() => root.render(<NodeSourceViewer node={node} onClose={vi.fn()} />));
+    expect(viewport.scrollLeft).toBe(400);
+    act(() => {
+      root.render(<NodeSourceViewer node={{ ...node, id: "other", location: { ...node.location, line: 40 } }} onClose={vi.fn()} />);
+    });
+    await act(async () => {
+      finishRead!();
+      await flushAsyncWork();
+    });
+    expect(viewport.scrollLeft).toBe(0);
+    expect(viewport.scrollTop).toBeGreaterThan(0);
+    expect(container.querySelector('[aria-current="location"]')?.getAttribute("data-source-line")).toBe("40");
+  });
+
   it("updates only the previous and next source search rows when navigating matches", async () => {
     const content = Array.from({ length: 500 }, (_, index) =>
       `const latencyLine${index} = "${index === 0 || index === 499 ? "needle" : "other"}";`

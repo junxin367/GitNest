@@ -20,6 +20,7 @@ import type {
 } from "@gitnest/contracts";
 
 import type { RepositoryTab } from "../../app/navigation";
+import { RepositoryChangesCache } from "./repositoryChangesCache";
 import {
   changeSupportsMode,
   findRequestedRepositoryChange,
@@ -78,7 +79,7 @@ export interface RepositoryDetailsController {
   loadMoreHistory(): Promise<void>;
   reload(
     tab: RepositoryTab,
-    options?: { preserveSelection?: boolean }
+    options?: { preserveSelection?: boolean; reuseChanges?: boolean }
   ): Promise<void>;
   invalidate(): void;
   clearError(): void;
@@ -180,12 +181,22 @@ export function useRepositoryDetails(
     revision: statusRevision
   });
   const activeQueries = useRef(new Map<LoadingKey, string>());
+  const changesProgressSubscription = useRef<(() => void) | null>(null);
   const sequence = useRef(0);
   const generation = useRef(0);
+  const [changesCache] = useState(
+    () => new RepositoryChangesCache(window.gitnest.repository)
+  );
+  const currentStatusRevisionRef = useRef(statusRevision);
+  currentStatusRevisionRef.current = statusRevision;
 
   const cancelAll = useCallback(() => {
-    for (const queryId of activeQueries.current.values()) {
-      void window.gitnest.repository.cancelQuery({ queryId });
+    changesProgressSubscription.current?.();
+    changesProgressSubscription.current = null;
+    for (const [key, queryId] of activeQueries.current) {
+      if (key !== "changes") {
+        void window.gitnest.repository.cancelQuery({ queryId });
+      }
     }
     activeQueries.current.clear();
     activeChangesRequestIdRef.current = null;
@@ -195,10 +206,14 @@ export function useRepositoryDetails(
     const queryId = activeQueries.current.get(key);
 
     if (queryId) {
-      void window.gitnest.repository.cancelQuery({ queryId });
+      if (key !== "changes") {
+        void window.gitnest.repository.cancelQuery({ queryId });
+      }
       activeQueries.current.delete(key);
     }
     if (key === "changes") {
+      changesProgressSubscription.current?.();
+      changesProgressSubscription.current = null;
       activeChangesRequestIdRef.current = null;
     }
   }, []);
@@ -381,7 +396,7 @@ export function useRepositoryDetails(
   );
 
   const loadChanges = useCallback(
-    async (preserveSelection = false) => {
+    async (preserveSelection = false, reuseChanges = false) => {
       if (!stableTarget) {
         return;
       }
@@ -400,117 +415,126 @@ export function useRepositoryDetails(
       setLoadingKey("changes", true);
       setError(null);
 
-      try {
-        const result = await window.gitnest.repository.getChanges({
-          queryId,
-          target: stableTarget
-        });
-
-        if (
-          !isCurrentQuery(
-            "changes",
-            queryId,
-            requestGeneration
-          )
-        ) {
-          return;
-        }
-
-        if (result.ok) {
-          setChanges(result.value);
-          const currentRequest = requestedChangeRef.current;
-          const requestMatchesTarget = Boolean(
-            currentRequest &&
-              repositoryTargetsMatch(
-                currentRequest.target,
-                stableTarget
-              ) &&
-              repositoryTargetsMatch(
-                currentRequest.target,
-                result.value.target
+      let receivedSnapshot = false;
+      const acceptChanges = (value: RepositoryChangesDto, preserveLoadedSelection = false) => {
+        setChanges(value);
+        const currentRequest = requestedChangeRef.current;
+        const requestMatchesTarget = Boolean(
+          currentRequest &&
+            repositoryTargetsMatch(
+              currentRequest.target,
+              stableTarget
+            ) &&
+            repositoryTargetsMatch(
+              currentRequest.target,
+              value.target
+            )
+        );
+        const requestedSelection =
+          requestMatchesTarget && currentRequest
+            ? resolveRequestedChangeSelection(
+                value,
+                currentRequest
               )
-          );
-          const requestedSelection =
-            requestMatchesTarget && currentRequest
-              ? resolveRequestedChangeSelection(
-                  result.value,
-                  currentRequest
-                )
-              : null;
-          const previousSelection = preserveSelection
-            ? selectedChangeRef.current
             : null;
-          const preserved = previousSelection
-            ? result.value.snapshot.changes.find(
-                (change) =>
-                  change.path === previousSelection.path
-              )
-            : undefined;
-          const nextChange =
-            requestedSelection?.change ??
-            preserved ??
-            result.value.snapshot.changes[0];
+        const previousSelection = preserveSelection || preserveLoadedSelection
+          ? selectedChangeRef.current
+          : null;
+        const preserved = previousSelection
+          ? value.snapshot.changes.find(
+              (change) =>
+                change.path === previousSelection.path
+            )
+          : undefined;
+        const nextChange =
+          requestedSelection?.change ??
+          preserved ??
+          value.snapshot.changes[0];
 
-          if (nextChange) {
-            if (requestedSelection && currentRequest) {
-              setChangeSelectionRequestId(currentRequest.id);
-            }
-            const nextMode =
-              requestedSelection?.mode ??
-              (preserved
-                ? preferredPreservedDiffMode(
-                    nextChange,
-                    previousSelection?.mode
+        if (nextChange) {
+          if (requestedSelection && currentRequest) {
+            setChangeSelectionRequestId(currentRequest.id);
+          }
+          const nextMode =
+            requestedSelection?.mode ??
+            (preserved
+              ? preferredPreservedDiffMode(
+                  nextChange,
+                  previousSelection?.mode
+                )
+              : preferredDiffMode(nextChange));
+          const preserveExistingDiff =
+            !requestedSelection &&
+            Boolean(preserved && previousSelection) &&
+            nextMode === previousSelection?.mode;
+          const diffAlreadyLoading =
+            activeQueries.current.has("diff");
+          if (
+            !(
+              preserveExistingDiff &&
+              (diffAlreadyLoading || preserveLoadedSelection)
+            )
+          ) {
+            void selectChange(nextChange, nextMode, {
+              preserveDiff: preserveExistingDiff,
+              ...(previousSelection
+                ? {
+                    contextLines:
+                      previousSelection.contextLines
+                  }
+                : {})
+            });
+          }
+        } else {
+          cancelQuery("diff");
+          setLoadingKey("diff", false);
+          const removedAfterEmptyDiffRefresh =
+            previousSelection
+              ? emptyDiffRefreshesRef.current.delete(
+                  emptyDiffRefreshKey(
+                    targetKey,
+                    previousSelection
                   )
-                : preferredDiffMode(nextChange));
-            const preserveExistingDiff =
-              !requestedSelection &&
-              Boolean(preserved && previousSelection) &&
-              nextMode === previousSelection?.mode;
-            const diffAlreadyLoading =
-              activeQueries.current.has("diff");
+                )
+              : false;
+          selectedChangeRef.current = null;
+          setSelectedChange(null);
+          diffRef.current = null;
+          setDiff(null);
+          setDiffNotice(
+            removedAfterEmptyDiffRefresh
+              ? "change-removed"
+              : null
+          );
+        }
+        if (requestMatchesTarget && currentRequest) {
+          markRequestedChangeHandled(currentRequest);
+        }
+      };
+      const entry = changesCache.read(
+        stableTarget, currentStatusRevisionRef.current, queryId, reuseChanges
+      );
+      const receiveChanges = (value: RepositoryChangesDto, snapshot: boolean) => {
+        if (!isCurrentQuery("changes", queryId, requestGeneration)) return;
+        if (snapshot) {
+          const preserveLoadedSelection = receivedSnapshot;
+          receivedSnapshot = true;
+          acceptChanges(value, preserveLoadedSelection);
+          setLoadingKey("changes", false);
+        } else {
+          setChanges(value);
+        }
+      };
+      const unsubscribe = entry.subscribe(receiveChanges);
+      changesProgressSubscription.current = unsubscribe;
+      if (reuseChanges && entry.value) receiveChanges(entry.value, true);
 
-            if (
-              !(
-                preserveExistingDiff &&
-                diffAlreadyLoading
-              )
-            ) {
-              void selectChange(nextChange, nextMode, {
-                preserveDiff: preserveExistingDiff,
-                ...(previousSelection
-                  ? {
-                      contextLines:
-                        previousSelection.contextLines
-                    }
-                  : {})
-              });
-            }
-          } else {
-            cancelQuery("diff");
-            setLoadingKey("diff", false);
-            const removedAfterEmptyDiffRefresh =
-              previousSelection
-                ? emptyDiffRefreshesRef.current.delete(
-                    emptyDiffRefreshKey(
-                      targetKey,
-                      previousSelection
-                    )
-                  )
-                : false;
-            selectedChangeRef.current = null;
-            setSelectedChange(null);
-            diffRef.current = null;
-            setDiff(null);
-            setDiffNotice(
-              removedAfterEmptyDiffRefresh
-                ? "change-removed"
-                : null
-            );
-          }
-          if (requestMatchesTarget && currentRequest) {
-            markRequestedChangeHandled(currentRequest);
-          }
+      try {
+        const result = await entry.result;
+        if (!isCurrentQuery("changes", queryId, requestGeneration)) return;
+        if (result.ok) {
+          if (!receivedSnapshot) acceptChanges(result.value);
+          else if (!entry.progressComplete) acceptChanges(result.value, true);
         } else if (result.error.code !== "COMMAND_CANCELLED") {
           setError(result.error);
         }
@@ -525,16 +549,24 @@ export function useRepositoryDetails(
           setError(unexpectedError(reason));
         }
       } finally {
+        unsubscribe();
+        if (changesProgressSubscription.current === unsubscribe) {
+          changesProgressSubscription.current = null;
+        }
         if (finishQuery("changes", queryId)) {
           activeChangesRequestIdRef.current = null;
           if (requestGeneration === generation.current) {
             setLoadingKey("changes", false);
+            setChanges((current) =>
+              current?.statsProgress ? { ...current, statsProgress: undefined } : current
+            );
           }
         }
       }
     },
     [
       cancelQuery,
+      changesCache,
       createQuery,
       finishQuery,
       isCurrentQuery,
@@ -857,7 +889,7 @@ export function useRepositoryDetails(
   const reload = useCallback(
     async (
       requestedTab: RepositoryTab,
-      options: { preserveSelection?: boolean } = {}
+      options: { preserveSelection?: boolean; reuseChanges?: boolean } = {}
     ) => {
       if (requestedTab === "overview") {
         await loadHistory(0);
@@ -871,7 +903,7 @@ export function useRepositoryDetails(
           diffRef.current = null;
           setDiff(null);
         }
-        await loadChanges(options.preserveSelection);
+        await loadChanges(options.preserveSelection, options.reuseChanges);
       } else if (requestedTab === "history") {
         const preserveSelection = Boolean(
           selectedCommitHashRef.current
@@ -905,10 +937,11 @@ export function useRepositoryDetails(
   const invalidate = useCallback(() => {
     generation.current += 1;
     cancelAll();
+    changesCache.invalidate(targetKey);
     setLoading(EMPTY_LOADING);
     setError(null);
     setDiffNotice(null);
-  }, [cancelAll]);
+  }, [cancelAll, changesCache, targetKey]);
 
   const clearError = useCallback(() => {
     setError(null);
@@ -920,7 +953,7 @@ export function useRepositoryDetails(
     setDataTargetKey(targetKey);
     selectedChangeRef.current = null;
     emptyDiffRefreshesRef.current.clear();
-    setChanges(null);
+    setChanges(changesCache.peek(targetKey, currentStatusRevisionRef.current));
     diffRef.current = null;
     setDiff(null);
     setDiffNotice(null);
@@ -939,7 +972,7 @@ export function useRepositoryDetails(
     setHistoryDetailOpen(false);
     setLoading(EMPTY_LOADING);
     setError(null);
-  }, [cancelAll, targetKey]);
+  }, [cancelAll, changesCache, targetKey]);
 
   useEffect(() => {
     const enteringHistory =
@@ -958,7 +991,7 @@ export function useRepositoryDetails(
       targetKey,
       revision: statusRevision
     };
-    void reload(tab);
+    void reload(tab, { reuseChanges: true });
   }, [cancelAll, reload, tab, targetKey]);
 
   useEffect(() => {
@@ -1018,8 +1051,9 @@ export function useRepositoryDetails(
     () => () => {
       generation.current += 1;
       cancelAll();
+      changesCache.dispose();
     },
-    [cancelAll]
+    [cancelAll, changesCache]
   );
 
   const currentTarget = dataTargetKey === targetKey;

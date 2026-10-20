@@ -796,6 +796,208 @@ describe("RepositoryCommitDetail", () => {
     expect(stage).toHaveBeenCalledWith({ target: TARGET, paths: [changes[1]!.path] });
   });
 
+  it("filters changed files by Diff code and carries the query into the selected Diff", async () => {
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    const changes = [
+      {
+        path: "src/other.ts",
+        kind: "ordinary" as const,
+        indexStatus: ".",
+        worktreeStatus: "M"
+      },
+      {
+        path: "src/task/ScDigitalHumanTaskManager.java",
+        kind: "ordinary" as const,
+        indexStatus: ".",
+        worktreeStatus: "M"
+      }
+    ];
+    const getDiff = vi.fn<
+      GitNestBridge["repository"]["getDiff"]
+    >(async ({ target, path, mode }) => ({
+      ok: true as const,
+      value: {
+        target,
+        diff: {
+          path,
+          mode,
+          content:
+            path === changes[1]!.path
+              ? [
+                  `diff --git a/${path} b/${path}`,
+                  "@@ -1395,2 +1395,4 @@",
+                  "+if (!addTaskAidFilter(searchArg.matcher, ScCutDef.Info.AID)) {",
+                  "+  return new FailList<>();",
+                  "+}"
+                ].join("\n")
+              : [
+                  `diff --git a/${path} b/${path}`,
+                  "@@ -1 +1 @@",
+                  "-const oldValue = true;",
+                  "+const nextValue = true;"
+                ].join("\n"),
+          additions: 1,
+          deletions: 1,
+          binary: false,
+          truncated: false
+        }
+      }
+    }));
+    installBridge({
+      getChanges: vi.fn(async ({ target }) => ({
+        ok: true as const,
+        value: {
+          target,
+          snapshot: {
+            branch: "main",
+            head: "head",
+            ahead: 0,
+            behind: 0,
+            staged: 0,
+            unstaged: changes.length,
+            untracked: 0,
+            conflicted: 0,
+            refreshedAt: "2026-10-10T00:00:00Z",
+            changes
+          }
+        }
+      })),
+      getDiff
+    });
+    const settings = createDefaultAppSettings();
+    const workflow = createWorkflowController();
+    function Harness() {
+      const controller = useRepositoryDetails(
+        TARGET,
+        "changes"
+      );
+      const hooks = React.useMemo(
+        () => ({
+          beforeMutation: controller.invalidate,
+          afterMutation: () => controller.reload("changes")
+        }),
+        [controller.invalidate, controller.reload]
+      );
+      const mutations = useRepositoryMutations(TARGET, hooks);
+      return (
+        <RepositoryChanges
+          {...({
+            controller,
+            target: TARGET,
+            workspaceId: "diff-content-search",
+            appSettings: { settings },
+            mutations,
+            workflow,
+            commands: { busy: false, active: null },
+            externalApplications: { profiles: [] },
+            commitMessage: "",
+            aiGenerating: false,
+            pushAfterCommit: false,
+            onCommitMessageChange: vi.fn(),
+            onGenerateAi: vi.fn(),
+            onPushAfterCommitChange: vi.fn(),
+            onCommitted: vi.fn()
+          } as unknown as React.ComponentProps<
+            typeof RepositoryChanges
+          >)}
+        />
+      );
+    }
+
+    await act(async () => {
+      root.render(<Harness />);
+      await flushAsyncWork();
+    });
+    const filter =
+      container.querySelector<HTMLInputElement>(
+        'input[aria-label="筛选变更文件"]'
+      )!;
+    act(() => {
+      filter.focus();
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value"
+      )?.set?.call(filter, "addTaskAidFilter");
+      filter.dispatchEvent(
+        new Event("input", { bubbles: true })
+      );
+    });
+    await act(async () => {
+      await flushAsyncWork();
+      await flushAsyncWork();
+    });
+
+    expect(
+      container.querySelectorAll(".diff-workspace-file")
+    ).toHaveLength(1);
+    expect(container.textContent).toContain(
+      changes[1]!.path
+    );
+    expect(container.textContent).toContain(
+      "匹配：if (!addTaskAidFilter"
+    );
+    expect(
+      getDiff.mock.calls.some(
+        ([request]) =>
+          request.intent === "search" &&
+          request.path === changes[1]!.path
+      )
+    ).toBe(true);
+    expect(
+      container.querySelector(
+        '[data-diff-viewer-search-hit="0"]'
+      )
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        'input[aria-label="搜索文本"]'
+      )
+    ).toBeNull();
+    expect(document.activeElement).toBe(filter);
+
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          ".diff-workspace-file-select"
+        )
+        ?.click();
+    });
+    expect(
+      container.querySelector<HTMLInputElement>(
+        'input[aria-label="搜索文本"]'
+      )?.value
+    ).toBe("addTaskAidFilter");
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true
+        })
+      );
+    });
+    expect(
+      container.querySelector(
+        'input[aria-label="搜索文本"]'
+      )
+    ).toBeNull();
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>(
+          ".diff-workspace-file-select"
+        )
+        ?.click();
+    });
+    expect(
+      container.querySelector<HTMLInputElement>(
+        'input[aria-label="搜索文本"]'
+      )?.value
+    ).toBe("addTaskAidFilter");
+  });
+
   it("stops the changes skeleton after an initial read is cancelled", async () => {
     vi.stubGlobal("ResizeObserver", class {
       observe() {}
@@ -1732,6 +1934,7 @@ function installBridge(
     configurable: true,
     value: {
       repository: {
+        onChangesProgress: vi.fn(() => () => undefined),
         cancelQuery: vi.fn(async () => ({
           ok: true as const,
           value: undefined

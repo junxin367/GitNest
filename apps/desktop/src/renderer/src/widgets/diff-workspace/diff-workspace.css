@@ -91,6 +91,19 @@
   overscroll-behavior: contain;
 }
 
+.diff-workspace-virtual-list {
+  position: relative;
+  min-width: 0;
+  overflow-anchor: none;
+}
+
+.diff-workspace-virtual-row {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+}
+
 .diff-workspace-file-list > .diff-viewer-state {
   min-height: 100%;
 }
@@ -368,6 +381,11 @@
   white-space: nowrap;
 }
 
+.diff-workspace-file-meta
+  .diff-workspace-file-content-match {
+  color: var(--accent);
+}
+
 .diff-workspace-file-status {
   display: grid;
   flex: 0 0 14px;
@@ -522,11 +540,19 @@
   background: var(--surface-hover);
 }
 
-.diff-workspace-tree-directory > span {
+.diff-workspace-tree-directory.has-count {
+  grid-template-columns: 16px 16px minmax(0, 1fr) auto;
+}
+
+.diff-workspace-tree-directory-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.diff-workspace-tree-directory-count {
+  position: static;
 }
 
 .diff-workspace-tree-directory-chevron {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   type CommitDiff,
@@ -39,6 +39,25 @@ const TARGET: RepositoryTarget = {
 const WORKTREE_PATH = "C:\\workspace\\repository";
 
 describe("RepositoryQueryService", () => {
+  it("forwards progressive snapshots and aborts remaining work when the query ends", async () => {
+    const client = new FakeGitClient();
+    const onProgress = vi.fn();
+    const snapshot = createSnapshot();
+    let signal!: AbortSignal;
+    vi.spyOn(client, "readRepositorySnapshot").mockImplementation(async (_path, options) => {
+      signal = options!.signal!;
+      expect(signal.aborted).toBe(false);
+      options?.onProgress?.({
+        kind: "snapshot", snapshot, completed: 0, total: snapshot.changes.length
+      });
+      return snapshot;
+    });
+    await createService(client).getChanges("progressive", TARGET, true, onProgress);
+    expect(onProgress).toHaveBeenCalledWith({
+      kind: "snapshot", snapshot, completed: 0, total: snapshot.changes.length
+    });
+    expect(signal.aborted).toBe(true);
+  });
   it("requests per-file stats by default for repository changes", async () => {
     const gitClient = new FakeGitClient();
     const service = createService(gitClient);
@@ -95,6 +114,32 @@ describe("RepositoryQueryService", () => {
         contextLines: 13,
         includeMedia: true,
         priority: "interactive",
+        signal: expect.any(AbortSignal)
+      }
+    ]);
+  });
+
+  it("uses background reads without media previews for Diff search indexing", async () => {
+    const gitClient = new FakeGitClient();
+    const service = createService(gitClient);
+
+    await service.getDiff(
+      "diff_search_1",
+      TARGET,
+      "src/app.ts",
+      "unstaged",
+      3,
+      "search"
+    );
+
+    expect(gitClient.diffCalls).toEqual([
+      {
+        repositoryPath: WORKTREE_PATH,
+        relativePath: "src/app.ts",
+        mode: "unstaged",
+        contextLines: 3,
+        includeMedia: false,
+        priority: "background",
         signal: expect.any(AbortSignal)
       }
     ]);

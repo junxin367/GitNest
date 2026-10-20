@@ -12,6 +12,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 
 class AnalysisHost {
+  [StructLayout(LayoutKind.Sequential)] struct AttributeTag { public uint attributes, tag; }
   [StructLayout(LayoutKind.Sequential)] struct SidEntry { public IntPtr Sid; public uint Attributes; }
   [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct Startup {
     public int cb; public string reserved, desktop, title;
@@ -60,7 +61,14 @@ class AnalysisHost {
   [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr pointer);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern IntPtr CreateFileW(string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", SetLastError=true)]
+  static extern bool GetFileInformationByHandleEx(IntPtr handle, int cls, out AttributeTag info, uint size);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern uint GetFinalPathNameByHandleW(IntPtr handle, StringBuilder path, uint size, uint flags);
 
+  static readonly HashSet<string> originalDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
   static readonly List<IntPtr> allocations = new List<IntPtr>();
   static IntPtr Allocate(int length) {
     IntPtr p = Marshal.AllocHGlobal(length); allocations.Add(p); return p;
@@ -81,12 +89,19 @@ class AnalysisHost {
     byte[] bytes = new byte[length]; Marshal.Copy(pointer, bytes, 0, length);
     return new RawAcl(bytes, 0);
   }
+  static string ExtendedPath(string path) {
+    if (path.StartsWith(@"\\?\", StringComparison.Ordinal)) return path;
+    return path.StartsWith(@"\\", StringComparison.Ordinal)
+      ? @"\\?\UNC\" + path.Substring(2)
+      : @"\\?\" + path;
+  }
   static void CheckEntry(string path, bool checkIntegrity) {
-    if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+    string entry = ExtendedPath(path);
+    if ((File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0)
       throw new IOException("Isolation cannot admit a reparse point: " + path);
     if (!checkIntegrity) return;
     IntPtr owner, group, dacl, sacl, descriptor;
-    uint error = GetNamedSecurityInfo(path, 1, 0x10, out owner, out group, out dacl, out sacl, out descriptor);
+    uint error = GetNamedSecurityInfo(entry, 1, 0x10, out owner, out group, out dacl, out sacl, out descriptor);
     if (error != 0) throw new Win32Exception((int)error, "Cannot check original integrity: " + path);
     try {
       // Unlabelled Windows objects have Medium integrity. Explicit labels
@@ -105,13 +120,37 @@ class AnalysisHost {
       }
     } finally { if (descriptor != IntPtr.Zero) LocalFree(descriptor); }
   }
+  static string ResolveOriginalLink(string path) {
+    IntPtr link = CreateFileW(ExtendedPath(path), 0, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+    if (link == new IntPtr(-1)) throw new Win32Exception();
+    try {
+      AttributeTag info;
+      if (!GetFileInformationByHandleEx(link, 9, out info, 8)) throw new Win32Exception();
+      if (info.tag != 0xA0000003 && info.tag != 0xA000000C)
+        throw new IOException("Unsupported original reparse point: " + path);
+    } finally { CloseHandle(link); }
+    IntPtr target = CreateFileW(ExtendedPath(path), 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
+    if (target == new IntPtr(-1)) throw new Win32Exception();
+    try {
+      var value = new StringBuilder(32768);
+      uint length = GetFinalPathNameByHandleW(target, value, 32768, 0);
+      if (length == 0 || length >= 32768) throw new Win32Exception();
+      string resolved = value.ToString();
+      if (resolved.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase))
+        throw new IOException("Remote original link targets are not supported: " + path);
+      return resolved;
+    } finally { CloseHandle(target); }
+  }
   static void CheckTree(string root, bool checkIntegrity) {
+    root = ExtendedPath(root);
+    if (checkIntegrity && (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0) {
+      root = ResolveOriginalLink(root);
+      CheckParents(root, true);
+    }
     CheckEntry(root, checkIntegrity);
     if (!Directory.Exists(root)) return;
-    foreach (string path in Directory.EnumerateFileSystemEntries(root)) {
-      CheckEntry(path, checkIntegrity);
-      if (Directory.Exists(path)) CheckTree(path, checkIntegrity);
-    }
+    if (checkIntegrity && !originalDirectories.Add(root.TrimEnd('\\'))) return;
+    foreach (string path in Directory.EnumerateFileSystemEntries(root)) CheckTree(path, checkIntegrity);
   }
   static void CheckParents(string path, bool checkIntegrity) {
     for (string p = path; p != null; p = Path.GetDirectoryName(p)) CheckEntry(p, checkIntegrity);
@@ -126,10 +165,11 @@ class AnalysisHost {
     foreach (SecurityIdentifier sid in new[] { WindowsIdentity.GetCurrent().User, new SecurityIdentifier("S-1-5-18") })
       access.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl,
         InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
-    Directory.SetAccessControl(root, access);
+    Directory.SetAccessControl(ExtendedPath(root), access);
   }
   static void VerifyWritableRoot(string root) {
-    var access = Directory.GetAccessControl(root);
+    string directory = ExtendedPath(root);
+    var access = Directory.GetAccessControl(directory);
     if (!access.AreAccessRulesProtected) throw new IOException("Analysis cache permissions are not private");
     foreach (FileSystemAccessRule rule in access.GetAccessRules(true, true, typeof(SecurityIdentifier))) {
       string sid = rule.IdentityReference.Value;
@@ -140,7 +180,7 @@ class AnalysisHost {
         throw new IOException("Analysis cache permissions changed; use a fresh runtime directory");
     }
     IntPtr owner, group, dacl, sacl, descriptor;
-    uint error = GetNamedSecurityInfo(root, 1, 0x10, out owner, out group, out dacl, out sacl, out descriptor);
+    uint error = GetNamedSecurityInfo(directory, 1, 0x10, out owner, out group, out dacl, out sacl, out descriptor);
     if (error != 0) throw new Win32Exception((int)error);
     try {
       if (sacl != IntPtr.Zero) foreach (GenericAce ace in ReadAcl(sacl)) {
@@ -155,15 +195,15 @@ class AnalysisHost {
     } finally { if (descriptor != IntPtr.Zero) LocalFree(descriptor); }
   }
   static void MakeWritable(string root) {
-    // Only our managed copy receives ACL/label changes.
+    // Only our private runtime receives ACL/label changes.
     IntPtr descriptor; uint size;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptor("S:(ML;OICI;NW;;;LW)", 1, out descriptor, out size))
       throw new Win32Exception();
     try {
       bool present, defaulted; IntPtr acl;
       if (!GetSecurityDescriptorSacl(descriptor, out present, out acl, out defaulted)) throw new Win32Exception();
-      uint error = SetNamedSecurityInfo(root, 1, 0x10, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, acl);
-      if (error != 0) throw new Win32Exception((int)error, "Cannot label analysis copy");
+      uint error = SetNamedSecurityInfo(ExtendedPath(root), 1, 0x10, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, acl);
+      if (error != 0) throw new Win32Exception((int)error, "Cannot label analysis runtime");
     } finally { LocalFree(descriptor); }
   }
   static string Quote(string value) {
@@ -179,12 +219,13 @@ class AnalysisHost {
     IntPtr original = IntPtr.Zero, token = IntPtr.Zero, job = IntPtr.Zero, ownerProcess = IntPtr.Zero;
     ProcessInfo process = new ProcessInfo();
     try {
+      Console.SetError(new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false)) { AutoFlush = true });
       AppContext.SetSwitch("Switch.System.IO.UseLegacyPathHandling", false);
       AppContext.SetSwitch("Switch.System.IO.BlockLongPaths", false);
       if (args.Length == 2 && args[0] == "--prepare") {
         string directory = Path.GetFullPath(args[1]);
         CheckParents(directory, false); CheckTree(directory, false);
-        if (Directory.GetFileSystemEntries(directory).Length == 0) {
+        if (Directory.GetFileSystemEntries(ExtendedPath(directory)).Length == 0) {
           MakePrivate(directory); MakeWritable(directory);
         } else VerifyWritableRoot(directory);
         return 0;
@@ -197,7 +238,7 @@ class AnalysisHost {
       CheckParents(root, false); CheckTree(root, false);
       for (int i = 0; i < count; i++) {
         string source = Path.GetFullPath(args[4 + i]);
-        if (Inside(source, root) || Inside(root, source)) throw new IOException("Copy overlaps original");
+        if (Inside(source, root) || Inside(root, source)) throw new IOException("Analysis runtime overlaps original");
         CheckParents(source, true); CheckTree(source, true);
       }
       // Never relabel existing descendants: a build tool may have hard-linked

@@ -11,6 +11,7 @@ import type {
   ChangedPathDto,
   GitReadErrorDto,
   OpenDiffViewerRequest,
+  RepositoryChangesDto,
   RepositoryDiffDto
 } from "@gitnest/contracts";
 import type { WorkspaceOperationDto, WorkspaceRuntimeStateDto } from "@gitnest/contracts";
@@ -22,6 +23,8 @@ import {
   useRepositoryMutations
 } from "../../entities/repository/useRepositoryMutations";
 import { getSnapshotContentRevision } from "../../entities/workspace/model";
+import { applyRepositoryChangesProgress } from "../../entities/repository/progressiveChanges";
+import { useChangedDiffSearch } from "../../features/diff-search/useChangedDiffSearch";
 import { useExternalApplications } from "../../features/external-application/useExternalApplications";
 import { FileHistoryDialog } from "../../features/file-history/FileHistoryDialog";
 import { RepositoryIgnoreDialog, type RepositoryIgnoreSelection } from "../../features/repository-ignore/RepositoryIgnoreDialog";
@@ -40,12 +43,14 @@ import {
   DEFAULT_DIFF_CONTEXT_LINES,
   DiffViewerState,
   type DiffContextRequest,
+  type DiffPanelSearchRequest,
   type DiffPanelState,
   type DiffPathCopyStatus
 } from "../../widgets/diff-workspace/DiffPanel";
 import {
   DiffWorkspace,
-  DiffWorkspaceSkeleton
+  DiffWorkspaceSkeleton,
+  type DiffWorkspaceContentSearchSelection
 } from "../../widgets/diff-workspace/DiffWorkspace";
 import { standaloneDiffWorkspaceConfiguration } from "../../widgets/diff-workspace/diffWorkspaceConfiguration";
 
@@ -149,6 +154,10 @@ function DiffViewer({
     ["queued", "running", "cancelling"].includes(operation.state));
   const [pathCopyStatus, setPathCopyStatus] =
     useState<DiffPathCopyStatus>("idle");
+  const [fileFilter, setFileFilter] = useState("");
+  const [panelSearchRequest, setPanelSearchRequest] =
+    useState<DiffPanelSearchRequest | undefined>();
+  const panelSearchRequestSequenceRef = useRef(0);
   const mutationHooks = useMemo(
     () => ({
       beforeMutation: () => undefined,
@@ -186,10 +195,31 @@ function DiffViewer({
     (files: readonly DiffViewerFile[]) => mutations.discardChanges(files.map(file => file.change)),
     [mutations.discardChanges]
   );
-  const selectFile = useCallback((file: DiffViewerFile) => {
+  const selectFile = useCallback((
+    file: DiffViewerFile,
+    contentSearch?: DiffWorkspaceContentSearchSelection
+  ) => {
+    setPanelSearchRequest((current) => {
+      const query = contentSearch?.query ?? "";
+      if (!query && !current?.query) {
+        return current;
+      }
+      const open = contentSearch?.open ?? false;
+      return {
+        key:
+          `${request.target.repositoryId}\u0000${request.target.worktreeId}\u0000${file.key}\u0000${query}\u0000${
+            open ? "open" : "highlight"
+          }\u0000${++panelSearchRequestSequenceRef.current}`,
+        query,
+        open
+      };
+    });
     setDiffContextLines(DEFAULT_DIFF_CONTEXT_LINES);
     setSelectedKey(file.key);
-  }, []);
+  }, [
+    request.target.repositoryId,
+    request.target.worktreeId
+  ]);
 
   const selectedFile =
     files.find((file) => file.key === selectedKey) ??
@@ -222,6 +252,38 @@ function DiffViewer({
       diff?.mode,
       diff?.path,
       files
+    ]
+  );
+  const diffSearch = useChangedDiffSearch({
+    enabled: !targetMissing,
+    files: workspaceFiles,
+    query: fileFilter,
+    revision: String(refreshVersion),
+    target: request.target
+  });
+  const updateFileFilter = useCallback(
+    (value: string) => {
+      setFileFilter(value);
+      setPanelSearchRequest((current) => {
+        if (
+          !current?.query ||
+          current.query === value.trim()
+        ) {
+          return current;
+        }
+        return {
+          key:
+            `${request.target.repositoryId}\u0000${request.target.worktreeId}\u0000clear\u0000${value}\u0000${
+              ++panelSearchRequestSequenceRef.current
+            }`,
+          query: "",
+          open: false
+        };
+      });
+    },
+    [
+      request.target.repositoryId,
+      request.target.worktreeId
     ]
   );
   const showChangesSkeleton = useSkeletonVisibility(
@@ -260,11 +322,48 @@ function DiffViewer({
     let current = true;
     setChangesLoading(true);
     setChangesError(null);
+    let currentChanges: RepositoryChangesDto | null = null;
+    let progressComplete = false;
+    const acceptChanges = (value: RepositoryChangesDto) => {
+      currentChanges = value;
+      setChangesLoaded(true);
+      setChangesLoading(false);
+      setBranch(value.snapshot.branch);
+      setFiles((previous) => buildDiffViewerFiles(value.snapshot.changes, previous));
+      if (value.snapshot.changes.length === 0) {
+        setDiff(null);
+        setDiffLoading(false);
+      }
+      setSelectedKey((currentKey) => {
+        const nextFiles = buildDiffViewerFiles(value.snapshot.changes);
+        return nextFiles.some((file) => file.key === currentKey)
+          ? currentKey
+          : (nextFiles[0]?.key ?? "");
+      });
+    };
+    const unsubscribeProgress = window.gitnest.repository.onChangesProgress((progress) => {
+      if (
+        !current ||
+        progress.queryId !== queryId ||
+        targetMissingRef.current ||
+        requestGeneration !== requestGenerationRef.current
+      ) return;
+      progressComplete = progress.completed >= progress.total;
+      const value = applyRepositoryChangesProgress(currentChanges, progress);
+      if (!value) return;
+      if (progress.kind === "snapshot") {
+        acceptChanges(value);
+      } else {
+        currentChanges = value;
+        setFiles((previous) => buildDiffViewerFiles(value.snapshot.changes, previous));
+      }
+    });
 
     void window.gitnest.repository
       .getChanges({
         queryId,
-        target: request.target
+        target: request.target,
+        progressive: true
       })
       .then((result) => {
         if (
@@ -279,21 +378,8 @@ function DiffViewer({
           return;
         }
 
-        const nextFiles = buildDiffViewerFiles(
-          result.value.snapshot.changes
-        );
-        setChangesLoaded(true);
-        setBranch(result.value.snapshot.branch);
-        setFiles(nextFiles);
-        if (nextFiles.length === 0) {
-          setDiff(null);
-          setDiffLoading(false);
-        }
-        setSelectedKey((currentKey) =>
-          nextFiles.some((file) => file.key === currentKey)
-            ? currentKey
-            : (nextFiles[0]?.key ?? "")
-        );
+        if (!currentChanges) acceptChanges(result.value);
+        else if (!progressComplete) acceptChanges(result.value);
       })
       .catch((reason) => {
         if (
@@ -305,6 +391,7 @@ function DiffViewer({
         }
       })
       .finally(() => {
+        unsubscribeProgress();
         if (
           current &&
           !targetMissingRef.current &&
@@ -316,6 +403,7 @@ function DiffViewer({
 
     return () => {
       current = false;
+      unsubscribeProgress();
       void window.gitnest.repository.cancelQuery({ queryId });
     };
   }, [
@@ -654,6 +742,14 @@ function DiffViewer({
         className="diff-viewer-workspace"
         configuration={standaloneDiffWorkspaceConfiguration}
         externalApplications={externalApplications}
+        fileSearch={{
+          matches: diffSearch.matches,
+          loading: diffSearch.loading,
+          incomplete: diffSearch.incomplete,
+          minimumQueryLength:
+            diffSearch.minimumQueryLength,
+          onQueryChange: updateFileFilter
+        }}
         fileView={fileBrowsing.fileView}
         files={workspaceFiles}
         mutationBusy={mutations.active !== null || ignoreBusy}
@@ -700,6 +796,7 @@ function DiffViewer({
             ),
           preferredLayout: appSettings.settings.diff.layout,
           preferredWrap: appSettings.settings.diff.wrap,
+          searchRequest: panelSearchRequest,
           state: panelState,
           truncated: selectedDiff?.truncated
         }}
