@@ -3015,10 +3015,6 @@
       flex-wrap: nowrap;
     }
 
-    .history-scope-controls.comparison {
-      gap: var(--space-1);
-    }
-
     .history-filter-controls {
       flex: 0 1 auto;
       flex-wrap: nowrap;
@@ -3229,10 +3225,6 @@
       font-size: var(--font-size-caption);
     }
 
-    .history-compare-exit {
-      white-space: nowrap;
-    }
-
     /* 筛选输入框与右侧操作按钮作为一组靠右排列 */
     .history-filter-input + .panel-header-action {
       margin-left: 0;
@@ -3259,48 +3251,6 @@
 
     .history-filter-input:focus {
       border-color: var(--accent);
-    }
-
-    .history-comparison-summary {
-      display: flex;
-      align-items: center;
-      gap: var(--space-3);
-      min-height: var(--control-default);
-      padding: var(--space-1) var(--space-4);
-      color: var(--muted);
-      background: var(--surface-2);
-      border-bottom: 1px solid var(--border-soft);
-      font-size: var(--font-size-caption);
-    }
-
-    .history-comparison-side,
-    .history-comparison-base {
-      display: inline-flex;
-      align-items: center;
-      gap: var(--space-1);
-      white-space: nowrap;
-    }
-
-    .history-comparison-side strong {
-      font-family: var(--font-mono);
-    }
-
-    .history-comparison-side.left strong {
-      color: var(--purple);
-    }
-
-    .history-comparison-side.right strong {
-      color: var(--blue);
-    }
-
-    .history-comparison-base code {
-      color: var(--text-soft);
-      font-family: var(--font-mono);
-    }
-
-    .history-comparison-note {
-      margin-left: auto;
-      white-space: nowrap;
     }
 
     .history-filter-empty {
@@ -3824,28 +3774,6 @@
       color: var(--blue);
       background: var(--blue-soft);
       border-color: color-mix(in srgb, var(--blue) 20%, transparent);
-    }
-
-    .ref-label.comparison-left {
-      color: var(--purple);
-      background: color-mix(in srgb, var(--purple) 13%, transparent);
-      border-color: color-mix(in srgb, var(--purple) 30%, transparent);
-    }
-
-    .ref-label.comparison-right {
-      color: var(--blue);
-      background: var(--blue-soft);
-      border-color: color-mix(in srgb, var(--blue) 30%, transparent);
-    }
-
-    .ref-label.comparison-base {
-      color: var(--muted);
-      background: var(--surface-3);
-      border-color: var(--border);
-    }
-
-    .commit-row.comparison-base {
-      border-top: 1px dashed var(--border);
     }
 
     .commit-author {
@@ -7678,7 +7606,6 @@
       }
 
       .history-scope-controls,
-      .history-scope-controls.comparison,
       .history-filter-controls {
         flex: 0 1 auto;
         flex-wrap: nowrap;
@@ -10580,10 +10507,7 @@
         time: formatSnapshotDate(override.date || repo.lastDate),
         refs: override.refs || [repo.branch],
         color: override.color || groupColors[repositoryGroupName(repo)] || "var(--accent)",
-        files,
-        ...(override.comparisonSide
-          ? { comparisonSide: override.comparisonSide }
-          : {})
+        files
       };
     }
 
@@ -11261,24 +11185,12 @@
     function currentHistorySingleRef() {
       return state.historyScope?.kind === "ref"
         ? state.historyScope.ref
-        : state.historyLastSingleRef || defaultHistoryRef();
-    }
-
-    function historyUpstreamRef(ref) {
-      const branches = historyBranchOptions();
-      const selected = branches.find((branch) => branch.fullName === ref);
-      if (!selected || selected.remote || !selected.upstream) return "";
-      return branches.find(
-        (branch) => branch.remote && branch.name === selected.upstream
-      )?.fullName || "";
+        : defaultHistoryRef();
     }
 
     function currentCommits() {
-      if (state.historyScope?.kind === "compare") {
-        return comparedHistoryCommits(state.historyScope);
-      }
       return commitsForHistoryRef(
-        state.historyScope?.kind === "ref"
+        state.tab === "history" && state.historyScope?.kind === "ref"
           ? state.historyScope.ref
           : defaultHistoryRef()
       );
@@ -11360,44 +11272,6 @@
       ];
     }
 
-    function comparedHistoryCommits(scope) {
-      const repo = currentRepo();
-      const leftName = historyRefDisplayName(scope.leftRef);
-      const rightName = historyRefDisplayName(scope.rightRef);
-      const left = commitsForHistoryRef(scope.leftRef)
-        .slice(0, 4)
-        .map((commit) => ({
-          ...commit,
-          refs: [leftName],
-          color: "var(--purple)",
-          comparisonSide: "left"
-        }));
-      const right = commitsForHistoryRef(scope.rightRef)
-        .slice(0, 3)
-        .map((commit) => ({
-          ...commit,
-          refs: [rightName],
-          color: "var(--blue)",
-          comparisonSide: "right"
-        }));
-      const interleaved = [];
-      for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-        if (right[index]) interleaved.push(right[index]);
-        if (left[index]) interleaved.push(left[index]);
-      }
-      interleaved.push(
-        repoCommit(repo, {
-          hash: `${repo.head.slice(0, 4)}000`,
-          subject: `${leftName} 与 ${rightName} 的共同历史基点`,
-          date: "2026-08-25T09:30:00+08:00",
-          refs: ["共同基点"],
-          color: "var(--muted)",
-          comparisonSide: "base"
-        })
-      );
-      return interleaved;
-    }
-
     function filteredHistoryCommits(commits = currentCommits()) {
       const query = (state.historyFilter || "").trim().toLowerCase();
       if (!query) return commits;
@@ -11439,14 +11313,12 @@
       if (scope.kind === "ref") {
         return `只读快照 · 最近 ${commits.length} 条 ${historyRefDisplayName(scope.ref)} 提交`;
       }
-      return `只读对比 · ${historyRefDisplayName(scope.leftRef)} ↔ ${historyRefDisplayName(scope.rightRef)}`;
+      return "";
     }
 
     function renderHistoryRefPicker(
       label,
-      selectedRef,
-      side,
-      disabledRef = ""
+      selectedRef
     ) {
       const branches = historyBranchOptions();
       const selected = branches.find(
@@ -11454,7 +11326,7 @@
       );
       const local = branches.filter((branch) => !branch.remote);
       const remote = branches.filter((branch) => branch.remote);
-      const pickerId = `history-ref-${side}`;
+      const pickerId = "history-ref";
       const renderOptions = (group, heading, items) => items.length
         ? `
           <div
@@ -11474,9 +11346,8 @@
                 data-selected="${branch.fullName === selectedRef}"
                 data-search-text="${escapeHtml(`${branch.name} ${branch.fullName} ${branch.upstream}`.toLowerCase())}"
                 ${group === "remote" ? "hidden" : ""}
-                ${branch.fullName === disabledRef ? "disabled" : ""}
-                title="${branch.fullName === disabledRef ? "比较范围不能选择同一个分支" : escapeHtml(branch.fullName)}"
-                onclick="selectHistoryRef('${side}', decodeURIComponent('${encodeURIComponent(branch.fullName)}'))"
+                title="${escapeHtml(branch.fullName)}"
+                onclick="selectHistoryRef(decodeURIComponent('${encodeURIComponent(branch.fullName)}'))"
               >
                 <span class="menu-item-icon">${icon("branch", 14)}</span>
                 <span class="history-ref-option-copy">
@@ -11567,34 +11438,9 @@
     }
 
     function renderHistoryScopeControls() {
-      const scope = state.historyScope;
-      if (scope?.kind === "compare") {
-        return `
-          <div class="history-scope-controls comparison" aria-label="比较分支提交历史">
-            ${renderHistoryRefPicker("基准", scope.leftRef, "left", scope.rightRef)}
-            ${renderHistoryRefPicker("目标", scope.rightRef, "right", scope.leftRef)}
-            ${renderButton({
-              label: "退出比较",
-              size: "small",
-              variant: "default",
-              className: "history-compare-exit",
-              attributes: 'onclick="exitHistoryComparison()"'
-            })}
-          </div>
-        `;
-      }
-
       return `
         <div class="history-scope-controls" aria-label="选择提交历史范围">
-          ${renderHistoryRefPicker("查看", currentHistorySingleRef(), "single")}
-          ${renderButton({
-            label: "比较",
-            title: "比较两个本地或远程跟踪分支的差异提交",
-            size: "small",
-            variant: "default",
-            icon: icon("diff", 13),
-            attributes: 'onclick="beginHistoryComparison()"'
-          })}
+          ${renderHistoryRefPicker("查看", currentHistorySingleRef())}
         </div>
       `;
     }
@@ -11718,57 +11564,8 @@
       renderHistory();
     }
 
-    function selectHistoryRef(side, ref) {
-      if (side === "single") {
-        state.historyLastSingleRef = ref;
-        state.historyScope = { kind: "ref", ref };
-        resetHistoryScopeView();
-        return;
-      }
-      const current = state.historyScope?.kind === "compare"
-        ? state.historyScope
-        : {
-            kind: "compare",
-            leftRef: historyUpstreamRef(currentHistorySingleRef()),
-            rightRef: currentHistorySingleRef()
-          };
-      if (!current.leftRef) return;
-      const next = {
-        ...current,
-        [side === "left" ? "leftRef" : "rightRef"]: ref
-      };
-      if (next.leftRef === next.rightRef) return;
-      state.historyScope = next;
-      resetHistoryScopeView();
-    }
-
-    function beginHistoryComparison() {
-      const targetRef = currentHistorySingleRef();
-      const upstreamRef = historyUpstreamRef(targetRef);
-      if (!upstreamRef) {
-        showToast(
-          "请选择比较基准",
-          "当前查看范围没有可用的上游跟踪分支。",
-          "branch"
-        );
-        return;
-      }
-      state.historyLastSingleRef = targetRef;
-      state.historyScope = {
-        kind: "compare",
-        leftRef: upstreamRef,
-        rightRef: targetRef
-      };
-      resetHistoryScopeView();
-    }
-
-    function exitHistoryComparison() {
-      state.historyScope = state.historyLastSingleRef
-        ? {
-            kind: "ref",
-            ref: state.historyLastSingleRef
-          }
-        : null;
+    function selectHistoryRef(ref) {
+      state.historyScope = { kind: "ref", ref };
       resetHistoryScopeView();
     }
 
@@ -12310,7 +12107,6 @@
       historyFilter: "",
       historyFilterOpen: false,
       historyScope: null,
-      historyLastSingleRef: null,
       workspaceWorktreeFilter: "",
       workspaceWorktreeFilterOpen: false,
       workspaceWorktreeFacet: "",
@@ -12774,7 +12570,6 @@
         state.historyFilter = "";
         state.historyFilterOpen = false;
         state.historyScope = null;
-        state.historyLastSingleRef = null;
         state.historyDetailOpen = false;
         state.historySelectedFile = "";
         state.historyCommitView = "details";
@@ -18192,18 +17987,15 @@
         state.tab === "history"
           ? state.historyDetailOpen && state.selectedCommit === commit.hash
           : state.selectedCommit === commit.hash;
-      const comparisonClass = commit.comparisonSide
-        ? ` comparison-${commit.comparisonSide}`
-        : "";
       return `
-        <div role="button" tabindex="0" class="commit-row${comparisonClass} ${isSelected ? "selected" : ""}" aria-current="${isSelected}" onclick="selectCommit('${commit.hash}')" onkeydown="activateOnKey(event)">
-          <div class="commit-graph ${commit.comparisonSide ? `comparison-${commit.comparisonSide}` : index === 2 ? "branch" : ""}" style="--lane-color:${commit.color}">
+        <div role="button" tabindex="0" class="commit-row ${isSelected ? "selected" : ""}" aria-current="${isSelected}" onclick="selectCommit('${commit.hash}')" onkeydown="activateOnKey(event)">
+          <div class="commit-graph ${index === 2 ? "branch" : ""}" style="--lane-color:${commit.color}">
             <span class="commit-node"></span>
           </div>
           <div class="commit-message">
             <div class="commit-subject">${commit.subject}</div>
             <div class="commit-meta">
-              ${commit.refs.map((ref) => `<span class="ref-label ${ref.startsWith("origin") ? "remote" : ""}${commit.comparisonSide ? ` comparison-${commit.comparisonSide}` : ""}">${ref}</span>`).join("")}
+              ${commit.refs.map((ref) => `<span class="ref-label ${ref.startsWith("origin") ? "remote" : ""}">${ref}</span>`).join("")}
             </div>
           </div>
           <div class="commit-time" title="提交日期">${commit.time}</div>
@@ -19304,14 +19096,6 @@
     function renderHistory() {
       const commits = currentCommits();
       const visibleCommits = filteredHistoryCommits(commits);
-      const comparison = state.historyScope?.kind === "compare"
-        ? {
-            ...state.historyScope,
-            leftOnly: commits.filter((item) => item.comparisonSide === "left").length,
-            rightOnly: commits.filter((item) => item.comparisonSide === "right").length,
-            mergeBase: commits.find((item) => item.comparisonSide === "base")?.hash
-          }
-        : null;
       const selectedCommit = state.historyDetailOpen
         ? commits.find((item) => item.hash === state.selectedCommit)
         : null;
@@ -19362,26 +19146,10 @@
                   </div>
                 </div>
               </div>
-              ${comparison ? `
-                <div class="history-comparison-summary">
-                  <span class="history-comparison-side left">
-                    ${escapeHtml(historyRefDisplayName(comparison.leftRef))}
-                    <strong>${comparison.leftOnly}</strong> 条独有
-                  </span>
-                  <span class="history-comparison-side right">
-                    ${escapeHtml(historyRefDisplayName(comparison.rightRef))}
-                    <strong>${comparison.rightOnly}</strong> 条独有
-                  </span>
-                  <span class="history-comparison-base">
-                    共同基点 <code>${escapeHtml(comparison.mergeBase || "无")}</code>
-                  </span>
-                  <span class="history-comparison-note">仅显示差异提交与共同基点</span>
-                </div>
-              ` : ""}
               <div class="commit-list">
                 ${visibleCommits.length
                   ? visibleCommits.map(renderCommitRow).join("")
-                  : `<div class="history-filter-empty">${icon(state.historyFilter ? "search" : "history", 18)}<strong>${state.historyFilter ? "没有匹配的提交" : comparison ? "两个分支没有差异提交" : "该引用暂无提交历史"}</strong><span>${state.historyFilter ? "可修改筛选关键词后重试。" : comparison ? "双方当前指向相同历史，或没有可展示的独有提交。" : "可选择其他本地或远程引用查看。"}</span></div>`}
+                  : `<div class="history-filter-empty">${icon(state.historyFilter ? "search" : "history", 18)}<strong>${state.historyFilter ? "没有匹配的提交" : "该引用暂无提交历史"}</strong><span>${state.historyFilter ? "可修改筛选关键词后重试。" : "可选择其他本地或远程引用查看。"}</span></div>`}
               </div>
             </section>
             ${selectedCommit

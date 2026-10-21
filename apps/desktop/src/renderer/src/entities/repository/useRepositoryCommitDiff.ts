@@ -46,7 +46,8 @@ export interface RepositoryCommitDiffController {
 
 export function useRepositoryCommitDiff(
   target: RepositoryTargetDto | undefined,
-  commitHash: string | undefined
+  commitHash: string | undefined,
+  stash = false
 ): RepositoryCommitDiffController {
   const stableTarget = useMemo(
     () =>
@@ -60,7 +61,7 @@ export function useRepositoryCommitDiff(
   );
   const scopeKey =
     stableTarget && commitHash
-      ? `${stableTarget.repositoryId}:${stableTarget.worktreeId}:${commitHash}`
+      ? `${stableTarget.repositoryId}:${stableTarget.worktreeId}:${stash ? "stash:" : ""}${commitHash}`
       : "";
   const [state, setState] = useState<CommitDiffState>(() =>
     createEmptyState(scopeKey)
@@ -146,8 +147,22 @@ export function useRepositoryCommitDiff(
       setState(nextState);
 
       try {
-        const result =
-          await window.gitnest.repository.getCommitDiff({
+        const result = stash
+          ? await window.gitnest.repository.getStashDiff({
+              queryId,
+              target: stableTarget,
+              stashRef: commitHash,
+              path,
+              contextLines
+            }).then(result => result.ok ? {
+              ok: true as const,
+              value: {
+                target: result.value.target,
+                commit: { hash: result.value.stash.hash },
+                diff: result.value.diff
+              }
+            } : result)
+          : await window.gitnest.repository.getCommitDiff({
             queryId,
             target: stableTarget,
             commitHash,
@@ -218,7 +233,8 @@ export function useRepositoryCommitDiff(
       commitHash,
       scopeKey,
       setScopedState,
-      stableTarget
+      stableTarget,
+      stash
     ]
   );
 

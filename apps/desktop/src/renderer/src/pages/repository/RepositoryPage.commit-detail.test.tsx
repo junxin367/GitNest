@@ -96,6 +96,7 @@ describe("RepositoryCommitDetail", () => {
     | undefined;
 
   beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(640);
     vi.stubGlobal("React", React);
     vi.stubGlobal(
       "requestAnimationFrame",
@@ -396,6 +397,8 @@ describe("RepositoryCommitDetail", () => {
   }
 
   it("only formats changed history rows on selection, detail loading, and pagination", () => {
+    // This regression measures row memoization with all rows inside the viewport.
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(4000);
     const format = vi.spyOn(commitTimestamp, "formatCommitTimestamp");
     const commits = Array.from({ length: 100 }, (_, index) => ({
       ...COMMIT, hash: `commit-${index}`, shortHash: `${index}`,
@@ -448,6 +451,48 @@ describe("RepositoryCommitDetail", () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }
+
+  it("移除比较入口并保留 Show All 选择", () => {
+    const selectScope = vi.fn();
+    act(() => renderHistory(TARGET, selectScope));
+    expect([...container.querySelectorAll("button")].some(button => button.textContent?.trim() === "比较")).toBe(false);
+    expect(container.querySelectorAll(".history-ref-picker")).toHaveLength(1);
+    act(() => container.querySelector<HTMLButtonElement>(".history-ref-trigger")!.click());
+    const all = [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')]
+      .find(item => item.querySelector("strong")?.textContent === "Show All")!;
+    expect(all).toBeDefined();
+    act(() => all.click());
+    expect(selectScope).toHaveBeenCalledWith({ kind: "all" });
+  });
+
+  it.each(["history", "outside"] as const)("刷新移除焦点行后正确保留 %s 焦点", (owner) => {
+    const commits = [
+      { ...COMMIT },
+      { ...COMMIT, hash: "b".repeat(40), subject: "Remaining commit" }
+    ];
+    let controller = {
+      historyScope: null, historyDetailOpen: false, selectedCommitHash: null, commit: null,
+      history: { target: TARGET, page: { commits } },
+      loading: { history: false, branches: false, commit: false },
+      error: null, selectCommit: vi.fn(), selectHistoryScope: vi.fn(), loadMoreHistory: vi.fn()
+    } as unknown as RepositoryDetailsController;
+    const render = () => root.render(<RepositoryHistory branch="main" controller={controller}
+      onCopyCommitId={vi.fn(async () => undefined)} repositoryKey="repository-a:worktree-a" target={TARGET} />);
+    act(render);
+    const row = container.querySelector<HTMLElement>(".commit-row")!;
+    act(() => row.focus());
+    const outside = document.createElement("input");
+    document.body.append(outside);
+    try {
+      if (owner === "outside") act(() => outside.focus());
+      controller = { ...controller, history: { target: TARGET, page: { commits: commits.slice(1) } } };
+      act(render);
+      expect(row.isConnected).toBe(false);
+      expect(document.activeElement).toBe(owner === "history" ? container.querySelector(".commit-list") : outside);
+    } finally {
+      outside.remove();
+    }
+  });
 
   it("focuses the history branch search only after its menu becomes visible", () => {
     const nativeFocus = HTMLElement.prototype.focus;

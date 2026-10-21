@@ -1632,9 +1632,7 @@ describe("renderer design-system guardrails", () => {
     expect(css).not.toMatch(
       /\.repository-page-history\s+\.history-(?:scope|filter)-controls\s*\{[^}]*flex:\s*1 0 100%;/
     );
-    expect(css).toMatch(
-      /\.history-comparison-summary\s*\{[\s\S]*?flex-wrap:\s*wrap;/
-    );
+    expect(css).not.toContain(".history-comparison-summary");
     expect(css).toMatch(
       /\.history-ref-trigger\s+\.gn-button__label\s*>\s*span\s*\{[^}]*flex:\s*1 1 auto;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/
     );

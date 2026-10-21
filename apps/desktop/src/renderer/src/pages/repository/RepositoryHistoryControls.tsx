@@ -20,6 +20,8 @@ import {
   MenuSeparator
 } from "../../shared/ui/Menu";
 
+const ALL_HISTORY_REF = "all";
+
 export function HistorySearchControls({
   search,
   onSearch,
@@ -78,11 +80,6 @@ interface HistoryScopeControlsProps {
   onChange(scope: RepositoryHistoryScopeDto | null): void;
 }
 
-type HistoryCompareDraft = {
-  leftRef: string;
-  rightRef: string;
-};
-
 export function HistoryScopeControls({
   branches,
   currentBranchName,
@@ -97,131 +94,14 @@ export function HistoryScopeControls({
         !branch.remote && branch.name === currentBranchName
     );
   const selectedSingleRef =
-    scope?.kind === "ref"
-      ? scope.ref
-      : currentBranch?.fullName ?? "";
+    scope?.kind === "all"
+      ? ALL_HISTORY_REF
+      : scope?.kind === "ref"
+        ? scope.ref
+        : currentBranch?.fullName ?? "";
   const selectedSingleBranch = branches.find(
     (branch) => branch.fullName === selectedSingleRef
   );
-  const lastSingleScopeRef =
-    useRef<RepositoryHistoryScopeDto | null>(null);
-  const [compareDraft, setCompareDraft] =
-    useState<HistoryCompareDraft | null>(null);
-
-  useEffect(() => {
-    if (scope?.kind !== "compare" && !compareDraft) {
-      lastSingleScopeRef.current = scope;
-    }
-  }, [compareDraft, scope]);
-
-  useEffect(() => {
-    if (scope?.kind === "compare") {
-      setCompareDraft(null);
-    }
-  }, [scope]);
-
-  const comparison =
-    scope?.kind === "compare" ? scope : compareDraft;
-  const beginComparison = () => {
-    if (!selectedSingleRef) {
-      return;
-    }
-    lastSingleScopeRef.current =
-      scope?.kind === "ref" ? scope : null;
-    const upstream = selectedSingleBranch?.upstream
-      ? branches.find(
-          (branch) =>
-            branch.name === selectedSingleBranch.upstream
-        )
-      : undefined;
-
-    if (
-      upstream &&
-      upstream.fullName !== selectedSingleRef
-    ) {
-      onChange({
-        kind: "compare",
-        leftRef: upstream.fullName,
-        rightRef: selectedSingleRef
-      });
-      return;
-    }
-    setCompareDraft({
-      leftRef: "",
-      rightRef: selectedSingleRef
-    });
-  };
-  const updateComparison = (
-    side: "left" | "right",
-    ref: string
-  ) => {
-    const current = comparison ?? {
-      leftRef: "",
-      rightRef: selectedSingleRef
-    };
-    const next = {
-      ...current,
-      [side === "left" ? "leftRef" : "rightRef"]: ref
-    };
-
-    if (
-      next.leftRef &&
-      next.rightRef &&
-      next.leftRef !== next.rightRef
-    ) {
-      setCompareDraft(null);
-      onChange({
-        kind: "compare",
-        leftRef: next.leftRef,
-        rightRef: next.rightRef
-      });
-      return;
-    }
-    setCompareDraft(next);
-  };
-  const leaveComparison = () => {
-    setCompareDraft(null);
-    onChange(lastSingleScopeRef.current);
-  };
-
-  if (comparison) {
-    return (
-      <div
-        className="history-scope-controls comparison"
-        aria-label="比较分支提交历史"
-      >
-        <HistoryRefPicker
-          branches={branches}
-          disabledRef={comparison.rightRef}
-          label="基准"
-          loading={loading}
-          onChange={(ref) =>
-            updateComparison("left", ref)
-          }
-          selectedRef={comparison.leftRef}
-        />
-        <HistoryRefPicker
-          branches={branches}
-          disabledRef={comparison.leftRef}
-          label="目标"
-          loading={loading}
-          onChange={(ref) =>
-            updateComparison("right", ref)
-          }
-          selectedRef={comparison.rightRef}
-        />
-        <Button
-          className="history-compare-exit"
-          onClick={leaveComparison}
-          size="small"
-          type="button"
-        >
-          退出比较
-        </Button>
-      </div>
-    );
-  }
-
   return (
     <div
       className="history-scope-controls"
@@ -232,32 +112,23 @@ export function HistoryScopeControls({
         label="查看"
         loading={loading}
         onChange={(ref) =>
-          onChange({ kind: "ref", ref })
+          onChange(ref === ALL_HISTORY_REF ? { kind: "all" } : { kind: "ref", ref })
         }
         selectedRef={selectedSingleRef}
         selectedName={
-          selectedSingleBranch?.name ??
-          currentBranchName ??
-          "当前分支"
+          scope?.kind === "all"
+            ? "Show All"
+            : selectedSingleBranch?.name ??
+              currentBranchName ??
+              "当前分支"
         }
       />
-      <Button
-        disabled={loading || branches.length < 2}
-        onClick={beginComparison}
-        size="small"
-        title="比较两个本地或远程跟踪分支的差异提交"
-        type="button"
-      >
-        <Icon name="diff" size={13} />
-        比较
-      </Button>
     </div>
   );
 }
 
 interface HistoryRefPickerProps {
   branches: BranchDto[];
-  disabledRef?: string;
   label: string;
   loading: boolean;
   selectedRef: string;
@@ -354,7 +225,6 @@ export function historyRefOptionClassName(
 
 function HistoryRefPicker({
   branches,
-  disabledRef,
   label,
   loading,
   selectedRef,
@@ -455,16 +325,11 @@ function HistoryRefPicker({
             className={historyRefOptionClassName(
               branch.fullName === selectedRef
             )}
-            disabled={branch.fullName === disabledRef}
             key={branch.fullName}
             leading={<Icon name="branch" size={14} />}
             onClick={() => selectRef(branch.fullName)}
             role="menuitemradio"
-            title={
-              branch.fullName === disabledRef
-                ? "比较范围不能选择同一个分支"
-                : branch.fullName
-            }
+            title={branch.fullName}
           >
             <span className="history-ref-option-copy">
               <strong>{branch.name}</strong>
@@ -504,7 +369,7 @@ function HistoryRefPicker({
         }
         type="button"
       >
-        <Icon name="branch" size={13} />
+        <Icon name={selectedRef === ALL_HISTORY_REF ? "graph" : "branch"} size={13} />
         <span>
           {selected?.name ??
             selectedName ??
@@ -601,6 +466,24 @@ function HistoryRefPicker({
             </div>
           </div>
           <div className="history-ref-menu-list">
+            {!searching && (
+              <>
+                <MenuItem
+                  aria-checked={selectedRef === ALL_HISTORY_REF}
+                  className={historyRefOptionClassName(selectedRef === ALL_HISTORY_REF)}
+                  leading={<Icon name="graph" size={14} />}
+                  onClick={() => selectRef(ALL_HISTORY_REF)}
+                  role="menuitemradio"
+                  title="显示全部本地、远程分支、标签及暂存历史"
+                >
+                  <span className="history-ref-option-copy">
+                    <strong>Show All</strong>
+                    <small>全部分支与 stash</small>
+                  </span>
+                </MenuItem>
+                <MenuSeparator />
+              </>
+            )}
             {renderGroup("本地分支", localBranches)}
             {searching &&
               localBranches.length > 0 &&

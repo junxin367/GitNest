@@ -40,7 +40,8 @@ export function RepositoryCommitDetail({
   useEffect(() => setHistoryPath(null), [scope]);
   const commitDiff = useRepositoryCommitDiff(
     target,
-    commit.hash
+    commit.hash,
+    Boolean(commit.stashRef)
   );
   const selectionPending = view === "files" && !commitDiff.selected;
   const selectedFile = selectionPending

@@ -1774,7 +1774,8 @@ export class WorkspaceRuntimeService {
         worktree.path,
         {
           signal,
-          priority: "background"
+          priority: "background",
+          includeContentFingerprint: true
         }
       );
     const key = repositoryTargetKey(target);
@@ -3083,7 +3084,8 @@ function repositorySnapshotContentSignature(
       snapshot.staged,
       snapshot.unstaged,
       snapshot.untracked,
-      snapshot.conflicted
+      snapshot.conflicted,
+      snapshot.contentFingerprint ?? null
     ])
   );
   const changes = [...snapshot.changes].sort(

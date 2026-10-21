@@ -84,47 +84,11 @@ describe("full repository history search", () => {
     })).commits).toEqual([]);
   }, 15_000);
 
-  it("keeps unified-search comparison counts and ref scopes consistent with the results", async () => {
-    const scope = { kind: "compare" as const, leftRef: "refs/heads/main", rightRef: "refs/heads/topic" };
-    const first = await client.readCommitHistory(fixture.path, {
-      scope, search: { keyword: "union[author]" }, limit: 1
-    });
-    const next = await client.readCommitHistory(fixture.path, {
-      scope, search: { keyword: "union[author]" }, limit: 1, offset: first.nextOffset!
-    });
-    expect([...first.commits, ...next.commits].map(commit => commit.subject).sort())
-      .toEqual(["Ancient second needle[body]", "Topic needle[body]"]);
-    expect(first.comparison).toMatchObject({ leftOnly: 1, rightOnly: 1 });
-    expect(next.comparison).toEqual(first.comparison);
-    expect(next.nextOffset).toBeUndefined();
-    const scoped = await client.readCommitHistory(fixture.path, {
-      scope: { kind: "ref", ref: "refs/heads/topic" }, search: { keyword: "WRITER" }
-    });
-    expect(scoped.commits).toEqual([]);
-  }, 15_000);
-
-  it("keeps ref and comparison scopes, and excludes nonmatching boundary commits", async () => {
-    const result = await client.readCommitHistory(fixture.path, {
-      scope: { kind: "ref", ref: "refs/heads/topic" },
-      search: { keyword: "Topic" }
-    });
-    expect(result.commits.map((commit) => commit.subject)).toEqual(["Topic needle[body]"]);
-    const comparison = await client.readCommitHistory(fixture.path, {
-      scope: { kind: "compare", leftRef: "refs/heads/main", rightRef: "refs/heads/topic" },
-      search: { keyword: "needle[body]" }, limit: 1
-    });
-    const next = await client.readCommitHistory(fixture.path, {
-      scope: { kind: "compare", leftRef: "refs/heads/main", rightRef: "refs/heads/topic" },
-      search: { keyword: "needle[body]" }, offset: comparison.nextOffset!, limit: 1
-    });
-    expect([...comparison.commits, ...next.commits].map((commit) => commit.subject).sort())
-      .toEqual(["Ancient second needle[body]", "Topic needle[body]"]);
-    expect(comparison.comparison).toMatchObject({ leftOnly: 1, rightOnly: 1 });
-    expect(next.nextOffset).toBeUndefined();
-    expect((await client.readCommitHistory(fixture.path, {
-      scope: { kind: "compare", leftRef: "refs/heads/main", rightRef: "refs/heads/topic" },
-      search: { keyword: "no matches" }
-    })).commits).toEqual([]);
+  it("keeps full-history searches inside the selected ref", async () => {
+    const scope = { kind: "ref" as const, ref: "refs/heads/topic" };
+    expect((await client.readCommitHistory(fixture.path, { scope, search: { keyword: "WRITER" } })).commits).toEqual([]);
+    const result = await client.readCommitHistory(fixture.path, { scope, search: { keyword: "Topic" } });
+    expect(result.commits.map(commit => commit.subject)).toEqual(["Topic needle[body]"]);
   }, 15_000);
 
   it("rejects malformed dates, ranges, controls and escaping paths before Git", async () => {
@@ -138,10 +102,53 @@ describe("full repository history search", () => {
     }
   });
 
-  function git(args: string[], date?: string): Promise<string> {
+  it("大量不同引用起点仍可加载、搜索和稳定分页", async () => {
+    const bulk = await createTemporaryDirectoryFixture("history-many-refs");
+    try {
+      await git(["init", "-b", "main"], undefined, undefined, bulk.path);
+      let input = "";
+      for (let index = 1; index <= 1000; index += 1) {
+        const subject = `release-${index}`;
+        input += `commit refs/heads/main\nmark :${index}\nauthor Bulk Author <bulk@example.test> ${1750000000 + index} +0800\ncommitter Bulk Author <bulk@example.test> ${1750000000 + index} +0800\ndata ${subject.length}\n${subject}\n${index > 1 ? `from :${index - 1}\n` : ""}\nreset refs/tags/v${index}\nfrom :${index}\n\nreset refs/heads/topic-${index}\nfrom :${index}\n\n`;
+      }
+      await git(["fast-import", "--quiet"], undefined, input, bulk.path);
+      const scope = { kind: "all" as const };
+      const first = await client.readCommitHistory(bulk.path, { scope, limit: 50 });
+      expect(first.traversal?.startHashes).toHaveLength(1000);
+      expect(first.commits[0]?.subject).toBe("release-1000");
+      expect(first.nextOffset).toBe(50);
+      const last = await client.readCommitHistory(bulk.path, { scope, traversal: first.traversal!, offset: 990, limit: 50 });
+      expect(last.commits).toHaveLength(10);
+      expect(last.commits.at(-1)?.subject).toBe("release-1");
+      expect(last.nextOffset).toBeUndefined();
+      const message = await client.readCommitHistory(bulk.path, { scope, search: { keyword: "release-999" } });
+      expect(message.commits.map(commit => commit.subject)).toEqual(["release-999"]);
+      const author = await client.readCommitHistory(bulk.path, {
+        scope, traversal: first.traversal!, search: { keyword: "Bulk Author" }, offset: 500, limit: 50
+      });
+      expect(author.commits).toHaveLength(50);
+      expect(author.commits[0]?.subject).toBe("release-500");
+
+      const ref = { kind: "ref" as const, ref: "refs/heads/main" };
+      const pinned = await client.readCommitHistory(bulk.path, { scope: ref, limit: 3 });
+      await git(["update-ref", ref.ref, pinned.commits[1]!.hash], undefined, undefined, bulk.path);
+      const next = await client.readCommitHistory(bulk.path, { scope: ref, traversal: pinned.traversal!, offset: 3, limit: 3 });
+      expect(next.commits[0]?.subject).toBe("release-997");
+    } finally {
+      await bulk.dispose();
+    }
+  }, 30_000);
+
+  it("拒绝已删除的比较范围", async () => {
+    await expect(client.readCommitHistory(fixture.path, {
+      scope: { kind: "compare", leftRef: "refs/heads/main", rightRef: "refs/heads/topic" } as never
+    })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+  });
+
+  function git(args: string[], date?: string, input?: string, cwd = fixture.path): Promise<string> {
     return new Promise((resolve, reject) => {
       const child = spawn("git", args, {
-        cwd: fixture.path, shell: false, windowsHide: true,
+        cwd, shell: false, windowsHide: true,
         env: {
           ...process.env, GIT_TERMINAL_PROMPT: "0",
           ...(date ? { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } : {})
@@ -153,6 +160,7 @@ describe("full repository history search", () => {
       child.stderr.on("data", (chunk) => { error += chunk; });
       child.once("error", reject);
       child.once("close", (code) => code === 0 ? resolve(output) : reject(new Error(error)));
+      child.stdin.end(input);
     });
   }
 });

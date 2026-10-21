@@ -1,12 +1,13 @@
 import {
   memo,
   useEffect,
+  useMemo,
   useRef,
-  useState
+  useState,
+  type CSSProperties
 } from "react";
 
 import type {
-  CommitHistoryComparisonSideDto,
   RepositoryHistoryPageDto,
   RepositoryHistoryScopeDto,
   RepositoryHistoryFilterDto,
@@ -29,6 +30,13 @@ import {
 import { HistoryScopeControls, HistorySearchControls } from "./RepositoryHistoryControls";
 import type { RepositoryCommitActionHandler } from "../../features/repository-workflow/RepositoryCommitActions";
 import type { RepositoryWorkflowController } from "../../features/repository-workflow/useRepositoryWorkflow";
+import {
+  buildHistoryGraph,
+  equalHistoryGraphRows,
+  HISTORY_GRAPH_ROW_HEIGHT,
+  type HistoryGraphRow
+} from "./historyGraph";
+import { useHistoryScroll } from "./useHistoryScroll";
 
 export { RepositoryCommitDetail } from "./RepositoryCommitDetail";
 export {
@@ -84,9 +92,24 @@ export function RepositoryHistory({
     hasLoadedHistory,
     loading: controller.loading.history
   });
-  const commits = history?.page.commits ?? [];
+  const commits = history?.page.commits;
+  const graph = useMemo(() => buildHistoryGraph(commits ?? []), [commits]);
+  const commitCount = commits?.length ?? 0;
+  const scroll = useHistoryScroll({
+    resetKey: `${repositoryKey}:${JSON.stringify(controller.historyScope)}:${JSON.stringify(controller.historySearch)}`,
+    commits: commits ?? [],
+    nextOffset: history?.page.nextOffset,
+    loading: controller.loading.history,
+    failed: Boolean(controller.historyLoadMoreError),
+    selectedHash: controller.historyDetailOpen ? controller.selectedCommitHash : null,
+    loadMore: controller.loadMoreHistory
+  });
   const branches = controller.branches?.branches ?? [];
-  const comparison = history?.page.comparison;
+  const remoteRefs = useMemo(() => new Set(
+    controller.branches?.branches
+      .filter((item) => item.remote)
+      .map((item) => item.name)
+  ), [controller.branches?.branches]);
   const selected = controller.commit?.commit;
   const showCommitDetail = Boolean(
     controller.historyDetailOpen &&
@@ -143,9 +166,9 @@ export function RepositoryHistory({
             <span className="panel-caption">
               {loadingRegion === "content"
                 ? "正在查询提交历史…"
-                : hasSearch ? `全历史搜索 · 已加载 ${commits.length} 条匹配提交` : historyScopeCaption(
+                : hasSearch ? `全历史搜索 · 已加载 ${commitCount} 条匹配提交` : historyScopeCaption(
                     controller.historyScope,
-                    commits.length,
+                    commitCount,
                     branch
                   )}
             </span>
@@ -198,83 +221,79 @@ export function RepositoryHistory({
             surfaceClassName="history-content-region repository-history-content-skeleton"
           >
             <div className="history-content-region">
-              {comparison && (
-                <div className="history-comparison-summary">
-                  <span className="history-comparison-side left">
-                    {historyRefDisplayName(comparison.leftRef)}
-                    <strong>{comparison.leftOnly}</strong>
-                    条独有
-                  </span>
-                  <span className="history-comparison-side right">
-                    {historyRefDisplayName(comparison.rightRef)}
-                    <strong>{comparison.rightOnly}</strong>
-                    条独有
-                  </span>
-                  <span className="history-comparison-base">
-                    共同基点
-                    <code>
-                      {comparison.mergeBase?.slice(0, 7) ?? "无"}
-                    </code>
-                  </span>
-                  <span className="history-comparison-note">
-                    {hasSearch ? "仅显示匹配条件的差异提交" : "仅显示差异提交与共同基点"}
-                  </span>
-                </div>
-              )}
-              <div className="commit-list">
-            {commits.map((item, index) => (
-              <HistoryCommitRow
-                branch={branch}
-                comparison={comparison}
-                index={index}
-                item={item}
-                key={item.hash}
-                onCopyCommitId={onCopyCommitId}
-                onSelectCommit={controller.selectCommit}
-                selected={controller.historyDetailOpen && item.hash === controller.selectedCommitHash}
-              />
-            ))}
-            {controller.error && !history ? (
-              <div className="history-filter-empty error">
-                <Icon name="warning" size={18} />
-                <strong>提交历史切换失败</strong>
-                <span>{controller.error.message}</span>
-              </div>
-            ) : commits.length === 0 ? (
-              <div className="history-filter-empty">
-                <Icon
-                  name={hasSearch ? "search" : "history"}
-                  size={18}
-                />
-                <strong>
-                  {hasSearch
-                    ? "没有匹配的提交"
-                    : comparison
-                      ? "两个分支没有差异提交"
-                      : "该引用暂无提交历史"}
-                </strong>
-                <span>
-                  {hasSearch
-                    ? "已搜索所选引用的完整历史，可修改搜索条件后重试。"
-                    : comparison
-                      ? "双方当前指向相同历史，或没有可展示的独有提交。"
-                      : "可选择其他本地或远程引用查看。"}
-                </span>
-              </div>
-            ) : null}
-            {history?.page.nextOffset !== undefined && (
-              <Button variant="unstyled"
-                aria-busy={controller.loading.history}
-                className="load-more-button"
-                disabled={controller.loading.history}
-                onClick={() => void controller.loadMoreHistory()}
-                type="button"
+              <div
+                className="commit-list"
+                aria-label="提交历史记录"
+                tabIndex={-1}
+                onKeyDown={scroll.onKeyDown}
+                ref={scroll.listRef}
+                style={{ "--history-graph-width": `${graph.width}px` } as CSSProperties}
               >
-                {controller.loading.history
-                  ? "加载中…"
-                  : "加载更多"}
-              </Button>
-            )}
+                <div className="history-table-header" aria-hidden="true">
+                  <span>关系图</span>
+                  <span>提交说明</span>
+                  <span>日期</span>
+                  <span>作者</span>
+                  <span>提交</span>
+                </div>
+                {scroll.start > 0 && (
+                  <div aria-hidden="true" style={{ height: scroll.start * HISTORY_GRAPH_ROW_HEIGHT }} />
+                )}
+                {commits?.slice(scroll.start, scroll.end).map((item, index) => (
+                  <HistoryCommitRow
+                    graph={graph.rows[scroll.start + index]!}
+                    item={item}
+                    key={item.hash}
+                    onCopyCommitId={onCopyCommitId}
+                    onSelectCommit={controller.selectCommit}
+                    remoteRefs={remoteRefs}
+                    selected={controller.historyDetailOpen && item.hash === controller.selectedCommitHash}
+                  />
+                ))}
+                {scroll.end < commitCount && (
+                  <div aria-hidden="true" style={{ height: (commitCount - scroll.end) * HISTORY_GRAPH_ROW_HEIGHT }} />
+                )}
+                {controller.error && !history ? (
+                  <div className="history-filter-empty error">
+                    <Icon name="warning" size={18} />
+                    <strong>提交历史切换失败</strong>
+                    <span>{controller.error.message}</span>
+                  </div>
+                ) : commitCount === 0 ? (
+                  <div className="history-filter-empty">
+                    <Icon
+                      name={hasSearch ? "search" : "history"}
+                      size={18}
+                    />
+                    <strong>
+                      {hasSearch
+                        ? "没有匹配的提交"
+                        : "该引用暂无提交历史"}
+                    </strong>
+                    <span>
+                      {hasSearch
+                        ? "已搜索所选引用的完整历史，可修改搜索条件后重试。"
+                        : "可选择其他本地或远程引用查看。"}
+                    </span>
+                  </div>
+                ) : null}
+                {commitCount > 0 && (
+                  <div className="history-scroll-status" role="status">
+                    {controller.historyLoadMoreError ? (
+                      <>
+                        <Icon name="warning" size={14} />
+                        <span>后续记录加载失败，已保留当前记录。</span>
+                        <Button size="small" onClick={() => void controller.loadMoreHistory()} type="button">重试</Button>
+                      </>
+                    ) : controller.loading.history ? (
+                      "正在加载记录…"
+                    ) : history?.page.nextOffset !== undefined ? (
+                      "向下滚动以继续查看"
+                    ) : (
+                      "已显示全部记录"
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </SkeletonBoundary>
@@ -326,25 +345,26 @@ export function RepositoryHistory({
 
 
 const HistoryCommitRow = memo(function HistoryCommitRow({
-  branch,
-  comparison,
-  index,
+  graph,
   item,
   onCopyCommitId,
   onSelectCommit,
+  remoteRefs,
   selected
 }: {
-  branch: string | undefined;
-  comparison: RepositoryHistoryPageDto["page"]["comparison"];
-  index: number;
+  graph: HistoryGraphRow;
   item: RepositoryHistoryPageDto["page"]["commits"][number];
   onCopyCommitId(hash: string): Promise<void>;
   onSelectCommit(hash: string): Promise<void>;
+  remoteRefs: ReadonlySet<string>;
   selected: boolean;
 }) {
-  const displayRef = item.comparisonSide
-    ? comparisonSideLabel(item.comparisonSide, comparison)
-    : getPrimaryCommitRef(item.refs, branch);
+  const refs = [...new Set(item.refs ?? [])].sort((left, right) =>
+    Number(right === "HEAD" || right.startsWith("HEAD -> "))
+    - Number(left === "HEAD" || left.startsWith("HEAD -> "))
+  );
+  const hiddenRefs = refs.slice(3);
+  const timestamp = formatCommitTimestamp(item.authoredAt);
   return (
     <div
       aria-current={
@@ -356,12 +376,10 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
         selected
           ? " selected"
           : ""
-      }${
-        item.comparisonSide
-          ? ` comparison-${item.comparisonSide}`
-          : ""
       }`}
+      data-history-hash={item.hash}
       key={item.hash}
+      style={{ "--lane-color": graph.color } as CSSProperties}
       onClick={() =>
         void onSelectCommit(item.hash)
       }
@@ -378,43 +396,69 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
       role="button"
       tabIndex={0}
     >
-      <span
-        className={`commit-graph ${
-          item.comparisonSide
-            ? `comparison-${item.comparisonSide}`
-            : `${index === 2 ? "branch " : ""}lane-${index % 3}`
-        }`}
-      >
-        <span className="commit-node" />
-      </span>
+      <svg className="commit-graph" aria-hidden="true" height={HISTORY_GRAPH_ROW_HEIGHT}>
+        <title>
+          {item.stashRef ? "暂存记录" : item.parentHashes.length > 1 ? "合并提交" : "提交"}
+          {graph.boundary ? " · 部分父提交未在当前列表中显示" : ""}
+        </title>
+        {graph.paths.map((path, index) => (
+          <path key={index} d={path.d} stroke={path.color} />
+        ))}
+        {graph.boundary && (
+          <path className="commit-graph-boundary" d={graph.boundary} stroke={graph.color} />
+        )}
+        <circle
+          className={`commit-node${item.stashRef ? " stash" : item.parentHashes.length > 1 ? " merge" : ""}`}
+          cx={16 + graph.lane * 16}
+          cy={HISTORY_GRAPH_ROW_HEIGHT / 2}
+          r={item.stashRef || item.parentHashes.length > 1 ? 4.5 : 3.5}
+        />
+      </svg>
       <span className="commit-message">
-        <strong className="commit-subject">
+        {(item.stashRef || refs.length > 0) && (
+          <span className="commit-refs-inline">
+            {item.stashRef && (
+              <span className="ref-label stash" title={`暂存记录 · ${item.stashRef}`}>
+                <Icon name="layers" size={12} />
+                <span className="commit-ref-name">{item.stashRef}</span>
+              </span>
+            )}
+            {refs.slice(0, 3).map((ref) => {
+              const current = ref === "HEAD" || ref.startsWith("HEAD -> ");
+              const tag = ref.startsWith("tag: ");
+              const name = historyRefDisplayName(ref.replace(/^HEAD -> |^tag: /, ""));
+              const remote = ref.startsWith("refs/remotes/") || remoteRefs.has(name) || name.startsWith("origin/");
+              return (
+                <span
+                  className={`ref-label${current ? " current" : ""}${tag ? " tag" : remote ? " remote" : ""}`}
+                  key={ref}
+                  title={current ? `当前检出 · ${name}` : tag ? `标签 · ${name}` : remote ? `远程分支 · ${name}` : `本地分支 · ${name}`}
+                >
+                  <Icon name={tag ? "tag" : "branch"} size={12} />
+                  {current && name !== "HEAD" && <span className="commit-ref-head">HEAD</span>}
+                  <span className="commit-ref-name">{name}</span>
+                </span>
+              );
+            })}
+            {hiddenRefs.length > 0 && (
+              <span className="ref-label more" title={`其他 ${hiddenRefs.length} 个引用\n${hiddenRefs.join("\n")}`}>
+                +{hiddenRefs.length}
+              </span>
+            )}
+          </span>
+        )}
+        <strong className="commit-subject" title={item.subject}>
           {item.subject}
         </strong>
-        <span className="commit-meta">
-          <span
-            className={`ref-label${
-              displayRef.startsWith("origin/")
-                ? " remote"
-                : ""
-            }${
-              item.comparisonSide
-                ? ` comparison-${item.comparisonSide}`
-                : ""
-            }`}
-            title={displayRef}
-          >
-            {displayRef}
-          </span>
-        </span>
       </span>
       <time
         className="commit-time"
         dateTime={item.authoredAt}
+        title={timestamp}
       >
-        {formatCommitTimestamp(item.authoredAt)}
+        {timestamp}
       </time>
-      <span className="commit-author">
+      <span className="commit-author" title={`${item.authorName} <${item.authorEmail}>`}>
         {item.authorName}
       </span>
       <code
@@ -443,7 +487,14 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
       </code>
     </div>
   );
-});
+}, (previous, next) =>
+  previous.item === next.item
+  && previous.onCopyCommitId === next.onCopyCommitId
+  && previous.onSelectCommit === next.onSelectCommit
+  && previous.remoteRefs === next.remoteRefs
+  && previous.selected === next.selected
+  && equalHistoryGraphRows(previous.graph, next.graph)
+);
 
 export function resolveHistoryLoadingRegion({
   hasCurrentHistory,
@@ -468,58 +519,18 @@ function historyScopeCaption(
   if (!scope) {
     return `只读快照 · 最近 ${commitCount} 条 ${
       currentBranch ?? "HEAD"
-    } 提交`;
+    } 记录`;
   }
-  if (scope.kind === "ref") {
-    return `只读快照 · 最近 ${commitCount} 条 ${historyRefDisplayName(
-      scope.ref
-    )} 提交`;
+  if (scope.kind === "all") {
+    return `全部分支与 stash · 已加载 ${commitCount} 条记录`;
   }
-  return `只读对比 · ${historyRefDisplayName(
-    scope.leftRef
-  )} ↔ ${historyRefDisplayName(scope.rightRef)}`;
+  return `只读快照 · 最近 ${commitCount} 条 ${historyRefDisplayName(scope.ref)} 记录`;
 }
 
 function historyRefDisplayName(ref: string): string {
   return ref
     .replace(/^refs\/heads\//, "")
     .replace(/^refs\/remotes\//, "");
-}
-
-function comparisonSideLabel(
-  side: CommitHistoryComparisonSideDto,
-  comparison: RepositoryHistoryPageDto["page"]["comparison"]
-): string {
-  if (side === "base") {
-    return "共同基点";
-  }
-  const ref =
-    side === "left"
-      ? comparison?.leftRef
-      : comparison?.rightRef;
-  return ref
-    ? historyRefDisplayName(ref)
-    : side === "left"
-      ? "基准分支"
-      : "目标分支";
-}
-
-function getPrimaryCommitRef(
-  refs: string[] | undefined,
-  branch: string | undefined
-): string {
-  const ref =
-    (refs ?? []).find(
-      (value) =>
-        !value.startsWith("origin/") &&
-        !value.startsWith("tag:")
-    ) ??
-    (refs ?? []).find((value) => !value.startsWith("tag:")) ??
-    (refs ?? [])[0] ??
-    branch ??
-    "detached";
-
-  return ref.replace(/^HEAD -> /, "");
 }
 
 export function RepositoryCommitDetailBreadcrumb({
@@ -618,19 +629,21 @@ function RepositoryHistorySkeleton() {
 function RepositoryHistoryRowsSkeleton() {
   return (
     <div className="gn-skeleton-list repository-history-rows-skeleton">
+      <div className="history-table-header" aria-hidden="true">
+        <span>关系图</span>
+        <span>提交说明</span>
+        <span>日期</span>
+        <span>作者</span>
+        <span>提交</span>
+      </div>
       {[78, 92, 70, 84, 66, 88, 74].map((width, index) => (
         <div className="gn-skeleton-row" key={`${width}-${index}`}>
-          <Skeleton variant="circle" width={12} height={12} />
+          <Skeleton variant="circle" width={8} height={8} />
           <span className="gn-skeleton-row-copy">
             <Skeleton
               variant="text"
               width={`${width}%`}
               height={14}
-            />
-            <Skeleton
-              variant="text"
-              width={`${32 + index * 4}%`}
-              height={11}
             />
           </span>
           <Skeleton variant="text" width={82} height={12} />

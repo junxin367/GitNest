@@ -16,6 +16,7 @@ import type {
   RepositoryHistoryPageDto,
   RepositoryHistoryScopeDto,
   RepositoryHistoryFilterDto,
+  RepositoryHistoryTraversalDto,
   RepositoryTargetDto
 } from "@gitnest/contracts";
 
@@ -51,6 +52,7 @@ export interface RepositoryDetailsController {
   history: RepositoryHistoryPageDto | null;
   historyScope: RepositoryHistoryScopeDto | null;
   historySearch: RepositoryHistoryFilterDto | null;
+  historyLoadMoreError?: GitReadErrorDto | null;
   commit: RepositoryCommitDto | null;
   branches: RepositoryBranchesDto | null;
   selectedChange: {
@@ -129,6 +131,12 @@ export function useRepositoryDetails(
     useState<RepositoryHistoryScopeDto | null>(null);
   const [historySearch, setHistorySearch] =
     useState<RepositoryHistoryFilterDto | null>(null);
+  const [historyLoadMoreError, setHistoryLoadMoreError] =
+    useState<GitReadErrorDto | null>(null);
+  const historyNextOffsetRef = useRef<number | undefined>(undefined);
+  const historyTraversalRef = useRef<RepositoryHistoryTraversalDto | undefined>(undefined);
+  const historyRowsRef = useRef<RepositoryHistoryPageDto["page"]["commits"]>([]);
+  const historyDepthRef = useRef(0);
   const [commit, setCommit] =
     useState<RepositoryCommitDto | null>(null);
   const [branches, setBranches] =
@@ -605,6 +613,7 @@ export function useRepositoryDetails(
       }
 
       const queryId = createQuery("commit");
+      const historyEntry = historyRowsRef.current.find(item => item.hash === commitHash);
       const requestGeneration = generation.current;
       const openHistoryDetail =
         options.openHistoryDetail ?? tab === "history";
@@ -622,7 +631,7 @@ export function useRepositoryDetails(
       setError(null);
 
       try {
-        const result = await window.gitnest.repository.getCommit({
+        let result = await window.gitnest.repository.getCommit({
           queryId,
           target: stableTarget,
           commitHash
@@ -638,6 +647,30 @@ export function useRepositoryDetails(
           return;
         }
 
+        if (result.ok && historyEntry?.stashRef) {
+          // Read by immutable hash: stash@{n} can move while the row is open.
+          const files = await window.gitnest.repository.getStashFiles({
+            queryId,
+            target: stableTarget,
+            stashRef: commitHash
+          });
+          if (!isCurrentQuery("commit", queryId, requestGeneration)) return;
+          result = files.ok
+            ? {
+                ok: true,
+                value: {
+                  ...result.value,
+                  commit: {
+                    ...result.value.commit,
+                    stashRef: historyEntry.stashRef,
+                    files: files.value.stash.files,
+                    additions: files.value.stash.additions,
+                    deletions: files.value.stash.deletions
+                  }
+                }
+              }
+            : files;
+        }
         if (result.ok) {
           setCommit(result.value);
         } else if (result.error.code !== "COMMAND_CANCELLED") {
@@ -688,7 +721,8 @@ export function useRepositoryDetails(
     async (
       offset = 0,
       scope = historyScopeRef.current,
-      search = tab === "history" ? historySearchRef.current : null
+      search = tab === "history" ? historySearchRef.current : null,
+      preserveDepth = false
     ) => {
       if (!stableTarget) {
         return;
@@ -698,16 +732,48 @@ export function useRepositoryDetails(
       const requestGeneration = generation.current;
       setLoadingKey("history", true);
       setError(null);
+      setHistoryLoadMoreError(null);
 
       try {
-        const result = await window.gitnest.repository.getHistory({
+        const depth = offset === 0 && preserveDepth ? Math.max(50, historyDepthRef.current) : 50;
+        let traversal = offset > 0 ? historyTraversalRef.current : undefined;
+        const readPage = (pageOffset: number, limit: number) => window.gitnest.repository.getHistory({
           queryId,
           target: stableTarget,
-          limit: 50,
-          offset,
+          limit,
+          offset: pageOffset,
           ...(scope ? { scope } : {}),
-          ...(search ? { search } : {})
+          ...(search ? { search } : {}),
+          ...(traversal ? { traversal } : {})
         });
+        let result = await readPage(offset, Math.min(100, depth));
+        if (result.ok) traversal = result.value.page.traversal;
+        // Refresh the loaded prefix without discarding the pages being read.
+        // Stash rows do not count toward the underlying Git log offset.
+        while (
+          preserveDepth && depth > 100
+          && isCurrentQuery("history", queryId, requestGeneration)
+          && result.ok && result.value.page.nextOffset !== undefined
+          && result.value.page.nextOffset < offset + depth
+        ) {
+          const nextOffset = result.value.page.nextOffset;
+          const next = await readPage(nextOffset, Math.min(100, offset + depth - nextOffset));
+          if (!next.ok) {
+            result = next;
+            break;
+          }
+          const seen = new Set(result.value.page.commits.map((item) => item.hash));
+          result = {
+            ...next,
+            value: {
+              ...next.value,
+              page: {
+                ...next.value.page,
+                commits: [...result.value.page.commits, ...next.value.page.commits.filter((item) => !seen.has(item.hash))]
+              }
+            }
+          };
+        }
 
         if (
           !isCurrentQuery(
@@ -720,20 +786,28 @@ export function useRepositoryDetails(
         }
 
         if (result.ok) {
-          setHistory((current) =>
-            offset > 0 && current
-              ? {
-                  ...result.value,
-                  page: {
-                    ...result.value.page,
-                    commits: [
-                      ...current.page.commits,
-                      ...result.value.page.commits
-                    ]
-                  }
+          const value = tab === "overview"
+            ? {
+                ...result.value,
+                page: {
+                  ...result.value.page,
+                  commits: result.value.page.commits.filter((item) => !item.stashRef)
                 }
-              : result.value
-          );
+              }
+            : result.value;
+          historyNextOffsetRef.current = value.page.nextOffset;
+          historyTraversalRef.current = value.page.traversal;
+          historyDepthRef.current = value.page.nextOffset
+            ?? offset + value.page.commits.filter((item) => !item.stashRef).length;
+          const seen = new Set(historyRowsRef.current.map(item => item.hash));
+          const commits = offset === 0
+            ? value.page.commits
+            : [...historyRowsRef.current, ...value.page.commits.filter(item => !seen.has(item.hash))];
+          historyRowsRef.current = commits;
+          setHistory({
+            ...value,
+            page: { ...value.page, commits }
+          });
           const first = result.value.page.commits[0];
           if (
             tab === "history" &&
@@ -749,6 +823,7 @@ export function useRepositoryDetails(
           }
         } else if (result.error.code !== "COMMAND_CANCELLED") {
           setError(result.error);
+          if (offset > 0) setHistoryLoadMoreError(result.error);
         }
       } catch (reason) {
         if (
@@ -758,7 +833,9 @@ export function useRepositoryDetails(
             requestGeneration
           )
         ) {
-          setError(unexpectedError(reason));
+          const failure = unexpectedError(reason);
+          setError(failure);
+          if (offset > 0) setHistoryLoadMoreError(failure);
         }
       } finally {
         if (
@@ -793,6 +870,11 @@ export function useRepositoryDetails(
       setHistoryDetailOpen(false);
       setCommit(null);
       setHistory(null);
+      historyNextOffsetRef.current = undefined;
+      historyTraversalRef.current = undefined;
+      historyRowsRef.current = [];
+      historyDepthRef.current = 0;
+      setHistoryLoadMoreError(null);
       setError(null);
       historyScopeRef.current = scope;
       setHistoryScope(scope);
@@ -812,6 +894,11 @@ export function useRepositoryDetails(
       setHistoryDetailOpen(false);
       setCommit(null);
       setHistory(null);
+      historyNextOffsetRef.current = undefined;
+      historyTraversalRef.current = undefined;
+      historyRowsRef.current = [];
+      historyDepthRef.current = 0;
+      setHistoryLoadMoreError(null);
       historySearchRef.current = search;
       setHistorySearch(search);
       await loadHistory(0, historyScopeRef.current, search);
@@ -878,12 +965,12 @@ export function useRepositoryDetails(
 
   const loadMoreHistory = useCallback(
     async () => {
-      const offset = history?.page.nextOffset;
-      if (offset !== undefined) {
+      const offset = historyNextOffsetRef.current;
+      if (offset !== undefined && !activeQueries.current.has("history")) {
         await loadHistory(offset, historyScopeRef.current);
       }
     },
-    [history?.page.nextOffset, loadHistory]
+    [loadHistory]
   );
 
   const reload = useCallback(
@@ -892,7 +979,7 @@ export function useRepositoryDetails(
       options: { preserveSelection?: boolean; reuseChanges?: boolean } = {}
     ) => {
       if (requestedTab === "overview") {
-        await loadHistory(0);
+        await loadHistory(0, null, null);
       } else if (requestedTab === "changes") {
         if (!options.preserveSelection) {
           cancelQuery("diff");
@@ -918,7 +1005,7 @@ export function useRepositoryDetails(
           setCommit(null);
         }
         await Promise.all([
-          loadHistory(0, historyScopeRef.current),
+          loadHistory(0, historyScopeRef.current, historySearchRef.current, true),
           loadBranches()
         ]);
       } else if (requestedTab === "branches") {
@@ -958,6 +1045,11 @@ export function useRepositoryDetails(
     setDiff(null);
     setDiffNotice(null);
     setHistory(null);
+    historyNextOffsetRef.current = undefined;
+    historyTraversalRef.current = undefined;
+    historyRowsRef.current = [];
+    historyDepthRef.current = 0;
+    setHistoryLoadMoreError(null);
     historyScopeRef.current = null;
     setHistoryScope(null);
     historySearchRef.current = null;
@@ -1065,6 +1157,7 @@ export function useRepositoryDetails(
     history: currentTarget ? history : null,
     historyScope: currentTarget ? historyScope : null,
     historySearch: currentTarget ? historySearch : null,
+    historyLoadMoreError: currentTarget ? historyLoadMoreError : null,
     commit: currentTarget ? commit : null,
     branches: currentTarget ? branches : null,
     selectedChange: currentTarget ? selectedChange : null,
@@ -1131,15 +1224,13 @@ function sameHistoryScope(
   if (left.kind !== right.kind) {
     return false;
   }
+  if (left.kind === "all" && right.kind === "all") {
+    return true;
+  }
   if (left.kind === "ref" && right.kind === "ref") {
     return left.ref === right.ref;
   }
-  return (
-    left.kind === "compare" &&
-    right.kind === "compare" &&
-    left.leftRef === right.leftRef &&
-    left.rightRef === right.rightRef
-  );
+  return false;
 }
 
 function preferredDiffMode(

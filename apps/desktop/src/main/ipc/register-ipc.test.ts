@@ -760,7 +760,7 @@ describe("repository history IPC validation", () => {
     }
   });
 
-  it("accepts exact local and remote refs for single and comparison history", () => {
+  it("accepts exact local and remote refs and all history", () => {
     expect(
       validateRepositoryHistoryRequest({
         queryId: "history_ref",
@@ -779,24 +779,20 @@ describe("repository history IPC validation", () => {
 
     expect(
       validateRepositoryHistoryRequest({
-        queryId: "history_compare",
+        queryId: "history_all",
         target,
         scope: {
-          kind: "compare",
-          leftRef: "refs/heads/main",
-          rightRef: "refs/heads/develop"
+          kind: "all"
         }
       })
     ).toMatchObject({
       scope: {
-        kind: "compare",
-        leftRef: "refs/heads/main",
-        rightRef: "refs/heads/develop"
+        kind: "all"
       }
     });
   });
 
-  it("rejects arbitrary revisions and identical comparison refs", () => {
+  it("rejects arbitrary revisions and removed comparison scopes", () => {
     expect(() =>
       validateRepositoryHistoryRequest({
         queryId: "history_bad_ref",
@@ -812,12 +808,12 @@ describe("repository history IPC validation", () => {
 
     expect(() =>
       validateRepositoryHistoryRequest({
-        queryId: "history_same_ref",
+        queryId: "history_removed_scope",
         target,
         scope: {
           kind: "compare",
           leftRef: "refs/heads/main",
-          rightRef: "refs/heads/main"
+          rightRef: "refs/heads/develop"
         }
       })
     ).toThrowError(

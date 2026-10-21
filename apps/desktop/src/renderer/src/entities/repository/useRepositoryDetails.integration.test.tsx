@@ -465,6 +465,35 @@ describe("useRepositoryDetails", () => {
     expect(getBranches).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { kind: "all" as const },
+    { kind: "ref" as const, ref: "refs/heads/topic" }
+  ])("概览读取当前 HEAD，并保留历史页的 $kind 范围和搜索", async (scope) => {
+    const head = createCommitSummary();
+    const scoped = { ...head, hash: "b".repeat(40), subject: "Scoped history result" };
+    const getHistory = vi.fn(async (request: { scope?: unknown; search?: unknown }) => ({
+      ok: true as const, value: { target: TARGET, page: { commits: [request.scope || request.search ? scoped : head] } }
+    }));
+    installBridge({
+      getHistory,
+      getBranches: vi.fn(async () => ({ ok: true as const, value: { target: TARGET, branches: [] } })),
+      getCommit: vi.fn(async (request: { commitHash: string }) => ({ ok: true as const, value: { target: TARGET, commit: {
+        ...head, hash: request.commitHash, committerName: head.authorName, committerEmail: head.authorEmail,
+        committedAt: head.authoredAt, body: "", refs: head.refs ?? [], files: [], additions: 0, deletions: 0
+      } } }))
+    });
+    await renderTarget(TARGET, "", "history");
+    await act(async () => { await controller!.selectHistoryScope(scope); });
+    await act(async () => { await controller!.searchHistory({ keyword: "scoped" }); });
+    await renderTarget(TARGET, "", "overview");
+    expect(getHistory.mock.calls.at(-1)?.[0]).not.toHaveProperty("scope");
+    expect(getHistory.mock.calls.at(-1)?.[0]).not.toHaveProperty("search");
+    expect(controller!.history?.page.commits[0]?.hash).toBe(head.hash);
+    await renderTarget(TARGET, "", "history");
+    expect(getHistory.mock.calls.at(-1)?.[0]).toMatchObject({ scope, search: { keyword: "scoped" } });
+    expect(controller!.history?.page.commits[0]?.hash).toBe(scoped.hash);
+  });
+
   it.each(["overview", "history", "branches", "changes"] as const)(
     "reports the scheduled %s query on its first render and after changing targets",
     (tab) => {
@@ -1493,7 +1522,7 @@ describe("useRepositoryDetails", () => {
     expect(controller?.historyDetailOpen).toBe(true);
   });
 
-  it.each(["pagination-failure", "switch-comparison"] as const)(
+  it.each(["pagination-failure", "switch-ref"] as const)(
     "keeps history data scoped during %s",
     async (scenario) => {
       const summary = createCommitSummary();
@@ -1501,15 +1530,11 @@ describe("useRepositoryDetails", () => {
       const initialHistory: RepositoryHistoryPageDto = {
         target: TARGET, page: { commits: [summary], nextOffset: 50 }
       };
-      const comparison = {
-        leftRef: "refs/heads/main", rightRef: "refs/heads/develop",
-        leftOnly: 0, rightOnly: 0, mergeBase: summary.hash
-      };
       installBridge({
         getHistory: vi.fn()
           .mockResolvedValueOnce({ ok: true, value: initialHistory })
           .mockImplementationOnce(() => new Promise((resolve) => { resolvePage = resolve; }))
-          .mockResolvedValueOnce({ ok: true, value: { target: TARGET, page: { commits: [], comparison } } }),
+          .mockResolvedValueOnce({ ok: true, value: { target: TARGET, page: { commits: [] } } }),
         getBranches: vi.fn(async () => ({ ok: true as const, value: { target: TARGET, branches: [] } })),
         getCommit: vi.fn(async () => ({ ok: true as const, value: {
           target: TARGET, commit: {
@@ -1526,10 +1551,10 @@ describe("useRepositoryDetails", () => {
       act(() => { paginating = controller?.loadMoreHistory(); });
       expect(controller?.history).toEqual(initialHistory);
       expect(controller?.loading.history).toBe(true);
-      if (scenario === "switch-comparison") {
+      if (scenario === "switch-ref") {
         await act(async () => {
           await controller?.selectHistoryScope({
-            kind: "compare", leftRef: comparison.leftRef, rightRef: comparison.rightRef
+            kind: "ref", ref: "refs/heads/develop"
           });
         });
         await act(async () => {
@@ -1537,7 +1562,7 @@ describe("useRepositoryDetails", () => {
           await paginating;
         });
         expect(controller?.history?.page.commits).toEqual([]);
-        expect(controller?.history?.page.comparison).toEqual(comparison);
+        expect(controller?.historyScope).toEqual({ kind: "ref", ref: "refs/heads/develop" });
         expect(controller?.commit).toBeNull();
         expect(controller?.error).toBeNull();
       } else {
@@ -1648,92 +1673,7 @@ describe("useRepositoryDetails", () => {
     );
   });
 
-  it("keeps branch comparison metadata on the loaded history page", async () => {
-    const summary = createCommitSummary();
-    const comparison = {
-      leftRef: "refs/remotes/origin/pre-production",
-      rightRef: "refs/heads/pre-production",
-      leftOnly: 4,
-      rightOnly: 3,
-      mergeBase: "e3d9000123456789"
-    };
-    const getHistory = vi.fn(
-      async (request: {
-        scope?: {
-          kind: string;
-        };
-      }): Promise<{
-        ok: true;
-        value: RepositoryHistoryPageDto;
-      }> => ({
-        ok: true,
-        value: {
-          target: TARGET,
-          page: {
-            commits: [
-              {
-                ...summary,
-                ...(request.scope?.kind === "compare"
-                  ? { comparisonSide: "left" as const }
-                  : {})
-              }
-            ],
-            ...(request.scope?.kind === "compare"
-              ? { comparison }
-              : {})
-          }
-        }
-      })
-    );
-    installBridge({
-      getHistory,
-      getBranches: vi.fn(async () => ({
-        ok: true as const,
-        value: {
-          target: TARGET,
-          branches: createBranches()
-        }
-      }))
-    });
 
-    await act(async () => {
-      root.render(
-        <Harness
-          onController={(value) => {
-            controller = value;
-          }}
-          tab="history"
-        />
-      );
-      await flushAsyncWork();
-    });
-    await act(flushAsyncWork);
-
-    await act(async () => {
-      await controller?.selectHistoryScope({
-        kind: "compare",
-        leftRef: comparison.leftRef,
-        rightRef: comparison.rightRef
-      });
-      await flushAsyncWork();
-    });
-
-    expect(getHistory).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        scope: {
-          kind: "compare",
-          leftRef: comparison.leftRef,
-          rightRef: comparison.rightRef
-        }
-      })
-    );
-    expect(controller?.history?.page.comparison).toEqual(
-      comparison
-    );
-    expect(
-      controller?.history?.page.commits[0]?.comparisonSide
-    ).toBe("left");
-  });
 });
 
 function Harness({

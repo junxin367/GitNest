@@ -1153,6 +1153,70 @@ describe("WorkspaceRuntimeService", () => {
     await runtime.dispose();
   });
 
+  it.each(["focus", "heartbeat", "workspace-change"] as const)(
+    "recovers missed content events on %s while preserving unchanged cached versions",
+    async (reason) => {
+      const workspace = createWorkspace(1);
+      const target = workspace.selectedTarget as RepositoryTarget;
+      const gitClient = new TrackingGitClient(undefined, [{
+        path: "src/app.ts",
+        indexStatus: ".",
+        worktreeStatus: "M",
+        kind: "ordinary"
+      }]);
+      let now = "2026-10-20T00:00:00.000Z";
+      let contentFingerprint = "original";
+      const read = gitClient.readRepositorySnapshot.bind(gitClient);
+      const reads = vi.spyOn(gitClient, "readRepositorySnapshot")
+        .mockImplementation(async (path, options) => ({
+          ...await read(path, options),
+          contentFingerprint,
+          refreshedAt: now
+        }));
+      const runtime = new WorkspaceRuntimeService(
+        new FakeConfiguration(workspace),
+        gitClient,
+        new MemorySnapshotStore(),
+        new FakeWatcher(),
+        {
+          autoRefresh: false,
+          selectedTargetHeartbeatIntervalMs: reason === "heartbeat" ? 40 : 0,
+          staleAfterMs: 1,
+          clock: () => now
+        }
+      );
+      const refresh = async () => {
+        const previousCalls = gitClient.calls.length;
+        now = new Date(Date.parse(now) + 60_000).toISOString();
+        if (reason === "focus") await runtime.refreshStaleOnFocus();
+        if (reason === "workspace-change") await runtime.selectTarget(target);
+        return waitForState(runtime, (state) =>
+          gitClient.calls.length > previousCalls &&
+          !state.snapshots[0]?.refreshPending
+        );
+      };
+      try {
+        await runtime.requestWorkspaceRefresh("manual");
+        const initial = await waitForState(runtime, (state) =>
+          state.monitor.mode === "watching" &&
+          state.snapshots[0]?.contentVersion === 1 &&
+          state.operations.some((operation) => operation.state === "succeeded")
+        );
+        expect((await refresh()).snapshots[0]?.contentVersion).toBe(1);
+
+        contentFingerprint = "edited-with-the-same-path-and-status";
+        expect((await refresh()).snapshots[0]?.contentVersion).toBe(2);
+        expect((await refresh()).snapshots[0]?.contentVersion).toBe(2);
+        expect(reads.mock.calls.every(([, options]) => !options?.includeChangeStats)).toBe(true);
+        expect(reads.mock.calls.every(([, options]) => options?.includeContentFingerprint)).toBe(true);
+        expect((await runtime.getState()).operations.map((operation) => operation.id))
+          .toEqual(initial.operations.map((operation) => operation.id));
+      } finally {
+        await runtime.dispose();
+      }
+    }
+  );
+
   it("keeps no-op refreshes stable and advances content versions only for relevant watcher changes", async () => {
     const workspace = createWorkspace(1);
     const target =

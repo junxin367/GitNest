@@ -33,6 +33,12 @@ export interface RepositoryHistoryRequest
   offset?: number;
   scope?: RepositoryHistoryScopeDto;
   search?: RepositoryHistoryFilterDto;
+  traversal?: RepositoryHistoryTraversalDto;
+}
+
+export interface RepositoryHistoryTraversalDto {
+  /** Immutable commit tips captured on the first page, reused until refresh. */
+  startHashes: string[];
 }
 
 export interface RepositoryHistoryFilterDto {
@@ -46,19 +52,12 @@ export interface RepositoryHistoryFilterDto {
 
 export type RepositoryHistoryScopeDto =
   | {
-      kind: "ref";
-      ref: string;
+      kind: "all";
     }
   | {
-      kind: "compare";
-      leftRef: string;
-      rightRef: string;
+      kind: "ref";
+      ref: string;
     };
-
-export type CommitHistoryComparisonSideDto =
-  | "left"
-  | "right"
-  | "base";
 
 export interface RepositoryCommitRequest
   extends RepositoryQueryRequest {
@@ -78,6 +77,7 @@ export interface RepositoryStashesRequest
 
 export interface RepositoryStashRequest
   extends RepositoryQueryRequest {
+  /** Exact stash ref or a full immutable stash commit hash for read queries. */
   stashRef: string;
 }
 
@@ -183,17 +183,11 @@ export interface RepositoryHistoryPageDto {
   page: {
     commits: Array<
       CommitSummaryDto & {
-        comparisonSide?: CommitHistoryComparisonSideDto;
+        stashRef?: string;
       }
     >;
     nextOffset?: number;
-    comparison?: {
-      leftRef: string;
-      rightRef: string;
-      leftOnly: number;
-      rightOnly: number;
-      mergeBase?: string;
-    };
+    traversal?: RepositoryHistoryTraversalDto;
   };
 }
 
@@ -207,6 +201,7 @@ export interface CommitFileStatDto {
 export interface RepositoryCommitDto {
   target: RepositoryTargetDto;
   commit: CommitSummaryDto & {
+    stashRef?: string;
     committerName: string;
     committerEmail: string;
     committedAt: string;

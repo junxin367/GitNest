@@ -119,7 +119,6 @@ export type {
 export type {
   CancelRepositoryOperationRequest,
   CancelRepositoryQueryRequest,
-  CommitHistoryComparisonSideDto,
   CommitFileStatDto,
   CreateRepositoryCommitRequest,
   RepositoryBranchesDto,
@@ -145,6 +144,7 @@ export type {
   RepositoryHistoryRequest,
   RepositoryHistoryFilterDto,
   RepositoryHistoryScopeDto,
+  RepositoryHistoryTraversalDto,
   RepositoryStashDiffDto,
   RepositoryStashDiffRequest,
   RepositoryStashFilesDto,

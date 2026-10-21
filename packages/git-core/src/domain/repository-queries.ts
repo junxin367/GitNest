@@ -46,38 +46,27 @@ export interface RepositoryDiff {
   media?: RepositoryMediaPreview;
 }
 
-export type CommitHistoryComparisonSide =
-  | "left"
-  | "right"
-  | "base";
-
 export interface CommitHistoryEntry extends CommitSummary {
-  comparisonSide?: CommitHistoryComparisonSide;
+  stashRef?: string;
 }
 
 export type CommitHistoryScope =
   | {
-      kind: "ref";
-      ref: string;
+      kind: "all";
     }
   | {
-      kind: "compare";
-      leftRef: string;
-      rightRef: string;
+      kind: "ref";
+      ref: string;
     };
-
-export interface CommitHistoryComparison {
-  leftRef: string;
-  rightRef: string;
-  leftOnly: number;
-  rightOnly: number;
-  mergeBase?: string;
-}
 
 export interface CommitHistoryPage {
   commits: CommitHistoryEntry[];
   nextOffset?: number;
-  comparison?: CommitHistoryComparison;
+  traversal?: CommitHistoryTraversal;
+}
+
+export interface CommitHistoryTraversal {
+  startHashes: string[];
 }
 
 export interface CommitFileStat {

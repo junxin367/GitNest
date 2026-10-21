@@ -8,6 +8,7 @@ import type {
 } from "../domain/repository";
 import type {
   CommitHistoryScope,
+  CommitHistoryTraversal,
   CommitDetails,
   CommitHistoryPage,
   RepositoryDiff,
@@ -32,6 +33,7 @@ export interface InspectRepositoryOptions extends GitReadOptions {
 export interface ReadRepositorySnapshotOptions
   extends GitReadOptions {
   includeChangeStats?: boolean;
+  includeContentFingerprint?: boolean;
   onProgress?: (progress: RepositorySnapshotProgress) => void;
 }
 
@@ -47,6 +49,7 @@ export interface ReadCommitHistoryOptions extends GitReadOptions {
   offset?: number;
   scope?: CommitHistoryScope;
   search?: CommitHistoryFilter;
+  traversal?: CommitHistoryTraversal;
 }
 
 export interface GitClient {

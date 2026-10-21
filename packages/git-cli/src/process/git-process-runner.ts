@@ -18,6 +18,7 @@ const DEFAULT_SHARED_CONCURRENCY = 3;
 export interface ProcessRequest {
   executable: string;
   args: readonly string[];
+  input?: string | undefined;
   cwd?: string | undefined;
   signal?: AbortSignal | undefined;
   timeoutMs?: number | undefined;
@@ -214,6 +215,7 @@ async function executeProcessWithStdout<
 >({
   executable,
   args,
+  input,
   cwd,
   signal,
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -245,7 +247,7 @@ async function executeProcessWithStdout<
       : createReadOnlyProcessEnvironment(environment),
     shell: false,
     windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"]
+    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"]
   };
 
   return new Promise((resolve, reject) => {
@@ -255,6 +257,7 @@ async function executeProcessWithStdout<
     let outputBytes = 0;
     let outputDiscarded = false;
     let settled = false;
+    let inputError: Error | undefined;
     let terminationReason:
       | "cancelled"
       | "timeout"
@@ -329,6 +332,14 @@ async function executeProcessWithStdout<
     signal?.addEventListener("abort", abort, { once: true });
     child.stdout?.on("data", collect(stdoutChunks));
     child.stderr?.on("data", collect(stderrChunks));
+    if (input !== undefined && child.stdin) {
+      child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+        // Git can close the pipe before exiting. Keep its exit code authoritative,
+        // and reject an otherwise successful command if input delivery was incomplete.
+        inputError = error;
+      });
+      child.stdin.end(input, "utf8");
+    }
 
     child.once("error", (error) => {
       finishWithError(
@@ -398,6 +409,11 @@ async function executeProcessWithStdout<
       }
 
       const normalizedExitCode = exitCode ?? -1;
+
+      if (normalizedExitCode === 0 && inputError) {
+        reject(new GitError("COMMAND_FAILED", "Unable to send Git input.", { cause: inputError.message }));
+        return;
+      }
 
       if (!allowFailure && normalizedExitCode !== 0) {
         reject(

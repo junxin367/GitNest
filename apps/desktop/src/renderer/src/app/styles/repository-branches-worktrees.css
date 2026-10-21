@@ -1113,6 +1113,7 @@
 
 .repository-history-rows-skeleton {
   flex: 1 1 auto;
+  align-content: start;
   overflow: hidden;
 }
 
@@ -1121,13 +1122,14 @@
 }
 
 .repository-history-rows-skeleton .gn-skeleton-row {
-  grid-template-columns:
-    12px
-    minmax(0, 1fr)
-    82px
-    68px
-    54px;
-  min-height: 64px;
+  min-height: var(--control-compact);
+  padding-top: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.repository-history-rows-skeleton .gn-skeleton-row > .gn-skeleton:first-child {
+  margin-left: var(--space-3);
 }
 
 .repository-commit-detail-skeleton {

@@ -227,8 +227,7 @@
     width: 100%;
   }
 
-  .repository-overview-commit-row,
-  .commit-row {
+  .repository-overview-commit-row {
     grid-template-columns:
       var(--control-large)
       minmax(0, 1fr);
@@ -236,10 +235,7 @@
 
   .repository-overview-commit-author,
   .repository-overview-commit-time,
-  .repository-overview-commit-id,
-  .commit-author,
-  .commit-time,
-  .commit-id {
+  .repository-overview-commit-id {
     display: none;
   }
 }

@@ -6,9 +6,6 @@ import {
   commitMetadataArguments,
   commitNumstatArguments,
   commitParentsArguments,
-  compareHistoryCountArguments,
-  compareHistoryMergeBaseArguments,
-  compareHistoryPageArguments,
   diffArguments,
   historyPageArguments,
   MERGED_REMOTE_BRANCH_ARGUMENTS,
@@ -117,43 +114,6 @@ describe("repository read commands", () => {
         "refs/remotes/origin/main"
       )
     ).toContain("refs/remotes/origin/main");
-    expect(
-      compareHistoryPageArguments(
-        51,
-        50,
-        "refs/heads/main",
-        "refs/heads/develop"
-      )
-    ).toEqual(
-      expect.arrayContaining([
-        "--left-right",
-        "--boundary",
-        "--topo-order",
-        "--format=%m%x00%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00",
-        "refs/heads/main...refs/heads/develop"
-      ])
-    );
-    expect(
-      compareHistoryCountArguments(
-        "refs/heads/main",
-        "refs/heads/develop"
-      )
-    ).toEqual([
-      "rev-list",
-      "--left-right",
-      "--count",
-      "refs/heads/main...refs/heads/develop"
-    ]);
-    expect(
-      compareHistoryMergeBaseArguments(
-        "refs/heads/main",
-        "refs/heads/develop"
-      )
-    ).toEqual([
-      "merge-base",
-      "refs/heads/main",
-      "refs/heads/develop"
-    ]);
     expect(commitMetadataArguments("abcdef")).toContain("abcdef");
     expect(commitNumstatArguments("abcdef")).toEqual(
       expect.arrayContaining(["--numstat", "-z", "abcdef"])

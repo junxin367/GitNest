@@ -133,7 +133,7 @@ import {
   type WorktreeCommandExecuteRequest,
   type WorktreeCommandPreflightRequest
 } from "@gitnest/contracts";
-import { GitError, normalizeCommitHistorySearch } from "@gitnest/git-core";
+import { GitError, normalizeCommitHistorySearch, normalizeCommitHistoryTraversal } from "@gitnest/git-core";
 import {
   featureRecord, featureString, featureBoolean, featureTarget, featureHash,
   validateWorkflowCommand, validateManagementCommand, validateRepositoryCreation
@@ -960,7 +960,8 @@ export function registerIpcHandlers(
           input.limit,
           input.offset,
           input.scope,
-          input.search
+          input.search,
+          input.traversal
         );
       })
   );
@@ -2631,13 +2632,17 @@ export function validateRepositoryHistoryRequest(
   const search = normalizeCommitHistorySearch(
     "search" in request ? request.search : undefined
   );
+  const traversal = normalizeCommitHistoryTraversal(
+    "traversal" in request ? request.traversal : undefined
+  );
 
   return {
     ...base,
     ...(limit === undefined ? {} : { limit }),
     ...(offset === undefined ? {} : { offset }),
     ...(scope === undefined ? {} : { scope }),
-    ...(search === undefined ? {} : { search })
+    ...(search === undefined ? {} : { search }),
+    ...(traversal === undefined ? {} : { traversal })
   };
 }
 
@@ -2647,8 +2652,12 @@ function validateRepositoryHistoryScope(
   if (!scope || typeof scope !== "object" || !("kind" in scope)) {
     throw new GitError(
       "INVALID_REQUEST",
-      "History scope must identify a ref or comparison."
+      "History scope must identify a ref or all history."
     );
+  }
+
+  if (scope.kind === "all") {
+    return { kind: "all" };
   }
 
   if (scope.kind === "ref") {
@@ -2661,28 +2670,6 @@ function validateRepositoryHistoryScope(
     return {
       kind: "ref",
       ref: validateRepositoryHistoryRef(scope.ref)
-    };
-  }
-
-  if (scope.kind === "compare") {
-    if (!("leftRef" in scope) || !("rightRef" in scope)) {
-      throw new GitError(
-        "INVALID_REQUEST",
-        "Compared history requires two refs."
-      );
-    }
-    const leftRef = validateRepositoryHistoryRef(scope.leftRef);
-    const rightRef = validateRepositoryHistoryRef(scope.rightRef);
-    if (leftRef === rightRef) {
-      throw new GitError(
-        "INVALID_REQUEST",
-        "Compared history requires two different refs."
-      );
-    }
-    return {
-      kind: "compare",
-      leftRef,
-      rightRef
     };
   }
 
@@ -2857,10 +2844,10 @@ export function validateRepositoryStashRequest(
   }
 
   const stashRef = request.stashRef.trim();
-  if (!/^stash@\{(?:0|[1-9]\d{0,8})\}$/.test(stashRef)) {
+  if (!/^stash@\{(?:0|[1-9]\d{0,8})\}$/.test(stashRef) && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(stashRef)) {
     throw new GitError(
       "INVALID_REQUEST",
-      "Stash references must use the exact stash@{n} form."
+      "Stash read queries require an exact stash@{n} reference or a full commit hash."
     );
   }
 

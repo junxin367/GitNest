@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { parseBranches } from "./branches";
-import {
-  parseComparedCommitHistory,
-  parseCommitHistory
-} from "./history";
+import { parseCommitHistory } from "./history";
 import { parseStashList } from "./stashes";
 import { parseWorktrees } from "./worktrees";
 
@@ -94,60 +91,6 @@ describe("structured Git parsers", () => {
         })
       ]);
     }
-  });
-
-  it("parses branch-comparison side and merge-base markers", () => {
-    const output =
-      [
-        [
-          "<",
-          "left123",
-          "left123",
-          "June",
-          "june@example.com",
-          "2026-09-15T10:00:00+08:00",
-          "Left commit",
-          "base123",
-          "main"
-        ].join("\0"),
-        [
-          ">",
-          "right12",
-          "right12",
-          "June",
-          "june@example.com",
-          "2026-09-15T11:00:00+08:00",
-          "Right commit",
-          "base123",
-          "develop"
-        ].join("\0"),
-        [
-          "-",
-          "base123",
-          "base123",
-          "June",
-          "june@example.com",
-          "2026-09-14T10:00:00+08:00",
-          "Merge base",
-          "",
-          ""
-        ].join("\0")
-      ].join("\0\n") + "\0\n";
-
-    expect(parseComparedCommitHistory(output)).toEqual([
-      expect.objectContaining({
-        hash: "left123",
-        comparisonSide: "left"
-      }),
-      expect.objectContaining({
-        hash: "right12",
-        comparisonSide: "right"
-      }),
-      expect.objectContaining({
-        hash: "base123",
-        comparisonSide: "base"
-      })
-    ]);
   });
 
   it("parses stash metadata with its exact reflog selector and base commit", () => {

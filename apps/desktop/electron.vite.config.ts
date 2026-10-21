@@ -132,6 +132,9 @@ export default defineConfig({
   renderer: {
     root: resolve(desktopRoot, "src/renderer"),
     plugins: [react()],
+    server: {
+      host: "127.0.0.1"
+    },
     resolve: {
       alias: [
         {

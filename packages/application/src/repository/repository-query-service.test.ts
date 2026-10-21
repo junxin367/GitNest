@@ -206,21 +206,20 @@ describe("RepositoryQueryService", () => {
     expect(gitClient.branchCalls).toBe(0);
   });
 
-  it("forwards a read-only branch comparison scope to Git", async () => {
+  it("forwards history scope, search and an immutable traversal to Git", async () => {
     const gitClient = new FakeGitClient();
     const service = createService(gitClient);
 
     await service.getHistory(
-      "history_compare",
+      "history_all",
       TARGET,
       50,
       0,
       {
-        kind: "compare",
-        leftRef: "refs/heads/main",
-        rightRef: "refs/heads/develop"
+        kind: "all"
       },
-      { keyword: "message", author: "Alice", path: "src", since: "2026-01-01" }
+      { keyword: "message", author: "Alice", path: "src", since: "2026-01-01" },
+      { startHashes: ["a".repeat(40)] }
     );
 
     expect(gitClient.historyCalls).toEqual([
@@ -229,11 +228,10 @@ describe("RepositoryQueryService", () => {
         limit: 50,
         offset: 0,
         scope: {
-          kind: "compare",
-          leftRef: "refs/heads/main",
-          rightRef: "refs/heads/develop"
+          kind: "all"
         },
         search: { keyword: "message", author: "Alice", path: "src", since: "2026-01-01" },
+        traversal: { startHashes: ["a".repeat(40)] },
         signal: expect.any(AbortSignal)
       }
     ]);
@@ -341,6 +339,7 @@ class FakeGitClient
     offset: number | undefined;
     scope: ReadCommitHistoryOptions["scope"];
     search: ReadCommitHistoryOptions["search"];
+    traversal: ReadCommitHistoryOptions["traversal"];
     signal: AbortSignal;
   }> = [];
   readonly commitDiffCalls: Array<{
@@ -461,6 +460,7 @@ class FakeGitClient
       offset: options.offset,
       scope: options.scope,
       search: options.search,
+      traversal: options.traversal,
       signal:
         options.signal ?? new AbortController().signal
     });

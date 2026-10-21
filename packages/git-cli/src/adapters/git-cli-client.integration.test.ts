@@ -4,7 +4,9 @@ import {
   open,
   readFile,
   rm,
+  stat,
   truncate,
+  utimes,
   writeFile
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -299,45 +301,6 @@ describe("GitCliClient integration", () => {
     }
   });
 
-  it("resolves both compared refs before waiting for either result", async () => {
-    const original = processRunner.runProcess;
-    let releaseLeft!: () => void;
-    const leftPending = new Promise<void>((resolve) => {
-      releaseLeft = resolve;
-    });
-    let rightStarted = false;
-    const commands = vi.spyOn(processRunner, "runProcess").mockImplementation(async (request) => {
-      if (request.args[0] === "rev-parse") {
-        if (request.args.includes("refs/heads/main^{commit}")) {
-          await leftPending;
-        }
-        if (request.args.includes("refs/heads/feature/test^{commit}")) {
-          rightStarted = true;
-        }
-      }
-      return original(request);
-    });
-    const pending = client.readCommitHistory(fixture.repositoryPath, {
-      scope: {
-        kind: "compare",
-        leftRef: "refs/heads/main",
-        rightRef: "refs/heads/feature/test"
-      }
-    });
-    try {
-      await vi.waitFor(() => expect(rightStarted).toBe(true));
-    } finally {
-      releaseLeft();
-      try {
-        await expect(pending).resolves.toMatchObject({
-          comparison: { leftRef: "refs/heads/main", rightRef: "refs/heads/feature/test" }
-        });
-      } finally {
-        commands.mockRestore();
-      }
-    }
-  });
-
   it("counts untracked lines across read boundaries and keeps binary detection", async () => {
     const lineFixture = await createTemporaryDirectoryFixture("untracked-line-boundaries");
     try {
@@ -435,6 +398,108 @@ describe("GitCliClient integration", () => {
       expect(change).not.toHaveProperty("stagedStats");
       expect(change).not.toHaveProperty("unstagedStats");
       expect(change).not.toHaveProperty("untrackedStats");
+    }
+  });
+
+  it.each(["unstaged", "untracked"] as const)(
+    "detects same-size %s edits with metadata-only cache validation",
+    async (mode) => {
+      const changedFixture = await createGitRepositoryFixture();
+      try {
+        const path = join(
+          changedFixture.repositoryPath,
+          mode === "unstaged" ? "README.md" : "未跟踪 file.txt"
+        );
+        await writeFile(path, "before\n");
+        const preservedTime = new Date("2020-01-01T00:00:00.000Z");
+        await utimes(path, preservedTime, preservedTime);
+        const info = await stat(path, { bigint: true });
+        const readSnapshot = () => client.readRepositorySnapshot(
+          changedFixture.repositoryPath,
+          { includeContentFingerprint: true }
+        );
+        const first = await readSnapshot();
+        const unchanged = await readSnapshot();
+        expect(first.contentFingerprint).toEqual(expect.any(String));
+        expect(unchanged.contentFingerprint).toBe(first.contentFingerprint);
+
+        await writeFile(path, "a\nb\ncc\n");
+        // Editors and restore tools can preserve mtime and size; ctime must
+        // still invalidate cached statistics for an already-dirty path.
+        await utimes(path, preservedTime, preservedTime);
+        const editedInfo = await stat(path, { bigint: true });
+        expect(editedInfo.size).toBe(info.size);
+        expect(editedInfo.mtimeNs).toBe(info.mtimeNs);
+        const edited = await readSnapshot();
+        expect(edited.changes).toEqual(first.changes);
+        expect(edited.contentFingerprint).not.toBe(first.contentFingerprint);
+        expect(open).not.toHaveBeenCalled();
+
+        const complete = await client.readRepositorySnapshot(
+          changedFixture.repositoryPath,
+          { includeChangeStats: true }
+        );
+        const change = complete.changes.find((entry) =>
+          entry.path === (mode === "unstaged" ? "README.md" : "未跟踪 file.txt")
+        );
+        expect(mode === "unstaged" ? change?.unstagedStats?.additions : change?.untrackedStats?.additions)
+          .toBe(3);
+      } finally {
+        await changedFixture.dispose();
+      }
+    }
+  );
+
+  it("detects index-only edits while paths, statuses and worktree metadata remain unchanged", async () => {
+    const changedFixture = await createGitRepositoryFixture();
+    const path = changedFixture.repositoryPath;
+    try {
+      const readSnapshot = () => client.readRepositorySnapshot(
+        path,
+        { includeContentFingerprint: true }
+      );
+      const firstBlob = (await runGit(path, ["hash-object", "-w", "README.md"])).trim();
+      const secondBlob = (await runGit(path, ["rev-parse", "HEAD:README.md"])).trim();
+      await runGit(path, ["update-index", "--cacheinfo", `100644,${firstBlob},staged file.txt`]);
+      const first = await readSnapshot();
+      await runGit(path, ["update-index", "--cacheinfo", `100644,${secondBlob},staged file.txt`]);
+      const edited = await readSnapshot();
+
+      expect(first.contentFingerprint).toEqual(expect.any(String));
+      expect(edited.changes).toEqual(first.changes);
+      expect(edited.contentFingerprint).not.toBe(first.contentFingerprint);
+      expect(open).not.toHaveBeenCalled();
+      expect((await readSnapshot()).contentFingerprint)
+        .toBe(edited.contentFingerprint);
+    } finally {
+      await changedFixture.dispose();
+    }
+  });
+
+  it("keeps content fingerprints stable when only tracking divergence changes", async () => {
+    const original = processRunner.runProcess;
+    let behind = 1;
+    const commands = vi.spyOn(processRunner, "runProcess").mockImplementation(async (request) => {
+      const result = await original(request);
+      return request.args.includes("status")
+        ? { ...result, stdout: `# branch.ab +0 -${behind}\0${result.stdout}` }
+        : result;
+    });
+    try {
+      const first = await client.readRepositorySnapshot(
+        fixture.repositoryPath,
+        { includeContentFingerprint: true }
+      );
+      behind = 2;
+      const second = await client.readRepositorySnapshot(
+        fixture.repositoryPath,
+        { includeContentFingerprint: true }
+      );
+      expect(first.behind).toBe(1);
+      expect(second.behind).toBe(2);
+      expect(second.contentFingerprint).toBe(first.contentFingerprint);
+    } finally {
+      commands.mockRestore();
     }
   });
 
@@ -1483,48 +1548,48 @@ describe("GitCliClient integration", () => {
     }
   });
 
-  it("reads one selected ref and compares divergent branch histories", async () => {
-    const comparisonFixture =
+  it("reads one selected ref and all divergent branch histories", async () => {
+    const historyFixture =
       await createGitRepositoryFixture();
 
     try {
       await writeFile(
         join(
-          comparisonFixture.repositoryPath,
+          historyFixture.repositoryPath,
           "main-only.txt"
         ),
         "main\n",
         "utf8"
       );
-      await runGit(comparisonFixture.repositoryPath, [
+      await runGit(historyFixture.repositoryPath, [
         "add",
         "main-only.txt"
       ]);
-      await runGit(comparisonFixture.repositoryPath, [
+      await runGit(historyFixture.repositoryPath, [
         "commit",
         "-m",
         "Main-only commit"
       ]);
       await writeFile(
         join(
-          comparisonFixture.linkedWorktreePath,
+          historyFixture.linkedWorktreePath,
           "feature-only.txt"
         ),
         "feature\n",
         "utf8"
       );
-      await runGit(comparisonFixture.linkedWorktreePath, [
+      await runGit(historyFixture.linkedWorktreePath, [
         "add",
         "feature-only.txt"
       ]);
-      await runGit(comparisonFixture.linkedWorktreePath, [
+      await runGit(historyFixture.linkedWorktreePath, [
         "commit",
         "-m",
         "Feature-only commit"
       ]);
 
       const selected = await client.readCommitHistory(
-        comparisonFixture.repositoryPath,
+        historyFixture.repositoryPath,
         {
           scope: {
             kind: "ref",
@@ -1536,44 +1601,12 @@ describe("GitCliClient integration", () => {
         "Feature-only commit"
       );
 
-      const comparison = await client.readCommitHistory(
-        comparisonFixture.repositoryPath,
-        {
-          scope: {
-            kind: "compare",
-            leftRef: "refs/heads/main",
-            rightRef: "refs/heads/feature/test"
-          }
-        }
-      );
-
-      expect(comparison.comparison).toMatchObject({
-        leftRef: "refs/heads/main",
-        rightRef: "refs/heads/feature/test",
-        leftOnly: 1,
-        rightOnly: 1
-      });
-      expect(comparison.comparison?.mergeBase).toMatch(
-        /^[0-9a-f]{40,64}$/i
-      );
-      expect(comparison.commits).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            subject: "Main-only commit",
-            comparisonSide: "left"
-          }),
-          expect.objectContaining({
-            subject: "Feature-only commit",
-            comparisonSide: "right"
-          }),
-          expect.objectContaining({
-            subject: "Initial fixture commit",
-            comparisonSide: "base"
-          })
-        ])
-      );
+      const all = await client.readCommitHistory(historyFixture.repositoryPath, { scope: { kind: "all" } });
+      expect(all.commits.map(commit => commit.subject)).toEqual(expect.arrayContaining([
+        "Main-only commit", "Feature-only commit", "Initial fixture commit"
+      ]));
     } finally {
-      await comparisonFixture.dispose();
+      await historyFixture.dispose();
     }
   });
 

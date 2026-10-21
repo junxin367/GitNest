@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   lstat,
   open,
@@ -18,10 +19,10 @@ import {
 import {
   GitError,
   normalizeCommitHistorySearch,
+  normalizeCommitHistoryTraversal,
   parseBranches,
   parseCommitMetadata,
   parseCommitNumstat,
-  parseComparedCommitHistory,
   parseCommitHistory,
   parseRepositoryDiff,
   parseStashList,
@@ -63,7 +64,6 @@ import {
   type CommitDiff,
   type CommitHistoryPage,
   type CommitHistoryFilter,
-  type CommitHistoryScope,
   type RepositoryDiff,
   type RepositoryIdentity,
   type RepositoryInspection,
@@ -85,9 +85,6 @@ import {
   commitParentsArguments,
   commitMetadataArguments,
   commitNumstatArguments,
-  compareHistoryCountArguments,
-  compareHistoryMergeBaseArguments,
-  compareHistoryPageArguments,
   diffArguments,
   historyArguments,
   historyPageArguments,
@@ -142,6 +139,7 @@ import {
 } from "../commands/worktree-operations";
 import { findGitExecutable } from "../environment/find-git-executable";
 import { readGitEnvironment } from "../environment/read-git-environment";
+import { attachHistoryStashes, stashMatchesHistorySearch } from "./history-stashes";
 import {
   runProcess,
   runProcessBuffer
@@ -160,6 +158,7 @@ const DEFAULT_WRITE_TIMEOUT_MS = 60_000;
 const DEFAULT_COMMIT_TIMEOUT_MS = 120_000;
 const DEFAULT_NETWORK_TIMEOUT_MS = 180_000;
 const UNTRACKED_STATS_CONCURRENCY = 4;
+const SNAPSHOT_FINGERPRINT_CONCURRENCY = 4;
 const CHANGE_STATS_PUBLISH_INTERVAL_MS = 1_000;
 const REMOTE_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024;
 const MAX_MUTATION_PATHS = 200;
@@ -365,18 +364,28 @@ export class GitCliClient
         priority: options.priority,
         timeoutMs: options.timeoutMs
       });
-      return await reconcileRepositorySnapshot(
-        parseStatusPorcelainV2(result.stdout),
-        {
-          executable: executablePath,
-          cwd: worktreePath,
-          signal: options.signal,
-          priority: options.priority,
-          timeoutMs: options.timeoutMs
-        },
-        options.includeChangeStats ?? false,
-        options.onProgress
-      );
+      const snapshot = parseStatusPorcelainV2(result.stdout);
+      const commandOptions: CommandOptions = {
+        executable: executablePath,
+        cwd: worktreePath,
+        signal: options.signal,
+        priority: options.priority,
+        timeoutMs: options.timeoutMs
+      };
+      const [reconciled, contentFingerprint] = await Promise.all([
+        reconcileRepositorySnapshot(
+          snapshot,
+          commandOptions,
+          options.includeChangeStats ?? false,
+          options.onProgress
+        ),
+        options.includeContentFingerprint
+          ? readSnapshotContentFingerprint(snapshot, result.stdout, commandOptions)
+          : undefined
+      ]);
+      return contentFingerprint === undefined
+        ? reconciled
+        : { ...reconciled, contentFingerprint };
     } catch (error) {
       throw mapRepositoryError(error, worktreePath);
     }
@@ -469,6 +478,10 @@ export class GitCliClient
     const limit = clampHistoryPageLimit(options.limit);
     const offset = clampHistoryOffset(options.offset);
     const search = normalizeCommitHistorySearch(options.search);
+    if (options.scope && options.scope.kind !== "all" && options.scope.kind !== "ref") {
+      throw new GitError("INVALID_REQUEST", "Unsupported history scope.");
+    }
+    let traversal = normalizeCommitHistoryTraversal(options.traversal);
     const commandOptions = {
       executable: executablePath,
       cwd: worktreePath,
@@ -477,124 +490,112 @@ export class GitCliClient
     };
 
     try {
-      if (
-        !options.scope &&
-        !(await repositoryHasHead({
-          ...commandOptions
-        }))
-      ) {
+      const hasHead = !traversal && (options.scope?.kind === "all" || !options.scope)
+        ? await repositoryHasHead(commandOptions)
+        : true;
+      if (!options.scope && !hasHead) {
         return { commits: [] };
       }
+      const stashes = parseStashList((await runProcess({
+        ...commandOptions,
+        args: stashListArguments(),
+        outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
+      })).stdout);
+      if (!traversal) {
+        const all = options.scope?.kind === "all";
+        if (all) {
+          if (!hasHead && !stashes.length) {
+            const refs = await runProcess({
+              ...commandOptions,
+              args: ["for-each-ref", "--count=1", "--format=%(objectname)", "refs/heads", "refs/remotes", "refs/tags"],
+              outputLimitBytes: 4096
+            });
+            if (!refs.stdout.trim()) return { commits: [], traversal: { startHashes: [] } };
+          }
+        }
+        const stashBases = [...new Set(stashes.flatMap(stash => {
+          const base = stash.baseHash ?? stash.parentHashes[0];
+          return base ? [validateCommitHash(base)] : [];
+        }))];
+        // Resolve moving refs once. Both ref expansion and large revision sets
+        // stay out of the Windows command line.
+        const resolved = await runProcess({
+          ...commandOptions,
+          args: all
+            ? ["log", "--no-walk", "--format=%H", "--branches", "--remotes", "--tags", "--stdin", ...(hasHead ? ["HEAD"] : []), "--"]
+            : resolveRevisionArguments(options.scope?.kind === "ref" ? validateHistoryRefInput(options.scope.ref) : "HEAD"),
+          ...(all ? { input: stashBases.join("\n") } : {}),
+          outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES,
+          allowFailure: true
+        });
+        assertAllowFailureIsRepository(resolved);
+        if (resolved.exitCode !== 0) {
+          throw new GitError("INVALID_REQUEST", "History refs must resolve to commits.", {
+            exitCode: resolved.exitCode, stderr: resolved.stderr.slice(0, 2048)
+          });
+        }
+        const hashes = resolved.stdout.trim().split(/\r?\n/).filter(Boolean).map(validateCommitHash);
+        if (!all && hashes.length !== 1) {
+          throw new GitError("INVALID_REQUEST", "History refs must resolve to commits.");
+        }
+        traversal = { startHashes: [...new Set(hashes)] };
+      }
+      const startHashes = traversal.startHashes;
+      const snapshot = traversal;
+      if (options.scope?.kind !== "all" && startHashes.length !== 1) {
+        throw new GitError("INVALID_REQUEST", "History traversal does not match its scope.");
+      }
+      if (!startHashes.length) return { commits: [], traversal };
+
+      const visibleStashes: StashSummary[] = [];
+      for (const stash of stashes) {
+        if (search && !stashMatchesHistorySearch(stash, search)) continue;
+        if (search && options.scope?.kind !== "all") {
+          const base = stash.baseHash ?? stash.parentHashes[0];
+          if (!base) continue;
+          const reachable = await runProcess({
+            ...commandOptions, args: ["merge-base", "--is-ancestor", validateCommitHash(base), startHashes[0]!],
+            allowFailure: true, outputLimitBytes: 4096
+          });
+          if (reachable.exitCode === 1) continue;
+          if (reachable.exitCode !== 0) throw commandFailure("Git merge-base", reachable);
+        }
+        if (search?.path) {
+          const files = await runProcess({
+            ...commandOptions, args: stashFilesArguments(validateCommitHash(stash.hash)),
+            outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
+          });
+          const path = search.path.replaceAll("\\", "/").split("/").filter(part => part && part !== ".").join("/");
+          if (!parseCommitNumstat(files.stdout).files.some(file => !path || file.path === path || file.path.startsWith(`${path}/`))) continue;
+        }
+        visibleStashes.push(stash);
+      }
+      const finish = (page: CommitHistoryPage) => attachHistoryStashes(
+        { ...page, traversal: snapshot },
+        // Matching stashes are returned once, without consuming Git log offsets.
+        search && offset > 0 ? [] : visibleStashes,
+        Boolean(search) && offset === 0
+      );
 
       if (search?.keyword) {
         const unified = await readUnifiedHistory(
-          commandOptions, search, limit, offset, options.scope
+          commandOptions, search, limit, offset, startHashes
         );
-        if (unified) return unified;
+        if (unified) return finish(unified);
       }
 
-      if (options.scope?.kind === "compare") {
-        const [leftRef, rightRef] = await Promise.all([
-          resolveHistoryRef(commandOptions, options.scope.leftRef),
-          resolveHistoryRef(commandOptions, options.scope.rightRef)
-        ]);
-        if (leftRef === rightRef) {
-          throw new GitError(
-            "INVALID_REQUEST",
-            "Compared history requires two different refs."
-          );
-        }
-
-        const [historyResult, countResult, mergeBaseResult] =
-          await Promise.all([
-            runProcess({
-              ...commandOptions,
-              args: compareHistoryPageArguments(
-                limit + 1,
-                offset,
-                leftRef,
-                rightRef,
-                search
-              ),
-              outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
-            }),
-            runProcess({
-              ...commandOptions,
-              args: compareHistoryCountArguments(
-                leftRef,
-                rightRef,
-                search
-              ),
-              outputLimitBytes: 4_096
-            }),
-            runProcess({
-              ...commandOptions,
-              args: compareHistoryMergeBaseArguments(
-                leftRef,
-                rightRef
-              ),
-              allowFailure: true,
-              outputLimitBytes: 4_096
-            })
-          ]);
-
-        assertAllowFailureIsRepository(mergeBaseResult);
-        if (
-          mergeBaseResult.exitCode !== 0 &&
-          !(
-            mergeBaseResult.exitCode === 1 &&
-            !mergeBaseResult.stderr.trim()
-          )
-        ) {
-          throw commandFailure(
-            "Git merge-base",
-            mergeBaseResult
-          );
-        }
-        const commits = parseComparedCommitHistory(
-          historyResult.stdout
-        );
-        const hasMore = commits.length > limit;
-        const { leftOnly, rightOnly } =
-          parseHistoryComparisonCounts(countResult.stdout);
-        const mergeBase =
-          mergeBaseResult.exitCode === 0
-            ? mergeBaseResult.stdout.trim().split(/\r?\n/)[0]
-            : undefined;
-
-        return {
-          commits: commits.slice(0, limit),
-          ...(hasMore
-            ? { nextOffset: offset + limit }
-            : {}),
-          comparison: {
-            leftRef,
-            rightRef,
-            leftOnly,
-            rightOnly,
-            ...(mergeBase ? { mergeBase } : {})
-          }
-        };
-      }
-
-      const ref =
-        options.scope?.kind === "ref"
-          ? await resolveHistoryRef(
-              commandOptions,
-              options.scope.ref
-            )
-          : undefined;
       const result = await runProcess({
         ...commandOptions,
-        args: historyPageArguments(limit + 1, offset, ref, search),
+        args: historyPageArguments(limit + 1, offset, "--stdin", search),
+        input: startHashes.join("\n"),
         outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
       });
       const commits = parseCommitHistory(result.stdout);
       const hasMore = commits.length > limit;
-      return {
+      return finish({
         commits: commits.slice(0, limit),
         ...(hasMore ? { nextOffset: offset + limit } : {})
-      };
+      });
     } catch (error) {
       throw mapRepositoryError(error, worktreePath);
     }
@@ -741,7 +742,7 @@ export class GitCliClient
     options: GitReadOptions = {}
   ): Promise<StashFiles> {
     const worktreePath = await validateDirectoryPath(path);
-    const normalizedRef = validateStashRef(stashRef);
+    const normalizedRef = validateStashReadRef(stashRef);
     const executablePath = await this.#getExecutablePath(options.signal);
     const commandOptions = {
       executable: executablePath,
@@ -779,7 +780,7 @@ export class GitCliClient
     options: ReadStashDiffOptions
   ): Promise<StashDiff> {
     const worktreePath = await validateDirectoryPath(path);
-    const normalizedRef = validateStashRef(options.stashRef);
+    const normalizedRef = validateStashReadRef(options.stashRef);
     const relativePath = validateRelativePathspec(options.path);
     const contextLines = clampContextLines(options.contextLines);
     const executablePath = await this.#getExecutablePath(
@@ -2846,6 +2847,65 @@ async function assertRestorePathScope(
   }
 }
 
+async function readSnapshotContentFingerprint(
+  snapshot: RepositorySnapshot,
+  statusOutput: string,
+  options: CommandOptions
+): Promise<string> {
+  // Porcelain v2 retains index blob IDs, including index-only changes that
+  // keep the same XY status. Branch headers are separate snapshot fields;
+  // remote commands intentionally ignore changes in tracking divergence.
+  const records = statusOutput.split("\0");
+  let firstChange = 0;
+  while (records[firstChange]?.startsWith("# ")) firstChange += 1;
+  const hash = createHash("sha256")
+    .update(records.slice(firstChange).join("\0"))
+    .update("\0");
+  const changes = snapshot.changes.filter((change) => change.worktreeStatus !== ".");
+  const metadata = new Array<string>(changes.length);
+  let cursor = 0;
+  let failed = false;
+  const worker = async () => {
+    while (!failed) {
+      assertReadNotCancelled(options.signal);
+      const index = cursor++;
+      const change = changes[index];
+      if (!change) return;
+      try {
+        const info = await lstat(
+          resolve(options.cwd, validateRelativePathspec(change.path)),
+          { bigint: true }
+        );
+        metadata[index] = JSON.stringify([
+          change.path,
+          String(info.mode),
+          String(info.size),
+          String(info.mtimeNs),
+          String(info.ctimeNs),
+          String(info.dev),
+          String(info.ino)
+        ]);
+      } catch (error) {
+        if (isMissingFilesystemPath(error)) {
+          metadata[index] = JSON.stringify([change.path, "missing"]);
+        } else {
+          failed = true;
+          throw error;
+        }
+      }
+    }
+  };
+  await Promise.all(Array.from(
+    { length: Math.min(SNAPSHOT_FINGERPRINT_CONCURRENCY, changes.length) },
+    worker
+  ));
+  assertReadNotCancelled(options.signal);
+  // Hash in status order so filesystem completion order cannot invalidate an
+  // unchanged repository. No file contents are read during this validation.
+  for (const entry of metadata) hash.update(entry).update("\0");
+  return hash.digest("base64url");
+}
+
 async function reconcileRepositorySnapshot(
   snapshot: RepositorySnapshot,
   options: CommandOptions,
@@ -3170,55 +3230,33 @@ async function readUnifiedHistory(
   search: CommitHistoryFilter,
   limit: number,
   offset: number,
-  scope?: CommitHistoryScope
+  revisions: string[]
 ): Promise<CommitHistoryPage | undefined> {
   const { keyword = "", ...filters } = search;
   const needle = keyword.toLowerCase();
-  const comparing = scope?.kind === "compare";
-  const refs = comparing
-    ? [scope.leftRef, scope.rightRef]
-    : [scope?.kind === "ref" ? scope.ref : "HEAD"];
-  await Promise.all(refs.map(async ref => {
-    if (ref !== "HEAD") await resolveHistoryRef(options, ref);
-  }));
-  let revisions = refs;
-  if (comparing && refs[0] === refs[1]) {
-    throw new GitError("INVALID_REQUEST", "Compared history requires two different refs.");
-  }
+  const commandOptions = { ...options, input: revisions.join("\n") };
   const pageArguments = (size: number, skip: number, criteria: CommitHistoryFilter) =>
-    comparing
-      ? compareHistoryPageArguments(size, skip, revisions[0]!, revisions[1]!, criteria)
-      : historyPageArguments(size, skip, revisions[0]!, criteria);
+    historyPageArguments(size, skip, "--stdin", criteria);
 
   // Keep Git's direct message search for queries that do not match any author.
   if (!filters.author) {
     const authorProbe = await runProcess({
-      ...options, args: pageArguments(1, 0, { ...filters, author: keyword }),
+      ...commandOptions, args: pageArguments(1, 0, { ...filters, author: keyword }),
       outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
     });
     if (!authorProbe.stdout.trim()) return undefined;
   }
 
-  revisions = await Promise.all(refs.map(async ref => {
-    const result = await runProcess({
-      ...options, args: resolveRevisionArguments(ref), outputLimitBytes: 4096
-    });
-    return validateCommitHash(result.stdout.trim());
-  }));
   const commits: CommitHistoryPage["commits"] = [];
   let matched = 0;
-  let leftOnly = 0;
-  let rightOnly = 0;
   const batchSize = 200;
   for (let scanOffset = 0; ; scanOffset += batchSize) {
     assertReadNotCancelled(options.signal);
     const result = await runProcess({
-      ...options, args: pageArguments(batchSize, scanOffset, filters),
+      ...commandOptions, args: pageArguments(batchSize, scanOffset, filters),
       outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
     });
-    const batch = comparing
-      ? parseComparedCommitHistory(result.stdout)
-      : parseCommitHistory(result.stdout);
+    const batch = parseCommitHistory(result.stdout);
     if (!batch.length) break;
     const matches = new Set(batch.filter(commit =>
       commit.authorName.toLowerCase().includes(needle) ||
@@ -3232,68 +3270,27 @@ async function readUnifiedHistory(
         ...options,
         args: ["log", "--no-walk=unsorted", "--format=%H",
           "--fixed-strings", "--regexp-ignore-case", `--grep=${keyword}`,
-          ...remaining.map(commit => validateCommitHash(commit.hash)), "--"],
+          "--stdin", "--"],
+        input: remaining.map(commit => validateCommitHash(commit.hash)).join("\n"),
         outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
       });
       for (const hash of messages.stdout.trim().split(/\r?\n/)) {
         if (hash) matches.add(hash);
       }
     }
-    // Preserve Git's original traversal order, including topological comparison order.
+    // Preserve Git's original topological traversal order.
     for (const commit of batch) {
       if (!matches.has(commit.hash)) continue;
       if (matched >= offset && commits.length < limit) commits.push(commit);
       matched += 1;
-      if ("comparisonSide" in commit && commit.comparisonSide === "left") leftOnly += 1;
-      if ("comparisonSide" in commit && commit.comparisonSide === "right") rightOnly += 1;
     }
-    if ((!comparing && matched > offset + limit) || batch.length < batchSize) break;
+    if (matched > offset + limit || batch.length < batchSize) break;
   }
   const page: CommitHistoryPage = {
     commits,
     ...(matched > offset + limit ? { nextOffset: offset + limit } : {})
   };
-  if (comparing) {
-    const mergeBase = await runProcess({
-      ...options, args: compareHistoryMergeBaseArguments(revisions[0]!, revisions[1]!),
-      allowFailure: true, outputLimitBytes: 4096
-    });
-    assertAllowFailureIsRepository(mergeBase);
-    if (mergeBase.exitCode !== 0 && !(mergeBase.exitCode === 1 && !mergeBase.stderr.trim())) {
-      throw commandFailure("Git merge-base", mergeBase);
-    }
-    page.comparison = {
-      leftRef: refs[0]!, rightRef: refs[1]!, leftOnly, rightOnly,
-      ...(mergeBase.exitCode === 0 ? { mergeBase: mergeBase.stdout.trim() } : {})
-    };
-  }
   return page;
-}
-
-async function resolveHistoryRef(
-  options: CommandOptions,
-  value: string
-): Promise<string> {
-  const ref = validateHistoryRefInput(value);
-  const result = await runProcess({
-    ...options,
-    args: resolveRevisionArguments(ref),
-    allowFailure: true,
-    outputLimitBytes: 4_096
-  });
-  assertAllowFailureIsRepository(result);
-
-  if (result.exitCode !== 0) {
-    throw new GitError(
-      "INVALID_REQUEST",
-      `History ref does not resolve to a commit: ${ref}`,
-      {
-        exitCode: result.exitCode,
-        stderr: result.stderr.slice(0, 2_048)
-      }
-    );
-  }
-  return ref;
 }
 
 function validateHistoryRefInput(value: string): string {
@@ -3324,23 +3321,6 @@ function validateHistoryRefInput(value: string): string {
     );
   }
   return ref;
-}
-
-function parseHistoryComparisonCounts(output: string): {
-  leftOnly: number;
-  rightOnly: number;
-} {
-  const match = output.trim().match(/^(\d+)\s+(\d+)$/);
-  if (!match) {
-    throw new GitError(
-      "INVALID_GIT_OUTPUT",
-      "Git comparison counts are invalid."
-    );
-  }
-  return {
-    leftOnly: Number(match[1]),
-    rightOnly: Number(match[2])
-  };
 }
 
 async function repositoryHasHead(
@@ -3837,6 +3817,13 @@ function validateStashRef(stashRef: string): string {
   }
 
   return normalized;
+}
+
+function validateStashReadRef(value: string): string {
+  const normalized = value.trim();
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(normalized)
+    ? normalized.toLowerCase()
+    : validateStashRef(value);
 }
 
 function normalizeMutationPath(path: string): string {

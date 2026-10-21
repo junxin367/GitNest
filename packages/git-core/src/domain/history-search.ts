@@ -1,4 +1,17 @@
 import { GitError } from "../errors/git-errors";
+import type { CommitHistoryTraversal } from "./repository-queries";
+
+export function normalizeCommitHistoryTraversal(value: unknown): CommitHistoryTraversal | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !value || typeof value !== "object" || !("startHashes" in value)
+    || !Array.isArray(value.startHashes)
+    || value.startHashes.some(hash => typeof hash !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(hash))
+  ) {
+    throw new GitError("INVALID_REQUEST", "History traversal requires full commit hashes.");
+  }
+  return { startHashes: value.startHashes.map((hash: string) => hash.toLowerCase()) };
+}
 
 /** Dates are inclusive local calendar days, applied to Git committer dates. */
 export interface CommitHistoryFilter {

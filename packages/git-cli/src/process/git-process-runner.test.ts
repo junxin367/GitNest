@@ -157,6 +157,47 @@ describe("createReadOnlyProcessEnvironment", () => {
       Buffer.from([0, 255, 1, 128])
     );
   });
+
+  it("通过标准输入传递超过 Windows 命令行长度的 UTF-8 数据", async () => {
+    const input = "提交起点\n".repeat(20_000);
+    const result = await runProcess({
+      executable: process.execPath,
+      args: ["-e", "let size = 0; process.stdin.on('data', data => size += data.length); process.stdin.on('end', () => process.stdout.write(String(size)))"],
+      input
+    });
+    expect(Number(result.stdout)).toBe(Buffer.byteLength(input));
+  });
+
+  it("空标准输入也会结束管道", async () => {
+    const result = await runProcess({
+      executable: process.execPath,
+      args: ["-e", "process.stdin.on('end', () => process.stdout.write('eof')); process.stdin.resume()"],
+      input: ""
+    });
+    expect(result.stdout).toBe("eof");
+  });
+
+  it("子进程提前退出时保留退出码，不产生未处理的管道错误", async () => {
+    const result = await runProcess({
+      executable: process.execPath,
+      args: ["-e", "process.exit(7)"],
+      input: "x".repeat(2 * 1024 * 1024),
+      allowFailure: true
+    });
+    expect(result.exitCode).toBe(7);
+  });
+
+  it("发送标准输入期间仍可取消命令", async () => {
+    const controller = new AbortController();
+    const pending = runProcess({
+      executable: process.execPath,
+      args: ["-e", "setTimeout(() => {}, 10000)"],
+      input: "x".repeat(2 * 1024 * 1024),
+      signal: controller.signal
+    });
+    setTimeout(() => controller.abort(), 50);
+    await expect(pending).rejects.toMatchObject({ code: "COMMAND_CANCELLED" });
+  });
 });
 
 describe("GitProcessScheduler", () => {

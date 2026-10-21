@@ -1,5 +1,5 @@
 export type { GitEnvironment } from "./domain/git-environment";
-export { normalizeCommitHistorySearch } from "./domain/history-search";
+export { normalizeCommitHistorySearch, normalizeCommitHistoryTraversal } from "./domain/history-search";
 export type { CommitHistoryFilter } from "./domain/history-search";
 export type {
   GitAncestry,
@@ -7,13 +7,12 @@ export type {
 } from "./domain/repository-commands";
 export type {
   CommitDiff,
-  CommitHistoryComparison,
-  CommitHistoryComparisonSide,
   CommitHistoryEntry,
   CommitDetails,
   CommitFileStat,
   CommitHistoryPage,
   CommitHistoryScope,
+  CommitHistoryTraversal,
   RepositoryBranches,
   RepositoryChanges,
   RepositoryDiff,
@@ -51,10 +50,7 @@ export {
   parseCommitNumstat
 } from "./parsers/commit-details";
 export { parseRepositoryDiff } from "./parsers/diff";
-export {
-  parseCommitHistory,
-  parseComparedCommitHistory
-} from "./parsers/history";
+export { parseCommitHistory } from "./parsers/history";
 export { parseStashList } from "./parsers/stashes";
 export {
   parseStatusPorcelainV2,

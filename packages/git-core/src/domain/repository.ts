@@ -32,6 +32,8 @@ export interface RepositorySnapshot {
   untracked: number;
   conflicted: number;
   changes: ChangedPath[];
+  /** Lightweight identity of index contents and changed worktree file metadata. */
+  contentFingerprint?: string;
   refreshedAt: string;
 }
 

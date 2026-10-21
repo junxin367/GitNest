@@ -75,7 +75,7 @@ export function historyArguments(limit: number): string[] {
 export function historyPageArguments(
   limit: number,
   offset: number,
-  ref?: string,
+  ref?: string | readonly string[],
   search?: CommitHistoryFilter
 ): string[] {
   return [
@@ -84,51 +84,13 @@ export function historyPageArguments(
     `--max-count=${limit}`,
     `--skip=${offset}`,
     "--date=iso-strict",
+    "--topo-order",
     "--decorate=short",
     "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00",
     ...historySearchArguments(search),
-    ...(ref ? [ref] : []),
-    ...(search?.path ? ["--", search.path] : [])
-  ];
-}
-
-export function compareHistoryPageArguments(
-  limit: number,
-  offset: number,
-  leftRef: string,
-  rightRef: string,
-  search?: CommitHistoryFilter
-): string[] {
-  return [
-    ...(search?.path ? ["--literal-pathspecs"] : []),
-    "log",
-    `--max-count=${limit}`,
-    `--skip=${offset}`,
-    "--left-right",
-    ...(search ? [] : ["--boundary"]),
-    "--topo-order",
-    "--date=iso-strict",
-    "--decorate=short",
-    "--format=%m%x00%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00",
-    ...historySearchArguments(search),
-    `${leftRef}...${rightRef}`,
-    ...(search?.path ? ["--", search.path] : [])
-  ];
-}
-
-export function compareHistoryCountArguments(
-  leftRef: string,
-  rightRef: string,
-  search?: CommitHistoryFilter
-): string[] {
-  return [
-    ...(search?.path ? ["--literal-pathspecs"] : []),
-    "rev-list",
-    "--left-right",
-    "--count",
-    ...historySearchArguments(search),
-    `${leftRef}...${rightRef}`,
-    ...(search?.path ? ["--", search.path] : [])
+    ...(typeof ref === "string" ? [ref] : ref ?? []),
+    "--",
+    ...(search?.path ? [search.path] : [])
   ];
 }
 
@@ -142,13 +104,6 @@ function historySearchArguments(search?: CommitHistoryFilter): string[] {
     ...(search.since ? [`--since-as-filter=${search.since}T00:00:00`] : []),
     ...(search.until ? [`--until=${search.until}T23:59:59`] : [])
   ];
-}
-
-export function compareHistoryMergeBaseArguments(
-  leftRef: string,
-  rightRef: string
-): string[] {
-  return ["merge-base", leftRef, rightRef];
 }
 
 export function diffArguments(
@@ -274,11 +229,11 @@ export function commitParentsArguments(
   ];
 }
 
-export function stashListArguments(limit: number): string[] {
+export function stashListArguments(limit?: number): string[] {
   return [
     "stash",
     "list",
-    `--max-count=${limit}`,
+    ...(limit === undefined ? [] : [`--max-count=${limit}`]),
     "--format=%gd%x00%H%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%x00"
   ];
 }
