@@ -58,7 +58,7 @@ export function buildHistoryGraph(commits: readonly HistoryCommit[]): {
       ? commit.stashRef ? Math.max(1, availableLane()) : availableLane()
       : incomingLane;
     const color = commit.stashRef
-      ? "var(--purple)"
+      ? "var(--history-stash-color)"
       : lanes[lane]?.color ?? allocateColor();
     const paths: HistoryGraphRow["paths"] = [];
 
@@ -84,7 +84,8 @@ export function buildHistoryGraph(commits: readonly HistoryCommit[]): {
     future.forEach((hash, parentIndex) => {
       let targetLane = lanes.findIndex((entry) => entry?.hash === hash);
       if (
-        targetLane > lane
+        !commit.stashRef
+        && targetLane > lane
         && !lanes[lane]
         && hash === commit.parentHashes[0]
       ) {

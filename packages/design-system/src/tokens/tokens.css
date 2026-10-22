@@ -123,6 +123,7 @@
   --red-soft: var(--color-danger-soft);
   --purple: #ae8cff;
   --purple-soft: rgba(174, 140, 255, 0.13);
+  --history-stash-color: #e400b5;
   --scrollbar: #314154;
 }
 
@@ -178,5 +179,6 @@ html[data-theme="light"] {
   --sidebar: #f7f9fc;
   --purple: #7653d4;
   --purple-soft: rgba(118, 83, 212, 0.1);
+  --history-stash-color: #b5008f;
   --scrollbar: #c2ced9;
 }

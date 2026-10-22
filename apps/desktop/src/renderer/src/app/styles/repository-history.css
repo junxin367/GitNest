@@ -522,9 +522,18 @@
 }
 
 .ref-label.stash {
-  color: var(--purple);
-  background: var(--purple-soft);
-  border-color: color-mix(in srgb, var(--purple) 38%, transparent);
+  color: var(--text-soft);
+  background: var(--surface-3);
+  border-color: var(--border);
+}
+
+.ref-label.stash > .icon {
+  box-sizing: content-box;
+  margin-left: calc(1px - var(--space-1));
+  padding: 2px;
+  color: var(--surface);
+  background: var(--history-stash-color);
+  border-radius: 2px;
 }
 
 .commit-author {

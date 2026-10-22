@@ -117,6 +117,7 @@
       --red: var(--color-danger);
       --red-soft: var(--color-danger-soft);
       --purple: #ae8cff;
+      --history-stash-color: #e400b5;
       --shadow: 0 24px 64px rgba(0, 0, 0, 0.32);
       --shadow-subtle: 0 1px 3px rgba(0, 0, 0, 0.2);
       --shadow-floating: 0 14px 38px rgba(0, 0, 0, 0.28);
@@ -156,6 +157,7 @@
       --rail: #eef2f7;
       --sidebar: #f7f9fc;
       --purple: #7653d4;
+      --history-stash-color: #b5008f;
       --shadow: 0 24px 64px rgba(37, 55, 72, 0.16);
       --shadow-subtle: 0 1px 3px rgba(37, 55, 72, 0.1);
       --shadow-floating: 0 14px 38px rgba(37, 55, 72, 0.16);
@@ -3774,6 +3776,21 @@
       color: var(--blue);
       background: var(--blue-soft);
       border-color: color-mix(in srgb, var(--blue) 20%, transparent);
+    }
+
+    .ref-label.stash {
+      color: var(--text-soft);
+      background: var(--surface-3);
+      border-color: var(--border);
+    }
+
+    .ref-label.stash > .icon {
+      box-sizing: content-box;
+      margin-left: calc(1px - var(--space-1));
+      padding: 2px;
+      color: var(--surface);
+      background: var(--history-stash-color);
+      border-radius: 2px;
     }
 
     .commit-author {
@@ -17983,19 +18000,21 @@
     }
 
     function renderCommitRow(commit, index = 0) {
+      const isStash = Boolean(commit.stashRef) ||
+        commit.refs.some((ref) => ref.startsWith("stash@{"));
       const isSelected =
         state.tab === "history"
           ? state.historyDetailOpen && state.selectedCommit === commit.hash
           : state.selectedCommit === commit.hash;
       return `
         <div role="button" tabindex="0" class="commit-row ${isSelected ? "selected" : ""}" aria-current="${isSelected}" onclick="selectCommit('${commit.hash}')" onkeydown="activateOnKey(event)">
-          <div class="commit-graph ${index === 2 ? "branch" : ""}" style="--lane-color:${commit.color}">
+          <div class="commit-graph ${!isStash && index === 2 ? "branch" : ""}" style="--lane-color:${isStash ? "var(--history-stash-color)" : commit.color}">
             <span class="commit-node"></span>
           </div>
           <div class="commit-message">
             <div class="commit-subject">${commit.subject}</div>
             <div class="commit-meta">
-              ${commit.refs.map((ref) => `<span class="ref-label ${ref.startsWith("origin") ? "remote" : ""}">${ref}</span>`).join("")}
+              ${commit.refs.map((ref) => `<span class="ref-label ${ref.startsWith("stash@{") ? "stash" : ref.startsWith("origin") ? "remote" : ""}">${ref.startsWith("stash@{") ? icon("layers", 12) : ""}${ref}</span>`).join("")}
             </div>
           </div>
           <div class="commit-time" title="提交日期">${commit.time}</div>
