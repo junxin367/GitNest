@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   ExternalApplicationKind,
@@ -12,6 +12,11 @@ import {
   buildExternalApplicationLaunch,
   type ExternalApplicationLaunch
 } from "./external-application.adapter";
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return { ...actual, spawn: vi.fn() };
+});
 
 const WORKING_DIRECTORY = "C:\\workspace\\repository";
 
@@ -193,6 +198,36 @@ describe("WindowsExternalApplicationAdapter", () => {
         process.env.WINDIR = previousWindowsDirectory;
       }
     }
+  });
+
+  it("launches Windows editors with visible windows", async () => {
+    const { spawn } = await import("node:child_process");
+    const child = {
+      once: vi.fn((event: string, listener: () => void) => {
+        if (event === "spawn") listener();
+        return child;
+      }),
+      unref: vi.fn()
+    };
+    vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+    const adapter = new WindowsExternalApplicationAdapter(
+      new FakeTerminalPort(),
+      {
+        pathExists: async () => true,
+        isDirectory: async () => true
+      }
+    );
+
+    await adapter.launch(
+      { kind: "vscode", label: "VS Code", executablePath: "C:\\Apps\\Code.exe" },
+      WORKING_DIRECTORY
+    );
+
+    expect(vi.mocked(spawn)).toHaveBeenCalledWith(
+      "C:\\Apps\\Code.exe",
+      ["--reuse-window", WORKING_DIRECTORY],
+      expect.objectContaining({ windowsHide: false })
+    );
   });
 
   it("opens editors, directories, and terminal profiles through fixed adapters", async () => {

@@ -1150,8 +1150,14 @@ export function useRepositoryDetails(
 
   const currentTarget = dataTargetKey === targetKey;
   const currentLoadingScope = currentTarget && loadingTab === tab;
+  // Effects still reset selection and validate the revision, but a cached
+  // target can paint its own rows immediately during the navigation render.
+  const cachedChanges = !currentTarget ? changesCache.peek(targetKey) : null;
+  const visibleLoading = currentLoadingScope
+    ? loading
+    : initialTabLoading(Boolean(target), tab);
   return {
-    changes: currentTarget ? changes : null,
+    changes: currentTarget ? changes : cachedChanges,
     diff: currentTarget ? diff : null,
     diffNotice: currentTarget ? diffNotice : null,
     history: currentTarget ? history : null,
@@ -1164,9 +1170,7 @@ export function useRepositoryDetails(
     changeSelectionRequestId: currentTarget ? changeSelectionRequestId : null,
     selectedCommitHash: currentTarget ? selectedCommitHash : null,
     historyDetailOpen: currentTarget && historyDetailOpen,
-    loading: currentLoadingScope
-      ? loading
-      : initialTabLoading(Boolean(target), tab),
+    loading: cachedChanges ? { ...visibleLoading, changes: false } : visibleLoading,
     error: currentLoadingScope ? error : null,
     selectChange,
     selectCommit,

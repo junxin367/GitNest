@@ -42,6 +42,9 @@ export function ActivityRail({
   onToggleSidebar,
   onToggleTheme
 }: ActivityRailProps) {
+  const activePrimaryView =
+    activeView === "repository" ? "workspace" : activeView;
+
   return (
     <nav className="activity-rail" aria-label="主导航">
       <Button variant="unstyled"
@@ -69,10 +72,10 @@ export function ActivityRail({
       <div className="rail-divider" aria-hidden="true" />
       {primaryItems.map((item) => (
         <Button variant="unstyled"
-          aria-current={item.id === activeView ? "page" : undefined}
+          aria-current={item.id === activePrimaryView ? "page" : undefined}
           aria-label={item.label}
           className={`rail-button${
-            item.id === activeView ? " active" : ""
+            item.id === activePrimaryView ? " active" : ""
           }`}
           key={item.id}
           onClick={() => onNavigate(item.id)}

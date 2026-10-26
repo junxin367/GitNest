@@ -505,16 +505,6 @@
   opacity: 0.8;
 }
 
-.ref-label.remote {
-  color: var(--blue);
-  background: var(--blue-soft);
-  border-color: color-mix(
-    in srgb,
-    var(--blue) 20%,
-    transparent
-  );
-}
-
 .ref-label.tag {
   color: var(--yellow);
   background: var(--yellow-soft);

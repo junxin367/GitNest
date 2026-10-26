@@ -54,6 +54,40 @@ describe("ActivityRail", () => {
     expect(markup).not.toContain("rail-badge");
   });
 
+  it.each([
+    ["workspace", "Workspace 总览"],
+    ["repository", "Workspace 总览"],
+    ["analysis", "代码分析"],
+    ["operations", "操作中心"],
+    ["settings", "设置"]
+  ] as const)("marks the owning navigation item as current on the %s page", (activeView, label) => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(
+      <ActivityRail
+        activeView={activeView}
+        onNavigate={vi.fn()}
+        onOpenSearch={vi.fn()}
+        onOpenTerminal={vi.fn()}
+        onToggleSidebar={vi.fn()}
+        onToggleTheme={vi.fn()}
+        searchOpen={false}
+        sidebarCollapsed={false}
+        sidebarDisabled={false}
+        terminalDisabled={false}
+        terminalTitle="打开终端"
+        theme="dark"
+      />
+    );
+
+    const currentItems = container.querySelectorAll(
+      '[aria-current="page"]'
+    );
+    expect(currentItems).toHaveLength(1);
+    expect(currentItems[0]?.getAttribute("aria-label")).toBe(label);
+    expect(currentItems[0]?.classList).toContain("active");
+    expect(container.querySelectorAll(".rail-button.active")).toHaveLength(1);
+  });
+
   it("uses the four-node graph icon from the prototype", () => {
     const markup = renderToStaticMarkup(
       <Icon name="graph" size={20} />

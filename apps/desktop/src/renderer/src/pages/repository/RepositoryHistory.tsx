@@ -37,6 +37,7 @@ import {
   type HistoryGraphRow
 } from "./historyGraph";
 import { useHistoryScroll } from "./useHistoryScroll";
+import { repositoryHistoryGraphColors, saveHistoryGraphColors } from "./historyGraphColors";
 
 export { RepositoryCommitDetail } from "./RepositoryCommitDetail";
 export {
@@ -93,7 +94,15 @@ export function RepositoryHistory({
     loading: controller.loading.history
   });
   const commits = history?.page.commits;
-  const graph = useMemo(() => buildHistoryGraph(commits ?? []), [commits]);
+  const graphColors = repositoryHistoryGraphColors(target.repositoryId);
+  const branches = controller.branches?.branches ?? [];
+  const graph = useMemo(
+    () => buildHistoryGraph(commits ?? [], graphColors, branches),
+    [commits, graphColors, controller.branches?.branches]
+  );
+  useEffect(() => {
+    saveHistoryGraphColors(target.repositoryId, graphColors);
+  }, [graph, graphColors, target.repositoryId]);
   const commitCount = commits?.length ?? 0;
   const scroll = useHistoryScroll({
     resetKey: `${repositoryKey}:${JSON.stringify(controller.historyScope)}:${JSON.stringify(controller.historySearch)}`,
@@ -104,7 +113,6 @@ export function RepositoryHistory({
     selectedHash: controller.historyDetailOpen ? controller.selectedCommitHash : null,
     loadMore: controller.loadMoreHistory
   });
-  const branches = controller.branches?.branches ?? [];
   const remoteRefs = useMemo(() => new Set(
     controller.branches?.branches
       .filter((item) => item.remote)

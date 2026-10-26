@@ -662,7 +662,11 @@ export function App() {
               snapshots={workspace.snapshots}
               view={view}
               workspace={workspace.workspace}
-              externalApplications={workspaceApplications}
+              externalApplications={
+                view === "repository"
+                  ? externalApplications
+                  : workspaceApplications
+              }
               commandActive={repositoryCommands.active}
               commandFeedback={repositoryCommands}
               commandCompletionVersion={

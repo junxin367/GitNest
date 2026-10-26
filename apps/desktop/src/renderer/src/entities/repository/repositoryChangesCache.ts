@@ -31,9 +31,9 @@ export class RepositoryChangesCache {
     this.#repository = repository;
   }
 
-  peek(targetKey: string, revision: string): RepositoryChangesDto | null {
+  peek(targetKey: string, revision?: string): RepositoryChangesDto | null {
     const entry = this.#entries.get(targetKey);
-    return entry?.revision === revision ? entry.value : null;
+    return entry && (revision === undefined || entry.revision === revision) ? entry.value : null;
   }
 
   read(

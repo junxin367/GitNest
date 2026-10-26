@@ -3712,8 +3712,8 @@
       left: 24px;
       width: 20px;
       height: 17px;
-      border-top: 2px solid var(--purple);
-      border-right: 2px solid var(--purple);
+      border-top: 2px solid var(--lane-color, var(--accent));
+      border-right: 2px solid var(--lane-color, var(--accent));
       border-radius: 0 12px 0 0;
       transform: translateY(-17px);
       opacity: 0.62;
@@ -3764,18 +3764,12 @@
       align-items: center;
       height: var(--space-5);
       padding: 0 var(--space-2);
-      color: var(--accent);
-      background: var(--accent-soft);
-      border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+      color: var(--lane-color, var(--accent));
+      background: color-mix(in srgb, var(--lane-color, var(--accent)) 12%, var(--surface));
+      border: 1px solid color-mix(in srgb, var(--lane-color, var(--accent)) 38%, transparent);
       border-radius: 999px;
       font-size: var(--font-size-caption);
       font-weight: var(--font-weight-semibold);
-    }
-
-    .ref-label.remote {
-      color: var(--blue);
-      background: var(--blue-soft);
-      border-color: color-mix(in srgb, var(--blue) 20%, transparent);
     }
 
     .ref-label.stash {
@@ -14445,6 +14439,8 @@
     function updateNavigationState() {
       const workspaceRail = document.getElementById("workspaceRail");
       const sidebarToggleRail = document.getElementById("sidebarToggleRail");
+      const workspaceActive =
+        state.view === "workspace" || state.view === "repository";
       const fullPageView =
         state.view === "operations" ||
         state.view === "settings" ||
@@ -14455,8 +14451,8 @@
       if (sidebarHidden && state.workspaceSwitcherOpen) {
         closeWorkspaceSwitcher();
       }
-      workspaceRail.classList.toggle("active", state.view === "workspace");
-      workspaceRail.setAttribute("aria-current", state.view === "workspace" ? "page" : "false");
+      workspaceRail.classList.toggle("active", workspaceActive);
+      workspaceRail.setAttribute("aria-current", workspaceActive ? "page" : "false");
       sidebarToggleRail.classList.remove("active");
       sidebarToggleRail.setAttribute("aria-label", sidebarLabel);
       sidebarToggleRail.setAttribute("aria-pressed", String(sidebarHidden));
@@ -18007,8 +18003,8 @@
           ? state.historyDetailOpen && state.selectedCommit === commit.hash
           : state.selectedCommit === commit.hash;
       return `
-        <div role="button" tabindex="0" class="commit-row ${isSelected ? "selected" : ""}" aria-current="${isSelected}" onclick="selectCommit('${commit.hash}')" onkeydown="activateOnKey(event)">
-          <div class="commit-graph ${!isStash && index === 2 ? "branch" : ""}" style="--lane-color:${isStash ? "var(--history-stash-color)" : commit.color}">
+        <div role="button" tabindex="0" class="commit-row ${isSelected ? "selected" : ""}" style="--lane-color:${isStash ? "var(--history-stash-color)" : commit.color}" aria-current="${isSelected}" onclick="selectCommit('${commit.hash}')" onkeydown="activateOnKey(event)">
+          <div class="commit-graph ${!isStash && index === 2 ? "branch" : ""}">
             <span class="commit-node"></span>
           </div>
           <div class="commit-message">

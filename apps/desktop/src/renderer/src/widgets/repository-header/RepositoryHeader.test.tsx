@@ -499,11 +499,11 @@ describe("RepositoryHeader", () => {
     expect(actionGroupChildren[2]?.classList).toContain(
       "open-in-control"
     );
-    const openWorkspace = container.querySelector<HTMLButtonElement>(
-      '[aria-label="使用 Visual Studio Code 打开Workspace 根目录"]'
+    const openWorktree = container.querySelector<HTMLButtonElement>(
+      '[aria-label="使用 Visual Studio Code 打开当前 Worktree"]'
     );
-    expect(openWorkspace).not.toBeNull();
-    act(() => openWorkspace?.click());
+    expect(openWorktree).not.toBeNull();
+    act(() => openWorktree?.click());
     expect(open).toHaveBeenCalledWith("vscode");
   });
 

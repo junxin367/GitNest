@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { act, StrictMode } from "react";
+import { act, StrictMode, useLayoutEffect } from "react";
 import {
   createRoot,
   type Root
@@ -109,6 +109,90 @@ describe("useRepositoryDetails", () => {
       expect(controller?.loading.changes).toBe(false);
     }
   );
+
+  it.each(["unchanged", "changed"])(
+    "keeps cached statistics in the first visible frame when returning with revision=%s",
+    async (revision) => {
+      const nextTarget = { repositoryId: "repository-b", worktreeId: "worktree-b" };
+      const initial = createChanges([{ ...CHANGE, unstagedStats: { additions: 7, deletions: 2 } }]);
+      const getChanges = vi.fn<GitNestBridge["repository"]["getChanges"]>(async ({ target }) => ({
+        ok: true, value: { ...initial, target }
+      }));
+      installBridge({
+        getChanges,
+        getDiff: vi.fn(async () => ({ ok: true as const, value: createDiff("diff") }))
+      });
+      const frames: Array<{ changes: RepositoryChangesDto | null; loading: boolean }> = [];
+      function Trace({ target, revision }: { target: RepositoryTargetDto; revision: string }) {
+        const value = useRepositoryDetails(target, "changes", revision);
+        useLayoutEffect(() => {
+          frames.push({ changes: value.changes, loading: value.loading.changes });
+        });
+        return null;
+      }
+      const render = async (target: RepositoryTargetDto, revision = "unchanged") => {
+        await act(async () => {
+          root.render(<Trace target={target} revision={revision} />);
+          await flushAsyncWork();
+        });
+      };
+      await render(TARGET);
+      await render(nextTarget);
+      frames.length = 0;
+      await render(TARGET, revision);
+      expect(frames[0]?.changes?.target).toEqual(TARGET);
+      expect(frames[0]?.loading).toBe(false);
+      expect(frames.every(frame =>
+        frame.changes?.target.repositoryId === TARGET.repositoryId
+        && frame.changes.snapshot.changes[0]?.unstagedStats?.additions === 7
+      )).toBe(true);
+      expect(getChanges).toHaveBeenCalledTimes(revision === "unchanged" ? 2 : 3);
+    }
+  );
+
+  it("keeps known statistics through the raw refresh snapshot until authoritative values replace them", async () => {
+    const listeners: Array<(progress: RepositoryChangesProgressDto) => void> = [];
+    let finish!: (result: { ok: true; value: RepositoryChangesDto }) => void;
+    const pending = new Promise<{ ok: true; value: RepositoryChangesDto }>((resolve) => { finish = resolve; });
+    const initial = createChanges([
+      { ...CHANGE, unstagedStats: { additions: 7, deletions: 2 } },
+      { ...SECOND_CHANGE, unstagedStats: { additions: 4, deletions: 1 } }
+    ]);
+    const getChanges = vi.fn<GitNestBridge["repository"]["getChanges"]>()
+      .mockResolvedValueOnce({ ok: true, value: initial })
+      .mockReturnValueOnce(pending);
+    installBridge({
+      getChanges,
+      getDiff: vi.fn(async () => ({ ok: true as const, value: createDiff("diff") })),
+      onChangesProgress: listener => { listeners.push(listener); return vi.fn(); }
+    });
+    await renderTarget();
+    await act(async () => {
+      void controller?.reload("changes", { preserveSelection: true });
+      await flushAsyncWork();
+    });
+    const queryId = getChanges.mock.calls[1]![0].queryId;
+    act(() => {
+      listeners[1]!({
+        kind: "snapshot", queryId, target: TARGET,
+        snapshot: createChanges([CHANGE, SECOND_CHANGE]).snapshot, completed: 0, total: 2
+      });
+    });
+    expect(controller?.changes?.snapshot.changes.map(change => change.unstagedStats))
+      .toEqual(initial.snapshot.changes.map(change => change.unstagedStats));
+    const updated = { ...CHANGE, unstagedStats: { additions: 11, deletions: 3 } };
+    await act(async () => {
+      listeners[1]!({
+        kind: "stats", queryId, target: TARGET,
+        changes: [updated, SECOND_CHANGE], completed: 2, total: 2
+      });
+      finish({ ok: true, value: createChanges([updated, SECOND_CHANGE]) });
+      await flushAsyncWork();
+    });
+    expect(controller?.changes?.snapshot.changes[0]?.unstagedStats).toEqual(updated.unstagedStats);
+    expect(controller?.changes?.snapshot.changes[1]?.unstagedStats).toBeUndefined();
+    expect(controller?.changes?.statsProgress).toBeUndefined();
+  });
 
   it.each([false, true])(
     "reuses a background stats query when it completes before returning=%s",

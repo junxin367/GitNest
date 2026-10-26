@@ -272,7 +272,11 @@ export function RepositoryHeader({
               Boolean(workspace?.selectedTarget))) && (
             <OpenInControl
               applications={externalApplications}
-                scope="workspace"
+              scope={
+                view === "repository" && workspace?.selectedTarget
+                  ? "repository"
+                  : "workspace"
+              }
             />
           )}
 

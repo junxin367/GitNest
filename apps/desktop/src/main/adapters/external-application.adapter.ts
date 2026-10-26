@@ -659,7 +659,7 @@ async function launchDetachedApplication(
       cwd: request.cwd,
       detached: true,
       shell: false,
-      windowsHide: true,
+      windowsHide: false,
       stdio: "ignore"
     });
     child.once("error", (error) => {
