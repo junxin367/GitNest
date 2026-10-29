@@ -1527,6 +1527,17 @@ export function validateUpdateAppSettingsRequest(
       }
       appearance.uiColor = value;
     }
+    if ("backgroundColor" in request.appearance) {
+      const value = request.appearance.backgroundColor;
+      if (
+        value !== null &&
+        (typeof value !== "string" ||
+          !/^#[0-9a-f]{6}$/i.test(value))
+      ) {
+        throw invalidSettingsRequest();
+      }
+      appearance.backgroundColor = value;
+    }
     result.appearance = appearance;
   }
 

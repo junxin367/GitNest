@@ -105,6 +105,9 @@ describe("repository read commands", () => {
       "--decorate=short"
     );
     expect(historyPageArguments(51, 50)).toContain(
+      "--date-order"
+    );
+    expect(historyPageArguments(51, 50)).toContain(
       "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00"
     );
     expect(

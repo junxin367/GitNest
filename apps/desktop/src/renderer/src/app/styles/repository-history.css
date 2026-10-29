@@ -288,10 +288,8 @@
   font-weight: var(--font-weight-medium);
 }
 
-.history-ref-option.is-selected
-  .history-ref-option-copy
-  strong {
-  color: var(--text);
+.history-ref-option-check {
+  color: var(--color-primary);
 }
 
 .history-ref-option-copy small {
@@ -467,24 +465,22 @@
 
 .commit-refs-inline {
   display: flex;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
-  max-width: 60%;
-  overflow: hidden;
+  max-width: 100%;
 }
 
 .ref-label {
   display: inline-flex;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
   max-width: 100%;
   height: calc(var(--space-5) - var(--space-1));
   padding: 0 var(--space-1);
-  overflow: hidden;
   color: var(--lane-color, var(--accent));
   background: color-mix(in srgb, var(--lane-color, var(--accent)) 12%, var(--surface));
   border: 1px solid color-mix(
@@ -503,8 +499,6 @@
 }
 
 .commit-ref-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

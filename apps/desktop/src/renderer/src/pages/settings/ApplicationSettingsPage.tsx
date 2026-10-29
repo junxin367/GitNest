@@ -55,8 +55,24 @@ import { Textarea } from "../../shared/ui/Textarea";
 import { Toast, ToastViewport } from "../../shared/ui/Toast";
 import { SettingsPage as AccountAuthSettings } from "./SettingsPage";
 
+const THEME_PRESETS = [
+  { id: "default-dark", name: "默认深色", accent: "#36c7b5", background: "#0d131b", text: "#e8eef6" },
+  { id: "default-light", name: "默认浅色", accent: "#06736a", background: "#f2f5f8", text: "#1b2733" },
+  { id: "tokyo-night", name: "Tokyo Night", accent: "#7aa2f7", background: "#1a1b26", text: "#c0caf5" },
+  { id: "catppuccin", name: "Catppuccin", accent: "#cba6f7", background: "#1e1e2e", text: "#cdd6f4" },
+  { id: "nord", name: "Nord", accent: "#88c0d0", background: "#2e3440", text: "#eceff4" },
+  { id: "dracula", name: "Dracula", accent: "#bd93f9", background: "#282a36", text: "#f8f8f2" },
+  { id: "gruvbox", name: "Gruvbox", accent: "#fabd2f", background: "#282828", text: "#ebdbb2" },
+  { id: "solarized-light", name: "Solarized Light", accent: "#268bd2", background: "#fdf6e3", text: "#657b83" },
+  { id: "monokai", name: "Monokai", accent: "#a6e22e", background: "#272822", text: "#f8f8f2" },
+  { id: "one-dark", name: "One Dark", accent: "#61afef", background: "#282c34", text: "#abb2bf" },
+  { id: "github-light", name: "GitHub Light", accent: "#0969da", background: "#ffffff", text: "#1f2328" },
+  { id: "rose-pine", name: "Rosé Pine", accent: "#c4a7e7", background: "#191724", text: "#e0def4" }
+] as const;
+
 export type ApplicationSettingsSection =
   | "general"
+  | "appearance"
   | "ai"
   | "analysis"
   | "git"
@@ -96,6 +112,16 @@ const GENERAL_SETTINGS_SECTION: SettingsSectionDefinition = {
 
 const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
   GENERAL_SETTINGS_SECTION,
+  {
+    id: "appearance",
+    label: "主题设置",
+    subtitle: "外观与颜色",
+    icon: "sparkle",
+    cards: [
+      { id: "settings-appearance-themes", label: "主题预览" },
+      { id: "settings-appearance-colors", label: "自定义颜色" }
+    ]
+  },
   {
     id: "analysis",
     label: "代码分析",
@@ -1038,57 +1064,6 @@ export const ApplicationSettingsPage = memo(function ApplicationSettingsPage({
                 </SettingsCard>
 
                 <SettingsCard
-                  description="自定义 GitNest 的强调色，用于按钮、选中状态、焦点和导航标记。"
-                  id="settings-general-ui-color"
-                  title="界面颜色"
-                >
-                  <div className="settings-color-control">
-                    <label htmlFor="settings-ui-color">强调色</label>
-                    <div className="settings-color-control-actions">
-                      <input
-                        aria-label="选择界面颜色"
-                        className="settings-color-input"
-                        id="settings-ui-color"
-                        onChange={(event) =>
-                          void appSettings.update({
-                            appearance: {
-                              uiColor: event.currentTarget.value
-                            }
-                          })
-                        }
-                        type="color"
-                        value={
-                          appSettings.settings.appearance.uiColor ??
-                          (appSettings.settings.appearance.theme ===
-                          "light"
-                            ? "#06736a"
-                            : "#36c7b5")
-                        }
-                      />
-                      <code>
-                        {appSettings.settings.appearance.uiColor ??
-                          "跟随当前主题"}
-                      </code>
-                      <Button
-                        disabled={
-                          appSettings.saving ||
-                          !appSettings.settings.appearance.uiColor
-                        }
-                        onClick={() =>
-                          void appSettings.update({
-                            appearance: { uiColor: null }
-                          })
-                        }
-                        size="small"
-                        type="button"
-                      >
-                        恢复默认
-                      </Button>
-                    </div>
-                  </div>
-                </SettingsCard>
-
-                <SettingsCard
                   badge={`${terminalProfiles.length} 个可用`}
                   description="左侧活动栏的终端入口会使用这里解析出的默认终端。"
                   id="settings-general-terminal"
@@ -1187,6 +1162,153 @@ export const ApplicationSettingsPage = memo(function ApplicationSettingsPage({
                         />
                       </dl>
                     </section>
+                  </div>
+                </SettingsCard>
+              </>
+            )}
+
+            {section === "appearance" && (
+              <>
+                <SettingsCard
+                  description="选择一套喜欢的配色方案，或自定义界面强调色与背景色。"
+                  id="settings-appearance-themes"
+                  title="主题预览"
+                >
+                  <div className="settings-theme-presets">
+                    {THEME_PRESETS.map((preset) => (
+                      <button
+                        className={`settings-theme-preset${
+                          appSettings.settings.appearance.uiColor === preset.accent &&
+                          appSettings.settings.appearance.backgroundColor === preset.background
+                            ? " active"
+                            : ""
+                        }`}
+                        key={preset.id}
+                        onClick={() =>
+                          void appSettings.update({
+                            appearance: {
+                              uiColor: preset.accent,
+                              backgroundColor: preset.background
+                            }
+                          })
+                        }
+                        type="button"
+                      >
+                        <span
+                          className="settings-theme-preview"
+                          style={{ background: preset.background }}
+                        >
+                          <span
+                            className="settings-theme-preview-bar"
+                            style={{ background: preset.accent }}
+                          />
+                          <span
+                            className="settings-theme-preview-text"
+                            style={{ background: preset.text }}
+                          />
+                          <span
+                            className="settings-theme-preview-text short"
+                            style={{ background: preset.text, opacity: 0.6 }}
+                          />
+                        </span>
+                        <span className="settings-theme-name">{preset.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </SettingsCard>
+
+                <SettingsCard
+                  description="自定义 GitNest 的主题颜色，用于按钮、选中状态、焦点、导航标记以及背景。"
+                  id="settings-appearance-colors"
+                  title="自定义颜色"
+                >
+                  <div className="settings-color-control">
+                    <label htmlFor="settings-ui-color">强调色</label>
+                    <div className="settings-color-control-actions">
+                      <input
+                        aria-label="选择界面颜色"
+                        className="settings-color-input"
+                        id="settings-ui-color"
+                        onChange={(event) =>
+                          void appSettings.update({
+                            appearance: {
+                              uiColor: event.currentTarget.value
+                            }
+                          })
+                        }
+                        type="color"
+                        value={
+                          appSettings.settings.appearance.uiColor ??
+                          (appSettings.settings.appearance.theme ===
+                          "light"
+                            ? "#06736a"
+                            : "#36c7b5")
+                        }
+                      />
+                      <code>
+                        {appSettings.settings.appearance.uiColor ??
+                          "跟随当前主题"}
+                      </code>
+                      <Button
+                        disabled={
+                          appSettings.saving ||
+                          !appSettings.settings.appearance.uiColor
+                        }
+                        onClick={() =>
+                          void appSettings.update({
+                            appearance: { uiColor: null }
+                          })
+                        }
+                        size="small"
+                        type="button"
+                      >
+                        恢复默认
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="settings-color-control">
+                    <label htmlFor="settings-bg-color">背景色</label>
+                    <div className="settings-color-control-actions">
+                      <input
+                        aria-label="选择背景颜色"
+                        className="settings-color-input"
+                        id="settings-bg-color"
+                        onChange={(event) =>
+                          void appSettings.update({
+                            appearance: {
+                              backgroundColor: event.currentTarget.value
+                            }
+                          })
+                        }
+                        type="color"
+                        value={
+                          appSettings.settings.appearance.backgroundColor ??
+                          (appSettings.settings.appearance.theme ===
+                          "light"
+                            ? "#f2f5f8"
+                            : "#0d131b")
+                        }
+                      />
+                      <code>
+                        {appSettings.settings.appearance.backgroundColor ??
+                          "跟随当前主题"}
+                      </code>
+                      <Button
+                        disabled={
+                          appSettings.saving ||
+                          !appSettings.settings.appearance.backgroundColor
+                        }
+                        onClick={() =>
+                          void appSettings.update({
+                            appearance: { backgroundColor: null }
+                          })
+                        }
+                        size="small"
+                        type="button"
+                      >
+                        恢复默认
+                      </Button>
+                    </div>
                   </div>
                 </SettingsCard>
               </>

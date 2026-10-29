@@ -1718,7 +1718,7 @@ describe("useRepositoryDetails", () => {
     await act(flushAsyncWork);
 
     expect(getBranches).toHaveBeenCalledTimes(1);
-    expect(controller?.historyScope).toBeNull();
+    expect(controller?.historyScope).toEqual({ kind: "all" });
 
     await act(async () => {
       await controller?.selectHistoryScope({

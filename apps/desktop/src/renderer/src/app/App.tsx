@@ -145,6 +145,7 @@ export function App() {
   const applicationUpdate = useApplicationUpdate();
   const theme = appSettings.settings.appearance.theme;
   const uiColor = appSettings.settings.appearance.uiColor;
+  const backgroundColor = appSettings.settings.appearance.backgroundColor;
   const workspace = useWorkspace();
   const workspaceChangedFiles = useWorkspaceChangedFiles(
     workspace.workspace,
@@ -341,6 +342,72 @@ export function App() {
       "color-mix(in srgb, var(--color-primary) 72%, #fff)"
     );
   }, [uiColor]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const bgProperties = [
+      "--color-bg-page",
+      "--color-bg-surface",
+      "--color-bg-subtle",
+      "--color-bg-muted",
+      "--color-bg-hover",
+      "--color-border",
+      "--color-border-subtle",
+      "--color-code-bg",
+      "--titlebar",
+      "--rail",
+      "--sidebar",
+      "--scrollbar"
+    ];
+    if (!backgroundColor) {
+      for (const property of bgProperties) {
+        root.style.removeProperty(property);
+      }
+      return;
+    }
+    root.style.setProperty("--color-bg-page", backgroundColor);
+    root.style.setProperty(
+      "--color-bg-surface",
+      `color-mix(in srgb, ${backgroundColor}, #ffffff 5%)`
+    );
+    root.style.setProperty(
+      "--color-bg-subtle",
+      `color-mix(in srgb, ${backgroundColor}, #ffffff 9%)`
+    );
+    root.style.setProperty(
+      "--color-bg-muted",
+      `color-mix(in srgb, ${backgroundColor}, #ffffff 13%)`
+    );
+    root.style.setProperty(
+      "--color-bg-hover",
+      `color-mix(in srgb, ${backgroundColor}, #ffffff 17%)`
+    );
+    root.style.setProperty(
+      "--color-border",
+      `color-mix(in srgb, ${backgroundColor}, #ffffff 24%)`
+    );
+    root.style.setProperty(
+      "--color-border-subtle",
+      `color-mix(in srgb, ${backgroundColor}, #ffffff 11%)`
+    );
+    root.style.setProperty("--color-code-bg", backgroundColor);
+    root.style.setProperty(
+      "--titlebar",
+      `color-mix(in srgb, ${backgroundColor}, #000000 12%)`
+    );
+    root.style.setProperty(
+      "--rail",
+      `color-mix(in srgb, ${backgroundColor}, #000000 10%)`
+    );
+    root.style.setProperty(
+      "--sidebar",
+      `color-mix(in srgb, ${backgroundColor}, #000000 8%)`
+    );
+    root.style.setProperty(
+      "--scrollbar",
+      `color-mix(in srgb, ${backgroundColor}, #ffffff 24%)`
+    );
+  }, [backgroundColor]);
 
   useEffect(() => {
     if (view !== "repository") {

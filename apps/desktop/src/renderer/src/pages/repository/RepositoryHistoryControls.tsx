@@ -111,7 +111,7 @@ export function HistoryScopeControls({
         ? selectedBranches[0]!.name
         : selectedRefs.length > 1
           ? `已选 ${selectedRefs.length} 个分支`
-          : currentBranchName ?? "当前分支";
+          : "Show All";
   return (
     <div
       className="history-scope-controls"
@@ -164,6 +164,29 @@ interface HistoryRefFilterOptions {
   showMergedRemote?: boolean;
 }
 
+function sortHistoryBranches(left: HistoryRefBranch, right: HistoryRefBranch): number {
+  const leftPriority = getHistoryBranchPriority(left.name);
+  const rightPriority = getHistoryBranchPriority(right.name);
+  if (leftPriority !== rightPriority) {
+    return leftPriority - rightPriority;
+  }
+  return left.name.localeCompare(right.name);
+}
+
+function getHistoryBranchPriority(name: string): number {
+  const normalized = name.replace(/^origin\//, "").toLowerCase();
+  if (normalized === "test") return 0;
+  if (normalized === "master" || normalized === "main") return 1;
+  if (normalized === "pre" || normalized === "pre-production") return 2;
+  if (normalized === "pro" || normalized === "production") return 3;
+  return 4;
+}
+
+function isMainBranch(name: string): boolean {
+  const branchName = name.replace(/^origin\//, "");
+  return ["test", "pre", "pre-production", "pro", "production", "master", "main"].includes(branchName);
+}
+
 export function groupHistoryRefBranches<
   TBranch extends HistoryRefBranch
 >(
@@ -191,27 +214,29 @@ export function groupHistoryRefBranches<
       )
     : branches;
   const searching = normalizedQuery.length > 0;
+  const sortedMatches = [...matches].sort(sortHistoryBranches);
   const localBranchCount = branches.filter(
     (branch) => !branch.remote
   ).length;
   const remoteBranchCount = branches.filter(
     (branch) => branch.remote
   ).length;
-  const remoteMatches = matches.filter(
+  const remoteMatches = sortedMatches.filter(
     (branch) => branch.remote
   );
   const mergedRemoteCount = branches.filter(
     (branch) =>
       branch.remote &&
       branch.merged === true &&
-      !selectedRefs.includes(branch.fullName)
+      !selectedRefs.includes(branch.fullName) &&
+      !isMainBranch(branch.name)
   ).length;
 
   return {
     localBranchCount,
     localBranches:
       searching || activeGroup === "local"
-        ? matches.filter((branch) => !branch.remote)
+        ? sortedMatches.filter((branch) => !branch.remote)
         : [],
     mergedRemoteCount,
     remoteBranchCount,
@@ -222,19 +247,16 @@ export function groupHistoryRefBranches<
               searching ||
               showMergedRemote ||
               branch.merged !== true ||
-              selectedRefs.includes(branch.fullName)
+              selectedRefs.includes(branch.fullName) ||
+              isMainBranch(branch.name)
           )
         : [],
     searching
   };
 }
 
-export function historyRefOptionClassName(
-  selected: boolean
-) {
-  return selected
-    ? "history-ref-option is-selected"
-    : "history-ref-option";
+export function historyRefOptionClassName(_selected: boolean) {
+  return "history-ref-option";
 }
 
 function HistoryRefPicker({
@@ -253,7 +275,6 @@ function HistoryRefPicker({
   const [query, setQuery] = useState("");
   const [showMergedRemote, setShowMergedRemote] =
     useState(false);
-  const [pendingRefs, setPendingRefs] = useState<string[]>(selectedRefs);
   const menuRef = useRef<HTMLDivElement>(null);
   const {
     localBranchCount,
@@ -292,10 +313,7 @@ function HistoryRefPicker({
       : selectedName ?? "选择分支";
 
   useEffect(() => {
-    if (!anchor) {
-      setPendingRefs(selectedRefs);
-      return;
-    }
+    if (!anchor) return;
     const closeForPointer = (event: PointerEvent) => {
       const target = event.target;
       if (
@@ -307,7 +325,6 @@ function HistoryRefPicker({
       }
       setAnchor(null);
       setQuery("");
-      setPendingRefs(selectedRefs);
     };
     const closeForEscape = (event: KeyboardEvent) => {
       if (
@@ -337,17 +354,10 @@ function HistoryRefPicker({
   }, [anchor, selectedRefsKey]);
 
   const selectRef = (ref: string) => {
-    setPendingRefs((current) =>
-      current.includes(ref)
-        ? current.filter((value) => value !== ref)
-        : [...current, ref]
-    );
-  };
-  const applyRefs = () => {
-    onChange(pendingRefs);
-    setAnchor(null);
-    setQuery("");
-    anchor?.focus();
+    const nextRefs = selectedRefs.includes(ref)
+      ? selectedRefs.filter((value) => value !== ref)
+      : [...selectedRefs, ref];
+    onChange(nextRefs);
   };
   const renderGroup = (
     heading: string,
@@ -359,14 +369,15 @@ function HistoryRefPicker({
         {items.map((branch) => (
           <MenuItem
             aria-checked={
-              pendingRefs.includes(branch.fullName)
+              selectedRefs.includes(branch.fullName)
             }
             className={historyRefOptionClassName(
-              pendingRefs.includes(branch.fullName)
+              selectedRefs.includes(branch.fullName)
             )}
             key={branch.fullName}
             leading={<Icon name="branch" size={14} />}
             onClick={() => selectRef(branch.fullName)}
+            trailing={selectedRefs.includes(branch.fullName) ? <Icon name="check" size={14} className="history-ref-option-check" /> : null}
             role="menuitemcheckbox"
             title={branch.fullName}
           >
@@ -414,7 +425,7 @@ function HistoryRefPicker({
           {selectedRefs.length === 1 && selected?.name
             ? selected.name
             : selectedName ??
-              (loading ? "读取分支…" : "选择分支")}
+              (loading ? "读取分支…" : "Show All")}
         </span>
         <Icon name="chevron" size={12} />
       </Button>
@@ -543,20 +554,12 @@ function HistoryRefPicker({
           </div>
           <div className="history-ref-menu-footer">
             <span className="history-ref-selection-count">
-              {pendingRefs.length > 1
-                ? `已选择 ${pendingRefs.length} 个分支`
-                : pendingRefs.length === 1
+              {selectedRefs.length > 1
+                ? `已选择 ${selectedRefs.length} 个分支`
+                : selectedRefs.length === 1
                   ? "已选择 1 个分支"
                   : "查看全部引用"}
             </span>
-            <Button
-              disabled={pendingRefs.length === 0}
-              onClick={applyRefs}
-              size="small"
-              type="button"
-            >
-              应用
-            </Button>
           </div>
         </MenuPopover>
       )}

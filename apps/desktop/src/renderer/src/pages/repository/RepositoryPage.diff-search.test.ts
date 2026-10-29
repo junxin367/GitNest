@@ -100,7 +100,7 @@ describe("history branch picker grouping", () => {
     ).toEqual({
       localBranchCount: 2,
       localBranches: branches.slice(0, 2),
-      mergedRemoteCount: 1,
+      mergedRemoteCount: 0,
       remoteBranchCount: 2,
       remoteBranches: [],
       searching: false
@@ -110,9 +110,9 @@ describe("history branch picker grouping", () => {
     ).toEqual({
       localBranchCount: 2,
       localBranches: [],
-      mergedRemoteCount: 1,
+      mergedRemoteCount: 0,
       remoteBranchCount: 2,
-      remoteBranches: [branches[3]],
+      remoteBranches: [branches[2], branches[3]],
       searching: false
     });
   });
@@ -121,7 +121,7 @@ describe("history branch picker grouping", () => {
     const expected = {
       localBranchCount: 2,
       localBranches: [branches[0]],
-      mergedRemoteCount: 1,
+      mergedRemoteCount: 0,
       remoteBranchCount: 2,
       remoteBranches: [branches[2]],
       searching: true
@@ -160,13 +160,9 @@ describe("history branch picker grouping", () => {
     ).toEqual(branches.slice(2));
   });
 
-  it("uses the shared selected menu state instead of a trailing checkmark", () => {
-    expect(historyRefOptionClassName(true)).toBe(
-      "history-ref-option is-selected"
-    );
-    expect(historyRefOptionClassName(false)).toBe(
-      "history-ref-option"
-    );
+  it("uses neutral menu class without background highlighting", () => {
+    expect(historyRefOptionClassName(true)).toBe("history-ref-option");
+    expect(historyRefOptionClassName(false)).toBe("history-ref-option");
   });
 });
 

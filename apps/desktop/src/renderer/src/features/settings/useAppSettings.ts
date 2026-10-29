@@ -40,6 +40,20 @@ export interface AppSettingsController {
   clearFeedback(): void;
 }
 
+function mergeRendererSettings(
+  current: AppSettingsDto,
+  patch: UpdateAppSettingsRequest
+): AppSettingsDto {
+  return {
+    ...current,
+    general: { ...current.general, ...patch.general },
+    appearance: { ...current.appearance, ...patch.appearance },
+    diff: { ...current.diff, ...patch.diff },
+    git: { ...current.git, ...patch.git },
+    navigation: { ...current.navigation, ...patch.navigation }
+  };
+}
+
 export function useAppSettings(): AppSettingsController {
   const [settings, setSettings] = useState<AppSettingsDto>(
     createDefaultAppSettings
@@ -63,10 +77,12 @@ export function useAppSettings(): AppSettingsController {
         notice?: string;
       } = {}
     ): Promise<boolean> => {
+      generation.current += 1;
       const requestGeneration = generation.current;
       const requestEventGeneration =
         settingsEventGeneration.current;
       setSavingCount((count) => count + 1);
+      setSettings((current) => mergeRendererSettings(current, patch));
       if (!options.silent) {
         setError(null);
         setNotice(null);

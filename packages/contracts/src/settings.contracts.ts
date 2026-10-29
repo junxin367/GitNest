@@ -49,6 +49,7 @@ export interface AppSettingsDto {
   appearance: {
     theme: AppThemeDto;
     uiColor?: string | null;
+    backgroundColor?: string | null;
   };
   diff: {
     /** Legacy default for repositories without a saved browsing preference. */
@@ -97,6 +98,7 @@ export interface UpdateAppSettingsRequest {
   appearance?: {
     theme?: AppThemeDto;
     uiColor?: string | null;
+    backgroundColor?: string | null;
   };
   diff?: {
     /** Legacy migration default; browsing controls use repositoryFileBrowsing. */
@@ -170,7 +172,8 @@ export function createDefaultAppSettings(): AppSettingsDto {
     },
     appearance: {
       theme: "dark",
-      uiColor: null
+      uiColor: null,
+      backgroundColor: null
     },
     diff: {
       fileView: "list",

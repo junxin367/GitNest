@@ -84,7 +84,7 @@ export function historyPageArguments(
     `--max-count=${limit}`,
     `--skip=${offset}`,
     "--date=iso-strict",
-    "--topo-order",
+    "--date-order",
     "--decorate=short",
     "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00",
     ...historySearchArguments(search),

@@ -477,10 +477,8 @@ describe("RepositoryCommitDetail", () => {
       ...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')
     ];
     expect(branchItems).toHaveLength(2);
+    act(() => branchItems[0]!.click());
     act(() => branchItems[1]!.click());
-    const apply = [...document.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "应用")!;
-    act(() => apply.click());
     expect(selectScope).toHaveBeenCalledWith({
       kind: "refs",
       refs: [

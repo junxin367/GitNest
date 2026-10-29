@@ -769,7 +769,8 @@ function toPublicSettings(
     general: { ...document.general },
     appearance: {
       theme: document.appearance.theme,
-      uiColor: normalizeUiColor(document.appearance.uiColor)
+      uiColor: normalizeUiColor(document.appearance.uiColor),
+      backgroundColor: normalizeUiColor(document.appearance.backgroundColor)
     },
     repositoryFileBrowsing: cloneRepositoryFileBrowsing(
       document.repositoryFileBrowsing
@@ -818,7 +819,8 @@ function cloneDocument(
     },
     appearance: {
       theme: document.appearance.theme,
-      uiColor: normalizeUiColor(document.appearance.uiColor)
+      uiColor: normalizeUiColor(document.appearance.uiColor),
+      backgroundColor: normalizeUiColor(document.appearance.backgroundColor)
     },
     diff: {
       fileView: document.diff.fileView,
@@ -942,7 +944,10 @@ function isAppearanceSettings(value: unknown): boolean {
     (value.theme === "dark" || value.theme === "light") &&
     (value.uiColor === undefined ||
       value.uiColor === null ||
-      isValidUiColor(value.uiColor))
+      isValidUiColor(value.uiColor)) &&
+    (value.backgroundColor === undefined ||
+      value.backgroundColor === null ||
+      isValidUiColor(value.backgroundColor))
   );
 }
 
@@ -1753,7 +1758,8 @@ function migrateV1Document(
     general: { ...document.general },
     appearance: {
       theme: document.appearance.theme,
-      uiColor: normalizeUiColor(document.appearance.uiColor)
+      uiColor: normalizeUiColor(document.appearance.uiColor),
+      backgroundColor: normalizeUiColor(document.appearance.backgroundColor)
     },
     diff: {
       ...document.diff,
@@ -1797,7 +1803,8 @@ function migrateV2Document(
     },
     appearance: {
       theme: document.appearance.theme,
-      uiColor: normalizeUiColor(document.appearance.uiColor)
+      uiColor: normalizeUiColor(document.appearance.uiColor),
+      backgroundColor: normalizeUiColor(document.appearance.backgroundColor)
     },
     diff: {
       fileView: document.diff.fileView,

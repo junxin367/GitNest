@@ -128,7 +128,7 @@ export function useRepositoryDetails(
   const [history, setHistory] =
     useState<RepositoryHistoryPageDto | null>(null);
   const [historyScope, setHistoryScope] =
-    useState<RepositoryHistoryScopeDto | null>(null);
+    useState<RepositoryHistoryScopeDto | null>({ kind: "all" });
   const [historySearch, setHistorySearch] =
     useState<RepositoryHistoryFilterDto | null>(null);
   const [historyLoadMoreError, setHistoryLoadMoreError] =
@@ -175,7 +175,7 @@ export function useRepositoryDetails(
   const activeChangesRequestIdRef = useRef<number | null>(null);
   const historyDetailOpenRef = useRef(false);
   const historyScopeRef =
-    useRef<RepositoryHistoryScopeDto | null>(null);
+    useRef<RepositoryHistoryScopeDto | null>({ kind: "all" });
   const historySearchRef =
     useRef<RepositoryHistoryFilterDto | null>(null);
   const previousTabRef = useRef<RepositoryTab | null>(null);
@@ -1050,8 +1050,8 @@ export function useRepositoryDetails(
     historyRowsRef.current = [];
     historyDepthRef.current = 0;
     setHistoryLoadMoreError(null);
-    historyScopeRef.current = null;
-    setHistoryScope(null);
+    historyScopeRef.current = { kind: "all" };
+    setHistoryScope({ kind: "all" });
     historySearchRef.current = null;
     setHistorySearch(null);
     setCommit(null);
@@ -1161,7 +1161,7 @@ export function useRepositoryDetails(
     diff: currentTarget ? diff : null,
     diffNotice: currentTarget ? diffNotice : null,
     history: currentTarget ? history : null,
-    historyScope: currentTarget ? historyScope : null,
+    historyScope: currentTarget ? historyScope : { kind: "all" },
     historySearch: currentTarget ? historySearch : null,
     historyLoadMoreError: currentTarget ? historyLoadMoreError : null,
     commit: currentTarget ? commit : null,
