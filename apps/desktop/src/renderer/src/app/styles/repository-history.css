@@ -5,15 +5,11 @@
 .history-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) 300px;
+  grid-template-rows: minmax(320px, 1fr);
   gap: 0;
   min-width: 0;
   min-height: 0;
   background: var(--surface);
-}
-
-.history-layout:not(.has-detail) {
-  grid-template-rows: minmax(320px, 1fr);
 }
 
 .history-list,
@@ -140,12 +136,31 @@
 }
 
 .history-ref-menu {
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(320px, calc(100vw - 16px));
   max-height: min(380px, calc(100vh - 32px));
   padding: var(--space-2);
   overflow-x: hidden;
   overflow-y: hidden;
+}
+
+.history-ref-menu-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+}
+
+.history-ref-selection-count {
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .history-ref-menu-header {
@@ -422,6 +437,11 @@
   stroke-width: 2;
 }
 
+.commit-node.head {
+  stroke: var(--accent-strong);
+  stroke-width: 2.5;
+}
+
 .commit-message {
   display: flex;
   align-items: center;
@@ -503,6 +523,14 @@
   flex: 0 0 auto;
   font-size: calc(var(--font-size-caption) - 2px);
   opacity: 0.8;
+}
+
+.commit-ref-remote {
+  flex: 0 0 auto;
+  padding-left: calc(var(--space-1) / 2);
+  color: var(--muted);
+  font-size: calc(var(--font-size-caption) - 2px);
+  font-weight: var(--font-weight-regular);
 }
 
 .ref-label.tag {

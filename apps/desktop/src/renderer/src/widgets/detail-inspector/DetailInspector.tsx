@@ -27,6 +27,10 @@ import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
 import type { RepositoryCommitActionHandler } from "../../features/repository-workflow/RepositoryCommitActions";
+import {
+  RepositoryCommitDetailBreadcrumb,
+  type RepositoryCommitDetailView
+} from "../../pages/repository/RepositoryHistory";
 
 interface DetailInspectorProps {
   commit: RepositoryCommitDto["commit"] | null;
@@ -41,6 +45,8 @@ interface DetailInspectorProps {
   onCommitAction?: RepositoryCommitActionHandler;
   actionBusy?: boolean;
   onClose(): void;
+  onCommitFileSelect?(path: string | null): void;
+  selectedCommitFile?: string | null;
   onOpenSettings(): void;
   onRenameWorkspace(
     workspaceId: string,
@@ -61,6 +67,8 @@ export function DetailInspector({
   onCommitAction,
   actionBusy,
   onClose,
+  onCommitFileSelect,
+  selectedCommitFile,
   onOpenSettings,
   onRenameWorkspace
 }: DetailInspectorProps) {
@@ -82,6 +90,8 @@ export function DetailInspector({
   const [commitNotice, setCommitNotice] = useState<string | null>(
     null
   );
+  const [commitDetailView, setCommitDetailView] =
+    useState<RepositoryCommitDetailView>("details");
   const operationActive = operations.some(
     (item) =>
       item.state === "queued" ||
@@ -118,7 +128,16 @@ export function DetailInspector({
 
   useEffect(() => {
     setCommitNotice(null);
-  }, [commit?.hash]);
+    setCommitDetailView("details");
+    onCommitFileSelect?.(null);
+  }, [commit?.hash, onCommitFileSelect]);
+
+  const changeCommitView = (view: RepositoryCommitDetailView) => {
+    setCommitDetailView(view);
+    if (view === "details") {
+      onCommitFileSelect?.(null);
+    }
+  };
 
   const saveWorkspaceName = async (event: FormEvent) => {
     event.preventDefault();
@@ -143,11 +162,15 @@ export function DetailInspector({
     const commitRefs = commit.refs ?? [];
     return (
       <aside className="inspector commit-inspector">
-        <header className="inspector-head">
-          <div className="inspector-title">
-            <Icon name="commit" />
-            提交详情
-          </div>
+        <header className="inspector-head commit-inspector-head">
+          <RepositoryCommitDetailBreadcrumb
+            additions={commit.additions}
+            deletions={commit.deletions}
+            fileCount={commit.files.length}
+            filesDisabled={commit.files.length === 0}
+            onViewChange={changeCommitView}
+            view={commitDetailView}
+          />
           <Button variant="unstyled"
             aria-label="折叠详情面板"
             className="icon-button"
@@ -160,28 +183,84 @@ export function DetailInspector({
         </header>
 
         <section className="inspector-section history-commit-summary">
-          <h2 className="selected-commit-title">
-            {commit.subject}
-          </h2>
-          <div className="commit-detail-meta">
-            <span>{commit.authorName}</span>
-            <code>{commit.hash}</code>
-            <span>
-              {formatCommitTimestamp(commit.authoredAt)}
-            </span>
-          </div>
-          {commitRefs.length > 0 && (
-            <div className="commit-refs">
-              {commitRefs.map((ref) => (
-                <span key={ref}>{ref}</span>
-              ))}
-            </div>
+          {commitDetailView === "details" && (
+            <>
+              <h2 className="selected-commit-title">
+                {commit.subject}
+              </h2>
+              <div className="commit-detail-meta">
+                <span>{commit.authorName}</span>
+                <code>{commit.hash}</code>
+                <span>
+                  {formatCommitTimestamp(commit.authoredAt)}
+                </span>
+              </div>
+              {commitRefs.length > 0 && (
+                <div className="commit-refs">
+                  {commitRefs.map((ref) => (
+                    <span key={ref}>{formatCommitRef(ref)}</span>
+                  ))}
+                </div>
+              )}
+              <p className="selected-commit-body">
+                {commit.body}
+              </p>
+            </>
           )}
-          <p className="selected-commit-body">
-            {commit.body}
-          </p>
         </section>
 
+        {commitDetailView === "files" && (
+          <section
+            aria-label="提交变更文件"
+            className="inspector-section commit-inspector-files"
+          >
+            {commit.files.length === 0 ? (
+              <p className="selected-commit-body">没有变更文件。</p>
+            ) : (
+              <div className="commit-file-list" role="list">
+                {commit.files.map((file) => {
+                  const filePath = splitCommitFilePath(file.path);
+                  return (
+                    <div key={file.path} role="listitem">
+                      <button
+                        aria-current={
+                          file.path === selectedCommitFile
+                            ? "true"
+                            : undefined
+                        }
+                        className="history-commit-file"
+                        onClick={() => onCommitFileSelect?.(file.path)}
+                        title={file.path}
+                        type="button"
+                      >
+                        <Icon name="fileCode" size={14} />
+                        <span className="history-commit-file-path">
+                          <strong>{filePath.name}</strong>
+                          {filePath.directory ? (
+                            <small>{filePath.directory}</small>
+                          ) : null}
+                        </span>
+                        {file.binary ? (
+                          <span className="history-commit-file-binary">
+                            二进制
+                          </span>
+                        ) : (
+                          <span className="history-commit-file-stats">
+                            <span className="additions">+{file.additions}</span>
+                            <span className="deletions">-{file.deletions}</span>
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
+        {commitDetailView === "details" && (
+          <>
         <section className="inspector-section">
           <div className="inspector-section-title">
             提交信息
@@ -193,7 +272,9 @@ export function DetailInspector({
             />
             <DetailRow
               label="分支"
-              value={commitRefs.join(", ") || "—"}
+              value={
+                commitRefs.map(formatCommitRef).join(", ") || "—"
+              }
             />
             <DetailRow
               label="作者"
@@ -204,15 +285,6 @@ export function DetailInspector({
               value={formatCommitTimestamp(commit.authoredAt)}
             />
           </dl>
-        </section>
-
-        <section className="inspector-section">
-          <div className="inspector-section-title">
-            采集范围
-          </div>
-          <p className="selected-commit-body">
-            当前页面展示提交的哈希、主题、作者、时间和变更文件统计。
-          </p>
         </section>
 
         <section className="inspector-section">
@@ -273,6 +345,8 @@ export function DetailInspector({
             </div>
           )}
         </section>
+          </>
+        )}
       </aside>
     );
   }
@@ -602,6 +676,23 @@ export function DetailInspector({
       </section>
     </aside>
   );
+}
+
+function splitCommitFilePath(path: string): {
+  directory: string;
+  name: string;
+} {
+  const separator = path.lastIndexOf("/");
+  return separator < 0
+    ? { directory: "", name: path }
+    : {
+        directory: path.slice(0, separator + 1),
+        name: path.slice(separator + 1)
+      };
+}
+
+function formatCommitRef(ref: string): string {
+  return ref.replace(/^HEAD -> /, "HEAD → ");
 }
 
 function DetailRow({

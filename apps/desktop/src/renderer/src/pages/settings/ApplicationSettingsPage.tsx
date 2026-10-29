@@ -1038,6 +1038,57 @@ export const ApplicationSettingsPage = memo(function ApplicationSettingsPage({
                 </SettingsCard>
 
                 <SettingsCard
+                  description="自定义 GitNest 的强调色，用于按钮、选中状态、焦点和导航标记。"
+                  id="settings-general-ui-color"
+                  title="界面颜色"
+                >
+                  <div className="settings-color-control">
+                    <label htmlFor="settings-ui-color">强调色</label>
+                    <div className="settings-color-control-actions">
+                      <input
+                        aria-label="选择界面颜色"
+                        className="settings-color-input"
+                        id="settings-ui-color"
+                        onChange={(event) =>
+                          void appSettings.update({
+                            appearance: {
+                              uiColor: event.currentTarget.value
+                            }
+                          })
+                        }
+                        type="color"
+                        value={
+                          appSettings.settings.appearance.uiColor ??
+                          (appSettings.settings.appearance.theme ===
+                          "light"
+                            ? "#06736a"
+                            : "#36c7b5")
+                        }
+                      />
+                      <code>
+                        {appSettings.settings.appearance.uiColor ??
+                          "跟随当前主题"}
+                      </code>
+                      <Button
+                        disabled={
+                          appSettings.saving ||
+                          !appSettings.settings.appearance.uiColor
+                        }
+                        onClick={() =>
+                          void appSettings.update({
+                            appearance: { uiColor: null }
+                          })
+                        }
+                        size="small"
+                        type="button"
+                      >
+                        恢复默认
+                      </Button>
+                    </div>
+                  </div>
+                </SettingsCard>
+
+                <SettingsCard
                   badge={`${terminalProfiles.length} 个可用`}
                   description="左侧活动栏的终端入口会使用这里解析出的默认终端。"
                   id="settings-general-terminal"
@@ -1045,12 +1096,10 @@ export const ApplicationSettingsPage = memo(function ApplicationSettingsPage({
                 >
                   <Select<ExternalTerminalProfileDto["kind"]>
                     ariaLabel="选择默认终端"
-                    className="settings-terminal-select"
                     disabled={
                       appSettings.saving ||
                       terminalProfiles.length === 0
                     }
-                    fullWidth
                     label="默认终端"
                     menuAriaLabel="默认终端选项"
                     onChange={(defaultTerminalKind) =>

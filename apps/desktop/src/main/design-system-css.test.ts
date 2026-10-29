@@ -1249,31 +1249,25 @@ describe("renderer design-system guardrails", () => {
     );
   });
 
-  it("uses a 300px breadcrumb-switched commit detail surface", () => {
-    for (const source of [css, prototypeShellHtml]) {
-      expect(source).toMatch(
-        /\.history-layout\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\) 300px;/
-      );
-      expect(source).toMatch(
-        /\.history-commit-detail\s*\{[^}]*height:\s*300px;[^}]*min-height:\s*300px;[^}]*max-height:\s*300px;/
-      );
-      expect(source).toMatch(
-        /\.history-commit-breadcrumb button\[aria-current="page"\]\s*\{/
-      );
-      expect(source).toMatch(
-        /\.history-commit-file-browser\s*\{[^}]*grid-template-columns:\s*minmax\(220px,\s*300px\) minmax\(0,\s*1fr\);[^}]*height:\s*100%;/
-      );
-      expect(source).not.toMatch(
-        /\.history-commit-files\[open\]\s*\{/
-      );
-    }
+  it("uses a collapsible inspector commit detail surface with a resizable diff drawer", () => {
     expect(css).toMatch(
-      /\.history-commit-detail\s+\.commit-file-list\s*\{[^}]*align-content:\s*start;[^}]*grid-auto-rows:\s*max-content;[^}]*overflow:\s*auto;/
+      /\.history-layout\s*\{[^}]*grid-template-rows:\s*minmax\(320px,\s*1fr\);/
     );
-    expect(prototypeShellHtml).toMatch(
-      /\.history-commit-file-list\s*\{[^}]*align-content:\s*start;[^}]*grid-auto-rows:\s*max-content;[^}]*overflow:\s*auto;/
+    expect(css).toMatch(
+      /\.history-commit-breadcrumb button\[aria-current="page"\]\s*\{/
     );
-
+    expect(css).toMatch(
+      /\.commit-diff-drawer\s*\{[^}]*max-width:\s*min\(800px,/
+    );
+    expect(css).toMatch(
+      /\.commit-diff-drawer-resize-handle\s*\{[^}]*left:\s*-4px;[^}]*cursor:\s*col-resize;/
+    );
+    expect(css).toMatch(
+      /\.content-frame\.commit-inspector-open\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/
+    );
+    expect(css).toMatch(
+      /\.content-frame\.commit-inspector-open\s*>\s*\.commit-inspector\s*\{[^}]*position:\s*absolute;/
+    );
     expect(repositoryHistorySource).toContain(
       'aria-label="提交详情导航"'
     );
@@ -1283,8 +1277,8 @@ describe("renderer design-system guardrails", () => {
     expect(repositoryHistorySource).toContain(
       'data-history-commit-view="files"'
     );
-    expect(repositoryHistorySource).toContain(
-      "view={commitDetailView}"
+    expect(repositoryHistorySource).not.toContain(
+      "history-commit-detail panel"
     );
     expect(repositoryCommitDetailSource).toContain(
       'view === "details"'
@@ -1296,30 +1290,6 @@ describe("renderer design-system guardrails", () => {
       'className="history-commit-files-header"'
     );
 
-    expect(prototypeShellHtml).toContain(
-      'historyCommitView: "details"'
-    );
-    expect(prototypeShellHtml).toContain(
-      "function setHistoryCommitView(view)"
-    );
-    expect(prototypeShellHtml).toContain(
-      'historyCommitView === "files"'
-    );
-    expect(prototypeShellHtml).toContain(
-      "onclick=\"setHistoryCommitView('details')\""
-    );
-    expect(prototypeShellHtml).toContain(
-      "onclick=\"setHistoryCommitView('files')\""
-    );
-    expect(prototypeShellHtml).toContain(
-      'data-history-commit-view="${historyCommitView}"'
-    );
-    expect(prototypeShellHtml).not.toContain(
-      "historyCommitFilesOpen"
-    );
-    expect(prototypeShellHtml).not.toContain(
-      '<details class="history-commit-files"'
-    );
   });
 
   it("keeps the prototype analysis time first without repeating the selected scope", () => {

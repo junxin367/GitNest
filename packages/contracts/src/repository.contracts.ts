@@ -57,6 +57,10 @@ export type RepositoryHistoryScopeDto =
   | {
       kind: "ref";
       ref: string;
+    }
+  | {
+      kind: "refs";
+      refs: string[];
     };
 
 export interface RepositoryCommitRequest

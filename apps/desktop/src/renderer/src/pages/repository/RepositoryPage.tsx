@@ -51,10 +51,10 @@ import {
 } from "../../widgets/workspace-sidebar/tapdKeywordPreferences";
 import { getRendererPreferenceStorage } from "../../widgets/workspace-sidebar/sidebarPreferences";
 import type { RepositoryWorkflowController } from "../../features/repository-workflow/useRepositoryWorkflow";
-import type { RepositoryCommitActionHandler } from "../../features/repository-workflow/RepositoryCommitActions";
 
 export {
   RepositoryCommitDetail,
+  buildHistoryRefLabels,
   groupHistoryRefBranches,
   historyRefOptionClassName,
   resolveHistoryLoadingRegion
@@ -72,8 +72,6 @@ interface RepositoryPageProps {
   externalApplications: ExternalApplicationController;
   appSettings: AppSettingsController;
   workflow?: RepositoryWorkflowController;
-  onCommitAction?: RepositoryCommitActionHandler;
-  actionBusy?: boolean;
   changeSelectionRequest?: RepositoryChangeSelectionRequest | null;
   onOpenTab(tab: RepositoryTab): void;
   onChangeSelectionHandled?(requestId: number): void;
@@ -94,8 +92,6 @@ export function RepositoryPage({
   externalApplications,
   appSettings,
   workflow,
-  onCommitAction,
-  actionBusy,
   changeSelectionRequest,
   onOpenTab,
   onChangeSelectionHandled,
@@ -114,12 +110,13 @@ export function RepositoryPage({
 
   useEffect(() => {
     onCommitSelectionChange?.(
-      tab === "history"
+      tab === "history" && details.historyDetailOpen
         ? details.commit?.commit ?? null
         : null
     );
   }, [
     details.commit,
+    details.historyDetailOpen,
     onCommitSelectionChange,
     tab
   ]);
@@ -694,8 +691,6 @@ export function RepositoryPage({
       )}
       {tab === "history" && (
         <RepositoryHistory
-          {...(workflow ? { workflow } : {})}
-          {...(onCommitAction ? { onCommitAction, actionBusy: actionBusy ?? false } : {})}
           branch={snapshot?.branch}
           controller={details}
           onCopyCommitId={copyCommitId}

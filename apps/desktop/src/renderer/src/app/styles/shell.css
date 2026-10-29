@@ -1215,6 +1215,21 @@ p {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.content-frame.commit-inspector-open {
+  --commit-inspector-width: clamp(300px, 27vw, 380px);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.content-frame.commit-inspector-open > .commit-inspector {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--commit-inspector-width);
+  min-width: var(--commit-inspector-width);
+  z-index: var(--z-popover);
+}
+
 .main-content {
   position: relative;
   min-width: 0;
@@ -1227,4 +1242,84 @@ p {
       transparent 28%
     ),
     var(--canvas);
+}
+
+.commit-diff-drawer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: var(--commit-inspector-width);
+  z-index: var(--z-popover);
+  display: flex;
+  flex-direction: column;
+  min-width: clamp(
+    0px,
+    calc(100% - var(--commit-inspector-width)),
+    360px
+  );
+  max-width: min(800px, calc(100% - var(--commit-inspector-width)));
+  overflow: hidden;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  box-shadow: -12px 0 28px color-mix(in srgb, #000 28%, transparent);
+}
+
+.commit-diff-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 42px;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  color: var(--text-soft);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-soft);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+}
+
+.commit-diff-drawer-head > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-diff-drawer-head .icon-button {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.commit-diff-drawer-content {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.commit-diff-drawer-content > .history-commit-file-preview,
+.commit-diff-drawer-content > .diff-viewer-state {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.commit-diff-drawer-content .history-commit-diff-panel {
+  min-width: 0;
+}
+
+.commit-diff-drawer-resize-handle {
+  position: absolute;
+  top: 0;
+  left: -4px;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.commit-diff-drawer-resize-handle:hover,
+.commit-diff-drawer-resize-handle:focus-visible {
+  background: color-mix(in srgb, var(--accent) 36%, transparent);
 }

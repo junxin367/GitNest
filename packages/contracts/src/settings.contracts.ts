@@ -13,6 +13,9 @@ export const DEFAULT_AI_COMMIT_PROMPT =
 export const DEFAULT_DIFF_COMMIT_PANEL_HEIGHT = 180;
 export const MIN_DIFF_COMMIT_PANEL_HEIGHT = 180;
 export const MAX_DIFF_COMMIT_PANEL_HEIGHT = 420;
+export const DEFAULT_DIFF_COMMIT_DETAIL_WIDTH = 600;
+export const MIN_DIFF_COMMIT_DETAIL_WIDTH = 360;
+export const MAX_DIFF_COMMIT_DETAIL_WIDTH = 800;
 
 export type AppThemeDto = "dark" | "light";
 export type AppCloseBehaviorDto = "tray" | "quit";
@@ -45,6 +48,7 @@ export interface AppSettingsDto {
   };
   appearance: {
     theme: AppThemeDto;
+    uiColor?: string | null;
   };
   diff: {
     /** Legacy default for repositories without a saved browsing preference. */
@@ -54,6 +58,7 @@ export interface AppSettingsDto {
     /** Legacy default for repositories without a saved browsing preference. */
     treeDirectoriesCollapsed: boolean;
     commitPanelHeight: number;
+    commitDetailWidth: number;
   };
   repositoryFileBrowsing: Record<string, RepositoryFileBrowsingDto>;
   git: {
@@ -91,6 +96,7 @@ export interface UpdateAppSettingsRequest {
   };
   appearance?: {
     theme?: AppThemeDto;
+    uiColor?: string | null;
   };
   diff?: {
     /** Legacy migration default; browsing controls use repositoryFileBrowsing. */
@@ -100,6 +106,7 @@ export interface UpdateAppSettingsRequest {
     /** Legacy migration default; browsing controls use repositoryFileBrowsing. */
     treeDirectoriesCollapsed?: boolean;
     commitPanelHeight?: number;
+    commitDetailWidth?: number;
   };
   git?: {
     fetchMode?: GitFetchModeDto;
@@ -162,14 +169,16 @@ export function createDefaultAppSettings(): AppSettingsDto {
       closeBehavior: "quit"
     },
     appearance: {
-      theme: "dark"
+      theme: "dark",
+      uiColor: null
     },
     diff: {
       fileView: "list",
       layout: "unified",
       wrap: false,
       treeDirectoriesCollapsed: false,
-      commitPanelHeight: DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
+      commitPanelHeight: DEFAULT_DIFF_COMMIT_PANEL_HEIGHT,
+      commitDetailWidth: DEFAULT_DIFF_COMMIT_DETAIL_WIDTH
     },
     repositoryFileBrowsing: {},
     git: {

@@ -57,6 +57,10 @@ export type CommitHistoryScope =
   | {
       kind: "ref";
       ref: string;
+    }
+  | {
+      kind: "refs";
+      refs: string[];
     };
 
 export interface CommitHistoryPage {

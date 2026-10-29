@@ -519,13 +519,43 @@ html[data-theme="light"] .settings-switch.active .settings-switch-thumb {
   line-height: var(--line-height-body);
 }
 
-.settings-terminal-select {
-  width: min(100%, 360px);
-  padding: var(--space-4) 0;
-}
-
 .settings-preference-list {
   padding: 0;
+}
+
+.settings-color-control {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 520px;
+}
+
+.settings-color-control > label {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+
+.settings-color-control-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.settings-color-input {
+  width: 42px;
+  height: 32px;
+  padding: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-regular);
+  cursor: pointer;
+}
+
+.settings-color-control-actions code {
+  min-width: 108px;
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
 }
 
 .settings-preference-groups {

@@ -1,0 +1,814 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GitNest · 优化版分支切换演示</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111817;
+      --surface: #182220;
+      --surface-2: #202d29;
+      --surface-3: #273832;
+      --border: #33473f;
+      --border-strong: #4d695e;
+      --text: #e9f2ed;
+      --muted: #91a69c;
+      --accent: #4ed6a0;
+      --accent-soft: rgba(78, 214, 160, .14);
+      --blue: #78b8ff;
+      --blue-soft: rgba(120, 184, 255, .12);
+      --yellow: #e8c36a;
+      --yellow-soft: rgba(232, 195, 106, .12);
+      --red: #ff8e8e;
+      --red-soft: rgba(255, 142, 142, .12);
+      --shadow: 0 24px 80px rgba(0, 0, 0, .38);
+      font-family: Inter, "Segoe UI", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 88% 5%, rgba(78, 214, 160, .08), transparent 28rem),
+        var(--bg);
+    }
+
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    aside {
+      padding: 24px 18px;
+      background: rgba(17, 24, 23, .82);
+      border-right: 1px solid var(--border);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 8px 28px;
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: .01em;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      color: #082117;
+      background: var(--accent);
+      border-radius: 9px;
+      font-weight: 900;
+    }
+
+    .repo-card {
+      padding: 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+
+    .repo-card strong, .repo-card span { display: block; }
+    .repo-card strong { font-size: 14px; }
+    .repo-card span {
+      margin-top: 5px;
+      overflow: hidden;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .scenario-picker {
+      display: grid;
+      gap: 8px;
+      margin-top: 22px;
+    }
+
+    .scenario-picker h2 {
+      margin: 0 8px 4px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .scenario {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: 100%;
+      padding: 10px 11px;
+      color: var(--muted);
+      text-align: left;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 9px;
+    }
+
+    .scenario:hover, .scenario.active {
+      color: var(--text);
+      background: var(--surface-2);
+      border-color: var(--border);
+    }
+
+    .scenario.active { box-shadow: 3px 0 0 var(--accent) inset; }
+    .scenario-dot {
+      width: 8px;
+      height: 8px;
+      background: var(--muted);
+      border-radius: 50%;
+    }
+    .scenario.active .scenario-dot { background: var(--accent); }
+
+    main {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-width: 0;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 76px;
+      padding: 16px 30px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .context {
+      min-width: 0;
+    }
+    .context strong, .context span { display: block; }
+    .context strong { font-size: 16px; }
+    .context span {
+      margin-top: 5px;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .branch-trigger {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 170px;
+      padding: 10px 13px;
+      color: var(--text);
+      background: var(--surface-2);
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .header-controls {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .branch-trigger:hover, .branch-trigger[aria-expanded="true"] {
+      background: var(--surface-3);
+      border-color: var(--accent);
+    }
+
+    .branch-trigger .chevron { margin-left: auto; color: var(--muted); }
+
+    .content {
+      width: min(980px, 100%);
+      padding: 44px 30px 80px;
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 680px;
+      margin: 10px 0 8px;
+      font-size: clamp(26px, 4vw, 42px);
+      line-height: 1.1;
+    }
+
+    .lead {
+      max-width: 720px;
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.65;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 30px;
+    }
+
+    .status-card {
+      padding: 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    .status-card span, .status-card strong { display: block; }
+    .status-card span { color: var(--muted); font-size: 12px; }
+    .status-card strong { margin-top: 7px; font-size: 18px; }
+    .status-card.dirty strong { color: var(--yellow); }
+    .status-card.clean strong { color: var(--accent); }
+    .status-card.detached strong { color: var(--blue); }
+
+    .demo-card {
+      margin-top: 18px;
+      padding: 20px;
+      background: linear-gradient(145deg, rgba(39, 56, 50, .85), rgba(24, 34, 32, .9));
+      border: 1px solid var(--border);
+      border-radius: 14px;
+    }
+
+    .demo-card h2 { margin: 0; font-size: 16px; }
+    .demo-card p { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 18px;
+    }
+    .step {
+      min-height: 72px;
+      padding: 12px;
+      color: var(--muted);
+      background: rgba(24, 34, 32, .86);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .step b { display: block; margin-bottom: 5px; color: var(--text); }
+
+    .notice {
+      display: none;
+      align-items: flex-start;
+      gap: 10px;
+      margin-top: 18px;
+      padding: 12px 14px;
+      color: var(--text);
+      background: var(--accent-soft);
+      border: 1px solid rgba(78, 214, 160, .35);
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .notice.show { display: flex; }
+    .notice.error {
+      background: var(--red-soft);
+      border-color: rgba(255, 142, 142, .35);
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 96px 20px 20px;
+      background: rgba(0, 0, 0, .42);
+      z-index: 10;
+    }
+    .overlay.show { display: flex; }
+
+    .branch-popover {
+      width: min(560px, 100%);
+      max-height: min(690px, calc(100vh - 116px));
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+    }
+
+    .popover-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 18px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .popover-head h2 { margin: 0; font-size: 16px; }
+    .popover-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+    .close {
+      width: 30px;
+      height: 30px;
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      font-size: 18px;
+    }
+    .close:hover { color: var(--text); background: var(--surface-2); border-color: var(--border); }
+
+    .search-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 14px 18px 10px;
+      padding: 0 11px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+    }
+    .search-wrap span { color: var(--muted); }
+    .search-wrap input {
+      width: 100%;
+      height: 36px;
+      color: var(--text);
+      background: transparent;
+      border: 0;
+      outline: 0;
+      font-size: 13px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 5px;
+      padding: 0 18px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .tab {
+      padding: 7px 9px;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: 7px;
+      font-size: 12px;
+    }
+    .tab:hover, .tab.active { color: var(--text); background: var(--surface-2); }
+    .tab.active { box-shadow: 0 -2px 0 var(--accent) inset; }
+
+    .branch-list {
+      max-height: 355px;
+      padding: 8px 10px 12px;
+      overflow: auto;
+    }
+    .section-label {
+      padding: 9px 8px 5px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .branch-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      width: 100%;
+      padding: 10px 9px;
+      color: var(--text);
+      text-align: left;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 9px;
+    }
+    .branch-row:hover, .branch-row:focus-visible { background: var(--surface-2); border-color: var(--border); outline: 0; }
+    .branch-row.current { background: var(--accent-soft); border-color: rgba(78, 214, 160, .28); }
+    .branch-main { min-width: 0; }
+    .branch-main strong, .branch-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .branch-main strong { font-size: 13px; }
+    .branch-main small { margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .branch-side { display: flex; align-items: center; gap: 8px; }
+    .badge {
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge.current { color: var(--accent); background: var(--accent-soft); }
+    .badge.remote { color: var(--blue); background: var(--blue-soft); }
+    .badge.sync { color: var(--muted); background: var(--surface-3); font-family: ui-monospace, monospace; }
+
+    .popover-foot {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 18px;
+      border-top: 1px solid var(--border);
+    }
+    .primary, .secondary {
+      padding: 8px 11px;
+      border-radius: 8px;
+      font-size: 12px;
+    }
+    .primary { color: #092117; background: var(--accent); border: 1px solid var(--accent); font-weight: 700; }
+    .secondary { color: var(--text); background: var(--surface-2); border: 1px solid var(--border); }
+
+    .decision {
+      display: none;
+      padding: 20px;
+    }
+    .decision.show { display: block; }
+    .decision h2 { margin: 0; font-size: 18px; }
+    .decision > p { color: var(--muted); font-size: 13px; line-height: 1.6; }
+    .risk {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px;
+      color: var(--yellow);
+      background: var(--yellow-soft);
+      border: 1px solid rgba(232, 195, 106, .3);
+      border-radius: 9px;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .decision-options { display: grid; gap: 9px; margin-top: 16px; }
+    .decision-option {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 13px;
+      color: var(--text);
+      text-align: left;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .decision-option:hover { border-color: var(--accent); }
+    .decision-option strong, .decision-option small { display: block; }
+    .decision-option small { margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .decision-option em { color: var(--accent); font-size: 11px; font-style: normal; white-space: nowrap; }
+    .decision-back {
+      margin-top: 15px;
+      padding: 7px 0;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      font-size: 12px;
+    }
+    .decision-back:hover { color: var(--text); }
+
+    .create {
+      display: none;
+      padding: 20px;
+    }
+    .create.show { display: block; }
+    .create h2 { margin: 0; font-size: 18px; }
+    .create p { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .create label { display: grid; gap: 6px; margin-top: 16px; color: var(--muted); font-size: 12px; }
+    .create input {
+      height: 38px;
+      padding: 0 10px;
+      color: var(--text);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      outline: 0;
+      font-family: ui-monospace, monospace;
+      font-size: 13px;
+    }
+    .create input:focus { border-color: var(--accent); }
+    .create-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+    @media (max-width: 760px) {
+      .shell { display: block; }
+      aside { display: none; }
+      header { padding: 14px 18px; }
+      .content { padding: 30px 18px 60px; }
+      .status-grid, .steps { grid-template-columns: 1fr 1fr; }
+      .header-controls { width: 100%; }
+      .branch-trigger { min-width: 0; }
+    }
+    @media (max-width: 480px) {
+      .context { display: none; }
+      header { justify-content: flex-end; }
+      .status-grid, .steps { grid-template-columns: 1fr; }
+      .header-controls { gap: 5px; }
+      .branch-trigger { padding-inline: 9px; font-size: 11px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand"><span class="brand-mark">G</span><span>GitNest</span></div>
+      <div class="repo-card">
+        <strong>sample-platform</strong>
+        <span>C:\Demo\sample-platform</span>
+      </div>
+      <div class="scenario-picker">
+        <h2>演示场景</h2>
+        <button class="scenario active" data-scenario="dirty"><span class="scenario-dot"></span>有未提交变更</button>
+        <button class="scenario" data-scenario="clean"><span class="scenario-dot"></span>干净工作区</button>
+        <button class="scenario" data-scenario="detached"><span class="scenario-dot"></span>Detached HEAD</button>
+      </div>
+    </aside>
+
+    <main>
+      <header>
+        <div class="context">
+          <strong>当前仓库</strong>
+          <span id="contextStatus">工作区有 3 项未提交变更 · 不会自动修改文件</span>
+        </div>
+        <div class="header-controls">
+          <button class="branch-trigger" id="branchTrigger" aria-expanded="false">
+            <span>⑂</span><span id="currentBranch">feature/payment</span><span class="chevron">⌄</span>
+          </button>
+        </div>
+      </header>
+
+      <section class="content">
+        <span class="eyebrow">交互演示 · 分支切换</span>
+        <h1>把“切换分支”变成一个可恢复、可解释的决策流程。</h1>
+        <p class="lead">在当前工作目录中搜索并切换本地或远程分支；已被其他 Worktree 检出的分支不会出现在列表中。演示不会执行真实 Git 命令。</p>
+
+        <div class="status-grid">
+          <div class="status-card dirty" id="statusWorktree"><span>工作区</span><strong>3 项变更</strong></div>
+          <div class="status-card"><span>当前分支</span><strong id="statusBranch">feature/payment</strong></div>
+          <div class="status-card"><span>上游同步</span><strong>↑ 2 · ↓ 1</strong></div>
+        </div>
+
+        <div class="demo-card">
+          <h2>建议的黄金路径</h2>
+          <p>默认不替用户偷偷 Stash；先告诉用户影响，再让用户明确选择“留在原分支 / 暂存后切换 / 携带变更切换”。</p>
+          <div class="steps">
+            <div class="step"><b>1 · 定位</b>搜索分支并按本地/远程分组查看。</div>
+            <div class="step"><b>2 · 预检</b>显示脏文件、上游和目标分支信息。</div>
+            <div class="step"><b>3 · 决策</b>用户选择处理变更的方式，不做隐式副作用。</div>
+            <div class="step"><b>4 · 收尾</b>完成后更新当前分支、状态和操作记录。</div>
+          </div>
+        </div>
+        <div class="notice" id="notice"><span>●</span><span id="noticeText"></span></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="overlay" id="overlay" aria-hidden="true">
+    <section class="branch-popover" role="dialog" aria-modal="true" aria-labelledby="popoverTitle">
+      <div class="popover-head">
+        <div>
+          <h2 id="popoverTitle">切换分支</h2>
+          <p id="popoverDescription">当前 Worktree · C:\Demo\sample-platform</p>
+        </div>
+        <button class="close" id="closePopover" aria-label="关闭">×</button>
+      </div>
+
+      <div id="pickerView">
+        <label class="search-wrap"><span>⌕</span><input id="branchSearch" autocomplete="off" placeholder="搜索本地、远程分支…（输入 / 聚焦）" /></label>
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="local" role="tab">本地</button>
+          <button class="tab" data-tab="remote" role="tab">远程</button>
+        </div>
+        <div class="branch-list" id="branchList"></div>
+        <div class="popover-foot">
+          <button class="secondary" id="createBranch">＋ 新建分支</button>
+          <button class="secondary" id="cancelPopover">取消</button>
+        </div>
+      </div>
+
+      <div class="decision" id="decisionView">
+        <h2>切换前需要处理工作区变更</h2>
+        <p>目标分支：<strong id="decisionTarget">feature/checkout-demo</strong></p>
+        <div class="risk">⚠ 当前 Worktree 有 3 项变更（2 个已修改文件、1 个未跟踪文件）。GitNest 不会自动 Stash 或丢弃内容。</div>
+        <div class="decision-options">
+          <button class="decision-option" data-choice="stay"><span><strong>留在当前分支</strong><small>取消这次切换，保持文件和索引不变。</small></span><em>安全退出</em></button>
+          <button class="decision-option" data-choice="stash"><span><strong>暂存并切换</strong><small>创建带分支名的 Stash，切换成功后保留在 Stash 列表。</small></span><em>推荐</em></button>
+          <button class="decision-option" data-choice="carry"><span><strong>携带变更切换</strong><small>先做文件冲突预检；无冲突时把变更带到目标分支。</small></span><em>需预检</em></button>
+        </div>
+        <button class="decision-back" id="decisionBack">← 返回分支列表</button>
+      </div>
+
+      <div class="create" id="createView">
+        <h2>新建并切换分支</h2>
+        <p>从当前 HEAD 创建本地分支，并在创建成功后自动检出。也可以选择一个远程分支作为起点。</p>
+        <label>分支名称<input id="newBranchName" value="feature/" spellcheck="false" /></label>
+        <label>起点<select id="startPoint" style="height:38px;padding:0 10px;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;"><option>当前 HEAD · feature/payment</option><option>origin/main</option><option>origin/develop</option></select></label>
+        <div class="create-actions"><button class="secondary" id="createBack">返回</button><button class="primary" id="createConfirm">创建并切换</button></div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const branches = [
+      { name: "feature/payment", type: "local", group: "本地分支", meta: "当前分支 · 跟踪 origin/feature/payment", sync: "↑2 ↓1", current: true },
+      { name: "feature/checkout-demo", type: "local", group: "本地分支", meta: "跟踪 origin/feature/checkout-demo", sync: "已同步" },
+      { name: "hotfix/login-timeout", type: "local", group: "本地分支", meta: "未配置上游", sync: "本地" },
+      { name: "main", type: "local", group: "本地分支", meta: "跟踪 origin/main", sync: "↓3" },
+      { name: "develop", type: "local", group: "本地分支", meta: "跟踪 origin/develop", sync: "↑1" },
+      { name: "release/1.8", type: "local", group: "本地分支", meta: "跟踪 origin/release/1.8", sync: "已同步" },
+      { name: "origin/main", type: "remote", group: "远程分支", meta: "远程 origin · 可检出为本地分支", sync: "远程" },
+      { name: "origin/feature/new-api", type: "remote", group: "远程分支", meta: "远程 origin · 2 小时前更新", sync: "远程" }
+    ];
+
+    const state = {
+      scenario: "dirty",
+      tab: "local",
+      query: "",
+      current: "feature/payment"
+    };
+    const overlay = document.getElementById("overlay");
+    const pickerView = document.getElementById("pickerView");
+    const decisionView = document.getElementById("decisionView");
+    const createView = document.getElementById("createView");
+    const list = document.getElementById("branchList");
+    const search = document.getElementById("branchSearch");
+    const notice = document.getElementById("notice");
+    const noticeText = document.getElementById("noticeText");
+
+    function showNotice(message, error = false) {
+      notice.classList.toggle("error", error);
+      notice.classList.add("show");
+      noticeText.textContent = message;
+      window.clearTimeout(showNotice.timer);
+      showNotice.timer = window.setTimeout(() => notice.classList.remove("show"), 5200);
+    }
+
+    function openPopover() {
+      overlay.classList.add("show");
+      overlay.setAttribute("aria-hidden", "false");
+      document.getElementById("branchTrigger").setAttribute("aria-expanded", "true");
+      document.getElementById("popoverTitle").textContent = "切换分支";
+      pickerView.style.display = "block";
+      decisionView.classList.remove("show");
+      createView.classList.remove("show");
+      window.setTimeout(() => search.focus(), 0);
+      renderList();
+    }
+
+    function closePopover() {
+      overlay.classList.remove("show");
+      overlay.setAttribute("aria-hidden", "true");
+      document.getElementById("branchTrigger").setAttribute("aria-expanded", "false");
+      document.getElementById("branchTrigger").focus();
+    }
+
+    function renderList() {
+      const query = state.query.trim().toLowerCase();
+      const filtered = branches.filter(branch => {
+        if (state.tab === "local" && branch.type !== "local") return false;
+        if (state.tab === "remote" && branch.type !== "remote") return false;
+        return !query || `${branch.name} ${branch.meta}`.toLowerCase().includes(query);
+      });
+      const groups = [...new Set(filtered.map(branch => branch.group))];
+      list.innerHTML = groups.length
+        ? groups.map(group => `
+          <div class="section-label">${group}</div>
+          ${filtered.filter(branch => branch.group === group).map(branch => `
+            <button class="branch-row ${branch.current ? "current" : ""}" data-branch="${branch.name}">
+              <span class="branch-main">
+                <strong>${branch.name}</strong>
+                <small>${branch.meta}</small>
+              </span>
+              <span class="branch-side">
+                <span class="badge sync">${branch.sync}</span>
+                ${branch.current ? '<span class="badge current">当前</span>' : ""}
+                ${branch.type === "remote" ? '<span class="badge remote">远程</span>' : ""}
+              </span>
+            </button>
+          `).join("")}
+        `).join("")
+        : '<div style="padding:28px 10px;color:var(--muted);text-align:center;font-size:12px;">没有匹配的分支</div>';
+      list.querySelectorAll("[data-branch]").forEach(row => {
+        row.addEventListener("click", () => chooseBranch(row.dataset.branch));
+      });
+    }
+
+    function chooseBranch(name) {
+      const branch = branches.find(item => item.name === name);
+      if (!branch || branch.current) return;
+      if (branch.type === "remote") {
+        pickerView.style.display = "none";
+        createView.classList.add("show");
+        document.getElementById("newBranchName").value = branch.name.replace(/^origin\//, "");
+        document.getElementById("startPoint").value = branch.name;
+        document.getElementById("newBranchName").focus();
+        return;
+      }
+      if (state.scenario === "dirty") {
+        pickerView.style.display = "none";
+        decisionView.classList.add("show");
+        document.getElementById("decisionTarget").textContent = name;
+        return;
+      }
+      switchBranch(name, "直接切换");
+    }
+
+    function switchBranch(name, mode) {
+      state.current = name;
+      document.getElementById("currentBranch").textContent = name;
+      document.getElementById("statusBranch").textContent = name;
+      document.getElementById("contextStatus").textContent = state.scenario === "dirty"
+        ? `${mode} · Stash 已保留在列表中`
+        : `${mode} · 状态已重新读取`;
+      branches.forEach(branch => branch.current = branch.name === name);
+      closePopover();
+      showNotice(`已切换到 ${name}。${mode === "暂存并切换" ? "原分支变更已安全保存在 Stash。" : ""}`);
+    }
+
+    document.getElementById("branchTrigger").addEventListener("click", () => {
+      overlay.classList.contains("show") ? closePopover() : openPopover();
+    });
+    document.getElementById("closePopover").addEventListener("click", closePopover);
+    document.getElementById("cancelPopover").addEventListener("click", closePopover);
+    overlay.addEventListener("click", event => { if (event.target === overlay) closePopover(); });
+    search.addEventListener("input", event => { state.query = event.target.value; renderList(); });
+    search.addEventListener("keydown", event => { if (event.key === "Escape") closePopover(); });
+
+    document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => {
+      state.tab = tab.dataset.tab;
+      document.querySelectorAll(".tab").forEach(item => item.classList.toggle("active", item === tab));
+      renderList();
+    }));
+
+    document.querySelectorAll(".decision-option").forEach(option => option.addEventListener("click", () => {
+      const choice = option.dataset.choice;
+      if (choice === "stay") {
+        closePopover();
+        showNotice("已取消切换，工作区和当前分支均未改变。");
+      } else if (choice === "stash") {
+        switchBranch(document.getElementById("decisionTarget").textContent, "暂存并切换");
+      } else {
+        closePopover();
+        showNotice("预检发现 1 个文件可能冲突，未执行切换。可先打开变更查看器。", true);
+      }
+    }));
+    document.getElementById("decisionBack").addEventListener("click", () => {
+      decisionView.classList.remove("show");
+      pickerView.style.display = "block";
+      renderList();
+    });
+    document.getElementById("createBranch").addEventListener("click", () => {
+      pickerView.style.display = "none";
+      createView.classList.add("show");
+      document.getElementById("newBranchName").focus();
+    });
+    document.getElementById("createBack").addEventListener("click", () => {
+      createView.classList.remove("show");
+      pickerView.style.display = "block";
+      renderList();
+    });
+    document.getElementById("createConfirm").addEventListener("click", () => {
+      const name = document.getElementById("newBranchName").value.trim();
+      if (!name || name.endsWith("/")) {
+        showNotice("请输入完整的分支名称。", true);
+        return;
+      }
+      switchBranch(name, "创建并切换");
+    });
+
+    document.querySelectorAll(".scenario").forEach(button => button.addEventListener("click", () => {
+      state.scenario = button.dataset.scenario;
+      document.querySelectorAll(".scenario").forEach(item => item.classList.toggle("active", item === button));
+      const worktree = document.getElementById("statusWorktree");
+      const status = document.getElementById("contextStatus");
+      if (state.scenario === "dirty") {
+        worktree.className = "status-card dirty";
+        worktree.innerHTML = "<span>工作区</span><strong>3 项变更</strong>";
+        status.textContent = "工作区有 3 项未提交变更 · 不会自动修改文件";
+      } else if (state.scenario === "clean") {
+        worktree.className = "status-card clean";
+        worktree.innerHTML = "<span>工作区</span><strong>干净</strong>";
+        status.textContent = "工作区干净 · 可直接切换";
+      } else {
+        worktree.className = "status-card detached";
+        worktree.innerHTML = "<span>工作区</span><strong>Detached HEAD</strong>";
+        status.textContent = "当前不在任何分支 · 可从当前提交创建分支";
+      }
+    }));
+
+    document.addEventListener("keydown", event => {
+      if (event.key === "/" && !overlay.classList.contains("show")) {
+        event.preventDefault();
+        openPopover();
+      }
+    });
+  </script>
+</body>
+</html>

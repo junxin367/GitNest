@@ -14,6 +14,7 @@ import {
   MAX_LSP_REQUESTS,
   MAX_LSP_SYMBOLS_PER_DOCUMENT,
   MAX_DIFF_COMMIT_PANEL_HEIGHT,
+  MAX_DIFF_COMMIT_DETAIL_WIDTH,
   MAX_MCP_MAX_STALE_AGE_DAYS,
   MIN_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
   MIN_CODE_ANALYSIS_DIAGNOSTICS,
@@ -26,6 +27,7 @@ import {
   MIN_LSP_REQUESTS,
   MIN_LSP_SYMBOLS_PER_DOCUMENT,
   MIN_DIFF_COMMIT_PANEL_HEIGHT,
+  MIN_DIFF_COMMIT_DETAIL_WIDTH,
   MIN_MCP_MAX_STALE_AGE_DAYS,
   type AppSettingsDto
 } from "@gitnest/contracts";
@@ -790,6 +792,29 @@ describe("repository history IPC validation", () => {
         kind: "all"
       }
     });
+
+    expect(
+      validateRepositoryHistoryRequest({
+        queryId: "history_refs",
+        target,
+        scope: {
+          kind: "refs",
+          refs: [
+            " refs/heads/main ",
+            "refs/remotes/origin/main",
+            "refs/heads/main"
+          ]
+        }
+      })
+    ).toMatchObject({
+      scope: {
+        kind: "refs",
+        refs: [
+          "refs/heads/main",
+          "refs/remotes/origin/main"
+        ]
+      }
+    });
   });
 
   it("rejects arbitrary revisions and removed comparison scopes", () => {
@@ -814,6 +839,35 @@ describe("repository history IPC validation", () => {
           kind: "compare",
           leftRef: "refs/heads/main",
           rightRef: "refs/heads/develop"
+        }
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+
+    expect(() =>
+      validateRepositoryHistoryRequest({
+        queryId: "history_empty_refs",
+        target,
+        scope: {
+          kind: "refs",
+          refs: []
+        }
+      })
+    ).toThrowError(
+      expect.objectContaining({ code: "INVALID_REQUEST" })
+    );
+
+    expect(() =>
+      validateRepositoryHistoryRequest({
+        queryId: "history_too_many_refs",
+        target,
+        scope: {
+          kind: "refs",
+          refs: Array.from(
+            { length: 33 },
+            (_, index) => `refs/heads/branch-${index}`
+          )
         }
       })
     ).toThrowError(
@@ -1381,6 +1435,73 @@ describe("application settings and AI IPC validation", () => {
       expect(() =>
         validateUpdateAppSettingsRequest({
           diff: { commitPanelHeight }
+        })
+      ).toThrowError(
+        expect.objectContaining({ code: "INVALID_REQUEST" })
+      );
+    }
+  });
+
+  it("validates the configurable UI color", () => {
+    expect(
+      validateUpdateAppSettingsRequest({
+        appearance: { uiColor: "#36C7B5" }
+      })
+    ).toEqual({
+      appearance: { uiColor: "#36C7B5" }
+    });
+    expect(
+      validateUpdateAppSettingsRequest({
+        appearance: { uiColor: null }
+      })
+    ).toEqual({
+      appearance: { uiColor: null }
+    });
+
+    for (const uiColor of [
+      "",
+      "36c7b5",
+      "#36c7b",
+      "#36c7b50",
+      "#gggggg",
+      123
+    ]) {
+      expect(() =>
+        validateUpdateAppSettingsRequest({
+          appearance: { uiColor }
+        })
+      ).toThrowError(
+        expect.objectContaining({ code: "INVALID_REQUEST" })
+      );
+    }
+  });
+
+  it("validates the persisted commit detail width range", () => {
+    expect(
+      validateUpdateAppSettingsRequest({
+        diff: { commitDetailWidth: MIN_DIFF_COMMIT_DETAIL_WIDTH }
+      })
+    ).toEqual({
+      diff: { commitDetailWidth: MIN_DIFF_COMMIT_DETAIL_WIDTH }
+    });
+    expect(
+      validateUpdateAppSettingsRequest({
+        diff: { commitDetailWidth: MAX_DIFF_COMMIT_DETAIL_WIDTH }
+      })
+    ).toEqual({
+      diff: { commitDetailWidth: MAX_DIFF_COMMIT_DETAIL_WIDTH }
+    });
+
+    for (const commitDetailWidth of [
+      MIN_DIFF_COMMIT_DETAIL_WIDTH - 1,
+      MAX_DIFF_COMMIT_DETAIL_WIDTH + 1,
+      480.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY
+    ]) {
+      expect(() =>
+        validateUpdateAppSettingsRequest({
+          diff: { commitDetailWidth }
         })
       ).toThrowError(
         expect.objectContaining({ code: "INVALID_REQUEST" })

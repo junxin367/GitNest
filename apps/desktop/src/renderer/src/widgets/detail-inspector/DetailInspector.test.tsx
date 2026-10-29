@@ -141,6 +141,85 @@ describe("DetailInspector Workspace details", () => {
     expect(container.textContent).not.toContain("暂未接入");
   });
 
+  it("shows the commit breadcrumb and changed files inside the inspector", async () => {
+    const onCommitFileSelect = vi.fn();
+    const commit = {
+      hash: "c".repeat(40),
+      shortHash: "ccccccc",
+      subject: "Update browser session",
+      authorName: "Author",
+      authorEmail: "author@example.com",
+      authoredAt: "2026-10-06T00:00:00Z",
+      parentHashes: ["p".repeat(40)],
+      refs: ["HEAD -> main"],
+      committerName: "Author",
+      committerEmail: "author@example.com",
+      committedAt: "2026-10-06T00:00:00Z",
+      body: "Keep the session alive.",
+      files: [
+        {
+          path: "app/src/BrowserSession.java",
+          additions: 58,
+          deletions: 88,
+          binary: false
+        }
+      ],
+      additions: 58,
+      deletions: 88
+    } satisfies RepositoryCommitDto["commit"];
+
+    act(() => {
+      root.render(
+        <DetailInspector
+          busy={false}
+          commit={commit}
+          gitEnvironment={null}
+          gitError={null}
+          monitor={null}
+          onClose={() => undefined}
+          onCommitFileSelect={onCommitFileSelect}
+          onOpenSettings={() => undefined}
+          onRenameWorkspace={async () => true}
+          operations={[]}
+          runtimeInfo={null}
+          snapshots={[]}
+          workspace={createWorkspace()}
+        />
+      );
+    });
+
+    expect(container.textContent).toContain("提交详情");
+    expect(container.textContent).toContain("HEAD → main");
+    expect(container.textContent).not.toContain("采集范围");
+    expect(
+      container.querySelector(
+        ".commit-inspector-head .history-commit-heading"
+      )
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        ".history-commit-summary .history-commit-heading"
+      )
+    ).toBeNull();
+
+    const filesButton = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent?.includes("变更文件")
+    );
+    await act(async () => filesButton?.click());
+    expect(container.textContent).toContain("BrowserSession.java");
+    expect(container.textContent).toContain("app/src/");
+    expect(container.textContent).toContain("+58");
+    expect(container.textContent).toContain("-88");
+
+    const fileButton = container.querySelector<HTMLButtonElement>(
+      ".history-commit-file"
+    );
+    await act(async () => fileButton?.click());
+    expect(onCommitFileSelect).toHaveBeenLastCalledWith(
+      "app/src/BrowserSession.java"
+    );
+  });
+
   it.each(["Newer draft", "Test Workspace"])(
     "preserves the newer name %s when an earlier save finishes",
     async (newerName) => {

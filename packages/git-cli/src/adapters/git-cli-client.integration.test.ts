@@ -981,10 +981,106 @@ describe("GitCliClient integration", () => {
         })
       ).resolves.toMatchObject({
         media: {
-          status: "unavailable",
-          reason: "missing"
+          status: "available",
+          kind: "image",
+          mimeType: "image/webp",
+          size: stagedBytes.byteLength
         }
       });
+      const deletedFixture =
+        await createTemporaryDirectoryFixture(
+          "deleted-media-preview"
+        );
+      const deletedSvgPath = join(
+        deletedFixture.path,
+        "deleted.svg"
+      );
+      const deletedSvg = Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="8"/></svg>',
+        "utf8"
+      );
+      try {
+        await runGit(deletedFixture.path, [
+          "init",
+          "--initial-branch=main",
+          "."
+        ]);
+        await runGit(deletedFixture.path, [
+          "config",
+          "user.name",
+          "GitNest Test"
+        ]);
+        await runGit(deletedFixture.path, [
+          "config",
+          "user.email",
+          "gitnest-test@example.com"
+        ]);
+        await writeFile(deletedSvgPath, deletedSvg);
+        await runGit(deletedFixture.path, [
+          "add",
+          "deleted.svg"
+        ]);
+        await runGit(deletedFixture.path, [
+          "commit",
+          "-m",
+          "Add SVG"
+        ]);
+
+        await rm(deletedSvgPath);
+        const unstagedDeletion =
+          await client.readRepositoryDiff(
+            deletedFixture.path,
+            {
+              path: "deleted.svg",
+              mode: "unstaged",
+              includeMedia: true
+            }
+          );
+        expect(unstagedDeletion.media).toMatchObject({
+          status: "available",
+          kind: "image",
+          mimeType: "image/svg+xml",
+          size: deletedSvg.byteLength
+        });
+        if (unstagedDeletion.media?.status !== "available") {
+          throw new Error(
+            "Expected a previous-version SVG preview."
+          );
+        }
+        expect(
+          Buffer.from(unstagedDeletion.media.content)
+        ).toEqual(deletedSvg);
+
+        await runGit(deletedFixture.path, [
+          "add",
+          "deleted.svg"
+        ]);
+        const stagedDeletion =
+          await client.readRepositoryDiff(
+            deletedFixture.path,
+            {
+              path: "deleted.svg",
+              mode: "staged",
+              includeMedia: true
+            }
+          );
+        expect(stagedDeletion.media).toMatchObject({
+          status: "available",
+          kind: "image",
+          mimeType: "image/svg+xml",
+          size: deletedSvg.byteLength
+        });
+        if (stagedDeletion.media?.status !== "available") {
+          throw new Error(
+            "Expected a previous-version staged SVG preview."
+          );
+        }
+        expect(
+          Buffer.from(stagedDeletion.media.content)
+        ).toEqual(deletedSvg);
+      } finally {
+        await deletedFixture.dispose();
+      }
     } finally {
       await mediaFixture.dispose();
     }
@@ -1601,6 +1697,26 @@ describe("GitCliClient integration", () => {
         "Feature-only commit"
       );
 
+      const selectedRefs = await client.readCommitHistory(
+        historyFixture.repositoryPath,
+        {
+          scope: {
+            kind: "refs",
+            refs: [
+              "refs/heads/main",
+              "refs/heads/feature/test"
+            ]
+          }
+        }
+      );
+      expect(selectedRefs.commits.map(commit => commit.subject)).toEqual(
+        expect.arrayContaining([
+          "Main-only commit",
+          "Feature-only commit",
+          "Initial fixture commit"
+        ])
+      );
+
       const all = await client.readCommitHistory(historyFixture.repositoryPath, { scope: { kind: "all" } });
       expect(all.commits.map(commit => commit.subject)).toEqual(expect.arrayContaining([
         "Main-only commit", "Feature-only commit", "Initial fixture commit"
@@ -1859,9 +1975,10 @@ describe("GitCliClient integration", () => {
         })
       ).resolves.toMatchObject({
         media: {
-          status: "unavailable",
+          status: "available",
           kind: "image",
-          reason: "missing"
+          mimeType: "image/webp",
+          size: committedMedia.byteLength
         }
       });
 

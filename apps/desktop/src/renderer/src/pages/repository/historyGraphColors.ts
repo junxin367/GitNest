@@ -47,6 +47,7 @@ export function historyBranchTipColors(
   branches: readonly BranchDto[],
   colors: HistoryGraphColors
 ): Map<string, string> {
+  const visibleHashes = new Set(commits.map((commit) => commit.hash));
   const tips = new Map<string, Set<string>>();
   const refHeads = new Set<string>();
   const fullNames = new Map(branches.flatMap((branch) => [
@@ -54,7 +55,14 @@ export function historyBranchTipColors(
     [branch.fullName, branch.fullName]
   ] as [string, string][]));
   const add = (hash: string, ref: string) => {
-    if (!hash || ref.endsWith("/HEAD") || refHeads.has(ref)) return;
+    if (
+      !hash ||
+      !visibleHashes.has(hash) ||
+      ref.endsWith("/HEAD") ||
+      refHeads.has(ref)
+    ) {
+      return;
+    }
     refHeads.add(ref);
     const refs = tips.get(hash) ?? new Set<string>();
     refs.add(ref);

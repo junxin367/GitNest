@@ -85,9 +85,11 @@ import {
   type DiffLayoutDto,
   type GitFetchModeDto,
   type GitPushStrategyDto,
+  MAX_DIFF_COMMIT_DETAIL_WIDTH,
   type IpcArguments,
   type IpcChannel,
   type IpcResult,
+  MIN_DIFF_COMMIT_DETAIL_WIDTH,
   type OpenDirectoryRequest,
   type OpenDiffViewerRequest,
   type OpenExternalApplicationRequest,
@@ -1514,6 +1516,17 @@ export function validateUpdateAppSettingsRequest(
         APP_THEMES
       ) as AppThemeDto;
     }
+    if ("uiColor" in request.appearance) {
+      const value = request.appearance.uiColor;
+      if (
+        value !== null &&
+        (typeof value !== "string" ||
+          !/^#[0-9a-f]{6}$/i.test(value))
+      ) {
+        throw invalidSettingsRequest();
+      }
+      appearance.uiColor = value;
+    }
     result.appearance = appearance;
   }
 
@@ -1549,6 +1562,13 @@ export function validateUpdateAppSettingsRequest(
         request.diff.commitPanelHeight,
         MIN_DIFF_COMMIT_PANEL_HEIGHT,
         MAX_DIFF_COMMIT_PANEL_HEIGHT
+      );
+    }
+    if ("commitDetailWidth" in request.diff) {
+      diff.commitDetailWidth = requireIntegerInRange(
+        request.diff.commitDetailWidth,
+        MIN_DIFF_COMMIT_DETAIL_WIDTH,
+        MAX_DIFF_COMMIT_DETAIL_WIDTH
       );
     }
     result.diff = diff;
@@ -2652,7 +2672,7 @@ function validateRepositoryHistoryScope(
   if (!scope || typeof scope !== "object" || !("kind" in scope)) {
     throw new GitError(
       "INVALID_REQUEST",
-      "History scope must identify a ref or all history."
+      "History scope must identify one or more refs or all history."
     );
   }
 
@@ -2671,6 +2691,28 @@ function validateRepositoryHistoryScope(
       kind: "ref",
       ref: validateRepositoryHistoryRef(scope.ref)
     };
+  }
+
+  if (scope.kind === "refs") {
+    if (
+      !("refs" in scope) ||
+      !Array.isArray(scope.refs) ||
+      scope.refs.length === 0 ||
+      scope.refs.length > 32
+    ) {
+      throw new GitError(
+        "INVALID_REQUEST",
+        "Multi-ref history requires between 1 and 32 refs."
+      );
+    }
+    const refs = [...new Set(scope.refs.map(validateRepositoryHistoryRef))].sort();
+    if (refs.length === 0) {
+      throw new GitError(
+        "INVALID_REQUEST",
+        "Multi-ref history requires at least one ref."
+      );
+    }
+    return { kind: "refs", refs };
   }
 
   throw new GitError(

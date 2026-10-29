@@ -6,11 +6,17 @@ import {
   parseDiffViewModel
 } from "../../shared/model/diffViewModel";
 import {
+  buildHistoryRefLabels,
   groupHistoryRefBranches,
   historyRefOptionClassName,
   resolveHistoryLoadingRegion,
   shouldShowRepositoryChangesSkeleton
 } from "./RepositoryPage";
+import { buildHistoryGraph } from "./historyGraph";
+import {
+  createHistoryGraphColors,
+  historyBranchTipColors
+} from "./historyGraphColors";
 
 describe("shared Diff search model", () => {
   it("finds every case-insensitive match in the unified document", () => {
@@ -147,7 +153,7 @@ describe("history branch picker grouping", () => {
         "",
         "remote",
         {
-          selectedRef: branches[2]!.fullName,
+          selectedRefs: [branches[2]!.fullName, branches[3]!.fullName],
           showMergedRemote: false
         }
       ).remoteBranches
@@ -161,6 +167,122 @@ describe("history branch picker grouping", () => {
     expect(historyRefOptionClassName(false)).toBe(
       "history-ref-option"
     );
+  });
+});
+
+describe("history ref decorations and graph colours", () => {
+  it("prioritizes HEAD, merges matching remote labels, and keeps tags separate", () => {
+    const labels = buildHistoryRefLabels(
+      [
+        "refs/heads/main",
+        "HEAD -> main",
+        "refs/remotes/origin/main",
+        "refs/remotes/upstream/main",
+        "tag: v1.0.0"
+      ],
+      new Set(["refs/remotes/origin/main", "refs/remotes/upstream/main"])
+    );
+
+    expect(labels).toEqual([
+      expect.objectContaining({
+        kind: "head",
+        name: "main",
+        active: true,
+        remotes: ["origin", "upstream"]
+      }),
+      expect.objectContaining({
+        kind: "tag",
+        name: "v1.0.0"
+      })
+    ]);
+  });
+
+  it("does not let an off-page branch tip consume a graph colour", () => {
+    const colors = createHistoryGraphColors();
+    colors.refs.set("refs/heads/main", 0);
+    const commits = [{
+      hash: "visible",
+      shortHash: "visible",
+      authorName: "Alice",
+      authorEmail: "alice@example.com",
+      authoredAt: "2026-01-01T00:00:00.000Z",
+      subject: "Visible",
+      parentHashes: [],
+      refs: []
+    }];
+    const branches = [
+      {
+        fullName: "refs/heads/main",
+        name: "main",
+        head: "visible",
+        current: true,
+        remote: false
+      },
+      {
+        fullName: "refs/heads/hidden",
+        name: "hidden",
+        head: "outside-page",
+        current: false,
+        remote: false
+      }
+    ];
+
+    expect(
+      historyBranchTipColors(commits, branches, colors)
+    ).toEqual(new Map([["visible", "var(--blue)"]]));
+    expect(colors.refs.has("refs/heads/hidden")).toBe(false);
+  });
+
+  it("keeps merge parents on separate lanes until they reconnect", () => {
+    const commits = [
+      {
+        hash: "merge",
+        shortHash: "merge",
+        authorName: "Alice",
+        authorEmail: "alice@example.com",
+        authoredAt: "2026-01-03T00:00:00.000Z",
+        subject: "Merge",
+        parentHashes: ["main", "feature"],
+        refs: []
+      },
+      {
+        hash: "main",
+        shortHash: "main",
+        authorName: "Alice",
+        authorEmail: "alice@example.com",
+        authoredAt: "2026-01-02T00:00:00.000Z",
+        subject: "Main",
+        parentHashes: ["root"],
+        refs: []
+      },
+      {
+        hash: "feature",
+        shortHash: "feature",
+        authorName: "Bob",
+        authorEmail: "bob@example.com",
+        authoredAt: "2026-01-02T00:00:00.000Z",
+        subject: "Feature",
+        parentHashes: ["root"],
+        refs: []
+      },
+      {
+        hash: "root",
+        shortHash: "root",
+        authorName: "Alice",
+        authorEmail: "alice@example.com",
+        authoredAt: "2026-01-01T00:00:00.000Z",
+        subject: "Root",
+        parentHashes: [],
+        refs: []
+      }
+    ];
+
+    const graph = buildHistoryGraph(commits);
+    expect(graph.rows[0]!.paths).toHaveLength(2);
+    expect(graph.rows[1]!.lane).toBe(0);
+    expect(graph.rows[2]!.lane).toBeGreaterThan(0);
+    expect(graph.rows[3]!.lane).toBe(0);
+    expect(graph.width).toBeGreaterThanOrEqual(64);
   });
 });
 

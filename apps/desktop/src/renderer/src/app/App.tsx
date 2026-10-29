@@ -5,7 +5,8 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState
+  useState,
+  type PointerEvent as ReactPointerEvent
 } from "react";
 
 import type {
@@ -14,6 +15,10 @@ import type {
   RepositoryCommitDto,
   RepositoryTargetDto,
   RuntimeInfo
+} from "@gitnest/contracts";
+import {
+  MAX_DIFF_COMMIT_DETAIL_WIDTH,
+  MIN_DIFF_COMMIT_DETAIL_WIDTH
 } from "@gitnest/contracts";
 
 import {
@@ -33,6 +38,9 @@ import {
   findTargetSnapshot,
   getSnapshotContentRevision
 } from "../entities/workspace/model";
+import {
+  useRepositoryCommitDiff,
+} from "../entities/repository/useRepositoryCommitDiff";
 import { useWorkspace } from "../entities/workspace/useWorkspace";
 import type {
   RepositoryChangeLocation,
@@ -64,6 +72,8 @@ import type {
 } from "../pages/settings/ApplicationSettingsPage";
 import { WorkspaceCollectionPage } from "../pages/workspace-overview/WorkspaceCollectionPage";
 import { WorkspaceOverviewPage } from "../pages/workspace-overview/WorkspaceOverviewPage";
+import { Button } from "../shared/ui/Button";
+import { Icon } from "../shared/ui/Icon";
 import { Skeleton, SkeletonSurface } from "../shared/ui/Skeleton";
 import { DiffWorkspaceSkeleton } from "../widgets/diff-workspace/DiffWorkspace";
 import { ActivityRail } from "../widgets/activity-rail/ActivityRail";
@@ -74,6 +84,12 @@ import { StatusBar } from "../widgets/status-bar/StatusBar";
 import { WorkspaceSidebar } from "../widgets/workspace-sidebar/WorkspaceSidebar";
 import { AnalysisPageHost } from "./AnalysisPageHost";
 import { CodeAnalysisLoadingFallback } from "../pages/code-analysis/CodeAnalysisSkeleton";
+import {
+  DEFAULT_DIFF_CONTEXT_LINES,
+  DiffPanel,
+  type DiffPanelState
+} from "../widgets/diff-workspace/DiffPanel";
+import { repositoryDiffWorkspaceConfiguration } from "../widgets/diff-workspace/diffWorkspaceConfiguration";
 
 const CodeAnalysisPage = lazy(() =>
   import("../pages/code-analysis/CodeAnalysisPage").then(
@@ -116,6 +132,9 @@ export function App() {
   const [selectedCommit, setSelectedCommit] = useState<
     RepositoryCommitDto["commit"] | null
   >(null);
+  const [selectedCommitFile, setSelectedCommitFile] = useState<
+    string | null
+  >(null);
   const [
     pendingChangeNavigation,
     setPendingChangeNavigation
@@ -125,6 +144,7 @@ export function App() {
   const appSettings = useAppSettings();
   const applicationUpdate = useApplicationUpdate();
   const theme = appSettings.settings.appearance.theme;
+  const uiColor = appSettings.settings.appearance.uiColor;
   const workspace = useWorkspace();
   const workspaceChangedFiles = useWorkspaceChangedFiles(
     workspace.workspace,
@@ -173,6 +193,28 @@ export function App() {
     [workspace.workspace]
   );
   const selectedTarget = workspace.workspace?.selectedTarget;
+  const handleCommitSelectionChange = useCallback(
+    (commit: RepositoryCommitDto["commit"] | null) => {
+      setSelectedCommit(commit);
+      if (!commit) {
+        setSelectedCommitFile(null);
+        setInspectorOpen(false);
+        return;
+      }
+      setInspectorOpen(true);
+    },
+    []
+  );
+  const handleCommitFileSelect = useCallback(
+    (path: string | null) => {
+      setSelectedCommitFile(path);
+    },
+    []
+  );
+  const toggleInspector = useCallback(() => {
+    setInspectorOpen((current) => !current);
+    setSelectedCommitFile(null);
+  }, []);
   const workflow = useRepositoryWorkflow(
     selectedTarget,
     workspace.operations,
@@ -239,6 +281,8 @@ export function App() {
     view === "settings";
   const inspectorVisible =
     inspectorOpen && !fullPageView;
+  const commitInspectorVisible =
+    inspectorVisible && Boolean(selectedCommit);
   const directoryPanelHidden =
     sidebarCollapsed || fullPageView;
   const startupNavigationApplied = useRef(false);
@@ -263,6 +307,40 @@ export function App() {
           .trim()
       );
   }, [theme]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const customProperties = [
+      "--color-primary",
+      "--color-primary-strong",
+      "--color-primary-soft",
+      "--color-on-primary",
+      "--color-focus"
+    ];
+    if (!uiColor) {
+      for (const property of customProperties) {
+        root.style.removeProperty(property);
+      }
+      return;
+    }
+    root.style.setProperty("--color-primary", uiColor);
+    root.style.setProperty(
+      "--color-primary-strong",
+      "color-mix(in srgb, var(--color-primary) 82%, #000)"
+    );
+    root.style.setProperty(
+      "--color-primary-soft",
+      "color-mix(in srgb, var(--color-primary) 14%, transparent)"
+    );
+    root.style.setProperty(
+      "--color-on-primary",
+      readableTextColor(uiColor)
+    );
+    root.style.setProperty(
+      "--color-focus",
+      "color-mix(in srgb, var(--color-primary) 72%, #fff)"
+    );
+  }, [uiColor]);
 
   useEffect(() => {
     if (view !== "repository") {
@@ -747,15 +825,15 @@ export function App() {
               onRefresh={() => void workspace.refresh()}
               onRepositoryTabChange={openRepositoryTab}
               onWorkspaceTabChange={openWorkspaceTab}
-              onToggleInspector={() =>
-                setInspectorOpen((current) => !current)
-              }
+              onToggleInspector={toggleInspector}
             />
           )}
           <div
             className={`content-frame${
-              inspectorVisible ? "" : " inspector-closed"
-            }`}
+              inspectorVisible && !commitInspectorVisible
+                ? ""
+                : " inspector-closed"
+            }${commitInspectorVisible ? " commit-inspector-open" : ""}`}
           >
             <main
               className="main-content"
@@ -831,8 +909,6 @@ export function App() {
                 ) : view === "repository" ? (
                   <RepositoryPage
                     workflow={workflow}
-                    onCommitAction={onCommitAction}
-                    actionBusy={repositoryCommandLocked || openingCommit}
                     key={workspace.workspace?.id}
                     appSettings={appSettings}
                     changeSelectionRequest={
@@ -847,7 +923,7 @@ export function App() {
                     commands={repositoryCommands}
                     terminals={externalTerminals}
                     onOpenTab={openRepositoryTab}
-                    onCommitSelectionChange={setSelectedCommit}
+                    onCommitSelectionChange={handleCommitSelectionChange}
                     onChangeSelectionHandled={(requestId) =>
                       setPendingChangeNavigation((current) =>
                         current?.id === requestId
@@ -876,6 +952,26 @@ export function App() {
                   />
                 )}
               </Suspense>
+              {selectedCommit &&
+                selectedCommitFile &&
+                selectedTarget &&
+                inspectorVisible && (
+                  <CommitDiffDrawer
+                    commit={selectedCommit}
+                    filePath={selectedCommitFile}
+                    initialWidth={
+                      appSettings.settings.diff.commitDetailWidth
+                    }
+                    target={selectedTarget}
+                    onClose={() => setSelectedCommitFile(null)}
+                    onWidthCommit={(width) => {
+                      void appSettings.update(
+                        { diff: { commitDetailWidth: width } },
+                        { silent: true }
+                      );
+                    }}
+                  />
+                )}
             </main>
             {inspectorVisible && (
               <DetailInspector
@@ -886,7 +982,12 @@ export function App() {
                 gitError={gitError}
                 busy={workspace.busy}
                 monitor={workspace.monitor}
-                onClose={() => setInspectorOpen(false)}
+                onClose={() => {
+                  setSelectedCommitFile(null);
+                  setInspectorOpen(false);
+                }}
+                onCommitFileSelect={handleCommitFileSelect}
+                selectedCommitFile={selectedCommitFile}
                 onOpenSettings={() =>
                   navigate("settings", "account")
                 }
@@ -997,6 +1098,191 @@ export function App() {
       )}
     </div>
   );
+}
+
+function CommitDiffDrawer({
+  commit,
+  filePath,
+  initialWidth,
+  target,
+  onClose,
+  onWidthCommit
+}: {
+  commit: RepositoryCommitDto["commit"];
+  filePath: string;
+  initialWidth: number;
+  target: RepositoryTargetDto;
+  onClose(): void;
+  onWidthCommit(width: number): void;
+}) {
+  const [width, setWidth] = useState(initialWidth);
+  const widthRef = useRef(initialWidth);
+  const commitDiff = useRepositoryCommitDiff(
+    target,
+    commit.hash,
+    Boolean(commit.stashRef)
+  );
+  const file = commit.files.find((item) => item.path === filePath);
+
+  useEffect(() => {
+    const next = clampCommitDetailWidth(initialWidth);
+    widthRef.current = next;
+    setWidth(next);
+  }, [initialWidth]);
+
+  useEffect(() => {
+    if (file) {
+      void commitDiff.selectFile(file.path);
+    }
+  }, [commitDiff.selectFile, file]);
+
+  if (!file) {
+    return null;
+  }
+
+  const diff =
+    commitDiff.diff?.commit.hash === commit.hash &&
+    commitDiff.diff.diff.path === file.path
+      ? commitDiff.diff.diff
+      : null;
+  const selectionPending =
+    commitDiff.selected?.path !== file.path;
+  const state: DiffPanelState | undefined =
+    (commitDiff.loading || selectionPending) && !diff
+      ? {
+          busy: true,
+          icon: "refresh",
+          message: "正在读取该提交中的变更文件。",
+          title: "读取提交 Diff…"
+        }
+      : commitDiff.error && !diff
+        ? {
+            icon: "warning",
+            message: commitDiff.error.message,
+            title: "提交 Diff 读取失败"
+          }
+        : undefined;
+
+  const handlePointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>
+  ) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = widthRef.current;
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const next = clampCommitDetailWidth(
+        startWidth + startX - moveEvent.clientX
+      );
+      widthRef.current = next;
+      setWidth(next);
+    };
+    const handlePointerUp = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      onWidthCommit(widthRef.current);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, {
+      once: true
+    });
+  };
+
+  return (
+    <aside
+      aria-label="提交文件 Diff"
+      className="commit-diff-drawer"
+      style={{ width: `${width}px` }}
+    >
+      <div className="commit-diff-drawer-head">
+        <span title={file.path}>{file.path}</span>
+        <Button
+          aria-label="关闭 Diff 查看面板"
+          className="icon-button"
+          onClick={onClose}
+          size="small"
+          title="关闭 Diff 查看面板"
+          type="button"
+          variant="unstyled"
+        >
+          <Icon name="close" size={14} />
+        </Button>
+      </div>
+      <div className="commit-diff-drawer-content">
+        {commitDiff.error && diff ? (
+          <div className="history-commit-file-error" role="alert">
+            <Icon name="warning" size={14} />
+            <span>{commitDiff.error.message}</span>
+            <Button
+              onClick={() =>
+                void commitDiff.selectFile(file.path, {
+                  contextLines:
+                    commitDiff.selected?.contextLines ??
+                    DEFAULT_DIFF_CONTEXT_LINES,
+                  preserveDiff: true
+                })
+              }
+              size="small"
+              variant="default"
+            >
+              重试
+            </Button>
+          </div>
+        ) : null}
+        <DiffPanel
+          additions={diff?.additions ?? file.additions}
+          binary={diff?.binary ?? file.binary}
+          className="history-commit-diff-panel"
+          config={repositoryDiffWorkspaceConfiguration.document}
+          content={diff?.content}
+          contextLines={
+            commitDiff.selected?.contextLines ??
+            DEFAULT_DIFF_CONTEXT_LINES
+          }
+          contextLoading={commitDiff.loading || selectionPending}
+          deletions={diff?.deletions ?? file.deletions}
+          maxLines={4_000}
+          media={diff?.media}
+          onContextRequest={(request) =>
+            void commitDiff.selectFile(file.path, {
+              contextLines: request.contextLines,
+              preserveDiff: true
+            })
+          }
+          path={file.path}
+          scopeKey={`commit:${commit.hash}:${file.path}`}
+          searchScopeKey={`commit:${commit.hash}:${file.path}`}
+          state={state}
+          statsAvailable
+          truncated={diff?.truncated}
+        />
+      </div>
+      <div
+        aria-label="调整 Diff 面板宽度"
+        className="commit-diff-drawer-resize-handle"
+        onPointerDown={handlePointerDown}
+        role="separator"
+        tabIndex={0}
+      />
+    </aside>
+  );
+}
+
+function clampCommitDetailWidth(width: number): number {
+  return Math.round(
+    Math.min(
+      MAX_DIFF_COMMIT_DETAIL_WIDTH,
+      Math.max(MIN_DIFF_COMMIT_DETAIL_WIDTH, width)
+    )
+  );
+}
+
+function readableTextColor(hex: string): string {
+  const red = Number.parseInt(hex.slice(1, 3), 16);
+  const green = Number.parseInt(hex.slice(3, 5), 16);
+  const blue = Number.parseInt(hex.slice(5, 7), 16);
+  const luminance =
+    (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
+  return luminance > 0.62 ? "#071411" : "#ffffff";
 }
 
 export function AppPageLoadingFallback({

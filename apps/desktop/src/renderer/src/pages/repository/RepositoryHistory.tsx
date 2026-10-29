@@ -8,6 +8,7 @@ import {
 } from "react";
 
 import type {
+  BranchDto,
   RepositoryHistoryPageDto,
   RepositoryHistoryScopeDto,
   RepositoryHistoryFilterDto,
@@ -23,13 +24,8 @@ import {
   SkeletonBoundary
 } from "../../shared/ui/Skeleton";
 import { RepositoryReadFailure } from "./RepositoryReadFailure";
-import {
-  RepositoryCommitDetail,
-  type RepositoryCommitDetailView
-} from "./RepositoryCommitDetail";
+import type { RepositoryCommitDetailView } from "./RepositoryCommitDetail";
 import { HistoryScopeControls, HistorySearchControls } from "./RepositoryHistoryControls";
-import type { RepositoryCommitActionHandler } from "../../features/repository-workflow/RepositoryCommitActions";
-import type { RepositoryWorkflowController } from "../../features/repository-workflow/useRepositoryWorkflow";
 import {
   buildHistoryGraph,
   equalHistoryGraphRows,
@@ -39,28 +35,27 @@ import {
 import { useHistoryScroll } from "./useHistoryScroll";
 import { repositoryHistoryGraphColors, saveHistoryGraphColors } from "./historyGraphColors";
 
-export { RepositoryCommitDetail } from "./RepositoryCommitDetail";
+export {
+  RepositoryCommitDetail,
+  type RepositoryCommitDetailView
+} from "./RepositoryCommitDetail";
 export {
   groupHistoryRefBranches,
   historyRefOptionClassName
 } from "./RepositoryHistoryControls";
 
+const EMPTY_HISTORY_BRANCHES: BranchDto[] = [];
 
 export function RepositoryHistory({
   branch,
   controller,
   onCopyCommitId,
-  onCommitAction,
-  actionBusy,
   repositoryKey,
   target
 }: {
   branch: string | undefined;
   controller: ReturnType<typeof useRepositoryDetails>;
   onCopyCommitId(hash: string): Promise<void>;
-  onCommitAction?: RepositoryCommitActionHandler;
-  actionBusy?: boolean;
-  workflow?: RepositoryWorkflowController;
   repositoryKey: string;
   target: RepositoryTargetDto;
 }) {
@@ -95,7 +90,17 @@ export function RepositoryHistory({
   });
   const commits = history?.page.commits;
   const graphColors = repositoryHistoryGraphColors(target.repositoryId);
-  const branches = controller.branches?.branches ?? [];
+  const branchData = controller.branches?.branches;
+  const branches = branchData ?? EMPTY_HISTORY_BRANCHES;
+  const remoteRefs = useMemo(
+    () =>
+      new Set(
+        branches
+          .filter((item) => item.remote)
+          .map((item) => item.name)
+      ),
+    [branchData]
+  );
   const graph = useMemo(
     () => buildHistoryGraph(commits ?? [], graphColors, branches),
     [commits, graphColors, controller.branches?.branches]
@@ -113,33 +118,11 @@ export function RepositoryHistory({
     selectedHash: controller.historyDetailOpen ? controller.selectedCommitHash : null,
     loadMore: controller.loadMoreHistory
   });
-  const remoteRefs = useMemo(() => new Set(
-    controller.branches?.branches
-      .filter((item) => item.remote)
-      .map((item) => item.name)
-  ), [controller.branches?.branches]);
-  const selected = controller.commit?.commit;
-  const showCommitDetail = Boolean(
-    controller.historyDetailOpen &&
-      (controller.selectedCommitHash ||
-        selected ||
-        controller.loading.commit)
-  );
   const [filterOpen, setFilterOpen] = useState(false);
   const filterTriggerRef = useRef<HTMLButtonElement>(null);
-  const [commitDetailView, setCommitDetailView] =
-    useState<RepositoryCommitDetailView>("details");
   useEffect(() => {
     setFilterOpen(false);
   }, [repositoryKey]);
-  useEffect(() => {
-    setCommitDetailView("details");
-  }, [
-    controller.historyDetailOpen,
-    controller.selectedCommitHash,
-    repositoryKey,
-    selected?.hash
-  ]);
   const hasSearch = Object.values(controller.historySearch ?? {}).some(Boolean);
 
   if (
@@ -161,9 +144,7 @@ export function RepositoryHistory({
       surfaceClassName="history-layout repository-history-skeleton"
     >
       <section
-        className={`history-layout${
-          showCommitDetail ? " has-detail" : ""
-        }`}
+        className="history-layout"
       >
         <div className="history-list">
           <header className="panel-header">
@@ -307,50 +288,10 @@ export function RepositoryHistory({
           </SkeletonBoundary>
         </div>
 
-        {showCommitDetail && (
-          <article
-            aria-label="提交详情"
-            className="commit-detail history-commit-detail panel"
-          >
-            <header className="panel-header">
-              <RepositoryCommitDetailBreadcrumb
-                additions={selected?.additions}
-                deletions={selected?.deletions}
-                fileCount={selected?.files.length ?? 0}
-                filesDisabled={!selected}
-                onViewChange={setCommitDetailView}
-                view={commitDetailView}
-              />
-            </header>
-            <SkeletonBoundary
-              fallback={<RepositoryCommitDetailSkeleton />}
-              hasContent={Boolean(selected)}
-              label="正在读取提交详情"
-              loading={controller.loading.commit}
-              surfaceClassName="repository-commit-detail-skeleton"
-            >
-              {selected ? (
-                <RepositoryCommitDetail
-                  {...(onCommitAction ? { onCommitAction, actionBusy: actionBusy ?? false } : {})}
-                  commit={selected}
-                  key={selected.hash}
-                  target={target}
-                  view={commitDetailView}
-                />
-              ) : (
-                <div className="diff-empty">
-                  <Icon name="activity" size={20} />
-                  <strong>选择提交查看详情</strong>
-                </div>
-              )}
-            </SkeletonBoundary>
-          </article>
-        )}
       </section>
     </SkeletonBoundary>
   );
 }
-
 
 const HistoryCommitRow = memo(function HistoryCommitRow({
   graph,
@@ -367,11 +308,15 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
   remoteRefs: ReadonlySet<string>;
   selected: boolean;
 }) {
-  const refs = [...new Set(item.refs ?? [])].sort((left, right) =>
-    Number(right === "HEAD" || right.startsWith("HEAD -> "))
-    - Number(left === "HEAD" || left.startsWith("HEAD -> "))
+  const refLabels = buildHistoryRefLabels(
+    item.refs ?? [],
+    remoteRefs
   );
-  const hiddenRefs = refs.slice(3);
+  const visibleRefLabels = refLabels.slice(0, 3);
+  const hiddenRefLabels = refLabels.slice(3);
+  const isCurrentHead = refLabels.some(
+    (ref) => ref.kind === "head" && ref.active
+  );
   const timestamp = formatCommitTimestamp(item.authoredAt);
   return (
     <div
@@ -407,6 +352,9 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
       <svg className="commit-graph" aria-hidden="true" height={HISTORY_GRAPH_ROW_HEIGHT}>
         <title>
           {item.stashRef ? "暂存记录" : item.parentHashes.length > 1 ? "合并提交" : "提交"}
+          {refLabels.length > 0
+            ? ` · ${refLabels.map((ref) => ref.name).join("、")}`
+            : ""}
           {graph.boundary ? " · 部分父提交未在当前列表中显示" : ""}
         </title>
         {graph.paths.map((path, index) => (
@@ -416,14 +364,14 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
           <path className="commit-graph-boundary" d={graph.boundary} stroke={graph.color} />
         )}
         <circle
-          className={`commit-node${item.stashRef ? " stash" : item.parentHashes.length > 1 ? " merge" : ""}`}
+          className={`commit-node${item.stashRef ? " stash" : item.parentHashes.length > 1 ? " merge" : ""}${isCurrentHead ? " head" : ""}`}
           cx={16 + graph.lane * 16}
           cy={HISTORY_GRAPH_ROW_HEIGHT / 2}
           r={item.stashRef || item.parentHashes.length > 1 ? 4.5 : 3.5}
         />
       </svg>
       <span className="commit-message">
-        {(item.stashRef || refs.length > 0) && (
+        {(item.stashRef || refLabels.length > 0) && (
           <span className="commit-refs-inline">
             {item.stashRef && (
               <span className="ref-label stash" title={`暂存记录 · ${item.stashRef}`}>
@@ -431,26 +379,15 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
                 <span className="commit-ref-name">{item.stashRef}</span>
               </span>
             )}
-            {refs.slice(0, 3).map((ref) => {
-              const current = ref === "HEAD" || ref.startsWith("HEAD -> ");
-              const tag = ref.startsWith("tag: ");
-              const name = historyRefDisplayName(ref.replace(/^HEAD -> |^tag: /, ""));
-              const remote = ref.startsWith("refs/remotes/") || remoteRefs.has(name) || name.startsWith("origin/");
-              return (
-                <span
-                  className={`ref-label${current ? " current" : ""}${tag ? " tag" : remote ? " remote" : ""}`}
-                  key={ref}
-                  title={current ? `当前检出 · ${name}` : tag ? `标签 · ${name}` : remote ? `远程分支 · ${name}` : `本地分支 · ${name}`}
-                >
-                  <Icon name={tag ? "tag" : "branch"} size={12} />
-                  {current && name !== "HEAD" && <span className="commit-ref-head">HEAD</span>}
-                  <span className="commit-ref-name">{name}</span>
-                </span>
-              );
-            })}
-            {hiddenRefs.length > 0 && (
-              <span className="ref-label more" title={`其他 ${hiddenRefs.length} 个引用\n${hiddenRefs.join("\n")}`}>
-                +{hiddenRefs.length}
+            {visibleRefLabels.map((ref) => (
+              <HistoryRefLabelView key={ref.key} refLabel={ref} />
+            ))}
+            {hiddenRefLabels.length > 0 && (
+              <span
+                className="ref-label more"
+                title={`其他 ${hiddenRefLabels.length} 个引用\n${hiddenRefLabels.map((ref) => ref.name).join("\n")}`}
+              >
+                +{hiddenRefLabels.length}
               </span>
             )}
           </span>
@@ -504,6 +441,185 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
   && equalHistoryGraphRows(previous.graph, next.graph)
 );
 
+type HistoryHeadLabel = {
+  kind: "head";
+  key: string;
+  name: string;
+  active: boolean;
+  remotes: string[];
+};
+type HistoryRemoteLabel = {
+  kind: "remote";
+  key: string;
+  name: string;
+  remote: string;
+};
+type HistoryTagLabel = {
+  kind: "tag";
+  key: string;
+  name: string;
+};
+type HistoryRefLabel =
+  | HistoryHeadLabel
+  | HistoryRemoteLabel
+  | HistoryTagLabel;
+
+export function buildHistoryRefLabels(
+  refs: readonly string[],
+  remoteRefs: ReadonlySet<string>
+): HistoryRefLabel[] {
+  const heads = new Map<string, HistoryHeadLabel>();
+  const remotes = new Map<string, HistoryRemoteLabel>();
+  const tags = new Map<string, HistoryTagLabel>();
+
+  for (const decoration of [...new Set(refs)]) {
+    if (decoration === "HEAD" || decoration.startsWith("HEAD -> ")) {
+      const name =
+        decoration === "HEAD"
+          ? "HEAD"
+          : decoration.slice("HEAD -> ".length);
+      const existing = heads.get(name);
+      heads.set(name, {
+        kind: "head",
+        key: `head:${name}`,
+        name,
+        active: true,
+        remotes: existing?.remotes ?? []
+      });
+      continue;
+    }
+    if (
+      decoration.startsWith("tag: ") ||
+      decoration.startsWith("refs/tags/")
+    ) {
+      const name = decoration
+        .replace(/^tag: /, "")
+        .replace(/^refs\/tags\//, "");
+      if (name) {
+        tags.set(name, {
+          kind: "tag",
+          key: `tag:${name}`,
+          name
+        });
+      }
+      continue;
+    }
+    if (decoration.startsWith("stash@")) {
+      continue;
+    }
+
+    const normalized = decoration.replace(/^refs\//, "");
+    const remoteMatch = normalized.match(
+      /^(?:remotes\/)?([^/]+)\/(.+)$/
+    );
+    const isRemoteDecoration =
+      decoration.startsWith("refs/remotes/") ||
+      remoteRefs.has(decoration) ||
+      decoration.startsWith("origin/");
+    if (isRemoteDecoration && remoteMatch) {
+      const remote = remoteMatch?.[1] ?? "remote";
+      const name = remoteMatch?.[2] ?? normalized;
+      if (!name || name === "HEAD") {
+        continue;
+      }
+      const local = heads.get(name);
+      if (local) {
+        if (!local.remotes.includes(remote)) {
+          local.remotes.push(remote);
+        }
+      } else {
+        const key = `remote:${remote}/${name}`;
+        remotes.set(key, {
+          kind: "remote",
+          key,
+          name,
+          remote
+        });
+      }
+      continue;
+    }
+
+    const name = normalized.replace(/^heads\//, "");
+    const existing = heads.get(name);
+    heads.set(name, {
+      kind: "head",
+      key: `head:${name}`,
+      name,
+      active: existing?.active ?? false,
+      remotes: existing?.remotes ?? []
+    });
+  }
+
+  return [
+    ...[...heads.values()].sort(
+      (left, right) =>
+        Number(right.active) - Number(left.active) ||
+        left.name.localeCompare(right.name)
+    ),
+    ...[...remotes.values()].sort(
+      (left, right) =>
+        left.name.localeCompare(right.name) ||
+        (left.remote ?? "").localeCompare(right.remote ?? "")
+    ),
+    ...[...tags.values()].sort((left, right) =>
+      left.name.localeCompare(right.name)
+    )
+  ];
+}
+
+function HistoryRefLabelView({
+  refLabel
+}: {
+  refLabel: HistoryRefLabel;
+}) {
+  if (refLabel.kind === "tag") {
+    return (
+      <span
+        className="ref-label tag"
+        title={`标签 · ${refLabel.name}`}
+      >
+        <Icon name="tag" size={12} />
+        <span className="commit-ref-name">{refLabel.name}</span>
+      </span>
+    );
+  }
+  if (refLabel.kind === "remote") {
+    return (
+      <span
+        className="ref-label remote"
+        title={`远程分支 · ${refLabel.remote}/${refLabel.name}`}
+      >
+        <Icon name="branch" size={12} />
+        <span className="commit-ref-name">{refLabel.name}</span>
+        <span className="commit-ref-remote">
+          {refLabel.remote}
+        </span>
+      </span>
+    );
+  }
+  return (
+    <span
+      className={`ref-label${refLabel.active ? " current" : ""}`}
+      title={
+        refLabel.active
+          ? `当前检出 · ${refLabel.name}`
+          : `本地分支 · ${refLabel.name}`
+      }
+    >
+      <Icon name="branch" size={12} />
+      {refLabel.active && refLabel.name !== "HEAD" && (
+        <span className="commit-ref-head">HEAD</span>
+      )}
+      <span className="commit-ref-name">{refLabel.name}</span>
+      {refLabel.remotes.map((remote) => (
+        <span className="commit-ref-remote" key={remote}>
+          {remote}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export function resolveHistoryLoadingRegion({
   hasCurrentHistory,
   hasLoadedHistory,
@@ -531,6 +647,9 @@ function historyScopeCaption(
   }
   if (scope.kind === "all") {
     return `全部分支与 stash · 已加载 ${commitCount} 条记录`;
+  }
+  if (scope.kind === "refs") {
+    return `已选 ${scope.refs.length} 个分支 · 已加载 ${commitCount} 条记录`;
   }
   return `只读快照 · 最近 ${commitCount} 条 ${historyRefDisplayName(scope.ref)} 记录`;
 }
@@ -659,22 +778,6 @@ function RepositoryHistoryRowsSkeleton() {
           <Skeleton variant="text" width={54} height={12} />
         </div>
       ))}
-    </div>
-  );
-}
-
-function RepositoryCommitDetailSkeleton() {
-  return (
-    <div className="gn-skeleton-panel-body repository-commit-skeleton-body">
-      <Skeleton variant="text" width="76%" height={24} />
-      <div className="repository-commit-skeleton-meta">
-        <Skeleton variant="text" width={90} height={12} />
-        <Skeleton variant="text" width="58%" height={12} />
-        <Skeleton variant="text" width={118} height={12} />
-      </div>
-      <Skeleton variant="text" width="92%" height={13} />
-      <Skeleton variant="text" width="86%" height={13} />
-      <Skeleton variant="text" width="64%" height={13} />
     </div>
   );
 }

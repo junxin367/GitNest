@@ -1,5 +1,6 @@
 import {
   DEFAULT_DIFF_COMMIT_PANEL_HEIGHT,
+  DEFAULT_DIFF_COMMIT_DETAIL_WIDTH,
   MAX_CODE_ANALYSIS_DIAGNOSTICS,
   MAX_CODE_ANALYSIS_GRAPH_EDGES,
   MAX_CODE_ANALYSIS_GRAPH_NODES,
@@ -14,6 +15,7 @@ import {
   MAX_MCP_MAX_RESPONSE_KB,
   MAX_MCP_MAX_STALE_AGE_DAYS,
   MAX_DIFF_COMMIT_PANEL_HEIGHT,
+  MAX_DIFF_COMMIT_DETAIL_WIDTH,
   MIN_CODE_ANALYSIS_DIAGNOSTICS,
   MIN_CODE_ANALYSIS_GRAPH_EDGES,
   MIN_CODE_ANALYSIS_GRAPH_NODES,
@@ -28,6 +30,7 @@ import {
   MIN_MCP_MAX_RESPONSE_KB,
   MIN_MCP_MAX_STALE_AGE_DAYS,
   MIN_DIFF_COMMIT_PANEL_HEIGHT,
+  MIN_DIFF_COMMIT_DETAIL_WIDTH,
   LANGUAGE_SERVER_LANGUAGES,
   createDefaultAppSettings,
   createDefaultCodeAnalysisSettings,
@@ -58,9 +61,10 @@ const LEGACY_AI_API_KEY_CREDENTIAL_REF =
   "settings_ai_api_key_legacy";
 type AppSettingsDiffDocument = Omit<
   AppSettingsDto["diff"],
-  "commitPanelHeight"
+  "commitPanelHeight" | "commitDetailWidth"
 > & {
   commitPanelHeight?: number;
+  commitDetailWidth?: number;
 };
 type StoredGeneralSettings = Omit<
   AppSettingsDto["general"],
@@ -628,6 +632,9 @@ function mergeSettings(
       ...diff,
       commitPanelHeight: normalizeDiffCommitPanelHeight(
         diff.commitPanelHeight
+      ),
+      commitDetailWidth: normalizeDiffCommitDetailWidth(
+        diff.commitDetailWidth
       )
     },
     repositoryFileBrowsing: mergeRepositoryFileBrowsing(
@@ -760,7 +767,10 @@ function toPublicSettings(
 ): AppSettingsDto {
   return {
     general: { ...document.general },
-    appearance: { ...document.appearance },
+    appearance: {
+      theme: document.appearance.theme,
+      uiColor: normalizeUiColor(document.appearance.uiColor)
+    },
     repositoryFileBrowsing: cloneRepositoryFileBrowsing(
       document.repositoryFileBrowsing
     ),
@@ -768,6 +778,9 @@ function toPublicSettings(
       ...document.diff,
       commitPanelHeight: normalizeDiffCommitPanelHeight(
         document.diff.commitPanelHeight
+      ),
+      commitDetailWidth: normalizeDiffCommitDetailWidth(
+        document.diff.commitDetailWidth
       )
     },
     git: { ...document.git },
@@ -804,7 +817,8 @@ function cloneDocument(
         document.general.closeBehavior ?? "quit"
     },
     appearance: {
-      theme: document.appearance.theme
+      theme: document.appearance.theme,
+      uiColor: normalizeUiColor(document.appearance.uiColor)
     },
     diff: {
       fileView: document.diff.fileView,
@@ -814,6 +828,9 @@ function cloneDocument(
         document.diff.treeDirectoriesCollapsed,
       commitPanelHeight: normalizeDiffCommitPanelHeight(
         document.diff.commitPanelHeight
+      ),
+      commitDetailWidth: normalizeDiffCommitDetailWidth(
+        document.diff.commitDetailWidth
       )
     },
     git: {
@@ -922,8 +939,22 @@ function isGeneralSettings(value: unknown): boolean {
 function isAppearanceSettings(value: unknown): boolean {
   return (
     isRecord(value) &&
-    (value.theme === "dark" || value.theme === "light")
+    (value.theme === "dark" || value.theme === "light") &&
+    (value.uiColor === undefined ||
+      value.uiColor === null ||
+      isValidUiColor(value.uiColor))
   );
+}
+
+function isValidUiColor(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^#[0-9a-f]{6}$/i.test(value)
+  );
+}
+
+function normalizeUiColor(value: unknown): string | null {
+  return isValidUiColor(value) ? value.toLowerCase() : null;
 }
 
 function isDiffSettings(value: unknown): boolean {
@@ -934,7 +965,9 @@ function isDiffSettings(value: unknown): boolean {
     typeof value.wrap === "boolean" &&
     typeof value.treeDirectoriesCollapsed === "boolean" &&
     (value.commitPanelHeight === undefined ||
-      isValidDiffCommitPanelHeight(value.commitPanelHeight))
+      isValidDiffCommitPanelHeight(value.commitPanelHeight)) &&
+    (value.commitDetailWidth === undefined ||
+      isValidDiffCommitDetailWidth(value.commitDetailWidth))
   );
 }
 
@@ -956,6 +989,26 @@ function normalizeDiffCommitPanelHeight(
   return isValidDiffCommitPanelHeight(value)
     ? value
     : DEFAULT_DIFF_COMMIT_PANEL_HEIGHT;
+}
+
+function isValidDiffCommitDetailWidth(
+  value: unknown
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value >= MIN_DIFF_COMMIT_DETAIL_WIDTH &&
+    value <= MAX_DIFF_COMMIT_DETAIL_WIDTH
+  );
+}
+
+function normalizeDiffCommitDetailWidth(
+  value: unknown
+): number {
+  return isValidDiffCommitDetailWidth(value)
+    ? value
+    : DEFAULT_DIFF_COMMIT_DETAIL_WIDTH;
 }
 
 function isGitSettings(value: unknown): boolean {
@@ -1698,11 +1751,17 @@ function migrateV1Document(
   return {
     schemaVersion: 2,
     general: { ...document.general },
-    appearance: { ...document.appearance },
+    appearance: {
+      theme: document.appearance.theme,
+      uiColor: normalizeUiColor(document.appearance.uiColor)
+    },
     diff: {
       ...document.diff,
       commitPanelHeight: normalizeDiffCommitPanelHeight(
         document.diff.commitPanelHeight
+      ),
+      commitDetailWidth: normalizeDiffCommitDetailWidth(
+        document.diff.commitDetailWidth
       )
     },
     git: {
@@ -1737,7 +1796,8 @@ function migrateV2Document(
         document.general.closeBehavior ?? "quit"
     },
     appearance: {
-      theme: document.appearance.theme
+      theme: document.appearance.theme,
+      uiColor: normalizeUiColor(document.appearance.uiColor)
     },
     diff: {
       fileView: document.diff.fileView,
@@ -1747,6 +1807,9 @@ function migrateV2Document(
         document.diff.treeDirectoriesCollapsed,
       commitPanelHeight: normalizeDiffCommitPanelHeight(
         document.diff.commitPanelHeight
+      ),
+      commitDetailWidth: normalizeDiffCommitDetailWidth(
+        document.diff.commitDetailWidth
       )
     },
     git: {

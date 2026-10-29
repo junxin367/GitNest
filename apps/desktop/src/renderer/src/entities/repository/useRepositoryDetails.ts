@@ -1234,6 +1234,12 @@ function sameHistoryScope(
   if (left.kind === "ref" && right.kind === "ref") {
     return left.ref === right.ref;
   }
+  if (left.kind === "refs" && right.kind === "refs") {
+    const leftRefs = [...left.refs].sort();
+    const rightRefs = [...right.refs].sort();
+    return leftRefs.length === rightRefs.length
+      && leftRefs.every((ref, index) => ref === rightRefs[index]);
+  }
   return false;
 }
 

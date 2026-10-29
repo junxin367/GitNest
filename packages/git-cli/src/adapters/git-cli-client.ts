@@ -478,8 +478,22 @@ export class GitCliClient
     const limit = clampHistoryPageLimit(options.limit);
     const offset = clampHistoryOffset(options.offset);
     const search = normalizeCommitHistorySearch(options.search);
-    if (options.scope && options.scope.kind !== "all" && options.scope.kind !== "ref") {
+    if (
+      options.scope &&
+      options.scope.kind !== "all" &&
+      options.scope.kind !== "ref" &&
+      options.scope.kind !== "refs"
+    ) {
       throw new GitError("INVALID_REQUEST", "Unsupported history scope.");
+    }
+    if (
+      options.scope?.kind === "refs" &&
+      (options.scope.refs.length === 0 || options.scope.refs.length > 32)
+    ) {
+      throw new GitError(
+        "INVALID_REQUEST",
+        "Multi-ref history requires between 1 and 32 refs."
+      );
     }
     let traversal = normalizeCommitHistoryTraversal(options.traversal);
     const commandOptions = {
@@ -519,30 +533,54 @@ export class GitCliClient
         }))];
         // Resolve moving refs once. Both ref expansion and large revision sets
         // stay out of the Windows command line.
-        const resolved = await runProcess({
-          ...commandOptions,
-          args: all
-            ? ["log", "--no-walk", "--format=%H", "--branches", "--remotes", "--tags", "--stdin", ...(hasHead ? ["HEAD"] : []), "--"]
-            : resolveRevisionArguments(options.scope?.kind === "ref" ? validateHistoryRefInput(options.scope.ref) : "HEAD"),
-          ...(all ? { input: stashBases.join("\n") } : {}),
-          outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES,
-          allowFailure: true
-        });
-        assertAllowFailureIsRepository(resolved);
-        if (resolved.exitCode !== 0) {
-          throw new GitError("INVALID_REQUEST", "History refs must resolve to commits.", {
-            exitCode: resolved.exitCode, stderr: resolved.stderr.slice(0, 2048)
+        let hashes: string[];
+        if (options.scope?.kind === "refs") {
+          hashes = [];
+          for (const ref of options.scope.refs) {
+            const resolved = await runProcess({
+              ...commandOptions,
+              args: resolveRevisionArguments(validateHistoryRefInput(ref)),
+              outputLimitBytes: 4096,
+              allowFailure: true
+            });
+            assertAllowFailureIsRepository(resolved);
+            if (resolved.exitCode !== 0) {
+              throw new GitError("INVALID_REQUEST", "History refs must resolve to commits.", {
+                exitCode: resolved.exitCode, stderr: resolved.stderr.slice(0, 2048)
+              });
+            }
+            hashes.push(validateCommitHash(resolved.stdout.trim()));
+          }
+        } else {
+          const resolved = await runProcess({
+            ...commandOptions,
+            args: all
+              ? ["log", "--no-walk", "--format=%H", "--branches", "--remotes", "--tags", "--stdin", ...(hasHead ? ["HEAD"] : []), "--"]
+              : resolveRevisionArguments(options.scope?.kind === "ref" ? validateHistoryRefInput(options.scope.ref) : "HEAD"),
+            ...(all ? { input: stashBases.join("\n") } : {}),
+            outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES,
+            allowFailure: true
           });
-        }
-        const hashes = resolved.stdout.trim().split(/\r?\n/).filter(Boolean).map(validateCommitHash);
-        if (!all && hashes.length !== 1) {
-          throw new GitError("INVALID_REQUEST", "History refs must resolve to commits.");
+          assertAllowFailureIsRepository(resolved);
+          if (resolved.exitCode !== 0) {
+            throw new GitError("INVALID_REQUEST", "History refs must resolve to commits.", {
+              exitCode: resolved.exitCode, stderr: resolved.stderr.slice(0, 2048)
+            });
+          }
+          hashes = resolved.stdout.trim().split(/\r?\n/).filter(Boolean).map(validateCommitHash);
+          if (!all && hashes.length !== 1) {
+            throw new GitError("INVALID_REQUEST", "History refs must resolve to commits.");
+          }
         }
         traversal = { startHashes: [...new Set(hashes)] };
       }
       const startHashes = traversal.startHashes;
       const snapshot = traversal;
-      if (options.scope?.kind !== "all" && startHashes.length !== 1) {
+      if (
+        options.scope?.kind !== "all" &&
+        options.scope?.kind !== "refs" &&
+        startHashes.length !== 1
+      ) {
         throw new GitError("INVALID_REQUEST", "History traversal does not match its scope.");
       }
       if (!startHashes.length) return { commits: [], traversal };
@@ -553,12 +591,28 @@ export class GitCliClient
         if (search && options.scope?.kind !== "all") {
           const base = stash.baseHash ?? stash.parentHashes[0];
           if (!base) continue;
-          const reachable = await runProcess({
-            ...commandOptions, args: ["merge-base", "--is-ancestor", validateCommitHash(base), startHashes[0]!],
-            allowFailure: true, outputLimitBytes: 4096
-          });
-          if (reachable.exitCode === 1) continue;
-          if (reachable.exitCode !== 0) throw commandFailure("Git merge-base", reachable);
+          let reachableFromScope = false;
+          for (const startHash of startHashes) {
+            const reachable = await runProcess({
+              ...commandOptions,
+              args: [
+                "merge-base",
+                "--is-ancestor",
+                validateCommitHash(base),
+                startHash
+              ],
+              allowFailure: true,
+              outputLimitBytes: 4096
+            });
+            if (reachable.exitCode === 0) {
+              reachableFromScope = true;
+              break;
+            }
+            if (reachable.exitCode !== 1) {
+              throw commandFailure("Git merge-base", reachable);
+            }
+          }
+          if (!reachableFromScope) continue;
         }
         if (search?.path) {
           const files = await runProcess({
@@ -687,6 +741,25 @@ export class GitCliClient
       const mediaDescriptor = options.includeMedia
         ? MEDIA_DESCRIPTORS[extname(relativePath).toLowerCase()]
         : undefined;
+      const media = mediaDescriptor
+        ? await readRevisionMediaPreview(
+            hash,
+            relativePath,
+            mediaDescriptor,
+            commandOptions
+          )
+        : undefined;
+      const resolvedMedia =
+        mediaDescriptor && media
+          ? isMissingMediaPreview(media) && firstParentHash
+            ? await readRevisionMediaPreview(
+                firstParentHash,
+                relativePath,
+                mediaDescriptor,
+                commandOptions
+              )
+            : media
+          : undefined;
       return {
         path: diff.path,
         content: diff.content,
@@ -694,16 +767,7 @@ export class GitCliClient
         truncated: diff.truncated,
         additions: diff.additions,
         deletions: diff.deletions,
-        ...(mediaDescriptor
-          ? {
-              media: await readRevisionMediaPreview(
-                hash,
-                relativePath,
-                mediaDescriptor,
-                commandOptions
-              )
-            }
-          : {})
+        ...(resolvedMedia ? { media: resolvedMedia } : {})
       };
     } catch (error) {
       throw mapRepositoryError(error, worktreePath);
@@ -844,6 +908,25 @@ export class GitCliClient
       const mediaDescriptor = options.includeMedia
         ? MEDIA_DESCRIPTORS[extname(relativePath).toLowerCase()]
         : undefined;
+      const media = mediaDescriptor
+        ? await readRevisionMediaPreview(
+            mediaRevision,
+            relativePath,
+            mediaDescriptor,
+            commandOptions
+          )
+        : undefined;
+      const resolvedMedia =
+        mediaDescriptor && media
+          ? isMissingMediaPreview(media) && mediaRevision === hash
+            ? await readRevisionMediaPreview(
+                `${hash}^1`,
+                relativePath,
+                mediaDescriptor,
+                commandOptions
+              )
+            : media
+          : undefined;
 
       return {
         ref: normalizedRef,
@@ -854,16 +937,7 @@ export class GitCliClient
         truncated: diff.truncated,
         additions: diff.additions,
         deletions: diff.deletions,
-        ...(mediaDescriptor
-          ? {
-              media: await readRevisionMediaPreview(
-                mediaRevision,
-                relativePath,
-                mediaDescriptor,
-                commandOptions
-              )
-            }
-          : {})
+        ...(resolvedMedia ? { media: resolvedMedia } : {})
       };
     } catch (error) {
       throw mapRepositoryError(error, worktreePath);
@@ -2588,9 +2662,43 @@ async function readRepositoryMediaPreview(
   options: CommandOptions
 ): Promise<RepositoryMediaPreview> {
   if (mode === "staged") {
-    return readStagedMediaPreview(path, descriptor, options);
+    const staged = await readStagedMediaPreview(
+      path,
+      descriptor,
+      options
+    );
+    return isMissingMediaPreview(staged)
+      ? readRevisionMediaPreview(
+          "HEAD",
+          path,
+          descriptor,
+          options
+        )
+      : staged;
+  }
+  if (mode === "unstaged") {
+    const worktree = await readWorktreeMediaPreview(
+      path,
+      descriptor,
+      options
+    );
+    return isMissingMediaPreview(worktree)
+      ? readStagedMediaPreview(path, descriptor, options)
+      : worktree;
   }
   return readWorktreeMediaPreview(path, descriptor, options);
+}
+
+function isMissingMediaPreview(
+  media: RepositoryMediaPreview | undefined
+): media is Extract<
+  RepositoryMediaPreview,
+  { status: "unavailable" }
+> {
+  return (
+    media?.status === "unavailable" &&
+    media.reason === "missing"
+  );
 }
 
 async function readStagedMediaPreview(

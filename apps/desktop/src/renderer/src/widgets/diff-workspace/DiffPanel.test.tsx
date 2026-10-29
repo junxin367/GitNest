@@ -1236,6 +1236,7 @@ describe("DiffPanel configuration", () => {
     expect(container.textContent).toContain("外部应用");
     expect(createObjectUrlMock).not.toHaveBeenCalled();
   });
+
 });
 
 function findButton(

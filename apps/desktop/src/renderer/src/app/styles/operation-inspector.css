@@ -168,6 +168,35 @@
   padding-top: var(--space-3);
 }
 
+.commit-inspector-head {
+  align-items: center;
+  min-width: 0;
+  min-height: 58px;
+}
+
+.commit-inspector-head > .history-commit-heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.commit-inspector .history-commit-breadcrumb {
+  min-width: 0;
+}
+
+.commit-inspector-files {
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+
+.commit-inspector-files .commit-file-list {
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-4));
+}
+
+.commit-inspector-files .history-commit-file {
+  min-height: 48px;
+  padding: var(--space-2) var(--space-4);
+}
+
 .selected-commit-title {
   margin: 0;
   color: var(--text);

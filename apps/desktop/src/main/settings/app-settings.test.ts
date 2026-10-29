@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_CODE_ANALYSIS_PERIODIC_REFRESH_MINUTES,
+  DEFAULT_DIFF_COMMIT_DETAIL_WIDTH,
   DEFAULT_DIFF_COMMIT_PANEL_HEIGHT,
   DEFAULT_MCP_MAX_STALE_AGE_DAYS,
   createDefaultAppSettings,
@@ -61,6 +62,10 @@ describe("AppSettingsService", () => {
     expect(initial.settings.diff.commitPanelHeight).toBe(
       DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
     );
+    expect(initial.settings.diff.commitDetailWidth).toBe(
+      DEFAULT_DIFF_COMMIT_DETAIL_WIDTH
+    );
+    expect(initial.settings.appearance.uiColor).toBeNull();
     expect(initial.settings.ai.apiKeyConfigured).toBe(false);
     expect(initial.settings.codeAnalysis.defaultScope).toBe(
       "changed"
@@ -834,17 +839,26 @@ describe("AppSettingsService", () => {
     expect(loaded.settings.diff.commitPanelHeight).toBe(
       DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
     );
+    expect(loaded.settings.diff.commitDetailWidth).toBe(
+      DEFAULT_DIFF_COMMIT_DETAIL_WIDTH
+    );
     expect(loaded.settings.codeAnalysis.enabled).toBe(true);
 
-    await service.update({ diff: { wrap: true } });
+    await service.update({
+      diff: { wrap: true, commitDetailWidth: 620 }
+    });
     const persisted = JSON.parse(
       await readFile(filePath, "utf8")
     ) as {
-      diff: { commitPanelHeight: number };
+      diff: {
+        commitPanelHeight: number;
+        commitDetailWidth: number;
+      };
     };
     expect(persisted.diff.commitPanelHeight).toBe(
       DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
     );
+    expect(persisted.diff.commitDetailWidth).toBe(620);
     expect(
       JSON.parse(await readFile(filePath, "utf8"))
         .schemaVersion

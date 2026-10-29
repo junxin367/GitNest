@@ -394,6 +394,7 @@ describe("RepositoryCommitDetail", () => {
     root.render(<RepositoryHistory branch={currentBranch} controller={controller}
       onCopyCommitId={vi.fn(async () => undefined)}
       repositoryKey={`${target.repositoryId}:${target.worktreeId}`} target={target} />);
+    return controller;
   }
 
   it("only formats changed history rows on selection, detail loading, and pagination", () => {
@@ -463,6 +464,57 @@ describe("RepositoryCommitDetail", () => {
     expect(all).toBeDefined();
     act(() => all.click());
     expect(selectScope).toHaveBeenCalledWith({ kind: "all" });
+  });
+
+  it("allows applying multiple branch refs as one history scope", () => {
+    const selectScope = vi.fn();
+    let controller!: RepositoryDetailsController;
+    act(() => {
+      controller = renderHistory(TARGET, selectScope, "feature/source");
+    });
+    act(() => container.querySelector<HTMLButtonElement>(".history-ref-trigger")!.click());
+    const branchItems = [
+      ...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')
+    ];
+    expect(branchItems).toHaveLength(2);
+    act(() => branchItems[1]!.click());
+    const apply = [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "应用")!;
+    act(() => apply.click());
+    expect(selectScope).toHaveBeenCalledWith({
+      kind: "refs",
+      refs: [
+        "refs/heads/feature/source",
+        "refs/heads/base"
+      ]
+    });
+    const scopedController = {
+      ...controller,
+      historyScope: {
+        kind: "refs",
+        refs: [
+          "refs/heads/feature/source",
+          "refs/heads/base"
+        ]
+      }
+    } as RepositoryDetailsController;
+    act(() => root.render(
+      <RepositoryHistory branch="feature/source" controller={scopedController}
+        onCopyCommitId={vi.fn(async () => undefined)}
+        repositoryKey="repository-a:worktree-a" target={TARGET} />
+    ));
+    expect(
+      container.querySelector<HTMLButtonElement>(".history-ref-trigger")
+        ?.textContent
+    ).toContain("已选 2 个分支");
+    expect(
+      container.querySelector<HTMLButtonElement>(".history-ref-trigger")
+        ?.title
+    ).toContain("feature/source");
+    expect(
+      container.querySelector<HTMLButtonElement>(".history-ref-trigger")
+        ?.title
+    ).toContain("base");
   });
 
   it.each(["history", "outside"] as const)("刷新移除焦点行后正确保留 %s 焦点", (owner) => {
