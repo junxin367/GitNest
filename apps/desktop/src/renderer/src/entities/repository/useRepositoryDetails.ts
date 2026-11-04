@@ -95,6 +95,8 @@ const EMPTY_LOADING: Record<LoadingKey, boolean> = {
   branches: false
 };
 const DEFAULT_DIFF_CONTEXT_LINES = 3;
+const HISTORY_PAGE_SIZE = 300;
+const OVERVIEW_HISTORY_PAGE_SIZE = 50;
 
 export function useRepositoryDetails(
   target: RepositoryTargetDto | undefined,
@@ -735,7 +737,8 @@ export function useRepositoryDetails(
       setHistoryLoadMoreError(null);
 
       try {
-        const depth = offset === 0 && preserveDepth ? Math.max(50, historyDepthRef.current) : 50;
+        const pageSize = tab === "history" ? HISTORY_PAGE_SIZE : OVERVIEW_HISTORY_PAGE_SIZE;
+        const depth = offset === 0 && preserveDepth ? Math.max(pageSize, historyDepthRef.current) : pageSize;
         let traversal = offset > 0 ? historyTraversalRef.current : undefined;
         const readPage = (pageOffset: number, limit: number) => window.gitnest.repository.getHistory({
           queryId,
@@ -746,18 +749,18 @@ export function useRepositoryDetails(
           ...(search ? { search } : {}),
           ...(traversal ? { traversal } : {})
         });
-        let result = await readPage(offset, Math.min(100, depth));
+        let result = await readPage(offset, Math.min(pageSize, depth));
         if (result.ok) traversal = result.value.page.traversal;
         // Refresh the loaded prefix without discarding the pages being read.
         // Stash rows do not count toward the underlying Git log offset.
         while (
-          preserveDepth && depth > 100
+          preserveDepth && depth > pageSize
           && isCurrentQuery("history", queryId, requestGeneration)
           && result.ok && result.value.page.nextOffset !== undefined
           && result.value.page.nextOffset < offset + depth
         ) {
           const nextOffset = result.value.page.nextOffset;
-          const next = await readPage(nextOffset, Math.min(100, offset + depth - nextOffset));
+          const next = await readPage(nextOffset, Math.min(pageSize, offset + depth - nextOffset));
           if (!next.ok) {
             result = next;
             break;

@@ -22,15 +22,16 @@ const LANE_WIDTH = 16;
 const laneX = (lane: number) => 16 + lane * LANE_WIDTH;
 
 /**
- * Reserve lanes for visible neighbours, keeping the first parent in the
- * current lane where possible. Only direct parent relationships form edges.
- * Treating an edge's earlier endpoint as its start also handles clock skew
- * without changing the order or pagination returned by Git.
+ * Git date-order supplies children before parents. Keep each first-parent
+ * line in its lane until its parent arrives, then reuse the released lanes.
+ * Only actual parent hashes form edges, including continuations into pages
+ * that have not been loaded yet.
  */
 export function buildHistoryGraph(
   commits: readonly HistoryCommit[],
   colors: HistoryGraphColors = createHistoryGraphColors(),
-  branches: readonly BranchDto[] = []
+  branches: readonly BranchDto[] = [],
+  options: { continueOutsidePage?: boolean } = {}
 ): {
   rows: HistoryGraphRow[];
   width: number;
@@ -38,24 +39,15 @@ export function buildHistoryGraph(
   const positions = new Map(commits.map((commit, index) => [commit.hash, index]));
   const tipColors = historyBranchTipColors(commits, branches, colors);
   const reservedColors = new Set(tipColors.values());
-  const assigned = new Set<string>();
-  for (const [tip, color] of tipColors) {
-    let hash: string | undefined = tip;
-    while (hash && !assigned.has(hash)) {
-      const position = positions.get(hash);
-      const commit = position === undefined ? undefined : commits[position];
-      if (!commit || commit.stashRef) break;
-      assigned.add(hash);
-      colors.commits.set(hash, color);
-      hash = commit.parentHashes[0];
-    }
-  }
   const neighbours = new Map(commits.map((commit) => [commit.hash, new Set<string>()]));
   for (const commit of commits) {
     for (const parent of commit.parentHashes) {
-      if (parent !== commit.hash && positions.has(parent)) {
+      if (parent === commit.hash) continue;
+      if (positions.has(parent)) {
         neighbours.get(commit.hash)!.add(parent);
         neighbours.get(parent)!.add(commit.hash);
+      } else if (options.continueOutsidePage) {
+        neighbours.get(commit.hash)!.add(parent);
       }
     }
   }
@@ -65,7 +57,7 @@ export function buildHistoryGraph(
   const allocateColor = (hash: string, sourceColor?: string) => {
     const used = new Set(lanes.flatMap((entry) => entry ? [entry.color] : []));
     if (sourceColor) used.add(sourceColor);
-    const saved = colors.commits.get(hash) ?? tipColors.get(hash);
+    const saved = tipColors.get(hash) ?? colors.commits.get(hash);
     if (saved && !used.has(saved)) return saved;
     for (const color of reservedColors) used.add(color);
     for (let index = 0; ; index++) {
@@ -76,12 +68,14 @@ export function buildHistoryGraph(
       }
     }
   };
-  const availableLane = () => {
-    const empty = lanes.findIndex((lane) => !lane);
-    return empty < 0 ? lanes.length : empty;
+  const availableLane = (minimum = 0) => {
+    for (let lane = minimum; lane < lanes.length; lane++) {
+      if (!lanes[lane]) return lane;
+    }
+    return Math.max(minimum, lanes.length);
   };
   const rows = commits.map((commit, index): HistoryGraphRow => {
-    const preferred = colors.commits.get(commit.hash) ?? tipColors.get(commit.hash);
+    const preferred = tipColors.get(commit.hash) ?? colors.commits.get(commit.hash);
     const branchLane = lanes.map((entry, slot) => ({ entry, slot }))
       .filter(({ entry }) => entry?.hash === commit.hash && !entry.stash)
       .sort((left, right) =>
@@ -92,13 +86,13 @@ export function buildHistoryGraph(
       ? branchLane
       : lanes.findIndex((entry) => entry?.hash === commit.hash);
     const lane = incomingLane < 0
-      ? commit.stashRef ? Math.max(1, availableLane()) : availableLane()
+      ? availableLane(commit.stashRef ? 1 : 0)
       : !commit.stashRef && branchLane < 0
         ? Math.min(incomingLane, availableLane())
         : incomingLane;
     const color = commit.stashRef
       ? "var(--history-stash-color)"
-      : preferred ?? (branchLane >= 0 ? lanes[branchLane]!.color : allocateColor(commit.hash));
+      : branchLane >= 0 ? lanes[branchLane]!.color : allocateColor(commit.hash);
     if (!commit.stashRef) colors.commits.set(commit.hash, color);
     const paths: HistoryGraphRow["paths"] = [];
 
@@ -114,10 +108,8 @@ export function buildHistoryGraph(
       if (arrives) lanes[slot] = undefined;
     });
 
-    // Prefer the actual first parent over children that happen to be earlier
-    // in date order, so ordinary topological histories keep a straight spine.
     const future = [...neighbours.get(commit.hash)!]
-      .filter((hash) => positions.get(hash)! > index)
+      .filter((hash) => !positions.has(hash) || positions.get(hash)! > index)
       .sort((left, right) => {
         const leftParent = commit.parentHashes.indexOf(left);
         const rightParent = commit.parentHashes.indexOf(right);
@@ -126,10 +118,8 @@ export function buildHistoryGraph(
       });
     future.forEach((hash) => {
       const firstParent = hash === commit.parentHashes[0];
-      const reversedFirstParent = commits[positions.get(hash)!]!.parentHashes[0] === commit.hash
+      const reversedFirstParent = commits[positions.get(hash)!]?.parentHashes[0] === commit.hash
         && (colors.commits.get(hash) ?? tipColors.get(hash)) === color;
-      // Keep each first-parent line until the ancestor's own row, even when
-      // another line already targets it. Its colour must not change early.
       const continuesLane = (firstParent || reversedFirstParent) && !lanes[lane];
       let targetLane = continuesLane
         ? lane
@@ -146,19 +136,16 @@ export function buildHistoryGraph(
           stash: Boolean(commit.stashRef)
         };
       }
-      const targetColor = commit.stashRef ? color : lanes[targetLane]!.color;
       paths.push({
         d: targetLane === lane
           ? `M ${laneX(lane)} ${MIDPOINT} V ${HISTORY_GRAPH_ROW_HEIGHT}`
           : `M ${laneX(lane)} ${MIDPOINT} C ${laneX(lane)} 24, ${laneX(targetLane)} 24, ${laneX(targetLane)} ${HISTORY_GRAPH_ROW_HEIGHT}`,
-        color: targetColor
+        color: commit.stashRef ? color : lanes[targetLane]!.color
       });
     });
 
     const hasMissingParent = commit.parentHashes.some((hash) => !positions.has(hash));
-    // A short dashed end denotes a parent outside this page/search. Never
-    // connect neighbouring search results merely because they are adjacent.
-    const boundary = !hasMissingParent
+    const boundary = !hasMissingParent || options.continueOutsidePage
       ? undefined
       : future.length
         ? `M ${laneX(lane)} ${MIDPOINT} Q ${laneX(lane) + 8} 20, ${laneX(lane) + 8} 30`

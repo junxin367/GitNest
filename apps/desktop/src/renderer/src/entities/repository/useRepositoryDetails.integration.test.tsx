@@ -1441,6 +1441,54 @@ describe("useRepositoryDetails", () => {
     }
   );
 
+  it("loads 300 history commits at a time and preserves the loaded prefix on refresh", async () => {
+    const summary = createCommitSummary();
+    const commits = Array.from({ length: 650 }, (_, index) => ({
+      ...summary,
+      hash: `commit-${index}`,
+      shortHash: `c${index}`
+    }));
+    const traversal = { startHashes: ["a".repeat(40)] };
+    const getHistory = vi.fn<GitNestBridge["repository"]["getHistory"]>(
+      async ({ offset = 0, limit = 50 }) => ({
+        ok: true,
+        value: {
+          target: TARGET,
+          page: {
+            commits: commits.slice(offset, offset + limit),
+            traversal,
+            ...(offset + limit < commits.length ? { nextOffset: offset + limit } : {})
+          }
+        }
+      })
+    );
+    installBridge({
+      getHistory,
+      getBranches: vi.fn(async () => ({ ok: true as const, value: { target: TARGET, branches: [] } })),
+      getCommit: vi.fn(async () => ({
+        ok: false as const,
+        error: { code: "COMMAND_CANCELLED" as const, message: "", details: {} }
+      }))
+    });
+    await renderTarget(TARGET, "", "history");
+    expect(getHistory.mock.calls[0]![0]).toMatchObject({ offset: 0, limit: 300 });
+    expect(controller?.history?.page.commits).toEqual(commits.slice(0, 300));
+
+    await act(async () => { await controller?.loadMoreHistory(); });
+    expect(getHistory.mock.calls[1]![0]).toMatchObject({ offset: 300, limit: 300, traversal });
+    expect(controller?.history?.page.commits).toEqual(commits.slice(0, 600));
+
+    await act(async () => { await controller?.reload("history"); });
+    expect(getHistory.mock.calls.slice(2).map(([request]) => [request.offset, request.limit]))
+      .toEqual([[0, 300], [300, 300]]);
+    expect(controller?.history?.page.commits).toEqual(commits.slice(0, 600));
+    expect(controller?.history?.page.nextOffset).toBe(600);
+
+    await act(async () => { await controller?.loadMoreHistory(); });
+    expect(controller?.history?.page.commits).toEqual(commits);
+    expect(controller?.history?.page.nextOffset).toBeUndefined();
+  });
+
   it("cancels obsolete history searches and restarts pagination with the active query", async () => {
     type HistoryResult = Awaited<ReturnType<GitNestBridge["repository"]["getHistory"]>>;
     let resolveObsolete!: (value: HistoryResult) => void;

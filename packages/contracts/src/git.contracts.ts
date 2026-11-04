@@ -112,6 +112,7 @@ export interface CommitSummaryDto {
   authorName: string;
   authorEmail: string;
   authoredAt: string;
+  committedAt?: string;
   subject: string;
   parentHashes: string[];
   refs?: string[];

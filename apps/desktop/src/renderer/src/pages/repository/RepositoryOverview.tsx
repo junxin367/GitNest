@@ -253,9 +253,9 @@ export function RepositoryOverview({
                     </span>
                     <time
                       className="repository-overview-commit-time"
-                      dateTime={commit.authoredAt}
+                      dateTime={commit.committedAt ?? commit.authoredAt}
                     >
-                      {formatCommitTimestamp(commit.authoredAt)}
+                      {formatCommitTimestamp(commit.committedAt ?? commit.authoredAt)}
                     </time>
                     <span className="repository-overview-commit-author">
                       {commit.authorName}

@@ -44,7 +44,8 @@ describe("structured Git parsers", () => {
       "2026-09-04T10:00:00+08:00",
       "Initial commit",
       "parent1 parent2",
-      "HEAD -> main, tag: release,one, origin/main"
+      "HEAD -> main, tag: release,one, origin/main",
+      "2026-09-05T11:00:00+08:00"
     ].join("\0") + "\0\n";
 
     expect(parseCommitHistory(output)).toEqual([
@@ -54,6 +55,7 @@ describe("structured Git parsers", () => {
         authorName: "June",
         authorEmail: "june@example.com",
         authoredAt: "2026-09-04T10:00:00+08:00",
+        committedAt: "2026-09-05T11:00:00+08:00",
         subject: "Initial commit",
         parentHashes: ["parent1", "parent2"],
         refs: [
@@ -101,7 +103,8 @@ describe("structured Git parsers", () => {
       "june@example.com\0" +
       "2026-09-16T10:00:00+08:00\0" +
       "On main: work in progress\0" +
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\0\0";
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\0" +
+      "2026-09-17T11:00:00+08:00\0\0";
 
     expect(parseStashList(output)).toEqual([
       {
@@ -110,6 +113,7 @@ describe("structured Git parsers", () => {
         authorName: "June",
         authorEmail: "june@example.com",
         authoredAt: "2026-09-16T10:00:00+08:00",
+        committedAt: "2026-09-17T11:00:00+08:00",
         subject: "On main: work in progress",
         parentHashes: [
           "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -128,7 +132,8 @@ describe("structured Git parsers", () => {
         "june@example.com\0" +
         "2026-09-16T10:00:00+08:00\0" +
         "On main: work in progress\0" +
-        `${"b".repeat(40)}\0\0`;
+        `${"b".repeat(40)}\0` +
+        "2026-09-17T11:00:00+08:00\0\0";
 
       expect(() => parseStashList(output)).toThrowError(
         expect.objectContaining({

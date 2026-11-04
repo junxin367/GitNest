@@ -247,8 +247,8 @@ export function RepositoryStashBrowser({
                       {stash.subject}
                     </span>
                     <span className="repository-stash-item-meta">
-                      <time dateTime={stash.authoredAt}>
-                        {formatCommitTimestamp(stash.authoredAt)}
+                      <time dateTime={stash.committedAt ?? stash.authoredAt}>
+                        {formatCommitTimestamp(stash.committedAt ?? stash.authoredAt)}
                       </time>
                       <StashStats
                         additions={stash.additions}
@@ -287,9 +287,9 @@ export function RepositoryStashBrowser({
                   <p>
                     {selectedStash.authorName}
                     <span aria-hidden="true"> · </span>
-                    <time dateTime={selectedStash.authoredAt}>
+                    <time dateTime={selectedStash.committedAt ?? selectedStash.authoredAt}>
                       {formatCommitTimestamp(
-                        selectedStash.authoredAt
+                        selectedStash.committedAt ?? selectedStash.authoredAt
                       )}
                     </time>
                     {selectedStash.baseHash ? (

@@ -13,7 +13,7 @@ export function parseStashList(output: string): StashMetadata[] {
     .filter(Boolean)
     .map((record) => {
       const fields = record.split("\0");
-      if (fields.length !== 7) {
+      if (fields.length !== 8) {
         throw new GitError(
           "INVALID_GIT_OUTPUT",
           "Stash metadata contains a malformed record."
@@ -27,7 +27,8 @@ export function parseStashList(output: string): StashMetadata[] {
         authorEmail = "",
         authoredAt = "",
         subject = "",
-        parents = ""
+        parents = "",
+        committedAt = ""
       ] = fields;
       const parentHashes = parents
         .trim()
@@ -50,6 +51,7 @@ export function parseStashList(output: string): StashMetadata[] {
         authorName,
         authorEmail,
         authoredAt,
+        committedAt,
         subject,
         parentHashes,
         ...(parentHashes[0]

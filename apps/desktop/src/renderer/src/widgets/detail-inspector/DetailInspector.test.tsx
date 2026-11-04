@@ -154,7 +154,7 @@ describe("DetailInspector Workspace details", () => {
       refs: ["HEAD -> main"],
       committerName: "Author",
       committerEmail: "author@example.com",
-      committedAt: "2026-10-06T00:00:00Z",
+      committedAt: "2026-11-04T03:06:25Z",
       body: "Keep the session alive.",
       files: [
         {
@@ -189,6 +189,13 @@ describe("DetailInspector Workspace details", () => {
     });
 
     expect(container.textContent).toContain("提交详情");
+    const timestamp = container.querySelector<HTMLTimeElement>(".commit-detail-meta time");
+    expect(timestamp?.dateTime).toBe(commit.committedAt);
+    expect(timestamp?.title).toContain("作者时间：");
+    const dates = new Map([...container.querySelectorAll(".commit-detail-list dt")]
+      .map(label => [label.textContent, label.nextElementSibling?.textContent]));
+    expect(dates.get("提交时间")).toBe(timestamp?.textContent);
+    expect(dates.get("作者时间")).not.toBe(dates.get("提交时间"));
     expect(container.textContent).toContain("HEAD → main");
     expect(container.textContent).not.toContain("采集范围");
     expect(

@@ -115,6 +115,7 @@ export interface StashSummary {
   authorName: string;
   authorEmail: string;
   authoredAt: string;
+  committedAt?: string;
   parentHashes: string[];
   baseHash?: string;
   files?: number;

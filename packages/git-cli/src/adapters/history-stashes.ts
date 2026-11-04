@@ -35,6 +35,7 @@ export function attachHistoryStashes(
         authorName: stash.authorName,
         authorEmail: stash.authorEmail,
         authoredAt: stash.authoredAt,
+        committedAt: stash.committedAt ?? stash.authoredAt,
         parentHashes: [commit.hash],
         refs: [],
         stashRef: stash.ref
@@ -66,6 +67,7 @@ function historyStashEntry(stash: StashSummary): CommitHistoryEntry {
     authorName: stash.authorName,
     authorEmail: stash.authorEmail,
     authoredAt: stash.authoredAt,
+    committedAt: stash.committedAt ?? stash.authoredAt,
     parentHashes: base ? [base] : [],
     refs: [],
     stashRef: stash.ref
@@ -76,7 +78,7 @@ export function stashMatchesHistorySearch(stash: StashSummary, search: CommitHis
   const author = `${stash.authorName} <${stash.authorEmail}>`.toLowerCase();
   if (search.keyword && !`${stash.subject}\n${author}`.toLowerCase().includes(search.keyword.toLowerCase())) return false;
   if (search.author && !author.includes(search.author.toLowerCase())) return false;
-  const timestamp = new Date(stash.authoredAt).getTime();
+  const timestamp = new Date(stash.committedAt ?? stash.authoredAt).getTime();
   if (search.since && timestamp < new Date(`${search.since}T00:00:00`).getTime()) return false;
   if (search.until && timestamp > new Date(`${search.until}T23:59:59.999`).getTime()) return false;
   return true;

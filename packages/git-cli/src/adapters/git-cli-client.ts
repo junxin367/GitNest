@@ -63,7 +63,6 @@ import {
   type CommitDetails,
   type CommitDiff,
   type CommitHistoryPage,
-  type CommitHistoryFilter,
   type RepositoryDiff,
   type RepositoryIdentity,
   type RepositoryInspection,
@@ -87,7 +86,6 @@ import {
   commitNumstatArguments,
   diffArguments,
   historyArguments,
-  historyPageArguments,
   MERGED_REMOTE_BRANCH_ARGUMENTS,
   revisionFileContentArguments,
   revisionFileSizeArguments,
@@ -139,6 +137,7 @@ import {
 } from "../commands/worktree-operations";
 import { findGitExecutable } from "../environment/find-git-executable";
 import { readGitEnvironment } from "../environment/read-git-environment";
+import { ChronologicalHistoryReader } from "./chronological-history";
 import { attachHistoryStashes, stashMatchesHistorySearch } from "./history-stashes";
 import {
   runProcess,
@@ -148,7 +147,7 @@ import {
 const DEFAULT_HISTORY_LIMIT = 50;
 const MAX_HISTORY_LIMIT = 500;
 const DEFAULT_HISTORY_PAGE_LIMIT = 50;
-const MAX_HISTORY_PAGE_LIMIT = 100;
+const MAX_HISTORY_PAGE_LIMIT = 500;
 const DEFAULT_DIFF_CONTEXT_LINES = 3;
 const MAX_DIFF_CONTEXT_LINES = 100_000;
 const DIFF_OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024;
@@ -260,6 +259,7 @@ export class GitCliClient
     string,
     Promise<GitEnvironment>
   >();
+  readonly #historyReader = new ChronologicalHistoryReader();
   readonly #remoteEnvironmentProvider:
     | GitRemoteCommandEnvironmentProvider
     | undefined;
@@ -631,25 +631,9 @@ export class GitCliClient
         Boolean(search) && offset === 0
       );
 
-      if (search?.keyword) {
-        const unified = await readUnifiedHistory(
-          commandOptions, search, limit, offset, startHashes
-        );
-        if (unified) return finish(unified);
-      }
-
-      const result = await runProcess({
-        ...commandOptions,
-        args: historyPageArguments(limit + 1, offset, "--stdin", search),
-        input: startHashes.join("\n"),
-        outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
-      });
-      const commits = parseCommitHistory(result.stdout);
-      const hasMore = commits.length > limit;
-      return finish({
-        commits: commits.slice(0, limit),
-        ...(hasMore ? { nextOffset: offset + limit } : {})
-      });
+      return finish(await this.#historyReader.read(
+        commandOptions, startHashes, search, limit, offset
+      ));
     } catch (error) {
       throw mapRepositoryError(error, worktreePath);
     }
@@ -3331,74 +3315,6 @@ function assertReadNotCancelled(signal?: AbortSignal): void {
       "The Git command was cancelled."
     );
   }
-}
-
-async function readUnifiedHistory(
-  options: CommandOptions,
-  search: CommitHistoryFilter,
-  limit: number,
-  offset: number,
-  revisions: string[]
-): Promise<CommitHistoryPage | undefined> {
-  const { keyword = "", ...filters } = search;
-  const needle = keyword.toLowerCase();
-  const commandOptions = { ...options, input: revisions.join("\n") };
-  const pageArguments = (size: number, skip: number, criteria: CommitHistoryFilter) =>
-    historyPageArguments(size, skip, "--stdin", criteria);
-
-  // Keep Git's direct message search for queries that do not match any author.
-  if (!filters.author) {
-    const authorProbe = await runProcess({
-      ...commandOptions, args: pageArguments(1, 0, { ...filters, author: keyword }),
-      outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
-    });
-    if (!authorProbe.stdout.trim()) return undefined;
-  }
-
-  const commits: CommitHistoryPage["commits"] = [];
-  let matched = 0;
-  const batchSize = 200;
-  for (let scanOffset = 0; ; scanOffset += batchSize) {
-    assertReadNotCancelled(options.signal);
-    const result = await runProcess({
-      ...commandOptions, args: pageArguments(batchSize, scanOffset, filters),
-      outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
-    });
-    const batch = parseCommitHistory(result.stdout);
-    if (!batch.length) break;
-    const matches = new Set(batch.filter(commit =>
-      commit.authorName.toLowerCase().includes(needle) ||
-      commit.authorEmail.toLowerCase().includes(needle)
-    ).map(commit => commit.hash));
-    const remaining = batch.filter(commit => !matches.has(commit.hash));
-    if (remaining.length) {
-      // Ask Git to match full messages without transferring unbounded commit bodies.
-      // Restrict it to this batch; union by hash prevents duplicate results.
-      const messages = await runProcess({
-        ...options,
-        args: ["log", "--no-walk=unsorted", "--format=%H",
-          "--fixed-strings", "--regexp-ignore-case", `--grep=${keyword}`,
-          "--stdin", "--"],
-        input: remaining.map(commit => validateCommitHash(commit.hash)).join("\n"),
-        outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
-      });
-      for (const hash of messages.stdout.trim().split(/\r?\n/)) {
-        if (hash) matches.add(hash);
-      }
-    }
-    // Preserve Git's original topological traversal order.
-    for (const commit of batch) {
-      if (!matches.has(commit.hash)) continue;
-      if (matched >= offset && commits.length < limit) commits.push(commit);
-      matched += 1;
-    }
-    if (matched > offset + limit || batch.length < batchSize) break;
-  }
-  const page: CommitHistoryPage = {
-    commits,
-    ...(matched > offset + limit ? { nextOffset: offset + limit } : {})
-  };
-  return page;
 }
 
 function validateHistoryRefInput(value: string): string {

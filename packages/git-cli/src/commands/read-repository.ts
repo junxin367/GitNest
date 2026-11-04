@@ -1,5 +1,8 @@
 import type { CommitHistoryFilter } from "@gitnest/git-core";
 
+const HISTORY_FORMAT =
+  "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00%cI%x00";
+
 export const STATUS_ARGUMENTS = [
   "-c",
   "core.fsmonitor=false",
@@ -67,8 +70,9 @@ export function historyArguments(limit: number): string[] {
     "log",
     `--max-count=${limit}`,
     "--date=iso-strict",
+    "--date-order",
     "--decorate=short",
-    "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00"
+    HISTORY_FORMAT
   ];
 }
 
@@ -86,11 +90,38 @@ export function historyPageArguments(
     "--date=iso-strict",
     "--date-order",
     "--decorate=short",
-    "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00",
+    HISTORY_FORMAT,
     ...historySearchArguments(search),
     ...(typeof ref === "string" ? [ref] : ref ?? []),
     "--",
     ...(search?.path ? [search.path] : [])
+  ];
+}
+
+export function historyOrderArguments(
+  search?: Pick<CommitHistoryFilter, "author" | "path">
+): string[] {
+  return [
+    ...(search?.path ? ["--literal-pathspecs"] : []),
+    "log",
+    "--date-order",
+    "--format=%H%x09%ct",
+    ...historySearchArguments(search),
+    "--stdin",
+    "--",
+    ...(search?.path ? [search.path] : [])
+  ];
+}
+
+export function historyPageContentArguments(): string[] {
+  return [
+    "log",
+    "--no-walk=unsorted",
+    "--date=iso-strict",
+    "--decorate=short",
+    HISTORY_FORMAT,
+    "--stdin",
+    "--"
   ];
 }
 
@@ -234,7 +265,7 @@ export function stashListArguments(limit?: number): string[] {
     "stash",
     "list",
     ...(limit === undefined ? [] : [`--max-count=${limit}`]),
-    "--format=%gd%x00%H%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%x00"
+    "--format=%gd%x00%H%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%cI%x00%x00"
   ];
 }
 

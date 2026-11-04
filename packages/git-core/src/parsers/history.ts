@@ -2,7 +2,7 @@ import type { CommitSummary } from "../domain/repository";
 import { GitError } from "../errors/git-errors";
 
 const FIELD_SEPARATOR = "\0";
-const COMMIT_FIELD_COUNT = 8;
+const COMMIT_FIELD_COUNT = 9;
 
 export function parseCommitHistory(output: string): CommitSummary[] {
   return parseRecords(output, COMMIT_FIELD_COUNT).map((fields) =>
@@ -43,7 +43,7 @@ function parseRecords(
 }
 
 function parseCommitFields(fields: string[]): CommitSummary {
-  if (fields.length < 7) {
+  if (fields.length !== COMMIT_FIELD_COUNT) {
     throw new GitError(
       "INVALID_GIT_OUTPUT",
       "A commit record does not contain all required fields."
@@ -58,7 +58,8 @@ function parseCommitFields(fields: string[]): CommitSummary {
     authoredAt = "",
     subject = "",
     parents = "",
-    decorations = ""
+    decorations = "",
+    committedAt = ""
   ] = fields;
 
   return {
@@ -67,6 +68,7 @@ function parseCommitFields(fields: string[]): CommitSummary {
     authorName,
     authorEmail,
     authoredAt,
+    committedAt,
     subject,
     parentHashes: parents ? parents.split(" ") : [],
     refs: decorations

@@ -108,7 +108,7 @@ describe("repository read commands", () => {
       "--date-order"
     );
     expect(historyPageArguments(51, 50)).toContain(
-      "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00"
+      "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00%cI%x00"
     );
     expect(
       historyPageArguments(
@@ -181,7 +181,7 @@ describe("repository read commands", () => {
         "stash",
         "list",
         "--max-count=50",
-        "--format=%gd%x00%H%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%x00"
+        "--format=%gd%x00%H%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%cI%x00%x00"
       ])
     );
     expect(stashFilesArguments("stash@{0}")).toEqual(

@@ -92,6 +92,8 @@ export function RepositoryHistory({
   const graphColors = repositoryHistoryGraphColors(target.repositoryId);
   const branchData = controller.branches?.branches;
   const branches = branchData ?? EMPTY_HISTORY_BRANCHES;
+  const hasSearch = Object.values(controller.historySearch ?? {}).some(Boolean);
+  const continueOutsidePage = history?.page.nextOffset !== undefined && !hasSearch;
   const remoteRefs = useMemo(
     () =>
       new Set(
@@ -102,8 +104,8 @@ export function RepositoryHistory({
     [branchData]
   );
   const graph = useMemo(
-    () => buildHistoryGraph(commits ?? [], graphColors, branches),
-    [commits, graphColors, controller.branches?.branches]
+    () => buildHistoryGraph(commits ?? [], graphColors, branches, { continueOutsidePage }),
+    [commits, graphColors, controller.branches?.branches, continueOutsidePage]
   );
   useEffect(() => {
     saveHistoryGraphColors(target.repositoryId, graphColors);
@@ -123,7 +125,6 @@ export function RepositoryHistory({
   useEffect(() => {
     setFilterOpen(false);
   }, [repositoryKey]);
-  const hasSearch = Object.values(controller.historySearch ?? {}).some(Boolean);
 
   if (
     !controller.loading.history &&
@@ -221,7 +222,7 @@ export function RepositoryHistory({
                 <div className="history-table-header" aria-hidden="true">
                   <span>关系图</span>
                   <span>提交说明</span>
-                  <span>日期</span>
+                  <span title="提交者时间，排序和日期筛选均使用此字段。">提交时间</span>
                   <span>作者</span>
                   <span>提交</span>
                 </div>
@@ -317,7 +318,8 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
   const isCurrentHead = refLabels.some(
     (ref) => ref.kind === "head" && ref.active
   );
-  const timestamp = formatCommitTimestamp(item.authoredAt);
+  const committedAt = item.committedAt ?? item.authoredAt;
+  const timestamp = formatCommitTimestamp(committedAt);
   return (
     <div
       aria-current={
@@ -398,7 +400,7 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
       </span>
       <time
         className="commit-time"
-        dateTime={item.authoredAt}
+        dateTime={committedAt}
         title={timestamp}
       >
         {timestamp}

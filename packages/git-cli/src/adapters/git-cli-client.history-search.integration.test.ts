@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTemporaryDirectoryFixture, type TemporaryDirectoryFixture } from "@gitnest/testkit";
 import { GitCliClient } from "./git-cli-client";
+import { stashMatchesHistorySearch } from "./history-stashes";
 
 describe("full repository history search", () => {
   let fixture: TemporaryDirectoryFixture;
@@ -22,9 +23,13 @@ describe("full repository history search", () => {
     await git(["add", "--", "literal1.txt"]);
     await git(["commit", "--author", "Union[author] Writer <union@example.test>",
       "-m", "Ancient second needle[body]"], "2020-01-03T12:00:00");
+    const recentBase = (await git(["rev-parse", "HEAD"])).trim();
+    let recentInput = "";
     for (let index = 0; index < 205; index += 1) {
-      await git(["commit", "--allow-empty", "-m", `Recent ${index}`], "2026-01-01T12:00:00");
+      const subject = `Recent ${index}`;
+      recentInput += `commit refs/heads/main\nmark :${index + 1}\nauthor History [Author] <history@example.test> 1767268800 +0000\ncommitter History [Author] <history@example.test> 1767268800 +0000\ndata ${subject.length}\n${subject}\nfrom ${index === 0 ? recentBase : `:${index}`}\n\n`;
     }
+    await git(["fast-import", "--quiet"], undefined, recentInput);
     await git(["switch", "-c", "topic", "base"]);
     await git(["commit", "--allow-empty", "-m", "Topic needle[body]", "-m", "union[author]"], "2020-01-04T12:00:00");
     await git(["switch", "main"]);
@@ -117,6 +122,16 @@ describe("full repository history search", () => {
       expect(first.traversal?.startHashes).toHaveLength(1000);
       expect(first.commits[0]?.subject).toBe("release-1000");
       expect(first.nextOffset).toBe(50);
+      const expanded = await client.readCommitHistory(bulk.path, {
+        scope, traversal: first.traversal!, limit: 300
+      });
+      expect(expanded.commits).toHaveLength(300);
+      expect(expanded.nextOffset).toBe(300);
+      const capped = await client.readCommitHistory(bulk.path, {
+        scope, traversal: first.traversal!, limit: 1000
+      });
+      expect(capped.commits).toHaveLength(500);
+      expect(capped.nextOffset).toBe(500);
       const last = await client.readCommitHistory(bulk.path, { scope, traversal: first.traversal!, offset: 990, limit: 50 });
       expect(last.commits).toHaveLength(10);
       expect(last.commits.at(-1)?.subject).toBe("release-1");
@@ -138,6 +153,128 @@ describe("full repository history search", () => {
       await bulk.dispose();
     }
   }, 30_000);
+
+  it("按提交者时间跨分支排列，显示字段、日期筛选与稳定分页保持一致", async () => {
+    const ordered = await createTemporaryDirectoryFixture("history-committer-order");
+    try {
+      await git(["init", "-b", "main"], undefined, undefined, ordered.path);
+      const base = 1_760_000_000;
+      const records: { subject: string; authored: number; committed: number; keywordMatch: boolean }[] = [];
+      let input = "commit refs/heads/main\nmark :1\n";
+      input += `author Root <root@example.test> ${base} +0800\ncommitter Root <root@example.test> ${base} +0800\ndata 4\nroot\n\n`;
+      const tips = new Map<string, number>();
+      for (let index = 1; index <= 260; index += 1) {
+        const branch = ["production", "pre-production", "test"][index % 3]!;
+        const authored = base + ((index * 37) % 263 + 1) * 60;
+        const committed = base + 3_000_000 + index;
+        const subject = `${index % 4 === 0 ? "needle" : "change"}-${index}`;
+        const author = index % 3 === 0 ? "Needle Writer" : "Other Writer";
+        const mark = index + 1;
+        records.push({ subject, authored, committed, keywordMatch: index % 4 === 0 || index % 3 === 0 });
+        input += `commit refs/heads/${branch}\nmark :${mark}\nauthor ${author} <writer@example.test> ${authored} +0800\ncommitter Integrator <integrator@example.test> ${committed} +0800\ndata ${subject.length}\n${subject}\nfrom :${tips.get(branch) ?? 1}\n\n`;
+        tips.set(branch, mark);
+      }
+      await git(["fast-import", "--quiet"], undefined, input, ordered.path);
+      records.push({ subject: "root", authored: base, committed: base, keywordMatch: false });
+      records.sort((left, right) => right.committed - left.committed);
+
+      const scope = { kind: "all" as const };
+      const first = await client.readCommitHistory(ordered.path, { scope, limit: 50 });
+      const commits = [...first.commits];
+      let offset = first.nextOffset;
+      while (offset !== undefined) {
+        const page = await client.readCommitHistory(ordered.path, {
+          scope, traversal: first.traversal!, offset, limit: 50
+        });
+        commits.push(...page.commits);
+        offset = page.nextOffset;
+      }
+      expect(commits.map(commit => commit.subject)).toEqual(records.map(record => record.subject));
+      expect(commits.map(commit => Date.parse(commit.committedAt!)))
+        .toEqual(records.map(record => record.committed * 1000));
+      expect(commits.map(commit => Date.parse(commit.authoredAt)))
+        .toEqual(records.map(record => record.authored * 1000));
+      expect(new Set(commits.map(commit => commit.hash)).size).toBe(records.length);
+      const repeated = await client.readCommitHistory(ordered.path, {
+        scope, traversal: first.traversal!, limit: 50
+      });
+      expect(repeated.commits.map(commit => commit.hash)).toEqual(first.commits.map(commit => commit.hash));
+
+      const matching = records.filter(record => record.keywordMatch).map(record => record.subject);
+      const searchFirst = await client.readCommitHistory(ordered.path, {
+        scope, limit: 50, search: { keyword: "needle" }
+      });
+      const searchSecond = await client.readCommitHistory(ordered.path, {
+        scope, traversal: searchFirst.traversal!, offset: searchFirst.nextOffset!, limit: 100,
+        search: { keyword: "needle" }
+      });
+      expect([...searchFirst.commits, ...searchSecond.commits].map(commit => commit.subject)).toEqual(matching);
+      expect(searchSecond.nextOffset).toBeUndefined();
+      const authorIntersection = await client.readCommitHistory(ordered.path, {
+        scope, limit: 100, search: { keyword: "needle", author: "Other Writer" }
+      });
+      expect(authorIntersection.commits.map(commit => commit.subject)).toEqual(
+        records.filter(record => record.subject.startsWith("needle-") && Number(record.subject.split("-")[1]) % 3 !== 0)
+          .map(record => record.subject)
+      );
+
+      const calendarDay = (timestamp: number) => {
+        const date = new Date(timestamp * 1000);
+        return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+      };
+      const committedDay = calendarDay(records[0]!.committed);
+      const dated = await client.readCommitHistory(ordered.path, {
+        scope, limit: 100, search: { since: committedDay, until: committedDay }
+      });
+      expect(dated.commits.map(commit => commit.subject)).toEqual(
+        records.filter(record => calendarDay(record.committed) === committedDay).slice(0, 100).map(record => record.subject)
+      );
+      const authoredDay = calendarDay(records[0]!.authored);
+      expect((await client.readCommitHistory(ordered.path, {
+        scope, search: { since: authoredDay, until: authoredDay }
+      })).commits.map(commit => commit.subject)).toEqual(["root"]);
+    } finally {
+      await ordered.dispose();
+    }
+  }, 30_000);
+
+  it("提交者时间倒置时仍保证子提交先于父提交，并按同一顺序分页", async () => {
+    const ordered = await createTemporaryDirectoryFixture("history-parent-order");
+    try {
+      await git(["init", "-b", "main"], undefined, undefined, ordered.path);
+      const base = 1_760_000_000;
+      let input = "";
+      for (const [index, subject, seconds] of [
+        [1, "root", 400], [2, "child", 100], [3, "grandchild", 200]
+      ] as const) {
+        input += `commit refs/heads/main\nmark :${index}\nauthor Writer <writer@example.test> ${base + index} +0800\ncommitter Integrator <integrator@example.test> ${base + seconds} +0800\ndata ${subject.length}\n${subject}\n${index > 1 ? `from :${index - 1}\n` : ""}\n`;
+      }
+      await git(["fast-import", "--quiet"], undefined, input, ordered.path);
+      const first = await client.readCommitHistory(ordered.path, { limit: 1 });
+      const second = await client.readCommitHistory(ordered.path, {
+        limit: 1, offset: first.nextOffset!, traversal: first.traversal!
+      });
+      const third = await client.readCommitHistory(ordered.path, {
+        limit: 1, offset: second.nextOffset!, traversal: first.traversal!
+      });
+      expect([...first.commits, ...second.commits, ...third.commits].map(commit => commit.subject))
+        .toEqual(["grandchild", "child", "root"]);
+      expect(third.nextOffset).toBeUndefined();
+    } finally {
+      await ordered.dispose();
+    }
+  }, 15_000);
+
+  it("stash 日期筛选同样使用提交者时间", () => {
+    const stash = {
+      ref: "stash@{0}", hash: "a".repeat(40), subject: "stash", authorName: "Writer",
+      authorEmail: "writer@example.test", parentHashes: [],
+      authoredAt: "2026-10-23T15:34:00+08:00",
+      committedAt: "2026-11-04T11:06:00+08:00"
+    };
+    expect(stashMatchesHistorySearch(stash, { since: "2026-11-04", until: "2026-11-04" })).toBe(true);
+    expect(stashMatchesHistorySearch(stash, { since: "2026-10-23", until: "2026-10-23" })).toBe(false);
+  });
 
   it("拒绝已删除的比较范围", async () => {
     await expect(client.readCommitHistory(fixture.path, {

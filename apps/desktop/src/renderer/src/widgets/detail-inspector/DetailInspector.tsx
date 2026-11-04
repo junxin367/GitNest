@@ -191,9 +191,12 @@ export function DetailInspector({
               <div className="commit-detail-meta">
                 <span>{commit.authorName}</span>
                 <code>{commit.hash}</code>
-                <span>
-                  {formatCommitTimestamp(commit.authoredAt)}
-                </span>
+                <time
+                  dateTime={commit.committedAt}
+                  title={`提交时间：${formatCommitTimestamp(commit.committedAt)}\n作者时间：${formatCommitTimestamp(commit.authoredAt)}`}
+                >
+                  {formatCommitTimestamp(commit.committedAt)}
+                </time>
               </div>
               {commitRefs.length > 0 && (
                 <div className="commit-refs">
@@ -282,6 +285,10 @@ export function DetailInspector({
             />
             <DetailRow
               label="提交时间"
+              value={formatCommitTimestamp(commit.committedAt)}
+            />
+            <DetailRow
+              label="作者时间"
               value={formatCommitTimestamp(commit.authoredAt)}
             />
           </dl>
