@@ -63,6 +63,7 @@ import { McpRegistrationService } from "../code-analysis/mcp-registration";
 import { installedLanguageServerSettingsPatch } from "../code-analysis/language-server-settings";
 import { UtilityProcessCodeAnalysisRunner } from "../code-analysis/utility-process-code-analysis-runner";
 import { AppSettingsService } from "../settings/app-settings";
+import { RepositoryAutoFetchScheduler } from "../git/repository-auto-fetch";
 import {
   createDataRegistry,
   type GitNestDataRegistry
@@ -88,6 +89,7 @@ export interface ApplicationServices {
   languageServerInstaller: LanguageServerInstaller;
   mcpRegistration: McpRegistrationService;
   repositoryCommands: RepositoryCommandService;
+  repositoryAutoFetch: RepositoryAutoFetchScheduler;
   repositoryMutations: RepositoryMutationService;
   repositoryManagement: RepositoryManagementService;
   repositoryWorkflow: RepositoryWorkflowService;
@@ -572,6 +574,15 @@ export function registerServices(): ApplicationServices {
     ),
     gitInspection: new GitInspectionService(gitClient),
     languageServerInstaller,
+    repositoryAutoFetch: new RepositoryAutoFetchScheduler({
+      workspace,
+      git: gitClient,
+      settings,
+      onError: error => {
+        void diagnostics.warning("repository.auto-fetch-failed", { error })
+          .catch(() => undefined);
+      }
+    }),
     repositoryCommands: new RepositoryCommandService(
       workspace,
       gitClient,

@@ -41,6 +41,7 @@ import {
   type GitReadPriority,
   type GitWriteOptions,
   type RestoreWorktreeOptions,
+  type CreateBranchOptions,
   type FetchRemoteOptions,
   type GitPullStrategy,
   type PushBranchOptions,
@@ -1244,7 +1245,7 @@ export class GitCliClient
             cwd: worktreePath,
             args: fetchRemoteArguments(
               remoteName,
-              options.prune ?? false
+              options.prune ?? true
             ),
             signal: options.signal,
             timeoutMs:
@@ -1421,7 +1422,7 @@ export class GitCliClient
     path: string,
     branch: string,
     startPoint: string,
-    options: GitWriteOptions = {}
+    options: CreateBranchOptions = {}
   ): Promise<void> {
     const worktreePath = await validateDirectoryPath(path);
     const startPointHash = validateCommitHash(startPoint);
@@ -1439,7 +1440,7 @@ export class GitCliClient
       await assertBranchName(commandOptions, branch);
       await runProcess({
         ...commandOptions,
-        args: createBranchArguments(branch, startPointHash),
+        args: createBranchArguments(branch, startPointHash, options.checkout),
         timeoutMs:
           options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
         outputLimitBytes: WRITE_OUTPUT_LIMIT_BYTES,

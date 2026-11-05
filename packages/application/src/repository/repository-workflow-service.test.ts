@@ -15,6 +15,23 @@ describe("RepositoryWorkflowService", () => {
     await fixture.service.preflight(amend);
     expect(fixture.client.inspect).toHaveBeenLastCalledWith("C:/repo");
   });
+  it.each(["amend", "undo-commit"] as const)("binds %s from history to the selected HEAD", async type => {
+    const fixture = setup();
+    const command = type === "amend"
+      ? { type, target, message: "更新说明", expectedHead: fixture.state.head! }
+      : { type, target, mode: "soft" as const, expectedHead: fixture.state.head! };
+    const preview = await fixture.service.preflight(command);
+    expect(preview.command).toEqual(command);
+    fixture.state.head = "b".repeat(40);
+    await expect(fixture.service.preflight(command)).rejects.toThrow("最近提交已变化");
+    await expect(fixture.service.execute(command, preview.preflightId, true)).rejects.toBeDefined();
+    expect(fixture.client.execute).not.toHaveBeenCalled();
+  });
+  it("rejects malformed history HEAD identifiers before inspection", async () => {
+    const fixture = setup();
+    await expect(fixture.service.preflight({ ...amend, expectedHead: "HEAD" })).rejects.toThrow("完整");
+    expect(fixture.client.inspect).not.toHaveBeenCalled();
+  });
   it("queues the exact target with cancellation signal and retains operationId", async () => {
     const fixture = setup();
     const preflight = await fixture.service.preflight(amend);
@@ -188,6 +205,59 @@ describe("RepositoryWorkflowService", () => {
     await expect(fixture.service.preflight({ type: "revert", target, commitHash: "b".repeat(40) })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
     fixture.state.operation = "merge";
     await expect(fixture.service.preflight(amend)).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+  });
+  it.each(["soft", "mixed", "hard"] as const)("预检任意提交的 %s 重置，确认后仍重新校验 HEAD 和分支", async mode => {
+    const fixture = setup();
+    fixture.state.changedPaths = ["modified.txt"];
+    const command = { type: "reset" as const, target, mode, commitHash: "b".repeat(40),
+      expectedHead: fixture.state.head!, expectedBranch: "main" };
+    const preview = await fixture.service.preflight(command);
+    expect(fixture.client.validateCommit).toHaveBeenCalledWith("C:/repo", command.commitHash, { allowMerge: true });
+    if (mode === "hard") expect(preview.warnings.join("")).toContain("modified.txt");
+    fixture.state.branch = "same-head-other-branch";
+    await expect(fixture.service.execute(command, preview.preflightId, true)).rejects.toThrow("当前分支已变化");
+    expect(fixture.client.execute).not.toHaveBeenCalled();
+  });
+  it.each(["checkout-commit", "merge", "rebase"] as const)("工作区不干净时拒绝 %s", async type => {
+    const fixture = setup();
+    fixture.state.changedPaths = ["untracked.txt"];
+    const command: RepositoryWorkflowCommand = type === "merge"
+      ? { type, target, commitHash: "b".repeat(40), mode: "normal" as const }
+      : type === "rebase" ? { type, target, commitHash: "b".repeat(40) }
+        : { type: "checkout-commit", target, commitHash: "b".repeat(40) };
+    await expect(fixture.service.preflight(command)).rejects.toThrow("先提交或储藏");
+    expect(fixture.runtime.queueRepositoryOperation).not.toHaveBeenCalled();
+  });
+  it.each(["merge", "rebase"] as const)("分离 HEAD 时不能对当前分支执行 %s", async type => {
+    const fixture = setup();
+    fixture.state.branch = null;
+    const command = type === "merge"
+      ? { type, target, commitHash: "b".repeat(40), mode: "normal" as const }
+      : { type, target, commitHash: "b".repeat(40) };
+    await expect(fixture.service.preflight(command)).rejects.toThrow("分离 HEAD");
+  });
+  it("将主线父提交选项交给 Git 验证，不默认选择第一父提交", async () => {
+    const fixture = setup();
+    const command = { type: "cherry-pick" as const, target, commitHash: "b".repeat(40), mainline: 2, noCommit: true };
+    const result = await fixture.service.preflight(command);
+    expect(fixture.client.validateCommit).toHaveBeenCalledWith("C:/repo", command.commitHash, { mainline: 2 });
+    expect(result.warnings.join("")).toContain("第 2 个父提交");
+    expect(result.warnings.join("")).toContain("不自动创建提交");
+  });
+  it.each([
+    { type: "reset", mode: "--hard" },
+    { type: "merge", mode: "unknown" },
+    { type: "merge", mode: "squash", noCommit: false },
+    { type: "cherry-pick", mainline: 0 },
+    { type: "revert", mainline: 1.5 },
+    { type: "cherry-pick", noCommit: true, recordOrigin: true },
+    { type: "rebase", preserveMerges: "yes" }
+  ])("在写入前拒绝无效操作参数 %j", async options => {
+    const fixture = setup();
+    await expect(fixture.service.preflight({
+      target, commitHash: "b".repeat(40), ...options
+    } as RepositoryWorkflowCommand)).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(fixture.client.execute).not.toHaveBeenCalled();
   });
 });
 

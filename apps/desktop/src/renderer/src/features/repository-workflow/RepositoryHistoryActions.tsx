@@ -8,11 +8,13 @@ import type { RepositoryWorkflowController } from "./useRepositoryWorkflow";
 export function RepositoryHistoryActions({
   controller,
   repositoryKey,
-  busy = false
+  busy = false,
+  head
 }: {
   controller: RepositoryWorkflowController;
   repositoryKey: string;
   busy?: boolean;
+  head?: string | undefined;
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -54,7 +56,8 @@ export function RepositoryHistoryActions({
     if (disabled) return;
     setOpenFor(null);
     triggerRef.current?.focus();
-    controller.openDraft(type);
+    if (head) controller.openDraft(type, undefined, undefined, head);
+    else controller.openDraft(type);
   };
 
   return (
@@ -97,10 +100,10 @@ export function RepositoryHistoryActions({
         >
           <MenuHeading>当前工作区 · 最近提交 HEAD</MenuHeading>
           <MenuItem disabled={disabled} onClick={() => choose("amend")}>
-            修正最近提交
+            修改最近一次提交（Amend）…
           </MenuItem>
           <MenuItem disabled={disabled} onClick={() => choose("undo-commit")}>
-            撤销最近提交
+            撤销最近提交（保留修改）…
           </MenuItem>
         </MenuPopover>
       )}

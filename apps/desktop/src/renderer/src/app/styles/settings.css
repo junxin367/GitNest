@@ -706,6 +706,10 @@ html[data-theme="light"] .settings-switch.active .settings-switch-thumb {
   gap: var(--space-3);
 }
 
+#settings-git-fetch .settings-option:first-child {
+  grid-column: 1 / -1;
+}
+
 .settings-option {
   display: grid;
   gap: var(--space-2);

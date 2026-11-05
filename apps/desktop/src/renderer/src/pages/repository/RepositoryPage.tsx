@@ -21,7 +21,10 @@ import type { RepositoryChangeSelectionRequest } from "../../entities/repository
 import { useRepositoryDetails } from "../../entities/repository/useRepositoryDetails";
 import { useRepositoryCommitDraft } from "../../entities/repository/useRepositoryCommitDraft";
 import type { ExternalApplicationController } from "../../features/external-application/useExternalApplications";
-import type { RepositoryCommandController } from "../../features/repository-command/useRepositoryCommands";
+import {
+  isRepositoryCommandOperation,
+  type RepositoryCommandController
+} from "../../features/repository-command/useRepositoryCommands";
 import type { AppSettingsController } from "../../features/settings/useAppSettings";
 import type { ExternalTerminalController } from "../../features/external-terminal/useExternalTerminals";
 import { WorktreeCommandDialog } from "../../features/worktree-command/WorktreeCommandDialog";
@@ -51,6 +54,7 @@ import {
 } from "../../widgets/workspace-sidebar/tapdKeywordPreferences";
 import { getRendererPreferenceStorage } from "../../widgets/workspace-sidebar/sidebarPreferences";
 import type { RepositoryWorkflowController } from "../../features/repository-workflow/useRepositoryWorkflow";
+import type { RepositoryCommitActionHandler } from "../../features/repository-workflow/RepositoryCommitActions";
 
 export {
   RepositoryCommitDetail,
@@ -72,6 +76,8 @@ interface RepositoryPageProps {
   externalApplications: ExternalApplicationController;
   appSettings: AppSettingsController;
   workflow?: RepositoryWorkflowController;
+  onCommitAction?: RepositoryCommitActionHandler;
+  actionBusy?: boolean;
   changeSelectionRequest?: RepositoryChangeSelectionRequest | null;
   onOpenTab(tab: RepositoryTab): void;
   onChangeSelectionHandled?(requestId: number): void;
@@ -92,6 +98,8 @@ export function RepositoryPage({
   externalApplications,
   appSettings,
   workflow,
+  onCommitAction,
+  actionBusy,
   changeSelectionRequest,
   onOpenTab,
   onChangeSelectionHandled,
@@ -191,6 +199,26 @@ export function RepositoryPage({
   const handledCommandCompletion = useRef(
     commands.completionVersion
   );
+  const completedFetch = operations.find(operation =>
+      operation.kind === "fetch" &&
+      operation.state !== "queued" &&
+      operation.state !== "running" &&
+      operation.state !== "cancelling" &&
+      operation.targetIds.some(id => id.startsWith(`${target?.repositoryId}:`))
+    );
+  const fetchCompletion = completedFetch
+    ? `${completedFetch.id}:${completedFetch.state}` : "";
+  const completedCommand = operations.find(operation =>
+    isRepositoryCommandOperation(operation.kind) &&
+    operation.state !== "queued" &&
+    operation.state !== "running" &&
+    operation.state !== "cancelling" &&
+    operation.targetIds.some(id => id.startsWith(`${target?.repositoryId}:`))
+  );
+  const commandCompletion = completedCommand
+    ? `${completedCommand.id}:${completedCommand.state}` : "";
+  const handledFetchCompletion = useRef({ targetKey, version: fetchCompletion });
+  const refreshedCommandCompletion = useRef(commandCompletion);
   const handledWorkflowCompletion = useRef(workflow?.completionVersion ?? 0);
   const handledWorktreeCommandCompletion = useRef(
     worktreeCommands.completionVersion
@@ -379,18 +407,32 @@ export function RepositoryPage({
   }, [workflow?.completionVersion, details.invalidate, details.reload, tab]);
 
   useEffect(() => {
+    const sameTarget = handledFetchCompletion.current.targetKey === targetKey;
+    const fetched = sameTarget && fetchCompletion !== "" &&
+      handledFetchCompletion.current.version !== fetchCompletion;
+    handledFetchCompletion.current = { targetKey, version: fetchCompletion };
+    const commandChanged = handledCommandCompletion.current !== commands.completionVersion;
+    const commandNeedsRefresh = commandChanged &&
+      (!commandCompletion || refreshedCommandCompletion.current !== commandCompletion);
+    handledCommandCompletion.current = commands.completionVersion;
+    if (!sameTarget) {
+      refreshedCommandCompletion.current = commandCompletion;
+      return;
+    }
     if (
-      handledCommandCompletion.current ===
-      commands.completionVersion
+      !commandNeedsRefresh &&
+      !fetched
     ) {
       return;
     }
-    handledCommandCompletion.current =
-      commands.completionVersion;
+    refreshedCommandCompletion.current = commandCompletion;
     details.invalidate();
     void details.reload(tab);
   }, [
     commands.completionVersion,
+    commandCompletion,
+    fetchCompletion,
+    targetKey,
     details.invalidate,
     details.reload,
     tab
@@ -691,7 +733,16 @@ export function RepositoryPage({
       )}
       {tab === "history" && (
         <RepositoryHistory
+          key={targetKey}
           branch={snapshot?.branch}
+          head={snapshot?.head}
+          commands={commands}
+          workflow={workflow}
+          onCommitAction={onCommitAction}
+          actionBusy={actionBusy}
+          operations={operations}
+          worktreePath={resolved.worktree?.path}
+          externalApplications={externalApplications}
           controller={details}
           onCopyCommitId={copyCommitId}
           repositoryKey={`${target.repositoryId}:${target.worktreeId}`}

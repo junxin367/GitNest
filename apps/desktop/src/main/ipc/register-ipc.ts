@@ -1592,6 +1592,9 @@ export function validateUpdateAppSettingsRequest(
     const git: NonNullable<
       UpdateAppSettingsRequest["git"]
     > = {};
+    if ("autoFetch" in request.git) {
+      git.autoFetch = requireBoolean(request.git.autoFetch);
+    }
     if ("fetchMode" in request.git) {
       git.fetchMode = requireEnum(
         request.git.fetchMode,
@@ -3454,10 +3457,9 @@ function validateRepositoryCommand(
         type: "fetch",
         targets: validateRepositoryCommandTargets(input.targets),
         ...(remote ? { remote } : {}),
-        prune: validateOptionalBoolean(
-          input.prune,
-          "Fetch prune"
-        )
+        prune: input.prune === undefined
+          ? true
+          : validateOptionalBoolean(input.prune, "Fetch prune")
       };
     }
     case "pull":
@@ -3519,7 +3521,10 @@ function validateRepositoryCommand(
           "Branch",
           MAX_REPOSITORY_COMMAND_NAME_LENGTH
         ),
-        ...(startPoint ? { startPoint } : {})
+        ...(startPoint ? { startPoint } : {}),
+        ...(input.checkout !== undefined
+          ? { checkout: validateOptionalBoolean(input.checkout, "Checkout after create") }
+          : {})
       };
     }
     case "rename-branch":

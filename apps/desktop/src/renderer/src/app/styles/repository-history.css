@@ -66,6 +66,67 @@
   margin-left: auto;
 }
 
+.history-context-menu {
+  width: max-content;
+  min-width: min(252px, calc(100vw - 16px));
+  max-width: min(400px, calc(100vw - 16px));
+  gap: 0;
+  padding: var(--space-1);
+}
+
+.history-context-menu .menu-item {
+  min-height: 28px;
+  padding: 6px 10px;
+  line-height: 1.4;
+}
+
+.history-context-menu .menu-item-label {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.history-context-menu .menu-separator {
+  margin: var(--space-1) 0;
+}
+
+.history-submenu-chevron {
+  transform: rotate(-90deg);
+}
+
+.history-context-menu .menu-heading {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.history-operation-options {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: var(--space-4) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-regular);
+}
+
+.history-operation-options > label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.history-list > .repository-workflow-conflicts {
+  flex: 0 0 auto;
+  max-height: 40%;
+  overflow: auto;
+}
+
+.commit-refs-inline [aria-haspopup="menu"] {
+  cursor: context-menu;
+}
+
 .history-scope-controls {
   flex: 0 1 auto;
   flex-wrap: nowrap;
@@ -1114,4 +1175,69 @@
   max-width: none;
   margin-right: 0;
   margin-left: 0;
+}
+
+.history-operation-context {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-regular);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.history-operation-context > span {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+
+.history-operation-context p,
+.history-operation-notice p {
+  margin: 0;
+}
+
+.history-operation-revision {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.history-operation-revision code {
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.history-operation-ref {
+  padding: 2px var(--space-2);
+  color: var(--blue);
+  border-radius: var(--radius-small);
+  background: var(--blue-soft);
+  overflow-wrap: anywhere;
+}
+
+.history-operation-notice {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-regular);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.history-operation-notice[data-tone="danger"] {
+  border-color: color-mix(in srgb, var(--red) 35%, transparent);
+  background: var(--red-soft);
+}
+
+.history-operation-paths {
+  max-height: 180px;
+  margin: var(--space-2) 0;
+  padding-left: var(--space-4);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
 }

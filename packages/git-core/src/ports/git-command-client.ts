@@ -13,6 +13,10 @@ export interface FetchRemoteOptions extends GitWriteOptions {
   prune?: boolean;
 }
 
+export interface CreateBranchOptions extends GitWriteOptions {
+  checkout?: boolean;
+}
+
 export type GitPullStrategy = "rebase" | "merge";
 
 export interface PushBranchOptions extends GitWriteOptions {
@@ -81,7 +85,7 @@ export interface GitRepositoryCommandClient {
     path: string,
     branch: string,
     startPoint: string,
-    options?: GitWriteOptions
+    options?: CreateBranchOptions
   ): Promise<void>;
   switchBranch(
     path: string,

@@ -32,6 +32,14 @@ export function RepositoryCommandDialog({
     (warning) => warning.severity === "danger"
   );
   const busy = active !== null;
+  const command = preflight.command;
+  const actionLabel = command.type === "create-branch"
+    ? command.checkout ? "创建并切换分支" : "创建分支"
+    : command.type === "switch-branch" ? `切换到 ${command.branch}`
+    : command.type === "rename-branch" ? "重命名分支"
+    : command.type === "delete-branch" ? "删除本地分支"
+    : command.type === "push" ? "推送提交"
+    : command.type === "pull" ? "拉取并更新分支" : "获取远程更新";
 
   return (
     <Dialog
@@ -75,7 +83,7 @@ export function RepositoryCommandDialog({
             type="button"
             variant={dangerous ? "danger" : "primary"}
           >
-            {busy ? "重新校验中…" : "确认并执行"}
+            {busy ? "正在执行…" : actionLabel}
           </Button>
         </>
       }
@@ -91,9 +99,6 @@ export function RepositoryCommandDialog({
       >
         <span>目标</span>
         <strong>{preflight.targetSummary}</strong>
-        <small>
-          预检有效至 {formatExpiry(preflight.expiresAt)}
-        </small>
       </div>
 
       <section>
@@ -157,20 +162,9 @@ export function RepositoryCommandDialog({
       <div className="command-warning">
         <Icon name="activity" size={14} />
         <span>
-          执行前会再次读取仓库与远程状态；如有变化，本次确认将失效。
+          执行前会检查仓库状态；如有变化，将停止操作并提示重新确认。
         </span>
       </div>
     </Dialog>
   );
-}
-
-function formatExpiry(value: string): string {
-  const expiresAt = new Date(value);
-  return Number.isNaN(expiresAt.getTime())
-    ? "短期内"
-    : expiresAt.toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit"
-      });
 }

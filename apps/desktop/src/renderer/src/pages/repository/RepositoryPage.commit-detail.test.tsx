@@ -240,7 +240,7 @@ describe("RepositoryCommitDetail", () => {
     expect(request).toHaveBeenCalledWith({
       type: "rename-branch", target: TARGET,
       branch: "feature/1", newName: "feature/renamed"
-    });
+    }, { confirmed: true });
 
     const updatedAt = "2026-10-06T09:30:00.000Z";
     controller.branches = {
@@ -396,6 +396,46 @@ describe("RepositoryCommitDetail", () => {
       repositoryKey={`${target.repositoryId}:${target.worktreeId}`} target={target} />);
     return controller;
   }
+
+  it("历史行支持右键和 Shift+F10，保留左键打开详情并在滚动后关闭菜单", () => {
+    let controller!: RepositoryDetailsController;
+    act(() => { controller = renderHistory(); });
+    const row = container.querySelector<HTMLElement>(".commit-row")!;
+    act(() => row.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true, cancelable: true, button: 2, clientX: 300, clientY: 200
+    })));
+    expect(document.querySelector('[aria-label="提交记录操作"]')).not.toBeNull();
+    expect(controller.selectCommit).not.toHaveBeenCalled();
+    controller = { ...controller, history: { ...controller.history!, page: {
+      ...controller.history!.page, commits: controller.history!.page.commits.map(commit => ({
+        ...commit, refs: [...(commit.refs ?? []), "refs/heads/renamed"]
+      }))
+    } } };
+    act(() => root.render(<RepositoryHistory branch="main" controller={controller}
+      onCopyCommitId={vi.fn(async () => undefined)}
+      repositoryKey={`${TARGET.repositoryId}:${TARGET.worktreeId}`} target={TARGET} />));
+    expect(document.querySelector('[aria-label="提交记录操作"]')).not.toBeNull();
+    expect(document.querySelector(".history-context-menu")?.textContent).toContain("分支：renamed");
+    act(() => container.querySelector(".commit-list")!.dispatchEvent(new Event("scroll")));
+    expect(document.querySelector(".history-context-menu")).toBeNull();
+    act(() => row.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true })));
+    expect(document.querySelector(".history-context-menu")).not.toBeNull();
+    act(() => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(document.querySelector(".history-context-menu")).toBeNull();
+    expect(document.activeElement).toBe(row);
+    act(() => row.click());
+    expect(controller.selectCommit).toHaveBeenCalledWith(COMMIT_HASH);
+  });
+
+  it("分支标签右键只打开分支菜单，切换仓库后关闭旧菜单", () => {
+    act(() => renderHistory());
+    const label = container.querySelector<HTMLElement>(".ref-label.current")!;
+    act(() => label.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 250, clientY: 150 })));
+    expect(document.querySelector(".history-context-menu")?.textContent).toContain("复制分支名称");
+    expect(document.querySelector(".history-context-menu")?.textContent).not.toContain("Cherry-pick");
+    act(() => renderHistory({ repositoryId: "other", worktreeId: "other" }));
+    expect(document.querySelector(".history-context-menu")).toBeNull();
+  });
 
   it("only formats changed history rows on selection, detail loading, and pagination", () => {
     // This regression measures row memoization with all rows inside the viewport.
@@ -874,7 +914,7 @@ describe("RepositoryCommitDetail", () => {
     expect(container.querySelector(".changes-page-with-workflow")).toBeNull();
     expect(container.querySelector(".repository-stash-browser")).toBeNull();
     expect(container.textContent).not.toContain("刷新操作状态");
-    expect(container.textContent).not.toContain("修正最近提交");
+    expect(container.textContent).not.toContain("修改最近一次提交");
     expect(container.textContent).not.toContain("创建储藏");
     changesFileRowRender.mockClear();
     const input = container.querySelector<HTMLTextAreaElement>('[name="commit-message"]')!;
@@ -1670,7 +1710,7 @@ describe("RepositoryPage AI commit requests", () => {
     vi.unstubAllGlobals();
   });
 
-  it("preserves stash context actions without adding permanent history actions", async () => {
+  it("preserves stash context actions and exposes HEAD actions only in the history header", async () => {
     const workflow = createWorkflowController();
     window.gitnest.repository.getChanges = vi.fn(async ({ target }) => ({
       ok: true as const,
@@ -1724,8 +1764,8 @@ describe("RepositoryPage AI commit requests", () => {
 
     await renderRepository("layout-actions", { workflow, tab: "history" });
     expect(container.querySelector(".repository-page-history .history-header-actions")).not.toBeNull();
-    expect(container.textContent).not.toContain("提交操作");
-    expect(container.textContent).not.toContain("修正最近提交");
+    expect(container.textContent).toContain("提交操作");
+    expect(container.textContent).not.toContain("修改最近一次提交");
     expect(container.textContent).not.toContain("撤销最近提交");
     expect(workflow.openDraft).toHaveBeenCalledTimes(2);
     expect(workflow.reload).not.toHaveBeenCalled();
@@ -1929,6 +1969,46 @@ describe("RepositoryPage AI commit requests", () => {
     expect(messageInput().value).toBe("fix: B draft");
     await renderRepository("a");
     expect(messageInput().value).toBe("feat: A result");
+  });
+
+  it("refreshes history and branches when background Fetch finishes without a local status change", async () => {
+    const getBranches = vi.fn<GitNestBridge["repository"]["getBranches"]>(async ({ target }) => ({
+      ok: true, value: { target, branches: [] }
+    }));
+    const getHistory = vi.fn<GitNestBridge["repository"]["getHistory"]>(async ({ target }) => ({
+      ok: true, value: { target, page: { commits: [] } }
+    }));
+    window.gitnest.repository.getBranches = getBranches;
+    window.gitnest.repository.getHistory = getHistory;
+    await renderRepository("a", { tab: "history" });
+    const initialBranchReads = getBranches.mock.calls.length;
+    const initialHistoryReads = getHistory.mock.calls.length;
+    const operation = {
+      id: "automatic-fetch", kind: "fetch" as const, scope: "repository" as const,
+      state: "running" as const, targetIds: ["a:other-worktree"], progress: 0,
+      succeeded: 0, failed: 0, message: ""
+    };
+    await renderRepository("a", { tab: "history", operations: [operation] });
+    expect(getBranches).toHaveBeenCalledTimes(initialBranchReads);
+    await renderRepository("a", {
+      tab: "history", operations: [{ ...operation, state: "succeeded", succeeded: 1 }]
+    });
+    expect(getBranches.mock.calls.length).toBeGreaterThan(initialBranchReads);
+    expect(getHistory.mock.calls.length).toBeGreaterThan(initialHistoryReads);
+    const afterCompletion = getBranches.mock.calls.length;
+    await renderRepository("a", {
+      tab: "history", operations: [{ ...operation, state: "succeeded", succeeded: 1 }]
+    });
+    expect(getBranches).toHaveBeenCalledTimes(afterCompletion);
+    await renderRepository("a", {
+      tab: "history", operations: [{ ...operation, state: "succeeded", succeeded: 1 }],
+      commands: {
+        active: null, busy: false, preflight: null, error: null, notice: null,
+        clearFeedback: noOp, completionVersion: 1, request: requestCommand,
+        confirm: async () => false, dismissPreflight: noOp, cancelOperation: async () => false
+      }
+    });
+    expect(getBranches).toHaveBeenCalledTimes(afterCompletion);
   });
 
   it("does not apply an unmounted page response after the repository page reopens", async () => {

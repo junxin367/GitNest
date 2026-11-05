@@ -56,6 +56,32 @@ describe("new repository operation IPC boundary", () => {
     expect(() => validateWorkflowCommand({ target, type: "create-stash", paths: [] })).toThrow();
     expect(() => validateWorkflowCommand({ target, type: "mark-resolved", paths: [] })).toThrow();
   });
+  it.each([
+    { type: "reset", mode: "hard" },
+    { type: "checkout-commit" },
+    { type: "merge", mode: "no-ff", noCommit: true },
+    { type: "rebase", preserveMerges: true },
+    { type: "cherry-pick", noCommit: true, mainline: 2, recordOrigin: false },
+    { type: "revert", noCommit: true, mainline: 1 },
+    { type: "amend", message: "修正提交" },
+    { type: "undo-commit", mode: "mixed" }
+  ])("历史操作参数和绑定的 HEAD、分支可以完整通过 IPC：%j", options => {
+    const binding = { expectedHead: "b".repeat(40), expectedBranch: "main" };
+    const command = { target, ...options, ...binding,
+      ...(["amend", "undo-commit"].includes(options.type) ? {} : { commitHash: "a".repeat(40) }) };
+    expect(validateWorkflowCommand({ ...command, force: true, arbitraryCommand: "ignored" })).toEqual(command);
+  });
+  it.each([
+    { type: "reset", mode: "--hard" },
+    { type: "merge", mode: "unknown" },
+    { type: "cherry-pick", mainline: "2" },
+    { type: "revert", mainline: 0 },
+    { type: "rebase", preserveMerges: "false" },
+    { type: "reset", mode: "hard", expectedHead: "HEAD" },
+    { type: "checkout-commit", expectedBranch: "main\nother" }
+  ])("IPC 拒绝无效高级操作参数：%j", options => {
+    expect(() => validateWorkflowCommand({ target, commitHash: "a".repeat(40), ...options })).toThrow();
+  });
 
   it("limits management operations to their explicit action and fields", () => {
     expect(validateManagementCommand({

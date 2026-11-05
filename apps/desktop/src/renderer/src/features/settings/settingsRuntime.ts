@@ -93,7 +93,7 @@ export async function requestRepositoryFetchBatches(
   request: (command: RepositoryCommandDto) => Promise<boolean>
 ): Promise<boolean> {
   for (const batch of chunkRepositoryTargets(targets)) {
-    if (!await request({ type: "fetch", targets: batch })) {
+    if (!await request({ type: "fetch", targets: batch, prune: true })) {
       return false;
     }
   }

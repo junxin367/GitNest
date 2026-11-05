@@ -1,10 +1,13 @@
 import {
   memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type CSSProperties
+  type CSSProperties,
+  type MouseEvent,
+  type KeyboardEvent
 } from "react";
 
 import type {
@@ -12,7 +15,8 @@ import type {
   RepositoryHistoryPageDto,
   RepositoryHistoryScopeDto,
   RepositoryHistoryFilterDto,
-  RepositoryTargetDto
+  RepositoryTargetDto,
+  WorkspaceOperationDto
 } from "@gitnest/contracts";
 
 import type { useRepositoryDetails } from "../../entities/repository/useRepositoryDetails";
@@ -34,6 +38,13 @@ import {
 } from "./historyGraph";
 import { useHistoryScroll } from "./useHistoryScroll";
 import { repositoryHistoryGraphColors, saveHistoryGraphColors } from "./historyGraphColors";
+import { RepositoryHistoryMenu, type HistoryContextMenuState, type HistoryMenuCommit } from "./RepositoryHistoryMenu";
+import type { RepositoryCommandController } from "../../features/repository-command/useRepositoryCommands";
+import type { RepositoryWorkflowController } from "../../features/repository-workflow/useRepositoryWorkflow";
+import type { RepositoryCommitActionHandler } from "../../features/repository-workflow/RepositoryCommitActions";
+import { RepositoryHistoryActions } from "../../features/repository-workflow/RepositoryHistoryActions";
+import { RepositoryWorkflowToolbar } from "../../features/repository-workflow/RepositoryWorkflowToolbar";
+import type { ExternalApplicationController } from "../../features/external-application/useExternalApplications";
 
 export {
   RepositoryCommitDetail,
@@ -48,12 +59,28 @@ const EMPTY_HISTORY_BRANCHES: BranchDto[] = [];
 
 export function RepositoryHistory({
   branch,
+  head,
+  commands,
+  workflow,
+  onCommitAction,
+  actionBusy,
+  operations = [],
+  worktreePath,
+  externalApplications,
   controller,
   onCopyCommitId,
   repositoryKey,
   target
 }: {
   branch: string | undefined;
+  head?: string | undefined;
+  commands?: RepositoryCommandController | undefined;
+  workflow?: RepositoryWorkflowController | undefined;
+  onCommitAction?: RepositoryCommitActionHandler | undefined;
+  actionBusy?: boolean | undefined;
+  operations?: WorkspaceOperationDto[] | undefined;
+  worktreePath?: string | undefined;
+  externalApplications?: ExternalApplicationController | undefined;
   controller: ReturnType<typeof useRepositoryDetails>;
   onCopyCommitId(hash: string): Promise<void>;
   repositoryKey: string;
@@ -121,6 +148,50 @@ export function RepositoryHistory({
     loadMore: controller.loadMoreHistory
   });
   const [filterOpen, setFilterOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<HistoryContextMenuState | null>(null);
+  const liveContextMenu = useMemo(() => {
+    if (!contextMenu) return null;
+    const commit = commits?.find(item => item.hash === contextMenu.commit.hash);
+    if (!commit || commit.stashRef !== contextMenu.commit.stashRef) return null;
+    return {
+      ...contextMenu,
+      commit,
+      refs: historyMenuRefs(buildHistoryRefLabels(commit.refs ?? [], remoteRefs))
+    };
+  }, [contextMenu, commits, remoteRefs]);
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+  const openContextMenu = useCallback((
+    event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
+    commit: HistoryMenuCommit,
+    refLabel?: HistoryRefLabel,
+    refs?: HistoryRefLabel[]
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const anchor = event.currentTarget;
+    const rect = anchor.getBoundingClientRect();
+    const mouse = "clientX" in event && (event.clientX !== 0 || event.clientY !== 0);
+    setContextMenu({
+      anchor,
+      x: mouse ? event.clientX : rect.left + 12,
+      y: mouse ? event.clientY : rect.top + rect.height,
+      commit,
+      ...(refLabel ? { refLabel } : {}),
+      ...(refs ? { refs } : {})
+    });
+  }, []);
+  const refreshHistory = useCallback(async () => {
+    controller.invalidate();
+    await controller.reload("history");
+  }, [controller.invalidate, controller.reload]);
+  useEffect(closeContextMenu, [
+    closeContextMenu, repositoryKey, controller.historyScope, controller.historySearch
+  ]);
+  useEffect(() => {
+    if (contextMenu && !commits?.some(commit =>
+      commit.hash === contextMenu.commit.hash && commit.stashRef === contextMenu.commit.stashRef
+    )) closeContextMenu();
+  }, [commits, contextMenu, closeContextMenu]);
   const filterTriggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     setFilterOpen(false);
@@ -148,6 +219,9 @@ export function RepositoryHistory({
         className="history-layout"
       >
         <div className="history-list">
+          {workflow && externalApplications && (workflow.state?.operation || Boolean(workflow.state?.conflictedPaths.length)) &&
+            <RepositoryWorkflowToolbar controller={workflow} externalApplications={externalApplications}
+              busy={commands?.busy ?? false} />}
           <header className="panel-header">
             <div className="panel-title">
               <Icon name="history" />
@@ -163,6 +237,8 @@ export function RepositoryHistory({
                   )}
             </span>
             <div className="history-header-actions">
+              {workflow && <RepositoryHistoryActions controller={workflow} repositoryKey={repositoryKey}
+                busy={actionBusy ?? false} head={head} />}
               <HistoryScopeControls
                 branches={branches}
                 currentBranchName={branch}
@@ -235,6 +311,7 @@ export function RepositoryHistory({
                     item={item}
                     key={item.hash}
                     onCopyCommitId={onCopyCommitId}
+                    onContextMenu={openContextMenu}
                     onSelectCommit={controller.selectCommit}
                     remoteRefs={remoteRefs}
                     selected={controller.historyDetailOpen && item.hash === controller.selectedCommitHash}
@@ -288,7 +365,10 @@ export function RepositoryHistory({
             </div>
           </SkeletonBoundary>
         </div>
-
+        <RepositoryHistoryMenu key={repositoryKey} contextMenu={liveContextMenu} onClose={closeContextMenu}
+          target={target} branches={branches} currentBranchName={branch} worktreePath={worktreePath} head={head}
+          commands={commands} workflow={workflow} operations={operations}
+          onCommitAction={onCommitAction} onCopyCommitId={onCopyCommitId} onRefresh={refreshHistory} busy={actionBusy} />
       </section>
     </SkeletonBoundary>
   );
@@ -298,6 +378,7 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
   graph,
   item,
   onCopyCommitId,
+  onContextMenu,
   onSelectCommit,
   remoteRefs,
   selected
@@ -305,6 +386,12 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
   graph: HistoryGraphRow;
   item: RepositoryHistoryPageDto["page"]["commits"][number];
   onCopyCommitId(hash: string): Promise<void>;
+  onContextMenu(
+    event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
+    commit: HistoryMenuCommit,
+    refLabel?: HistoryRefLabel,
+    refs?: HistoryRefLabel[]
+  ): void;
   onSelectCommit(hash: string): Promise<void>;
   remoteRefs: ReadonlySet<string>;
   selected: boolean;
@@ -315,6 +402,15 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
   );
   const visibleRefLabels = refLabels.slice(0, 3);
   const hiddenRefLabels = refLabels.slice(3);
+  const menuRefs = historyMenuRefs(refLabels);
+  const openMenu = (event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>, refLabel?: HistoryRefLabel) =>
+    onContextMenu(event, item, refLabel, menuRefs);
+  const keyboardMenu = (event: KeyboardEvent<HTMLElement>, refLabel?: HistoryRefLabel) => {
+    if (event.nativeEvent.isComposing) return false;
+    if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return false;
+    openMenu(event, refLabel);
+    return true;
+  };
   const isCurrentHead = refLabels.some(
     (ref) => ref.kind === "head" && ref.active
   );
@@ -333,12 +429,15 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
           : ""
       }`}
       data-history-hash={item.hash}
+      aria-haspopup="menu"
+      onContextMenu={event => openMenu(event)}
       key={item.hash}
       style={{ "--lane-color": graph.color } as CSSProperties}
       onClick={() =>
         void onSelectCommit(item.hash)
       }
       onKeyDown={(event) => {
+        if (keyboardMenu(event)) return;
         if (
           event.key !== "Enter" &&
           event.key !== " "
@@ -382,12 +481,22 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
               </span>
             )}
             {visibleRefLabels.map((ref) => (
-              <HistoryRefLabelView key={ref.key} refLabel={ref} />
+              <HistoryRefLabelView key={ref.key} refLabel={ref}
+                onContextMenu={openMenu} onKeyboardMenu={keyboardMenu} />
             ))}
             {hiddenRefLabels.length > 0 && (
               <span
                 className="ref-label more"
                 title={`其他 ${hiddenRefLabels.length} 个引用\n${hiddenRefLabels.map((ref) => ref.name).join("\n")}`}
+                role="button"
+                tabIndex={0}
+                aria-label="查看其他分支与标签操作"
+                aria-haspopup="menu"
+                onClick={event => openMenu(event)}
+                onKeyDown={event => {
+                  if (keyboardMenu(event)) return;
+                  if (event.key === "Enter" || event.key === " ") openMenu(event);
+                }}
               >
                 +{hiddenRefLabels.length}
               </span>
@@ -437,6 +546,7 @@ const HistoryCommitRow = memo(function HistoryCommitRow({
 }, (previous, next) =>
   previous.item === next.item
   && previous.onCopyCommitId === next.onCopyCommitId
+  && previous.onContextMenu === next.onContextMenu
   && previous.onSelectCommit === next.onSelectCommit
   && previous.remoteRefs === next.remoteRefs
   && previous.selected === next.selected
@@ -461,10 +571,16 @@ type HistoryTagLabel = {
   key: string;
   name: string;
 };
-type HistoryRefLabel =
+export type HistoryRefLabel =
   | HistoryHeadLabel
   | HistoryRemoteLabel
   | HistoryTagLabel;
+
+function historyMenuRefs(labels: HistoryRefLabel[]): HistoryRefLabel[] {
+  return labels.flatMap<HistoryRefLabel>(ref => ref.kind === "head"
+    ? [ref, ...ref.remotes.map(remote => ({ kind: "remote" as const, key: `remote:${remote}/${ref.name}`, name: ref.name, remote }))]
+    : [ref]);
+}
 
 export function buildHistoryRefLabels(
   refs: readonly string[],
@@ -570,13 +686,25 @@ export function buildHistoryRefLabels(
 }
 
 function HistoryRefLabelView({
-  refLabel
+  refLabel,
+  onContextMenu,
+  onKeyboardMenu
 }: {
   refLabel: HistoryRefLabel;
+  onContextMenu(event: MouseEvent<HTMLElement>, refLabel: HistoryRefLabel): void;
+  onKeyboardMenu(event: KeyboardEvent<HTMLElement>, refLabel: HistoryRefLabel): boolean;
 }) {
+  const menuProps = {
+    role: "button",
+    tabIndex: 0,
+    "aria-haspopup": "menu" as const,
+    onContextMenu: (event: MouseEvent<HTMLSpanElement>) => onContextMenu(event, refLabel),
+    onKeyDown: (event: KeyboardEvent<HTMLSpanElement>) => { onKeyboardMenu(event, refLabel); }
+  };
   if (refLabel.kind === "tag") {
     return (
       <span
+        {...menuProps}
         className="ref-label tag"
         title={`标签 · ${refLabel.name}`}
       >
@@ -588,6 +716,7 @@ function HistoryRefLabelView({
   if (refLabel.kind === "remote") {
     return (
       <span
+        {...menuProps}
         className="ref-label remote"
         title={`远程分支 · ${refLabel.remote}/${refLabel.name}`}
       >
@@ -601,6 +730,7 @@ function HistoryRefLabelView({
   }
   return (
     <span
+      {...menuProps}
       className={`ref-label${refLabel.active ? " current" : ""}`}
       title={
         refLabel.active
@@ -614,7 +744,10 @@ function HistoryRefLabelView({
       )}
       <span className="commit-ref-name">{refLabel.name}</span>
       {refLabel.remotes.map((remote) => (
-        <span className="commit-ref-remote" key={remote}>
+        <span className="commit-ref-remote" key={remote}
+          role="button" tabIndex={0} aria-haspopup="menu" title={`远程分支 · ${remote}/${refLabel.name}`}
+          onContextMenu={event => onContextMenu(event, { kind: "remote", key: `remote:${remote}/${refLabel.name}`, name: refLabel.name, remote })}
+          onKeyDown={event => { onKeyboardMenu(event, { kind: "remote", key: `remote:${remote}/${refLabel.name}`, name: refLabel.name, remote }); }}>
           {remote}
         </span>
       ))}

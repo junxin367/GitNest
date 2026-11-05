@@ -5,6 +5,8 @@ import { Dialog } from "../../shared/ui/Dialog";
 import { Input } from "../../shared/ui/Input";
 import { Textarea } from "../../shared/ui/Textarea";
 import type { RepositoryWorkflowController } from "./useRepositoryWorkflow";
+import type { RepositoryWorkflowStateDto } from "@gitnest/contracts";
+import { WorkflowRevision, WorkflowRewriteNotice, workflowActionLabel } from "./RepositoryWorkflowPresentation";
 
 export function RepositoryWorkflowToolbar({
   controller, busy = false, externalApplications
@@ -30,9 +32,14 @@ export function RepositoryWorkflowToolbar({
       <strong>{state?.operation ? `正在进行 ${state.operation}` : "存在未解决冲突"}</strong>
       {state?.currentReplay && <p>当前提交：<code>{state.currentReplay.commitHash.slice(0, 12)}</code> {state.currentReplay.subject}</p>}
       {state?.currentReplay?.isEmpty
-        ? <p role="status">当前提交已没有文件变更。请选择跳过当前提交，或保留一条空提交记录后继续。</p>
-        : <p>编辑并保存冲突文件后，将文件标记为已解决。所有冲突解决后可以继续操作。</p>}
+        ? <p role="status">当前提交已没有文件变更。请选择跳过当前提交{state.currentReplay.canKeepEmpty ? "，或保留一条空提交记录后继续" : ""}。</p>
+        : state?.currentReplay?.noCommit
+          ? <p>当前为仅应用变更模式。解决冲突并标记后，继续操作会保留暂存结果，由你手动提交。</p>
+        : state?.conflictedPaths.length
+          ? <p>编辑并保存冲突文件后，将文件标记为已解决。所有冲突解决后可以继续操作。</p>
+          : <p>当前操作尚未完成。可继续完成提交，或中止并恢复操作前的状态。</p>}
       {state?.currentReplay?.blockedReason && <p role="status">{state.currentReplay.blockedReason}</p>}
+      {state?.currentReplay?.continueBlockedReason && <p role="status">{state.currentReplay.continueBlockedReason}</p>}
       {state?.currentReplay?.isEmpty && !state.currentReplay.canKeepEmpty && !state.currentReplay.blockedReason &&
         <p>此重放方式仅支持跳过空提交；如需保留，请在终端处理。</p>}
       {(state?.conflictedPaths ?? []).map(path => <div className="repository-workflow-conflict" key={path}>
@@ -45,7 +52,7 @@ export function RepositoryWorkflowToolbar({
       </div>)}
       {externalApplications.error && <p role="alert">{externalApplications.error.message}</p>}
       {state?.operation && <div className="repository-workflow-toolbar">
-        <Button size="small" disabled={disabled || state.conflictedPaths.length > 0 || state.currentReplay?.isEmpty}
+        <Button size="small" disabled={disabled || state.conflictedPaths.length > 0 || state.currentReplay?.isEmpty || Boolean(state.currentReplay?.continueBlockedReason)}
           onClick={() => void controller.request({ type: "continue" })}>继续 {state.operation}</Button>
         {state.operation !== "merge" && state.currentReplay && <>
           <Button size="small" disabled={disabled || !state.currentReplay.canSkip}
@@ -74,6 +81,7 @@ function WorkflowDraftDialog({ controller }: { controller: RepositoryWorkflowCon
   const [undoMode, setUndoMode] = useState<"soft" | "mixed">("soft");
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
+  const [initialState, setInitialState] = useState<RepositoryWorkflowStateDto | null>(null);
   const id = useId();
   useEffect(() => {
     let live = true;
@@ -81,29 +89,42 @@ function WorkflowDraftDialog({ controller }: { controller: RepositoryWorkflowCon
       if (!live) return;
       setLoading(false);
       setLoaded(Boolean(state));
+      setInitialState(state);
       if (state && draft.type === "amend") setMessage(state.headMessage);
     });
     return () => { live = false; };
   }, [controller.reload, draft.type]);
   const busy = loading || controller.busy;
+  const snapshot = controller.state ?? initialState;
+  const headChanged = loaded && Boolean(
+    (draft.expectedHead && snapshot?.head !== draft.expectedHead) ||
+    (draft.type !== "create-stash" && initialState &&
+      (snapshot?.head !== initialState.head || snapshot?.branch !== initialState.branch))
+  );
   const title = draft.type === "create-stash" ? "创建储藏" :
-    draft.type === "amend" ? "修正最近一次提交" : "撤销最近一次提交";
+    draft.type === "amend" ? "修改最近一次提交（Amend）" : "撤销最近提交（保留修改）";
+  const action = draft.type === "create-stash"
+    ? { type: "create-stash" as const, message: message.trim(), includeUntracked,
+        ...(draft.path ? { paths: draft.paths ?? [draft.path] } : {}) }
+    : draft.type === "amend"
+      ? { type: "amend" as const, message: message.trim(), ...(snapshot?.head ? { expectedHead: snapshot.head, expectedBranch: snapshot.branch } : {}) }
+      : { type: "undo-commit" as const, mode: undoMode, ...(snapshot?.head ? { expectedHead: snapshot.head, expectedBranch: snapshot.branch } : {}) };
   const submit = async () => {
-    if (busy || !loaded) return;
-    const accepted = await controller.request(draft.type === "create-stash"
-      ? { type: "create-stash", message: message.trim(), includeUntracked,
-          ...(draft.path ? { paths: draft.paths ?? [draft.path] } : {}) }
-      : draft.type === "amend" ? { type: "amend", message: message.trim() }
-      : { type: "undo-commit", mode: undoMode });
+    if (busy || !loaded || !snapshot || headChanged) return;
+    const accepted = await controller.request(action, { confirmed: true, reviewedState: snapshot });
     if (accepted) controller.closeDraft();
   };
   return <Dialog title={title} icon="commit" size="target" dismissDisabled={busy}
     onDismiss={controller.closeDraft}
     footer={<>
       <Button disabled={busy} onClick={controller.closeDraft}>取消</Button>
-      <Button variant="primary" disabled={busy || !loaded || (draft.type === "amend" && !message.trim())}
-        onClick={() => void submit()}>{busy ? "正在读取…" : "检查并继续"}</Button>
+      <Button variant="primary" disabled={busy || !loaded || headChanged || (draft.type === "amend" && !message.trim())}
+        onClick={() => void submit()}>{loading ? "正在读取…" : busy ? "正在执行…" : workflowActionLabel(action)}</Button>
     </>}>
+    {draft.type !== "create-stash" && snapshot?.head && <section className="history-operation-context" aria-label="当前提交">
+      <span>当前分支</span><strong>{snapshot.branch ?? "分离 HEAD"}</strong>
+      <WorkflowRevision hash={snapshot.head} subject={snapshot.headMessage.split("\n")[0]} />
+    </section>}
     {draft.type === "create-stash" ? <>
       <p>范围：{draft.path ?? "当前工作区全部改动"}</p>
       <Input id={`${id}-message`} label="储藏备注（可选）" fullWidth disabled={busy}
@@ -118,14 +139,15 @@ function WorkflowDraftDialog({ controller }: { controller: RepositoryWorkflowCon
       <p>{controller.state?.hasStagedChanges ? "当前有暂存内容，会一并追加到提交。" : "当前没有暂存内容，仅修改提交信息。"}</p>
     </> : <>
       <p>将当前分支退回最近提交的父提交，文件改动保留在本地。</p>
+      <p>最近提交会从当前分支历史中移除；如需保留历史并抵消变更，请使用“还原此提交（Revert）”。</p>
+      {snapshot && snapshot.parentCount > 1 && <p>最近提交为合并提交，将退回第一父提交，并保留合并带来的文件修改。</p>}
       <label><input type="radio" name={`${id}-undo`} checked={undoMode === "soft"} disabled={busy}
         onChange={() => setUndoMode("soft")} />保留在暂存区</label>
       <label><input type="radio" name={`${id}-undo`} checked={undoMode === "mixed"} disabled={busy}
         onChange={() => setUndoMode("mixed")} />保留为未暂存改动</label>
     </>}
-    {(draft.type === "amend" || draft.type === "undo-commit") && <p>
-      这会改写本地历史。如果提交已推送，协作者的历史不会自动同步，请核对下一步显示的远程影响。
-    </p>}
+    {draft.type !== "create-stash" && snapshot && <WorkflowRewriteNotice state={snapshot} />}
+    {headChanged && <p role="alert">最近提交已变化，请关闭对话框并刷新提交历史后重新选择。</p>}
     {controller.error && <p role="alert">{controller.error}</p>}
   </Dialog>;
 }

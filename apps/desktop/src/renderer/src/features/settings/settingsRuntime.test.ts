@@ -121,7 +121,7 @@ describe("settings runtime preferences", () => {
     const request = vi.fn(async () => ++submittedChunks !== rejectedChunk);
     expect(await requestRepositoryFetchBatches(targets, request)).toBe(false);
     expect(request).toHaveBeenCalledTimes(rejectedChunk);
-    expect(request).toHaveBeenNthCalledWith(1, { type: "fetch", targets: targets.slice(0, 50) });
+    expect(request).toHaveBeenNthCalledWith(1, { type: "fetch", targets: targets.slice(0, 50), prune: true });
   });
 
   it("waits for each Fetch submission before sending the next chunk", async () => {
@@ -136,6 +136,6 @@ describe("settings runtime preferences", () => {
     release(true);
     expect(await pending).toBe(true);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith({ type: "fetch", targets: targets.slice(50) });
+    expect(request).toHaveBeenLastCalledWith({ type: "fetch", targets: targets.slice(50), prune: true });
   });
 });

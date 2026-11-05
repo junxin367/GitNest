@@ -116,8 +116,12 @@ describe("repository operation commands", () => {
     expect(fetchRemoteArguments("origin", true)).toEqual([
       "fetch",
       "--prune",
+      "--no-prune-tags",
       "--",
       "origin"
+    ]);
+    expect(fetchRemoteArguments("origin", false)).toEqual([
+      "fetch", "--no-prune", "--no-prune-tags", "--", "origin"
     ]);
     expect(readRemoteUrlArguments("origin")).toEqual([
       "remote",

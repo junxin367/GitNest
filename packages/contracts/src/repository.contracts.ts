@@ -319,6 +319,7 @@ export type RepositoryCommandDto =
       type: "fetch";
       targets: RepositoryTargetDto[];
       remote?: string;
+      /** 默认清理远程已删除的跟踪引用；false 显式保留。 */
       prune?: boolean;
     }
   | {
@@ -342,6 +343,7 @@ export type RepositoryCommandDto =
       target: RepositoryTargetDto;
       branch: string;
       startPoint?: string;
+      checkout?: boolean;
     }
   | {
       type: "rename-branch";

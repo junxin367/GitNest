@@ -146,6 +146,17 @@ for (const entry of asarEntries) {
 const packagedMetadata = JSON.parse(
   extractAsarFile("package.json").toString("utf8")
 );
+const builderConfiguration = await readFile(
+  join(projectRoot, "apps", "desktop", "electron-builder.yml"),
+  "utf8"
+);
+const configuredAppId = /^appId:\s*([^\s#]+)\s*$/m.exec(builderConfiguration)?.[1];
+const packagedMain = extractAsarFile("out/main/index.js").toString("utf8");
+assert(
+  Boolean(configuredAppId) &&
+    packagedMain.includes(`.setAppUserModelId("${configuredAppId}")`),
+  "Packaged Windows runtime must use the same AppUserModelID as its installer shortcuts."
+);
 assertEqual(
   packagedMetadata.version,
   version,

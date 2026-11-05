@@ -117,11 +117,11 @@ describe("DetailInspector Workspace details", () => {
     expect(container.querySelectorAll(".quick-grid")).toHaveLength(1);
     expect([...container.querySelectorAll(".quick-grid > button")].map(button =>
       button.textContent?.trim()
-    )).toEqual(["复制 ID", "远程查看", "Cherry-pick", "创建分支"]);
-    expect(container.querySelectorAll(".quick-grid > .quick-button > svg")).toHaveLength(4);
-    expect(container.textContent).not.toContain("还原此提交");
+    )).toEqual(["复制 ID", "远程查看", "拣选提交", "还原此提交", "创建分支"]);
+    expect(container.querySelectorAll(".quick-grid > .quick-button > svg")).toHaveLength(5);
     const actions = [
-      ["远程查看", "remote"], ["Cherry-pick", "cherry-pick"],
+      ["远程查看", "remote"], ["拣选提交", "cherry-pick"],
+      ["还原此提交", "revert"],
       ["创建分支", "create-branch"]
     ] as const;
     for (const [label, action] of actions) {
@@ -132,7 +132,7 @@ describe("DetailInspector Workspace details", () => {
     const secondCommit = { ...firstCommit, hash: "b".repeat(40), subject: "Second" };
     render(secondCommit);
     await act(async () => [...container.querySelectorAll("button")]
-      .find(button => button.textContent?.trim() === "Cherry-pick")!.click());
+      .find(button => button.textContent?.trim() === "拣选提交")!.click());
     expect(onCommitAction).toHaveBeenLastCalledWith("cherry-pick", secondCommit);
     render(secondCommit, true);
     expect([...container.querySelectorAll(".quick-grid > button")].slice(1)

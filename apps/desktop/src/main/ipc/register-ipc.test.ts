@@ -409,6 +409,15 @@ describe("repository command IPC validation", () => {
     worktreeId: "worktree"
   };
 
+  it("defaults Fetch to prune without overriding an explicit opt-out", () => {
+    expect(validateRepositoryCommandPreflightRequest({
+      command: { type: "fetch", targets: [target] }
+    }).command).toEqual({ type: "fetch", targets: [target], prune: true });
+    expect(validateRepositoryCommandPreflightRequest({
+      command: { type: "fetch", targets: [target], prune: false }
+    }).command).toEqual({ type: "fetch", targets: [target], prune: false });
+  });
+
   it("normalizes a supported command without widening its capabilities", () => {
     expect(
       validateRepositoryCommandPreflightRequest({
@@ -427,6 +436,14 @@ describe("repository command IPC validation", () => {
         prune: true
       }
     });
+  });
+
+  it("preserves the explicit create-and-checkout option and rejects non-boolean values", () => {
+    const command = { type: "create-branch", target, branch: "feature/new", checkout: true };
+    expect(validateRepositoryCommandPreflightRequest({ command })).toEqual({ command });
+    expect(() => validateRepositoryCommandPreflightRequest({
+      command: { ...command, checkout: "true" }
+    })).toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
   });
 
   it("rejects unsafe or ambiguous command shapes", () => {
@@ -1242,6 +1259,19 @@ describe("application settings and AI IPC validation", () => {
     repositoryId: "repository",
     worktreeId: "worktree"
   };
+
+  it("validates the automatic Fetch preference without coercing non-booleans", () => {
+    expect(validateUpdateAppSettingsRequest({
+      git: { autoFetch: false, fetchMode: "manual" }
+    })).toEqual({ git: { autoFetch: false, fetchMode: "manual" } });
+    expect(validateUpdateAppSettingsRequest({
+      git: { autoFetch: true }
+    })).toEqual({ git: { autoFetch: true } });
+    for (const autoFetch of ["false", 0, null]) {
+      expect(() => validateUpdateAppSettingsRequest({ git: { autoFetch } }))
+        .toThrowError(expect.objectContaining({ code: "INVALID_REQUEST" }));
+    }
+  });
 
   it("normalizes supported settings without accepting an empty AI key", () => {
     expect(

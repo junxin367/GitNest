@@ -7,6 +7,9 @@ import { RepositoryWorkflowDraftDialog, RepositoryWorkflowToolbar } from "./Repo
 import type { RepositoryWorkflowController } from "./useRepositoryWorkflow";
 import { useRepositoryWorkflow } from "./useRepositoryWorkflow";
 import type { ExternalApplicationController } from "../external-application/useExternalApplications";
+import { RepositoryHistoryOperationDialog, type HistoryOperationType } from "./RepositoryHistoryOperationDialog";
+import { CreateBranchFromCommitDialog } from "./RepositoryCommitActions";
+import type { RepositoryCommandController } from "../repository-command/useRepositoryCommands";
 
 describe("RepositoryWorkflowToolbar conflict choices", () => {
   let container: HTMLDivElement;
@@ -32,7 +35,7 @@ describe("RepositoryWorkflowToolbar conflict choices", () => {
     render(fixture({ operation: null, currentReplay: null, conflictedPaths: [] }));
     expect(container.childElementCount).toBe(0);
     render(fixture());
-    for (const label of ["创建储藏", "储藏当前文件", "修正最近提交", "撤销最近提交", "刷新操作状态"]) {
+    for (const label of ["创建储藏", "储藏当前文件", "修改最近一次提交", "撤销最近提交", "刷新操作状态"]) {
       expect(button(label)).toBeUndefined();
     }
   });
@@ -44,8 +47,10 @@ describe("RepositoryWorkflowToolbar conflict choices", () => {
     const dialog = document.querySelector("[role='dialog']")!;
     expect(controller.reload).toHaveBeenCalledTimes(1);
     expect(dialog.querySelector("textarea")?.value).toBe("Current HEAD message");
-    await act(async () => [...dialog.querySelectorAll("button")].find(entry => entry.textContent === "检查并继续")!.click());
-    expect(controller.request).toHaveBeenCalledWith({ type: "amend", message: "Current HEAD message" });
+    await act(async () => [...dialog.querySelectorAll("button")].find(entry => entry.textContent === "修改最近一次提交")!.click());
+    expect(controller.request).toHaveBeenCalledWith({
+      type: "amend", message: "Current HEAD message", expectedHead: "a".repeat(40), expectedBranch: "main"
+    }, { confirmed: true, reviewedState: controller.state });
     expect(controller.closeDraft).toHaveBeenCalledTimes(1);
   });
   it("shows the current commit and requests skip through preflight even while conflicts remain", () => {
@@ -115,6 +120,127 @@ describe("RepositoryWorkflowToolbar conflict choices", () => {
     expect(button("继续 cherry-pick")?.disabled).toBe(true);
     expect(button("保留空提交")?.disabled).toBe(false);
     expect(container.textContent).toContain("请选择保留空提交或跳过");
+  });
+  const selected = { hash: "c".repeat(40), subject: "所选提交", parentHashes: ["d".repeat(40)] };
+  async function operationDialog(type: HistoryOperationType, parentHashes = selected.parentHashes) {
+    const controller = fixture({ operation: null, currentReplay: null, conflictedPaths: [], changedPaths: [] });
+    controller.reload = vi.fn(async () => controller.state);
+    const close = vi.fn();
+    await act(async () => root.render(<RepositoryHistoryOperationDialog intent={{
+      type, commit: { ...selected, parentHashes }
+    }} controller={controller} onClose={close} />));
+    return { controller, close };
+  }
+  const dialogButton = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
+    .find(entry => entry.textContent === label)!;
+
+  it("Hard Reset 必须明确勾选丢弃修改，提交时绑定当前分支和 HEAD", async () => {
+    const { controller, close } = await operationDialog("reset");
+    act(() => document.querySelector<HTMLInputElement>('input[name="history-reset-mode"][value="hard"]')!.click());
+    expect(dialogButton("丢弃修改并重置 main").disabled).toBe(true);
+    act(() => document.querySelector<HTMLInputElement>("#history-reset-discard")!.click());
+    await act(async () => dialogButton("丢弃修改并重置 main").click());
+    expect(controller.request).toHaveBeenCalledWith({
+      type: "reset", commitHash: selected.hash, mode: "hard",
+      expectedHead: "a".repeat(40), expectedBranch: "main"
+    }, { confirmed: true, reviewedState: controller.state });
+    expect(controller.confirm).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+  });
+  it("合并提交需要显式选择主线，不默认使用第一父提交", async () => {
+    const { controller } = await operationDialog("cherry-pick", ["d".repeat(40), "e".repeat(40)]);
+    expect(dialogButton("拣选到 main（Cherry-pick）").disabled).toBe(true);
+    act(() => {
+      const select = document.querySelector<HTMLSelectElement>("#history-mainline")!;
+      select.value = "2"; select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => dialogButton("拣选到 main（Cherry-pick）").click());
+    expect(controller.request).toHaveBeenCalledWith(expect.objectContaining({
+      type: "cherry-pick", commitHash: selected.hash, mainline: 2
+    }), { confirmed: true, reviewedState: controller.state });
+  });
+  it("仅应用变更时清除来源记录，防止互相冲突的选项", async () => {
+    const { controller } = await operationDialog("cherry-pick");
+    act(() => document.querySelector<HTMLInputElement>("#history-record-origin")!.click());
+    act(() => document.querySelector<HTMLInputElement>("#history-no-commit")!.click());
+    expect(document.querySelector<HTMLInputElement>("#history-record-origin")!.checked).toBe(false);
+    expect(document.querySelector<HTMLInputElement>("#history-record-origin")!.disabled).toBe(true);
+    expect(document.querySelector('[role="dialog"] h2')?.textContent).toBe("应用变更（不提交）");
+    await act(async () => dialogButton("仅应用变更").click());
+    expect(controller.request).toHaveBeenCalledWith(expect.objectContaining({
+      type: "cherry-pick", noCommit: true, recordOrigin: false
+    }), { confirmed: true, reviewedState: controller.state });
+  });
+  it("Squash 合并只生成待提交结果", async () => {
+    const { controller } = await operationDialog("merge");
+    act(() => {
+      const select = document.querySelector<HTMLSelectElement>('select[aria-label="合并方式"]')!;
+      select.value = "squash"; select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => dialogButton("准备合并结果").click());
+    expect(controller.request).toHaveBeenCalledWith(expect.objectContaining({ type: "merge", mode: "squash", noCommit: true }),
+      { confirmed: true, reviewedState: controller.state });
+  });
+  it("HEAD 相同但当前分支被外部切换后也禁止继续", async () => {
+    const { controller } = await operationDialog("reset");
+    const changed = { ...controller, state: { ...controller.state!, branch: "other" } };
+    act(() => root.render(<RepositoryHistoryOperationDialog intent={{ type: "reset", commit: selected }}
+      controller={changed} onClose={vi.fn()} />));
+    expect(dialogButton("将 other 重置到此提交").disabled).toBe(true);
+    expect(document.body.textContent).toContain("当前分支或 HEAD 已变化");
+    expect(controller.request).not.toHaveBeenCalled();
+  });
+  it("读取当前状态失败时不能使用缓存 HEAD 继续操作", async () => {
+    const controller = fixture({ operation: null, currentReplay: null, conflictedPaths: [] });
+    controller.reload = vi.fn(async () => null);
+    controller.error = "读取失败";
+    await act(async () => root.render(<RepositoryHistoryOperationDialog intent={{ type: "reset", commit: selected }}
+      controller={controller} onClose={vi.fn()} />));
+    expect(dialogButton("将 main 重置到此提交").disabled).toBe(true);
+    expect(document.body.textContent).toContain("读取失败");
+    expect(controller.request).not.toHaveBeenCalled();
+  });
+  it("Revert 与撤销最近提交分别说明保留历史和保留文件修改", async () => {
+    await operationDialog("revert");
+    expect(document.body.textContent).toContain("原提交保留在历史中");
+    expect(dialogButton("还原此提交（Revert）").disabled).toBe(false);
+    const controller = fixture({ operation: null, currentReplay: null, conflictedPaths: [] });
+    controller.draft = { type: "undo-commit" };
+    controller.reload = vi.fn(async () => controller.state);
+    await act(async () => root.render(<RepositoryWorkflowDraftDialog controller={controller} />));
+    expect(document.body.textContent).toContain("最近提交会从当前分支历史中移除");
+    expect(document.body.textContent).toContain("文件改动保留在本地");
+    expect(dialogButton("撤销最近提交并保留修改").disabled).toBe(false);
+  });
+  it("Hard Reset 展示最新变更路径，影响变化后清除丢弃勾选", async () => {
+    const { controller } = await operationDialog("reset");
+    act(() => document.querySelector<HTMLInputElement>('input[value="hard"]')!.click());
+    act(() => document.querySelector<HTMLInputElement>("#history-reset-discard")!.click());
+    const changed = { ...controller, state: { ...controller.state!, changedPaths: ["新增文件.txt"] } };
+    act(() => root.render(<RepositoryHistoryOperationDialog intent={{ type: "reset", commit: selected }}
+      controller={changed} onClose={vi.fn()} />));
+    expect(document.body.textContent).toContain("新增文件.txt");
+    expect(document.querySelector<HTMLInputElement>("#history-reset-discard")!.checked).toBe(false);
+    expect(dialogButton("丢弃修改并重置 main").disabled).toBe(true);
+  });
+  it("从提交创建分支可直接选择切换，并在原弹窗完成确认", async () => {
+    const request = vi.fn(async () => true);
+    const commands = { busy: false, request, error: null } as unknown as RepositoryCommandController;
+    const close = vi.fn();
+    await act(async () => root.render(<CreateBranchFromCommitDialog commit={selected}
+      target={{ repositoryId: "repo", worktreeId: "wt" }} commands={commands} onClose={close} />));
+    act(() => {
+      const input = document.querySelector<HTMLInputElement>("#commit-new-branch")!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "feature/new");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      document.querySelector<HTMLInputElement>("#commit-new-branch-checkout")!.click();
+    });
+    await act(async () => dialogButton("创建并切换分支").click());
+    expect(request).toHaveBeenCalledExactlyOnceWith({
+      type: "create-branch", target: { repositoryId: "repo", worktreeId: "wt" },
+      branch: "feature/new", startPoint: selected.hash, checkout: true
+    }, { confirmed: true });
+    expect(close).toHaveBeenCalledOnce();
   });
 });
 

@@ -23,6 +23,7 @@ import type {
   RepositoryCommitDto,
   RepositoryDiffDto,
   RepositoryHistoryPageDto,
+  RepositoryHistoryScopeDto,
   RepositoryTargetDto
 } from "@gitnest/contracts";
 
@@ -1543,6 +1544,36 @@ describe("useRepositoryDetails", () => {
     expect(controller?.selectedCommitHash).toBeNull();
   });
 
+  it("刷新历史中的引用时同步右侧详情，不重复读取提交内容", async () => {
+    const summary = createCommitSummary();
+    let refs = ["HEAD -> main", "tag: old"];
+    const getCommit = vi.fn<GitNestBridge["repository"]["getCommit"]>(async () => ({
+      ok: true,
+      value: { target: TARGET, commit: {
+        ...summary, refs, committerName: summary.authorName, committerEmail: summary.authorEmail,
+        committedAt: summary.authoredAt, body: "内容保持不变", files: [], additions: 0, deletions: 0
+      } }
+    }));
+    installBridge({
+      getHistory: vi.fn(async () => ({ ok: true as const, value: {
+        target: TARGET, page: { commits: [{ ...summary, refs }] }
+      } })),
+      getBranches: vi.fn(async () => ({ ok: true as const, value: { target: TARGET, branches: [] } })),
+      getCommit
+    });
+    await renderTarget(TARGET, "unchanged", "history");
+    await act(flushAsyncWork);
+    await act(async () => { await controller?.selectCommit(summary.hash); });
+    const contentReads = getCommit.mock.calls.length;
+    const files = controller?.commit?.commit.files;
+    refs = ["origin/main", "tag: new"];
+    await act(async () => { await controller?.reload("history"); });
+    expect(controller?.historyDetailOpen).toBe(true);
+    expect(controller?.commit?.commit.refs).toEqual(refs);
+    expect(controller?.commit?.commit.files).toBe(files);
+    expect(getCommit).toHaveBeenCalledTimes(contentReads);
+  });
+
   it("keeps history details collapsed while loading the inspector commit", async () => {
     const summary = createCommitSummary();
     const getHistory = vi.fn(
@@ -1708,6 +1739,76 @@ describe("useRepositoryDetails", () => {
       expect(controller?.loading.history).toBe(false);
     }
   );
+
+  it.each(["ref", "refs"] as const)("removes a pruned remote from the %s scope and reloads valid history", async kind => {
+    let removed = false;
+    const missingRef = "refs/remotes/origin/deleted";
+    const retained = createBranches();
+    const deleted = { ...retained[0]!, name: "origin/deleted", fullName: missingRef, remote: true, current: false };
+    const getBranches = vi.fn(async () => ({ ok: true as const, value: {
+      target: TARGET, branches: removed ? retained : [...retained, deleted]
+    } }));
+    const getHistory = vi.fn<GitNestBridge["repository"]["getHistory"]>(async request => {
+      const refs = request.scope?.kind === "ref" ? [request.scope.ref] :
+        request.scope?.kind === "refs" ? request.scope.refs : [];
+      if (removed && refs.includes(missingRef)) return {
+        ok: false, error: { code: "INVALID_REQUEST", message: "引用已删除", details: {} }
+      };
+      return { ok: true, value: { target: TARGET, page: { commits: [createCommitSummary()] } } };
+    });
+    installBridge({ getBranches, getHistory, getCommit: vi.fn(async () => ({
+      ok: true as const, value: { target: TARGET, commit: {
+        ...createCommitSummary(), committerName: "June", committerEmail: "june@example.com",
+        committedAt: "2026-09-04T10:00:00+08:00", body: "", refs: [], files: [], additions: 0, deletions: 0
+      } }
+    })) });
+    await renderTarget(TARGET, "", "history");
+    const scope: RepositoryHistoryScopeDto = kind === "ref"
+      ? { kind: "ref", ref: missingRef }
+      : { kind: "refs", refs: ["refs/heads/main", missingRef] };
+    await act(async () => { await controller!.selectHistoryScope(scope); });
+    removed = true;
+    await act(async () => { await controller!.reload("history"); });
+    const expectedScope = kind === "ref" ? { kind: "all" } : { kind: "ref", ref: "refs/heads/main" };
+    expect(controller!.historyScope).toEqual(expectedScope);
+    expect(controller!.branches?.branches.some(branch => branch.fullName === missingRef)).toBe(false);
+    expect(controller!.error).toBeNull();
+    expect(controller!.history?.page.commits).toHaveLength(1);
+    expect(getHistory).toHaveBeenLastCalledWith(expect.objectContaining({ scope: expectedScope }));
+  });
+
+  it("ignores a late failure for a pruned ref after switching history back to Show All", async () => {
+    let removed = false;
+    let finishOld!: (value: Awaited<ReturnType<GitNestBridge["repository"]["getHistory"]>>) => void;
+    const missingRef = "refs/remotes/origin/deleted";
+    const getBranches = vi.fn(async () => ({ ok: true as const, value: {
+      target: TARGET, branches: removed ? createBranches() : [...createBranches(), {
+        ...createBranches()[0]!, name: "origin/deleted", fullName: missingRef, remote: true, current: false
+      }]
+    } }));
+    const getHistory = vi.fn<GitNestBridge["repository"]["getHistory"]>(async request => {
+      if (removed && request.scope?.kind === "ref") return new Promise(resolve => { finishOld = resolve; });
+      return { ok: true, value: { target: TARGET, page: { commits: [createCommitSummary()] } } };
+    });
+    installBridge({ getBranches, getHistory, getCommit: vi.fn(async () => ({
+      ok: true as const, value: { target: TARGET, commit: {
+        ...createCommitSummary(), committerName: "June", committerEmail: "june@example.com",
+        committedAt: "2026-09-04T10:00:00+08:00", body: "", refs: [], files: [], additions: 0, deletions: 0
+      } }
+    })) });
+    await renderTarget(TARGET, "", "history");
+    await act(async () => { await controller!.selectHistoryScope({ kind: "ref", ref: missingRef }); });
+    removed = true;
+    let reload!: Promise<void>;
+    await act(async () => { reload = controller!.reload("history"); await flushAsyncWork(); });
+    expect(controller!.historyScope).toEqual({ kind: "all" });
+    await act(async () => {
+      finishOld({ ok: false, error: { code: "INVALID_REQUEST", message: "过期的引用错误", details: {} } });
+      await reload;
+    });
+    expect(controller!.error).toBeNull();
+    expect(controller!.history?.page.commits).toHaveLength(1);
+  });
 
   it("loads branches and keeps the selected history scope across pagination", async () => {
     const mainCommit = createCommitSummary();

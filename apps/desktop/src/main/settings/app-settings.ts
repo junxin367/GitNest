@@ -836,6 +836,7 @@ function cloneDocument(
       )
     },
     git: {
+      autoFetch: document.git.autoFetch ?? true,
       fetchMode: document.git.fetchMode,
       pushStrategy: document.git.pushStrategy ?? "rebase"
     },
@@ -1019,6 +1020,7 @@ function normalizeDiffCommitDetailWidth(
 function isGitSettings(value: unknown): boolean {
   return (
     isRecord(value) &&
+    (value.autoFetch === undefined || typeof value.autoFetch === "boolean") &&
     (value.fetchMode === "manual" ||
       value.fetchMode === "startup") &&
     (value.pushStrategy === undefined ||
@@ -1820,6 +1822,7 @@ function migrateV2Document(
       )
     },
     git: {
+      autoFetch: document.git.autoFetch ?? true,
       fetchMode: document.git.fetchMode,
       pushStrategy: document.git.pushStrategy ?? "rebase"
     },

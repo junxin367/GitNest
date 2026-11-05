@@ -41,6 +41,41 @@ import { ApplicationSettingsPage } from "./ApplicationSettingsPage";
 }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("ApplicationSettingsPage", () => {
+  it("defaults to automatic Fetch and can explicitly persist startup-only or manual fetching", async () => {
+    vi.stubGlobal("React", React);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const controller = settingsController();
+    try {
+      await act(async () => root.render(
+        <ApplicationSettingsPage appSettings={controller} initialSection="git"
+          gitEnvironment={null} terminalProfiles={[]} />
+      ));
+      const options = () => Array.from(
+        container.querySelectorAll<HTMLButtonElement>("#settings-git-fetch button")
+      );
+      const automatic = options().find(button => button.textContent?.includes("自动 Fetch（推荐）"));
+      expect(automatic?.classList.contains("active")).toBe(true);
+      await act(async () => options().find(button => button.textContent?.includes("手动 Fetch"))?.click());
+      expect(controller.update).toHaveBeenLastCalledWith({
+        git: { autoFetch: false, fetchMode: "manual" }
+      });
+      await act(async () => options().find(button => button.textContent?.includes("启动时检查"))?.click());
+      expect(controller.update).toHaveBeenLastCalledWith({
+        git: { autoFetch: false, fetchMode: "startup" }
+      });
+      await act(async () => automatic?.click());
+      expect(controller.update).toHaveBeenLastCalledWith({
+        git: { autoFetch: true, fetchMode: "manual" }
+      });
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("shows the application setting sections and no removable dangerous-operation switch", () => {
     vi.stubGlobal("React", React);
     try {
@@ -69,6 +104,7 @@ describe("ApplicationSettingsPage", () => {
 
       expect(navigationLabels).toEqual([
         "通用",
+        "主题设置",
         "代码分析",
         "AI 提交信息",
         "Git",

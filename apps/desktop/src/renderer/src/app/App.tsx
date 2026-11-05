@@ -31,7 +31,8 @@ import {
 import { useRepositoryWorkflow } from "../features/repository-workflow/useRepositoryWorkflow";
 import { RepositoryWorkflowDialog } from "../features/repository-workflow/RepositoryWorkflowDialog";
 import { RepositoryWorkflowDraftDialog } from "../features/repository-workflow/RepositoryWorkflowToolbar";
-import { CreateBranchFromCommitDialog, type RepositoryCommitActionHandler } from "../features/repository-workflow/RepositoryCommitActions";
+import { CreateBranchFromCommitDialog, type RepositoryCommitActionHandler, type RepositoryCommitActionTarget } from "../features/repository-workflow/RepositoryCommitActions";
+import { RepositoryHistoryOperationDialog, type HistoryOperationIntent } from "../features/repository-workflow/RepositoryHistoryOperationDialog";
 import { Toast, ToastViewport } from "../shared/ui/Toast";
 import {
   listWorkspaceTargets,
@@ -220,10 +221,11 @@ export function App() {
     selectedTarget,
     workspace.operations,
     workspace.workspace?.id,
-    view === "repository" && repositoryTab === "changes",
+    view === "repository" && (repositoryTab === "changes" || repositoryTab === "history"),
     getSnapshotContentRevision(findTargetSnapshot(workspace.snapshots, selectedTarget))
   );
-  const [branchFromCommit, setBranchFromCommit] = useState<RepositoryCommitDto["commit"] | null>(null);
+  const [branchFromCommit, setBranchFromCommit] = useState<RepositoryCommitActionTarget | null>(null);
+  const [historyOperation, setHistoryOperation] = useState<HistoryOperationIntent | null>(null);
   const [commitActionError, setCommitActionError] = useState<string | null>(null);
   const [openingCommit, setOpeningCommit] = useState(false);
   const workflowScope = `${workspace.workspace?.id ?? ""}:${selectedTarget?.repositoryId ?? ""}:${selectedTarget?.worktreeId ?? ""}`;
@@ -231,6 +233,7 @@ export function App() {
   workflowScopeRef.current = workflowScope;
   useEffect(() => {
     setBranchFromCommit(null);
+    setHistoryOperation(null);
     setCommitActionError(null);
     setOpeningCommit(false);
   }, [workflowScope]);
@@ -238,8 +241,10 @@ export function App() {
     if (!selectedTarget || workflow.busy || repositoryCommands.busy || openingCommit) return;
     setCommitActionError(null);
     if (action === "create-branch") { setBranchFromCommit(commit); return; }
-    if (action === "cherry-pick" || action === "revert") {
-      await workflow.request({ type: action, commitHash: commit.hash });
+    if (action === "reset" || action === "checkout-commit" || action === "merge" || action === "rebase" ||
+      action === "cherry-pick-options" || action === "revert-options" || action === "cherry-pick" || action === "revert") {
+      workflow.clearFeedback();
+      setHistoryOperation({ type: action === "cherry-pick-options" ? "cherry-pick" : action === "revert-options" ? "revert" : action, commit });
       return;
     }
     const scope = workflowScope;
@@ -265,6 +270,7 @@ export function App() {
       operation.targetIds.includes(selectedTargetKey)
   );
   const repositoryCommandLocked =
+    Boolean(historyOperation || branchFromCommit) ||
     workspace.busy ||
     workflow.busy ||
     workflow.preflight !== null ||
@@ -523,7 +529,8 @@ export function App() {
     }
 
     startupFetchAttempted.current = true;
-    if (appSettings.settings.git.fetchMode !== "startup") {
+    if (appSettings.settings.git.autoFetch !== false ||
+      appSettings.settings.git.fetchMode !== "startup") {
       return;
     }
     const targets = listWorkspaceTargets(workspace.workspace);
@@ -532,6 +539,7 @@ export function App() {
     }
   }, [
     appSettings.loading,
+    appSettings.settings.git.autoFetch,
     appSettings.settings.git.fetchMode,
     fetchTargets,
     workspace.operation,
@@ -827,7 +835,8 @@ export function App() {
                 if (selectedTarget) {
                   void repositoryCommands.request({
                     type: "fetch",
-                    targets: [selectedTarget]
+                    targets: [selectedTarget],
+                    prune: true
                   });
                 }
               }}
@@ -976,6 +985,8 @@ export function App() {
                 ) : view === "repository" ? (
                   <RepositoryPage
                     workflow={workflow}
+                    onCommitAction={onCommitAction}
+                    actionBusy={repositoryCommandLocked || openingCommit}
                     key={workspace.workspace?.id}
                     appSettings={appSettings}
                     changeSelectionRequest={
@@ -1080,6 +1091,9 @@ export function App() {
       />
       <RepositoryWorkflowDialog controller={workflow} />
       <RepositoryWorkflowDraftDialog controller={workflow} />
+      {historyOperation && selectedTarget && <RepositoryHistoryOperationDialog
+        key={`${workflowScope}:${historyOperation.type}:${historyOperation.commit.hash}`}
+        intent={historyOperation} controller={workflow} onClose={() => setHistoryOperation(null)} />}
       {branchFromCommit && selectedTarget && <CreateBranchFromCommitDialog
         key={`${workflowScope}:${branchFromCommit.hash}`}
         commit={branchFromCommit} target={selectedTarget} commands={repositoryCommands}

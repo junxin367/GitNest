@@ -116,6 +116,7 @@ export async function createApplication(): Promise<void> {
     if (!(window instanceof BrowserWindow)) {
       return;
     }
+    services.repositoryAutoFetch.setForeground(true);
     void services.workspace
       .setForeground(true)
       .catch((error) =>
@@ -128,6 +129,9 @@ export async function createApplication(): Promise<void> {
   });
   app.on("browser-window-blur", () => {
     setTimeout(() => {
+      services.repositoryAutoFetch.setForeground(
+        Boolean(BrowserWindow.getFocusedWindow())
+      );
       void services.workspace
         .setForeground(
           Boolean(BrowserWindow.getFocusedWindow())
@@ -141,6 +145,10 @@ export async function createApplication(): Promise<void> {
         .catch(() => undefined);
     }, 0);
   });
+  services.repositoryAutoFetch.setForeground(
+    Boolean(BrowserWindow.getFocusedWindow())
+  );
+  services.repositoryAutoFetch.start();
 
   app.on("before-quit", (event) => {
     if (shutdownComplete) {
@@ -157,6 +165,7 @@ export async function createApplication(): Promise<void> {
       clearTimeout(updateCheckTimer);
     }
     services.applicationUpdate.dispose();
+    services.repositoryAutoFetch.dispose();
     services.codeAnalysisRefresh.dispose();
     void (async () => {
       try {

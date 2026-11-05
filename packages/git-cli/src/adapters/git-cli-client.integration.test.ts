@@ -53,6 +53,33 @@ describe("GitCliClient integration", () => {
     ]);
   });
 
+  it("creates a branch without switching by default and atomically creates and checks out when requested", async () => {
+    const repository = await createTemporaryDirectoryFixture("create-checkout");
+    try {
+      await runGit(repository.path, ["init", "--initial-branch=main", "."]);
+      await runGit(repository.path, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+        "commit", "--allow-empty", "-m", "Base"]);
+      const base = (await runGit(repository.path, ["rev-parse", "HEAD"])).trim();
+      await client.createBranch(repository.path, "feature/only", base);
+      expect((await runGit(repository.path, ["branch", "--show-current"])).trim()).toBe("main");
+      await client.createBranch(repository.path, "feature/checkout", base, { checkout: true });
+      expect((await runGit(repository.path, ["branch", "--show-current"])).trim()).toBe("feature/checkout");
+      await writeFile(join(repository.path, "blocked.txt"), "target content\n");
+      await runGit(repository.path, ["add", "blocked.txt"]);
+      await runGit(repository.path, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+        "commit", "-m", "Add target file"]);
+      const target = (await runGit(repository.path, ["rev-parse", "HEAD"])).trim();
+      await runGit(repository.path, ["switch", "main"]);
+      await writeFile(join(repository.path, "blocked.txt"), "local content\n");
+      await expect(client.createBranch(repository.path, "feature/blocked", target, { checkout: true })).rejects.toBeDefined();
+      expect((await runGit(repository.path, ["branch", "--show-current"])).trim()).toBe("main");
+      expect((await runGit(repository.path, ["branch", "--list", "feature/blocked"])).trim()).toBe("");
+      expect(await readFile(join(repository.path, "blocked.txt"), "utf8")).toBe("local content\n");
+    } finally {
+      await repository.dispose();
+    }
+  });
+
   it("detects the installed Git environment", async () => {
     const environment = await client.getEnvironment();
 

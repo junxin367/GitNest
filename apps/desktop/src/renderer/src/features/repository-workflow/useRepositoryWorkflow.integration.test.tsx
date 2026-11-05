@@ -60,6 +60,85 @@ describe("useRepositoryWorkflow inspect scheduling", () => {
     vi.unstubAllGlobals();
   });
 
+  it("executes an action confirmed in its own dialog after one preflight and ignores repeated clicks", async () => {
+    preflight.mockImplementation(async ({ command }) => ({
+      ok: true, value: {
+        preflightId: "inline", expiresAt: "", command, state: state(),
+        summary: "跳过", warnings: [], confirmationRequired: true
+      }
+    }));
+    await render();
+    const reviewedState = controller.state!;
+    await act(async () => {
+      expect(await Promise.all([
+        controller.request({ type: "skip" }, { confirmed: true, reviewedState }),
+        controller.request({ type: "skip" }, { confirmed: true, reviewedState })
+      ])).toEqual([true, false]);
+    });
+    expect(preflight).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledExactlyOnceWith({
+      command: { type: "skip", target: targetA }, preflightId: "inline", confirmed: true
+    });
+    expect(controller.preflight).toBeNull();
+  });
+
+  it("updates a changed impact without executing and permits a new explicit click after review", async () => {
+    const latest = { ...state(), changedPaths: ["new.txt"], untrackedPaths: ["new.txt"], hasUntrackedFiles: true };
+    preflight.mockImplementation(async ({ command }) => ({
+      ok: true, value: {
+        preflightId: "updated", expiresAt: "", command, state: latest,
+        summary: "重置", warnings: ["新增文件"], confirmationRequired: true
+      }
+    }));
+    await render();
+    const reviewedState = controller.state!;
+    await act(async () => {
+      expect(await controller.request({ type: "reset", mode: "hard", commitHash: "b".repeat(40) },
+        { confirmed: true, reviewedState })).toBe(false);
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(controller.preflight).toBeNull();
+    expect(controller.error).toContain("仓库状态已变化");
+    expect(controller.state?.changedPaths).toEqual(["new.txt"]);
+    await act(async () => {
+      expect(await controller.request({ type: "reset", mode: "hard", commitHash: "b".repeat(40) },
+        { confirmed: true, reviewedState: controller.state! })).toBe(true);
+    });
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("does not execute a previously confirmed action when the repository changes during preflight", async () => {
+    const pending = deferred<Awaited<ReturnType<typeof preflight>>>();
+    preflight.mockReturnValueOnce(pending.promise);
+    await render();
+    let request!: Promise<boolean>;
+    act(() => { request = controller.request({ type: "skip" }, { confirmed: true }); });
+    await render(targetB);
+    await act(async () => {
+      pending.resolve({ ok: true, value: {
+        preflightId: "obsolete", expiresAt: "", command: { type: "skip", target: targetA },
+        state: state(), summary: "", warnings: [], confirmationRequired: true
+      } });
+      expect(await request).toBe(false);
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(controller.state?.target).toEqual(targetB);
+    expect(controller.preflight).toBeNull();
+  });
+
+  it("keeps an execution failure in the original flow and releases the busy state", async () => {
+    execute.mockResolvedValueOnce({ ok: false, error: {
+      code: "PREFLIGHT_CHANGED", message: "文件内容已变化", details: {}
+    } });
+    await render();
+    await act(async () => {
+      expect(await controller.request({ type: "skip" }, { confirmed: true })).toBe(false);
+    });
+    expect(controller.preflight).toBeNull();
+    expect(controller.busy).toBe(false);
+    expect(controller.error).toBe("文件内容已变化");
+  });
+
   it("issues one inspect per target switch even with different terminal histories", async () => {
     const history = [operation("completed-a", "succeeded")];
     await render(targetA, history);

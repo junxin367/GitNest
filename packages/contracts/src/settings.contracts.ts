@@ -63,6 +63,7 @@ export interface AppSettingsDto {
   };
   repositoryFileBrowsing: Record<string, RepositoryFileBrowsingDto>;
   git: {
+    autoFetch?: boolean;
     fetchMode: GitFetchModeDto;
     pushStrategy: GitPushStrategyDto;
   };
@@ -111,6 +112,7 @@ export interface UpdateAppSettingsRequest {
     commitDetailWidth?: number;
   };
   git?: {
+    autoFetch?: boolean;
     fetchMode?: GitFetchModeDto;
     pushStrategy?: GitPushStrategyDto;
   };
@@ -185,6 +187,7 @@ export function createDefaultAppSettings(): AppSettingsDto {
     },
     repositoryFileBrowsing: {},
     git: {
+      autoFetch: true,
       fetchMode: "manual",
       pushStrategy: "rebase"
     },

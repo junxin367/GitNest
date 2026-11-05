@@ -1,17 +1,22 @@
 import type { RepositoryTargetDto } from "./workspace.contracts";
 
 export type RepositoryWorkflowOperationDto = "merge" | "rebase" | "cherry-pick" | "revert";
-export type RepositoryWorkflowActionDto =
+export type RepositoryWorkflowActionDto = (
   | { type: "create-stash"; message?: string; includeUntracked?: boolean; paths?: string[] }
-  | { type: "amend"; message: string }
-  | { type: "undo-commit"; mode: "soft" | "mixed" }
-  | { type: "cherry-pick"; commitHash: string }
-  | { type: "revert"; commitHash: string }
+  | { type: "amend"; message: string; expectedHead?: string }
+  | { type: "undo-commit"; mode: "soft" | "mixed"; expectedHead?: string }
+  | { type: "cherry-pick"; commitHash: string; mainline?: number; noCommit?: boolean; recordOrigin?: boolean; expectedHead?: string }
+  | { type: "revert"; commitHash: string; mainline?: number; noCommit?: boolean; expectedHead?: string }
+  | { type: "reset"; commitHash: string; mode: "soft" | "mixed" | "hard"; expectedHead?: string }
+  | { type: "checkout-commit"; commitHash: string; expectedHead?: string }
+  | { type: "merge"; commitHash: string; mode: "normal" | "no-ff" | "squash"; noCommit?: boolean; expectedHead?: string }
+  | { type: "rebase"; commitHash: string; preserveMerges?: boolean; expectedHead?: string }
   | { type: "mark-resolved"; paths: string[] }
   | { type: "continue" }
   | { type: "skip" }
   | { type: "keep-empty" }
-  | { type: "abort" };
+  | { type: "abort" }
+) & { expectedBranch?: string | null };
 export type RepositoryWorkflowCommandDto = RepositoryWorkflowActionDto & { target: RepositoryTargetDto };
 export interface RepositoryWorkflowStateDto {
   target: RepositoryTargetDto;
@@ -27,6 +32,8 @@ export interface RepositoryWorkflowStateDto {
     canSkip: boolean;
     canKeepEmpty: boolean;
     blockedReason?: string;
+    noCommit?: boolean;
+    continueBlockedReason?: string;
   } | null;
   conflictedPaths: string[];
   changedPaths: string[];

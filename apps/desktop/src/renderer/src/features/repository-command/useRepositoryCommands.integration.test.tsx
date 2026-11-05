@@ -105,6 +105,22 @@ describe("useRepositoryCommands", () => {
     expect(controller?.notice).toBe("Fetch 已完成。");
   });
 
+  it("creates and switches a branch with one explicit dialog action while retaining preflight", async () => {
+    const command: RepositoryCommandDto = {
+      type: "create-branch", target: TARGET_A, branch: "feature/new", checkout: true
+    };
+    const preflightCommand = vi.fn(async () => ({ ok: true as const, value: createPreflight(command, true) }));
+    const executeCommand = vi.fn(async () => ({ ok: true as const, value: { operationIds: ["created"] } }));
+    installBridge({ preflightCommand, executeCommand });
+    await renderHarness(TARGET_A, []);
+    await act(async () => { expect(await controller!.request(command, { confirmed: true })).toBe(true); });
+    expect(preflightCommand).toHaveBeenCalledExactlyOnceWith({ command });
+    expect(executeCommand).toHaveBeenCalledExactlyOnceWith({
+      command, preflightId: "preflight_1", confirmed: true
+    });
+    expect(controller!.preflight).toBeNull();
+  });
+
   it("holds Pull behind explicit confirmation", async () => {
     const command: RepositoryCommandDto = {
       type: "pull",

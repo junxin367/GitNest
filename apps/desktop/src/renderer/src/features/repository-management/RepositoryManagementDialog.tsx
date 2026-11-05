@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   RepositoryManagementActionDto, RepositoryManagementBridge,
   RepositoryManagementPreflightDto, RepositoryManagementStateDto, RepositoryTargetDto, WorkspaceOperationDto
@@ -30,11 +30,13 @@ export function RepositoryManagementDialog({ bridge, target, onDismiss, onOperat
   const [remote, setRemote] = useState("origin");
   const [pendingOperationId, setPendingOperationId] = useState<string | null>(null);
   const targetKey = `${target.repositoryId}:${target.worktreeId}`;
-  const scopeRef = useRef(targetKey);
-  scopeRef.current = targetKey;
+  const scope = useMemo(() => ({}), [bridge, targetKey]);
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
   const mounted = useRef(true);
+  const flight = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const inScope = () => mounted.current && scopeRef.current === targetKey;
+  const inScope = () => mounted.current && scopeRef.current === scope;
   const operation = operations?.find(item => item.id === pendingOperationId);
   const operationRunning = pendingOperationId !== null &&
     (!operation || operation.state === "queued" || operation.state === "running" || operation.state === "cancelling");
@@ -53,7 +55,8 @@ export function RepositoryManagementDialog({ bridge, target, onDismiss, onOperat
   }, [operation?.id, operation?.state, operationRunning]);
   useEffect(() => {
     let current = true;
-    setState(null); setPreflight(null); setError("");
+    setState(null); setPreflight(null); setError(""); setBusy(false); setPendingOperationId(null);
+    flight.current = false;
     void bridge.inspect({ target }).then((result) => {
       if (!current) return;
       if (result.ok) { setState(result.value); setRemote(result.value.remotes.find((item) => item.name === "origin")?.name ?? result.value.remotes[0]?.name ?? ""); }
@@ -67,29 +70,37 @@ export function RepositoryManagementDialog({ bridge, target, onDismiss, onOperat
     if (result.ok) setState(result.value);
     else setError(result.error.message);
   }
-  async function prepare(action: RepositoryManagementActionDto) {
-    if (locked) return;
+  async function prepare(action: RepositoryManagementActionDto, confirmed = false) {
+    if (locked || flight.current) return;
+    flight.current = true;
     setBusy(true); setError(""); setNotice("");
     try {
       const result = await bridge.preflight({ target, action });
       if (!inScope()) return;
-      if (result.ok) setPreflight(result.value);
+      if (result.ok) {
+        if (confirmed) await executeCandidate(result.value);
+        else setPreflight(result.value);
+      }
       else setError(result.error.message);
-    } catch (failure) { if (inScope()) setError(String(failure)); } finally { if (inScope()) setBusy(false); }
+    } catch (failure) { if (inScope()) setError(String(failure)); } finally { if (inScope()) { flight.current = false; setBusy(false); } }
+  }
+  async function executeCandidate(candidate: RepositoryManagementPreflightDto) {
+    const result = await bridge.execute({ preflightId: candidate.preflightId, confirmed: true });
+    if (!inScope()) return;
+    setPreflight(null);
+    if (result.ok) {
+      if (operations) setPendingOperationId(result.value.operationId);
+      setNotice(operations ? "操作已加入队列，完成后自动刷新。" : "操作已加入队列，完成后可刷新列表。");
+      onOperationAccepted?.(result.value.operationId);
+    } else setError(result.error.message);
   }
   async function execute() {
-    if (!preflight || locked) return;
+    if (!preflight || locked || flight.current) return;
+    flight.current = true;
     setBusy(true); setError("");
     try {
-      const result = await bridge.execute({ preflightId: preflight.preflightId, confirmed: true });
-      if (!inScope()) return;
-      setPreflight(null);
-      if (result.ok) {
-        if (operations) setPendingOperationId(result.value.operationId);
-        setNotice(operations ? "操作已加入队列，完成后自动刷新。" : "操作已加入队列，完成后可刷新列表。");
-        onOperationAccepted?.(result.value.operationId);
-      } else setError(result.error.message);
-    } catch (failure) { if (inScope()) setError(String(failure)); } finally { if (inScope()) setBusy(false); }
+      await executeCandidate(preflight);
+    } catch (failure) { if (inScope()) setError(String(failure)); } finally { if (inScope()) { flight.current = false; setBusy(false); } }
   }
   return <Dialog icon="branch" title="远程与标签管理" size="complex" dismissDisabled={busy} onDismiss={onDismiss}
     footer={<><Button disabled={busy} onClick={() => void load().catch((failure: unknown) => setError(String(failure)))}>刷新</Button><Button disabled={busy} onClick={onDismiss}>关闭</Button></>}>
@@ -102,7 +113,9 @@ export function RepositoryManagementDialog({ bridge, target, onDismiss, onOperat
       {"url" in preflight.command.action && <p>{preflight.command.action.url}</p>}
       {preflight.command.action.type === "tag-create" && <p>提交：{preflight.command.action.revision}；{preflight.command.action.message ? "附注标签" : "轻量标签"}</p>}
       <Button disabled={busy} onClick={() => setPreflight(null)}>返回编辑</Button>
-      <Button disabled={busy} variant="primary" onClick={() => void execute()}>确认执行</Button>
+      <Button disabled={busy} variant="danger" onClick={() => void execute()}>
+        {busy ? "正在删除…" : preflight.command.action.type === "remote-remove" ? "删除远程" : "删除本地标签"}
+      </Button>
     </section> : <>
       <section aria-label="远程管理">
         <h3>远程地址</h3>
@@ -116,19 +129,19 @@ export function RepositoryManagementDialog({ bridge, target, onDismiss, onOperat
         </li>)}</ul>}
         <div className="workspace-dialog-field"><label htmlFor="manage-remote-name">远程名称</label><Input id="manage-remote-name" value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></div>
         <div className="workspace-dialog-field"><label htmlFor="manage-remote-url">远程地址</label><Input id="manage-remote-url" fullWidth value={url} disabled={busy} onChange={(event) => setUrl(event.target.value)} /></div>
-        <Button disabled={locked || !state || !name.trim() || !url.trim()} onClick={() => void prepare({ type: state?.remotes.some((item) => item.name === name.trim()) ? "remote-set-url" : "remote-add", name: name.trim(), url: url.trim() })}>保存远程</Button>
+        <Button disabled={locked || !state || !name.trim() || !url.trim()} onClick={() => void prepare({ type: state?.remotes.some((item) => item.name === name.trim()) ? "remote-set-url" : "remote-add", name: name.trim(), url: url.trim() }, true)}>保存远程</Button>
       </section>
       <section aria-label="标签管理">
         <h3>标签</h3>
         <div className="workspace-dialog-field"><label htmlFor="manage-tag-name">标签名称</label><Input id="manage-tag-name" value={tag} disabled={busy} onChange={(event) => setTag(event.target.value)} /></div>
         <div className="workspace-dialog-field"><label htmlFor="manage-tag-revision">目标提交或分支</label><Input id="manage-tag-revision" value={revision} disabled={busy} onChange={(event) => setRevision(event.target.value)} /></div>
         <div className="workspace-dialog-field"><label htmlFor="manage-tag-message">附注说明（可选）</label><Input id="manage-tag-message" value={message} disabled={busy} onChange={(event) => setMessage(event.target.value)} /></div>
-        <Button disabled={locked || !state || !tag.trim() || !revision.trim()} onClick={() => void prepare({ type: "tag-create", name: tag.trim(), revision: revision.trim(), ...(message.trim() ? { message: message.trim() } : {}) })}>创建标签</Button>
+        <Button disabled={locked || !state || !tag.trim() || !revision.trim()} onClick={() => void prepare({ type: "tag-create", name: tag.trim(), revision: revision.trim(), ...(message.trim() ? { message: message.trim() } : {}) }, true)}>创建标签</Button>
         <div className="workspace-dialog-field"><label htmlFor="manage-tag-remote">推送到远程</label><select id="manage-tag-remote" value={remote} disabled={busy} onChange={(event) => setRemote(event.target.value)}>{state?.remotes.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</select></div>
         {multiplePushUrls && <p>当前远程配置了多个 Push 地址，请先整理为单一推送地址再推送标签。</p>}
         {state?.tags.length === 0 && <p>尚无本地标签。</p>}
         <ul>{state?.tags.map((item) => <li key={item.name}><strong>{item.name}</strong> <span>{item.hash.slice(0, 8)} {item.subject}</span>
-          <Button disabled={locked || !remote || multiplePushUrls} onClick={() => void prepare({ type: "tag-push", name: item.name, remote })}>推送标签</Button>
+          <Button disabled={locked || !remote || multiplePushUrls} onClick={() => void prepare({ type: "tag-push", name: item.name, remote }, true)}>推送标签</Button>
           <Button disabled={locked} onClick={() => void prepare({ type: "tag-delete", name: item.name })}>删除本地标签</Button>
         </li>)}</ul>
       </section>

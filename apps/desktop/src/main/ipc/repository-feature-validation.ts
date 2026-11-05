@@ -52,6 +52,13 @@ export function featureHash(value: unknown): string {
 export function validateWorkflowCommand(value: unknown): RepositoryWorkflowCommandDto {
   const request = featureRecord(value);
   const target = featureTarget(request.target);
+  const expected = {
+    ...(request.expectedHead === undefined ? {} : { expectedHead: featureHash(request.expectedHead) }),
+    ...(request.expectedBranch === undefined ? {} : {
+      expectedBranch: request.expectedBranch === null ? null : featureString(request.expectedBranch, 1024)
+    })
+  };
+  if (expected.expectedBranch && /[\r\n]/.test(expected.expectedBranch)) invalid();
   switch (request.type) {
     case "create-stash":
       return {
@@ -61,13 +68,35 @@ export function validateWorkflowCommand(value: unknown): RepositoryWorkflowComma
         ...(request.paths === undefined ? {} : { paths: paths(request.paths) })
       };
     case "amend":
-      return { target, type: request.type, message: featureString(request.message, 100000) };
+      return { target, type: request.type, message: featureString(request.message, 100000), ...expected };
     case "undo-commit":
       if (request.mode !== "soft" && request.mode !== "mixed") invalid();
-      return { target, type: request.type, mode: request.mode };
+      return { target, type: request.type, mode: request.mode, ...expected };
     case "cherry-pick":
-    case "revert":
-      return { target, type: request.type, commitHash: featureHash(request.commitHash) };
+    case "revert": {
+      if (request.mainline !== undefined &&
+        (typeof request.mainline !== "number" || !Number.isSafeInteger(request.mainline) || request.mainline < 1)) invalid();
+      const base = {
+        target, commitHash: featureHash(request.commitHash), ...expected,
+        ...(request.mainline === undefined ? {} : { mainline: request.mainline as number }),
+        ...(request.noCommit === undefined ? {} : { noCommit: featureBoolean(request.noCommit) })
+      };
+      if (request.type === "revert") return { type: request.type, ...base };
+      return { type: request.type, ...base,
+        ...(request.recordOrigin === undefined ? {} : { recordOrigin: featureBoolean(request.recordOrigin) }) };
+    }
+    case "reset":
+      if (request.mode !== "soft" && request.mode !== "mixed" && request.mode !== "hard") invalid();
+      return { target, type: request.type, commitHash: featureHash(request.commitHash), mode: request.mode, ...expected };
+    case "checkout-commit":
+      return { target, type: request.type, commitHash: featureHash(request.commitHash), ...expected };
+    case "merge":
+      if (request.mode !== "normal" && request.mode !== "no-ff" && request.mode !== "squash") invalid();
+      return { target, type: request.type, commitHash: featureHash(request.commitHash), mode: request.mode, ...expected,
+        ...(request.noCommit === undefined ? {} : { noCommit: featureBoolean(request.noCommit) }) };
+    case "rebase":
+      return { target, type: request.type, commitHash: featureHash(request.commitHash), ...expected,
+        ...(request.preserveMerges === undefined ? {} : { preserveMerges: featureBoolean(request.preserveMerges) }) };
     case "mark-resolved":
       return { target, type: request.type, paths: paths(request.paths) };
     case "continue":

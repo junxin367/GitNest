@@ -811,6 +811,22 @@ export function useRepositoryDetails(
             ...value,
             page: { ...value.page, commits }
           });
+          if (tab === "history" && offset === 0) {
+            const selected = commits.find(item => item.hash === selectedCommitHashRef.current);
+            if (selected) setCommit(current => {
+              if (!current || current.commit.hash !== selected.hash ||
+                current.target.repositoryId !== stableTarget.repositoryId ||
+                current.target.worktreeId !== stableTarget.worktreeId) return current;
+              const refs = selected.refs ?? current.commit.refs;
+              if (current.commit.stashRef === selected.stashRef &&
+                refs.length === current.commit.refs.length &&
+                refs.every((ref, index) => ref === current.commit.refs[index])) return current;
+              const commit = { ...current.commit, refs };
+              if (selected.stashRef) commit.stashRef = selected.stashRef;
+              else delete commit.stashRef;
+              return { ...current, commit };
+            });
+          }
           const first = result.value.page.commits[0];
           if (
             tab === "history" &&
@@ -937,6 +953,15 @@ export function useRepositoryDetails(
 
       if (result.ok) {
         setBranches(result.value);
+        const nextScope = withoutMissingRemoteBranches(historyScopeRef.current, result.value.branches);
+        if (!sameHistoryScope(historyScopeRef.current, nextScope)) {
+          if (tab === "history") {
+            await selectHistoryScope(nextScope);
+          } else {
+            historyScopeRef.current = nextScope;
+            setHistoryScope(nextScope);
+          }
+        }
       } else if (result.error.code !== "COMMAND_CANCELLED") {
         setError(result.error);
       }
@@ -962,8 +987,10 @@ export function useRepositoryDetails(
     createQuery,
     finishQuery,
     isCurrentQuery,
+    selectHistoryScope,
     setLoadingKey,
-    stableTarget
+    stableTarget,
+    tab
   ]);
 
   const loadMoreHistory = useCallback(
@@ -1219,6 +1246,19 @@ export function resolveRequestedChangeSelection(
       ? request.mode
       : preferredDiffMode(change)
   };
+}
+
+function withoutMissingRemoteBranches(
+  scope: RepositoryHistoryScopeDto | null,
+  branches: RepositoryBranchesDto["branches"]
+): RepositoryHistoryScopeDto | null {
+  if (!scope || scope.kind === "all") return scope;
+  const refs = scope.kind === "ref" ? [scope.ref] : scope.refs;
+  const available = new Set(branches.map(branch => branch.fullName));
+  const retained = refs.filter(ref => !ref.startsWith("refs/remotes/") || available.has(ref));
+  if (retained.length === refs.length) return scope;
+  if (retained.length === 0) return { kind: "all" };
+  return retained.length === 1 ? { kind: "ref", ref: retained[0]! } : { kind: "refs", refs: retained };
 }
 
 function sameHistoryScope(

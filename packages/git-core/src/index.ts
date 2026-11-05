@@ -62,6 +62,7 @@ export {
 } from "./parsers/version";
 export { parseWorktrees } from "./parsers/worktrees";
 export type {
+  CreateBranchOptions,
   FetchRemoteOptions,
   GitPullStrategy,
   GitRepositoryCommandClient,

@@ -1514,35 +1514,48 @@ export const ApplicationSettingsPage = memo(function ApplicationSettingsPage({
                 </SettingsCard>
 
                 <SettingsCard
-                  description="选择应用启动并完成 Workspace 加载后的远程检查方式。"
+                  description="同步远程分支，并自动清理远程已删除的分支引用。"
                   id="settings-git-fetch"
                   title="远程检查策略"
                 >
                   <div className="settings-option-grid">
                     <SettingsOption
+                      active={appSettings.settings.git.autoFetch !== false}
+                      description="打开或切换仓库时自动获取，随后每 5 分钟更新当前仓库的所有远程。后台失败时保留已有数据。"
+                      icon="refresh"
+                      onClick={() =>
+                        void appSettings.update({
+                          git: { autoFetch: true, fetchMode: "manual" }
+                        })
+                      }
+                      title="自动 Fetch（推荐）"
+                    />
+                    <SettingsOption
                       active={
+                        appSettings.settings.git.autoFetch === false &&
                         appSettings.settings.git.fetchMode ===
                         "manual"
                       }
-                      description="只有明确点击 Fetch 时才更新远程跟踪引用。"
+                      description="点击 Fetch 时同步远程分支，并清理远程已删除的分支引用。"
                       icon="download"
                       onClick={() =>
                         void appSettings.update({
-                          git: { fetchMode: "manual" }
+                          git: { autoFetch: false, fetchMode: "manual" }
                         })
                       }
                       title="手动 Fetch"
                     />
                     <SettingsOption
                       active={
+                        appSettings.settings.git.autoFetch === false &&
                         appSettings.settings.git.fetchMode ===
                         "startup"
                       }
-                      description="每次启动且 Workspace 加载完成后，对全部仓库执行一次 Fetch。"
+                      description="每次启动且 Workspace 加载完成后，对全部仓库执行一次 Fetch，并清理失效的远程分支引用。"
                       icon="refresh"
                       onClick={() =>
                         void appSettings.update({
-                          git: { fetchMode: "startup" }
+                          git: { autoFetch: false, fetchMode: "startup" }
                         })
                       }
                       title="启动时检查"
@@ -1553,7 +1566,7 @@ export const ApplicationSettingsPage = memo(function ApplicationSettingsPage({
                     <div>
                       <strong>仅更新远程跟踪引用</strong>
                       <p>
-                        启动检查不会执行 Pull、Merge、Rebase，也不会修改工作区、暂存区或未提交改动。
+                        远程检查会保留本地分支、标签和未提交改动，不会自动 Pull、Merge 或 Rebase。
                       </p>
                     </div>
                   </div>

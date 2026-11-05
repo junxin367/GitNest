@@ -100,8 +100,8 @@ export class GitCliWorkflowClient implements GitWorkflowClient {
     let currentReplay: GitWorkflowState["currentReplay"] = null;
     if (replayHash) {
       const [replayInfo, replayFiles] = await Promise.all([
-        this.#run(path, ["show", "-s", "--format=%s", replayHash], options),
-        this.#run(path, ["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "-z", replayHash], options)
+        this.#run(path, ["show", "-s", "--format=%H%n%s", replayHash], options),
+        this.#run(path, ["diff-tree", "-m", "--root", "--no-commit-id", "--name-only", "-r", "-z", replayHash], options)
       ]);
       const affected = new Set(replayFiles.stdout.split("\0").filter(Boolean));
       const untrackedSet = new Set(untrackedPaths);
@@ -111,10 +111,17 @@ export class GitCliWorkflowClient implements GitWorkflowClient {
         ? "请先移走或保存未跟踪文件，再跳过或保留空提交。"
         : outsideReplay ? "存在当前提交范围之外的修改，请先保存这些修改，再跳过当前提交。" : undefined;
       const isEmpty = conflictedPaths.length === 0 && trackedPaths.length === 0;
+      const [fullHash = "", ...subject] = replayInfo.stdout.trimEnd().split("\n");
+      const noCommitReplay = /^\s*no-commit\s*=\s*true\s*$/m.test(metadata["sequencer/opts"] ?? "");
+      const remaining = (metadata["sequencer/todo"] ?? "").split(/\r?\n/).filter(line => /^(pick|revert)\s/.test(line.trim()));
       currentReplay = {
-        commitHash: replayHash, subject: replayInfo.stdout.trim(),
+        commitHash: fullHash, subject: subject.join("\n").trim(),
         isEmpty, canSkip: !blockedReason,
-        canKeepEmpty: isEmpty && !blockedReason && !("rebase-apply/" in metadata),
+        canKeepEmpty: isEmpty && !blockedReason && !noCommitReplay && !("rebase-apply/" in metadata),
+        ...(noCommitReplay ? {
+          noCommit: true,
+          ...(remaining.length === 1 ? {} : { continueBlockedReason: "仅应用变更的多提交序列请在终端继续，或中止当前操作。" })
+        } : {}),
         ...(blockedReason ? { blockedReason } : {})
       };
     }
@@ -136,13 +143,17 @@ export class GitCliWorkflowClient implements GitWorkflowClient {
     };
   }
 
-  async validateCommit(path: string, hash: string, options: GitReadOptions = {}): Promise<void> {
+  async validateCommit(path: string, hash: string, options: GitReadOptions & { allowMerge?: boolean; mainline?: number } = {}): Promise<void> {
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(hash)) throw new GitError("INVALID_REQUEST", "请选择完整的提交 ID。");
     const result = await this.#run(path, ["show", "-s", "--format=%H%n%P", `${hash}^{commit}`], options);
     const [resolved = "", parents = ""] = result.stdout.trim().split("\n");
-    if (resolved.toLowerCase() !== hash.toLowerCase() || parents.trim().split(/\s+/).filter(Boolean).length > 1) {
-      throw new GitError("INVALID_REQUEST", "此操作需要普通提交；合并提交需要明确指定主线，暂不支持。");
+    if (resolved.toLowerCase() !== hash.toLowerCase()) throw new GitError("INVALID_REQUEST", "提交 ID 不匹配。");
+    const parentCount = parents.trim().split(/\s+/).filter(Boolean).length;
+    if (options.mainline !== undefined &&
+      (!Number.isSafeInteger(options.mainline) || options.mainline < 1 || parentCount < 2 || options.mainline > parentCount)) {
+      throw new GitError("INVALID_REQUEST", "主线父提交编号与所选合并提交不匹配。");
     }
+    if (parentCount > 1 && !options.allowMerge && options.mainline === undefined) throw new GitError("INVALID_REQUEST", "合并提交需要明确选择主线父提交。");
   }
 
   async execute(path: string, action: GitWorkflowAction, options: GitWriteOptions = {}): Promise<void> {
@@ -165,8 +176,24 @@ export class GitCliWorkflowClient implements GitWorkflowClient {
         break;
       case "amend": args = ["commit", "--amend", "--message", action.message]; break;
       case "undo-commit": args = ["reset", `--${action.mode}`, "HEAD^"]; break;
-      case "cherry-pick": args = ["cherry-pick", "--no-edit", action.commitHash]; break;
-      case "revert": args = ["revert", "--no-edit", action.commitHash]; break;
+      // 用单提交范围保留 sequencer，确保 -n 模式冲突后仍可继续或中止。
+      case "cherry-pick": args = ["cherry-pick", "--no-edit",
+        ...(action.noCommit ? ["--no-commit"] : []), ...(action.recordOrigin ? ["-x"] : []),
+        ...(action.mainline ? ["--mainline", String(action.mainline)] : []),
+        action.noCommit ? `${action.commitHash}^!` : action.commitHash]; break;
+      case "revert": args = ["revert", "--no-edit", ...(action.noCommit ? ["--no-commit"] : []),
+        ...(action.mainline ? ["--mainline", String(action.mainline)] : []),
+        action.noCommit ? `${action.commitHash}^!` : action.commitHash]; break;
+      case "reset": args = ["-c", "submodule.recurse=false", "reset", `--${action.mode}`, "--no-recurse-submodules", action.commitHash, "--"]; break;
+      case "checkout-commit": args = ["-c", "submodule.recurse=false", "switch", "--detach", "--no-recurse-submodules", action.commitHash]; break;
+      case "merge": args = ["-c", "submodule.recurse=false", "merge", "--no-edit", "--no-autostash",
+        ...(action.mode === "squash" ? ["--squash", "--no-commit", "--ff"] : [
+          "--no-squash",
+          action.mode === "no-ff" || action.noCommit ? "--no-ff" : "--ff",
+          action.noCommit ? "--no-commit" : "--commit"
+        ]), action.commitHash]; break;
+      case "rebase": args = ["-c", "submodule.recurse=false", "rebase", "--no-autostash", "--no-update-refs", "--no-fork-point",
+        action.preserveMerges ? "--rebase-merges" : "--no-rebase-merges", action.commitHash]; break;
       case "mark-resolved": args = ["add", "-A", "--", ...action.paths.map(literalPath)]; break;
       case "continue":
       case "skip":
@@ -174,6 +201,17 @@ export class GitCliWorkflowClient implements GitWorkflowClient {
       case "abort": {
         const state = await this.inspect(path, { ...options, includeFingerprint: false });
         if (!state.operation) throw new GitError("INVALID_REQUEST", "没有进行中的 Git 操作。");
+        if (action.type === "continue" && state.conflictedPaths.length) {
+          throw new GitError("INVALID_REQUEST", "请先解决并标记全部冲突文件。");
+        }
+        if (action.type === "continue" && state.currentReplay?.continueBlockedReason) {
+          throw new GitError("INVALID_REQUEST", state.currentReplay.continueBlockedReason);
+        }
+        if (action.type === "continue" && state.currentReplay?.noCommit) {
+          // 单提交的仅应用模式已完成冲突解决，保留暂存结果并清除操作状态。
+          args = [state.operation, "--quit"];
+          break;
+        }
         if (action.type === "continue" && state.currentReplay?.isEmpty) {
           throw new GitError("INVALID_REQUEST", "当前提交已没有文件变更。请选择“跳过当前提交”或“保留空提交”，不要重复继续。");
         }
@@ -199,6 +237,13 @@ export class GitCliWorkflowClient implements GitWorkflowClient {
       }
     }
     const result = await this.#run(path, args, options, true);
+    if ((action.type === "cherry-pick" || action.type === "revert") && action.noCommit) {
+      const state = await this.inspect(path, { ...options, includeFingerprint: false });
+      if (state.operation === action.type && state.currentReplay?.commitHash.toLowerCase() === action.commitHash.toLowerCase()) {
+        // 成功的 -n revert 也可能留下 REVERT_HEAD，保留暂存结果并结束本次操作。
+        await this.#run(path, [action.type, "--quit"], options, true);
+      }
+    }
     if (action.type === "create-stash" && result.stdout.includes("No local changes to save")) {
       throw new GitError("INVALID_REQUEST", "没有可储藏的修改；子模块内部修改需要在子模块中单独保存。");
     }
@@ -284,8 +329,11 @@ function currentReplayHash(operation: GitWorkflowOperation | null, metadata: Rec
       }
     }
   }
+  if (!value && (operation === "cherry-pick" || operation === "revert")) {
+    value = /^(?:pick|revert)\s+([a-f0-9]+)\s/i.exec(metadata["sequencer/todo"]?.trimStart() ?? "")?.[1];
+  }
   const hash = value?.trim();
-  return hash && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(hash) ? hash : null;
+  return hash && /^[a-f0-9]{7,64}$/i.test(hash) ? hash : null;
 }
 
 function detectOperation(metadata: Record<string, string>): GitWorkflowOperation | null {

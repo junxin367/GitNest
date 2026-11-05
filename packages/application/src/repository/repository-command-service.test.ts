@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   GitError,
@@ -91,6 +91,44 @@ describe("RepositoryCommandService", () => {
       service.execute(preflight.command, preflight.preflightId, false)
     ).rejects.toBe(failure);
     expect(runtime.queued).toHaveLength(0);
+  });
+
+  it("passes create-and-checkout through one queued operation with worktree impact", async () => {
+    const client = new FakeRepositoryClient();
+    client.createBranch = vi.fn(async () => undefined);
+    const runtime = new FakeRuntime();
+    const service = createService(runtime, client);
+    const preflight = await service.preflight({
+      type: "create-branch", target: TARGET, branch: "feature/new", checkout: true
+    });
+    expect(preflight.impacts).toContainEqual(expect.objectContaining({ kind: "worktree-update" }));
+    await service.execute(preflight.command, preflight.preflightId, true);
+    await runtime.runQueued(0);
+    expect(client.createBranch).toHaveBeenCalledExactlyOnceWith(
+      WORKTREE_PATH, "feature/new", LOCAL_HEAD, { signal: expect.any(AbortSignal), checkout: true }
+    );
+  });
+
+  it("allows creating a branch with local changes but rejects creating and switching", async () => {
+    const client = new FakeRepositoryClient();
+    client.snapshot.untracked = 1;
+    const runtime = new FakeRuntime();
+    const service = createService(runtime, client);
+    await expect(service.preflight({
+      type: "create-branch", target: TARGET, branch: "feature/create-only"
+    })).resolves.toMatchObject({ command: { type: "create-branch" } });
+    await expect(service.preflight({
+      type: "create-branch", target: TARGET, branch: "feature/switch", checkout: true
+    })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    expect(runtime.queued).toHaveLength(0);
+  });
+
+  it("rejects an unchecked change of the create-and-checkout option after preflight", async () => {
+    const service = createService(new FakeRuntime(), new FakeRepositoryClient());
+    const preflight = await service.preflight({ type: "create-branch", target: TARGET, branch: "feature/new" });
+    await expect(service.execute(
+      { ...preflight.command, checkout: true } as RepositoryCommand, preflight.preflightId, true
+    )).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
   });
 
   it("consumes a confirmed preflight once when execution requests overlap", async () => {
@@ -248,7 +286,7 @@ describe("RepositoryCommandService", () => {
         type: "fetch",
         targets: [TARGET],
         remote: "origin",
-        prune: false
+        prune: true
       },
       targetSummary: "1 个仓库目标",
       confirmationRequired: false
@@ -265,7 +303,7 @@ describe("RepositoryCommandService", () => {
           type: "fetch",
           targets: [TARGET],
           remote: "origin",
-          prune: true
+          prune: false
         },
         preflight.preflightId,
         false
@@ -286,8 +324,7 @@ describe("RepositoryCommandService", () => {
     const preflight = await service.preflight({
       type: "fetch",
       targets: [TARGET],
-      remote: "origin",
-      prune: true
+      remote: "origin"
     });
 
     expect(preflight.impacts).toEqual([
@@ -304,6 +341,18 @@ describe("RepositoryCommandService", () => {
         )
       })
     ]);
+  });
+
+  it.each([undefined, false])("uses cleanup by default while preserving explicit prune=%s", async (prune) => {
+    const client = new FakeRepositoryClient();
+    const runtime = new FakeRuntime();
+    const service = createService(runtime, client);
+    const preflight = await service.preflight({
+      type: "fetch", targets: [TARGET], ...(prune !== undefined ? { prune } : {})
+    });
+    await service.execute(preflight.command, preflight.preflightId, false);
+    await runtime.runQueued(0);
+    expect(client.fetchCalls).toEqual([{ path: WORKTREE_PATH, remote: "origin", prune: prune ?? true }]);
   });
 
   it("requires explicit confirmation for commands that can write refs or the worktree", async () => {

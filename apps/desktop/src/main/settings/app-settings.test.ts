@@ -59,6 +59,7 @@ describe("AppSettingsService", () => {
     expect(initial.settings.general.restoreLastView).toBe(true);
     expect(initial.settings.general.closeBehavior).toBe("quit");
     expect(initial.settings.git.pushStrategy).toBe("rebase");
+    expect(initial.settings.git.autoFetch).toBe(true);
     expect(initial.settings.diff.commitPanelHeight).toBe(
       DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
     );
@@ -843,9 +844,11 @@ describe("AppSettingsService", () => {
       DEFAULT_DIFF_COMMIT_DETAIL_WIDTH
     );
     expect(loaded.settings.codeAnalysis.enabled).toBe(true);
+    expect(loaded.settings.git.autoFetch).toBe(true);
 
     await service.update({
-      diff: { wrap: true, commitDetailWidth: 620 }
+      diff: { wrap: true, commitDetailWidth: 620 },
+      git: { autoFetch: false, fetchMode: "manual" }
     });
     const persisted = JSON.parse(
       await readFile(filePath, "utf8")
@@ -859,6 +862,8 @@ describe("AppSettingsService", () => {
       DEFAULT_DIFF_COMMIT_PANEL_HEIGHT
     );
     expect(persisted.diff.commitDetailWidth).toBe(620);
+    expect((await new AppSettingsService(filePath, new MemorySecretVault()).get())
+      .settings.git).toMatchObject({ autoFetch: false, fetchMode: "manual" });
     expect(
       JSON.parse(await readFile(filePath, "utf8"))
         .schemaVersion

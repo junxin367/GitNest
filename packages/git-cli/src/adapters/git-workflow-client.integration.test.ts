@@ -214,6 +214,202 @@ describe("GitCliWorkflowClient real Git workflows", () => {
     } finally { await fixture.dispose(); }
   }, 30_000);
 
+  it.each(["soft", "mixed", "hard"] as const)("重置到指定历史提交：%s 保留或覆盖对应文件状态", async mode => {
+    const fixture = await repository();
+    try {
+      const { path, git, client } = fixture;
+      const base = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await writeFile(join(path, "tracked.txt"), "next\n");
+      await git(["add", "."]); await git(["commit", "-m", "next"]);
+      await writeFile(join(path, "tracked.txt"), "dirty\n");
+      await writeFile(join(path, "keep-untracked.txt"), "keep\n");
+      await client.execute(path, { type: "reset", mode, commitHash: base });
+      const state = await client.inspect(path);
+      expect(state.head).toBe(base);
+      expect(state.branch).toBe("main");
+      expect(state.hasStagedChanges).toBe(mode === "soft");
+      expect(await readFile(join(path, "tracked.txt"), "utf8")).toBe(mode === "hard" ? "base\n" : "dirty\n");
+      expect(await readFile(join(path, "keep-untracked.txt"), "utf8")).toBe("keep\n");
+    } finally { await fixture.dispose(); }
+  }, 30_000);
+
+  it("检出历史提交进入分离 HEAD，原分支引用保持原位", async () => {
+    const fixture = await repository();
+    try {
+      const { path, git, client } = fixture;
+      const base = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await writeFile(join(path, "tracked.txt"), "next\n");
+      await git(["add", "."]); await git(["commit", "-m", "next"]);
+      const tip = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await client.execute(path, { type: "checkout-commit", commitHash: base });
+      const state = await client.inspect(path);
+      expect(state.branch).toBeNull();
+      expect(state.head).toBe(base);
+      expect((await git(["rev-parse", "main"])).stdout.trim()).toBe(tip);
+    } finally { await fixture.dispose(); }
+  }, 30_000);
+
+  it.each([
+    ["normal", false], ["no-ff", false], ["normal", true], ["squash", true]
+  ] as const)("合并模式 %s、暂停提交 %s 产生正确历史和暂存结果", async (mode, noCommit) => {
+    const fixture = await repository();
+    try {
+      const { path, git, client } = fixture;
+      const base = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await git(["switch", "-c", "feature"]);
+      await writeFile(join(path, "feature.txt"), "feature\n");
+      await git(["add", "."]); await git(["commit", "-m", "feature"]);
+      const feature = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await git(["switch", "main"]);
+      await git(["config", "branch.main.mergeOptions", "--squash"]);
+      await client.execute(path, { type: "merge", commitHash: feature, mode, noCommit });
+      const state = await client.inspect(path);
+      expect(await readFile(join(path, "feature.txt"), "utf8")).toBe("feature\n");
+      if (noCommit) {
+        expect(state.head).toBe(base);
+        expect(state.hasStagedChanges).toBe(true);
+        expect(state.operation).toBe(mode === "squash" ? null : "merge");
+        if (mode !== "squash") {
+          await client.execute(path, { type: "abort" });
+          expect((await client.inspect(path)).head).toBe(base);
+        }
+      } else {
+        expect(state.head === feature).toBe(mode === "normal");
+        expect(state.parentCount).toBe(mode === "no-ff" ? 2 : 1);
+      }
+    } finally { await fixture.dispose(); }
+  }, 30_000);
+
+  it("变基重放当前分支，忽略自动更新其他分支的全局配置", async () => {
+    const fixture = await repository();
+    try {
+      const { path, git, client } = fixture;
+      await git(["switch", "-c", "topic"]);
+      await writeFile(join(path, "topic.txt"), "topic\n");
+      await git(["add", "."]); await git(["commit", "-m", "topic"]);
+      const original = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await git(["branch", "keep-original"]);
+      await git(["switch", "main"]);
+      await writeFile(join(path, "advance.txt"), "advance\n");
+      await git(["add", "."]); await git(["commit", "-m", "advance"]);
+      const onto = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await git(["switch", "topic"]);
+      await git(["config", "rebase.updateRefs", "true"]);
+      await client.execute(path, { type: "rebase", commitHash: onto });
+      expect((await git(["rev-parse", "HEAD^"])).stdout.trim()).toBe(onto);
+      expect((await git(["rev-parse", "keep-original"])).stdout.trim()).toBe(original);
+      expect((await client.inspect(path)).branch).toBe("topic");
+    } finally { await fixture.dispose(); }
+  }, 30_000);
+
+  it("Cherry-pick 来源记录与只应用变更、Revert 只应用变更均生效", async () => {
+    const fixture = await repository();
+    try {
+      const { path, git, client } = fixture;
+      const base = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await git(["switch", "-c", "feature"]);
+      await writeFile(join(path, "feature.txt"), "feature\n");
+      await git(["add", "."]); await git(["commit", "-m", "feature"]);
+      const commitHash = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await git(["switch", "main"]);
+      await client.execute(path, { type: "cherry-pick", commitHash, noCommit: true });
+      expect((await client.inspect(path)).head).toBe(base);
+      expect((await client.inspect(path)).hasStagedChanges).toBe(true);
+      expect((await client.inspect(path)).operation).toBeNull();
+      await git(["reset", "--hard", base]);
+      await client.execute(path, { type: "cherry-pick", commitHash, recordOrigin: true });
+      expect((await git(["show", "-s", "--format=%B", "HEAD"])).stdout).toContain(`(cherry picked from commit ${commitHash})`);
+      const head = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await client.execute(path, { type: "revert", commitHash: head, noCommit: true });
+      expect((await client.inspect(path)).head).toBe(head);
+      expect((await client.inspect(path)).operation).toBeNull();
+      expect((await git(["diff", "--cached", "--name-status"])).stdout).toContain("D\tfeature.txt");
+    } finally { await fixture.dispose(); }
+  }, 30_000);
+
+  it.each([false, true])("Rebase 保留合并结构选项 %s 对应真实父子关系", async preserveMerges => {
+    const fixture = await repository();
+    try {
+      const { path, git, client } = fixture;
+      await git(["branch", "onto"]);
+      await git(["switch", "-c", "feature"]);
+      await writeFile(join(path, "right.txt"), "right\n");
+      await git(["add", "."]); await git(["commit", "-m", "right"]);
+      await git(["switch", "main"]);
+      await writeFile(join(path, "left.txt"), "left\n");
+      await git(["add", "."]); await git(["commit", "-m", "left"]);
+      await git(["merge", "--no-ff", "-m", "merge", "feature"]);
+      await git(["switch", "onto"]);
+      await writeFile(join(path, "onto.txt"), "onto\n");
+      await git(["add", "."]); await git(["commit", "-m", "onto"]);
+      const onto = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await git(["switch", "main"]);
+      await client.execute(path, { type: "rebase", commitHash: onto, preserveMerges });
+      expect((await client.inspect(path)).parentCount).toBe(preserveMerges ? 2 : 1);
+      expect((await git(["merge-base", "--is-ancestor", onto, "HEAD"])).exitCode).toBe(0);
+      expect(await readFile(join(path, "right.txt"), "utf8")).toBe("right\n");
+    } finally { await fixture.dispose(); }
+  }, 30_000);
+
+  it("合并提交的主线选择分别应用不同父提交的差异", async () => {
+    const fixture = await repository();
+    try {
+      const { path, git, client } = fixture;
+      const base = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await git(["switch", "-c", "feature"]);
+      await writeFile(join(path, "right.txt"), "right\n");
+      await git(["add", "."]); await git(["commit", "-m", "right"]);
+      await git(["switch", "main"]);
+      await writeFile(join(path, "left.txt"), "left\n");
+      await git(["add", "."]); await git(["commit", "-m", "left"]);
+      await git(["merge", "--no-ff", "-m", "merge", "feature"]);
+      const commitHash = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await expect(client.validateCommit(path, commitHash, { mainline: 3 })).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+      await client.validateCommit(path, commitHash, { mainline: 1 });
+      await git(["switch", "-c", "replay", base]);
+      await client.execute(path, { type: "cherry-pick", commitHash, mainline: 1 });
+      expect((await git(["ls-files"])).stdout).toContain("right.txt");
+      expect((await git(["ls-files"])).stdout).not.toContain("left.txt");
+      await git(["reset", "--hard", base]);
+      await client.execute(path, { type: "cherry-pick", commitHash, mainline: 2 });
+      expect((await git(["ls-files"])).stdout).toContain("left.txt");
+      expect((await git(["ls-files"])).stdout).not.toContain("right.txt");
+      await client.execute(path, { type: "revert", commitHash, mainline: 2 });
+      expect((await git(["ls-files"])).stdout).not.toContain("left.txt");
+    } finally { await fixture.dispose(); }
+  }, 30_000);
+
+  it.each([
+    ["cherry-pick", "abort"], ["cherry-pick", "continue"], ["revert", "abort"], ["revert", "continue"]
+  ] as const)("只应用变更的 %s 冲突可 %s，继续后不自动提交", async (type, resolution) => {
+    const fixture = await repository();
+    try {
+      const { path, git, client } = fixture;
+      await git(["switch", "-c", "feature"]);
+      await writeFile(join(path, "tracked.txt"), "feature\n");
+      await git(["add", "."]); await git(["commit", "-m", "feature"]);
+      const commitHash = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await git(["switch", "main"]);
+      await writeFile(join(path, "tracked.txt"), "main\n");
+      await git(["add", "."]); await git(["commit", "-m", "main"]);
+      const before = (await git(["rev-parse", "HEAD"])).stdout.trim();
+      await expect(client.execute(path, { type, commitHash, noCommit: true })).rejects.toBeDefined();
+      const state = await client.inspect(path);
+      expect(state.operation).toBe(type);
+      expect(state.currentReplay?.noCommit).toBe(true);
+      expect(state.currentReplay?.commitHash).toBe(commitHash);
+      if (resolution === "continue") {
+        await writeFile(join(path, "tracked.txt"), "resolved\n");
+        await client.execute(path, { type: "mark-resolved", paths: ["tracked.txt"] });
+      }
+      await client.execute(path, { type: resolution });
+      expect((await client.inspect(path)).head).toBe(before);
+      expect((await client.inspect(path)).operation).toBeNull();
+      expect(await readFile(join(path, "tracked.txt"), "utf8")).toBe(resolution === "abort" ? "main\n" : "resolved\n");
+      if (resolution === "continue") expect((await client.inspect(path)).hasStagedChanges).toBe(true);
+    } finally { await fixture.dispose(); }
+  }, 30_000);
+
   for (const operation of ["merge", "rebase", "cherry-pick", "revert"] as const) {
     for (const action of ["continue", "abort"] as const) {
       it(`${operation} conflict ${action} works in a linked Worktree without an editor`, async () => {

@@ -61,6 +61,7 @@ function RepositoryBranchesContent({
   const branches = controller.branches?.branches ?? [];
   const [createFormOpen, setCreateFormOpen] = useState(false);
   const [newBranch, setNewBranch] = useState("");
+  const [checkoutNewBranch, setCheckoutNewBranch] = useState(false);
   const [renamingBranch, setRenamingBranch] =
     useState<string | null>(null);
   const [renamedBranch, setRenamedBranch] = useState("");
@@ -137,8 +138,9 @@ function RepositoryBranchesContent({
       .request({
         type: "create-branch",
         target,
-        branch
-      })
+        branch,
+        checkout: checkoutNewBranch
+      }, { confirmed: true })
       .then((accepted) => {
         if (accepted && createDraftRevision.current === submittedRevision) {
           setNewBranch("");
@@ -167,7 +169,7 @@ function RepositoryBranchesContent({
         target,
         branch,
         newName
-      })
+      }, { confirmed: true })
       .then((accepted) => {
         if (accepted && renameDraftRevision.current === submittedRevision) {
           setRenamingBranch(null);
@@ -282,14 +284,22 @@ function RepositoryBranchesContent({
                     }
                   />
                   {commands.active === "create-branch"
-                    ? "预检中…"
-                    : "创建"}
+                    ? "正在创建…"
+                    : checkoutNewBranch ? "创建并切换" : "创建"}
                 </Button>
               </div>
+              <label>
+                <input type="checkbox" checked={checkoutNewBranch} disabled={commands.busy}
+                  onChange={event => {
+                    createDraftRevision.current += 1;
+                    setCheckoutNewBranch(event.target.checked);
+                  }} />
+                创建后切换到此分支
+              </label>
             </form>
             <p>
-              分支写操作都会先展示目标、路径与引用影响；GitNest
-              不会自动 Stash。
+              {checkoutNewBranch ? "创建分支后立即切换；有未提交修改时请先提交或储藏。"
+                : "从当前 HEAD 创建分支，当前工作区保持在原分支。"}
             </p>
           </div>
         )}

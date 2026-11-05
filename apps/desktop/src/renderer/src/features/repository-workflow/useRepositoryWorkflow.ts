@@ -7,6 +7,11 @@ import type {
   WorkspaceOperationDto
 } from "@gitnest/contracts";
 
+export interface RepositoryWorkflowRequestOptions {
+  confirmed?: boolean;
+  reviewedState?: RepositoryWorkflowStateDto;
+}
+
 export interface RepositoryWorkflowController {
   state: RepositoryWorkflowStateDto | null;
   preflight: RepositoryWorkflowPreflightDto | null;
@@ -15,11 +20,11 @@ export interface RepositoryWorkflowController {
   error: string | null;
   notice: string | null;
   completionVersion: number;
-  draft: { type: "create-stash" | "amend" | "undo-commit"; path?: string; paths?: string[] } | null;
-  openDraft(type: "create-stash" | "amend" | "undo-commit", path?: string, originalPath?: string): void;
+  draft: { type: "create-stash" | "amend" | "undo-commit"; path?: string; paths?: string[]; expectedHead?: string } | null;
+  openDraft(type: "create-stash" | "amend" | "undo-commit", path?: string, originalPath?: string, expectedHead?: string): void;
   closeDraft(): void;
   reload(): Promise<RepositoryWorkflowStateDto | null>;
-  request(action: RepositoryWorkflowActionDto): Promise<boolean>;
+  request(action: RepositoryWorkflowActionDto, options?: RepositoryWorkflowRequestOptions): Promise<boolean>;
   confirm(): Promise<boolean>;
   dismiss(): void;
   clearFeedback(): void;
@@ -179,7 +184,25 @@ export function useRepositoryWorkflow(
     return operationsRef.current.some(item => activeState(item.state) &&
       item.kind !== "status" && item.kind !== "scan" && item.targetIds.includes(key));
   }, [scope]);
-  const request = useCallback(async (action: RepositoryWorkflowActionDto) => {
+  const executePreflight = useCallback(async (candidate: RepositoryWorkflowPreflightDto) => {
+    const result = await window.gitnest.repositoryWorkflow.execute({
+      command: candidate.command, preflightId: candidate.preflightId, confirmed: true
+    });
+    if (current.current !== scope) return false;
+    preflightRef.current = null;
+    setPreflight(null);
+    if (!result.ok) {
+      setError(result.error.message);
+      void refresh();
+      return false;
+    }
+    pendingRef.current = result.value.operationId;
+    setPendingId(result.value.operationId);
+    setNotice("操作已加入队列，完成后自动刷新。");
+    return true;
+  }, [scope, refresh]);
+
+  const request = useCallback(async (action: RepositoryWorkflowActionDto, options?: RepositoryWorkflowRequestOptions) => {
     if (!scope.target || current.current !== scope || flight.current || pendingRef.current ||
       preflightRef.current || hasActiveOperation()) return false;
     flight.current = true;
@@ -200,6 +223,13 @@ export function useRepositoryWorkflow(
       inspection.explicitRead = false;
       setInspecting(false);
       setState(result.value.state);
+      if (options?.confirmed) {
+        if (options.reviewedState && reviewKey(options.reviewedState) !== reviewKey(result.value.state)) {
+          setError("仓库状态已变化，已更新操作影响，请检查后重新执行。");
+          return false;
+        }
+        return await executePreflight(result.value);
+      }
       preflightRef.current = result.value;
       setPreflight(result.value);
       return true;
@@ -212,7 +242,7 @@ export function useRepositoryWorkflow(
         setActive(false);
       }
     }
-  }, [scope, hasActiveOperation, inspection, refresh]);
+  }, [scope, hasActiveOperation, inspection, refresh, executePreflight]);
 
   const confirm = useCallback(async () => {
     const candidate = preflightRef.current;
@@ -221,21 +251,7 @@ export function useRepositoryWorkflow(
     setActive(true);
     setError(null);
     try {
-      const result = await window.gitnest.repositoryWorkflow.execute({
-        command: candidate.command, preflightId: candidate.preflightId, confirmed: true
-      });
-      if (current.current !== scope) return false;
-      preflightRef.current = null;
-      setPreflight(null);
-      if (!result.ok) {
-        setError(result.error.message);
-        void refresh();
-        return false;
-      }
-      pendingRef.current = result.value.operationId;
-      setPendingId(result.value.operationId);
-      setNotice("操作已加入队列，完成后自动刷新。");
-      return true;
+      return await executePreflight(candidate);
     } catch (reason) {
       if (current.current === scope) {
         preflightRef.current = null;
@@ -249,16 +265,20 @@ export function useRepositoryWorkflow(
         setActive(false);
       }
     }
-  }, [scope, refresh]);
+  }, [scope, executePreflight]);
 
   return {
     state, preflight, inspecting, error, notice, completionVersion, draft,
     busy: active || pendingId !== null || hasActiveOperation(),
     reload, request, confirm,
-    openDraft: (type, path, originalPath) => {
+    openDraft: (type, path, originalPath, expectedHead) => {
       if (flight.current || pendingRef.current || preflightRef.current) return;
       setError(null);
-      setDraft(path ? { type, path, paths: [...new Set([originalPath, path].filter((item): item is string => Boolean(item)))] } : { type });
+      setDraft({
+        type,
+        ...(path ? { path, paths: [...new Set([originalPath, path].filter((item): item is string => Boolean(item)))] } : {}),
+        ...(expectedHead ? { expectedHead } : {})
+      });
     },
     closeDraft: () => { if (!flight.current) setDraft(null); },
     dismiss: () => {
@@ -268,4 +288,14 @@ export function useRepositoryWorkflow(
     },
     clearFeedback: () => { setError(null); setNotice(null); }
   };
+}
+
+function reviewKey(state: RepositoryWorkflowStateDto): string {
+  // Lightweight inspect intentionally omits the content fingerprint. Compare
+  // the visible impact here; execute still revalidates the full fingerprint.
+  return JSON.stringify([
+    state.head, state.branch, state.headMessage, state.parentCount, state.operation,
+    [...state.changedPaths].sort(), [...state.conflictedPaths].sort(), [...state.untrackedPaths].sort(),
+    state.hasStagedChanges, [...state.remoteBranchesContainingHead].sort(), state.currentReplay
+  ]);
 }

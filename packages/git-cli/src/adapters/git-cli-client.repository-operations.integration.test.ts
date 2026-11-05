@@ -39,6 +39,43 @@ describe("GitCliClient repository operations integration", () => {
     await fixture.dispose();
   });
 
+  it("prunes deleted remote branches by default while keeping local branches, other remotes and local tags", async () => {
+    await runGit(fixture.peerPath, ["switch", "-c", "feature/deleted"]);
+    await commitChange(fixture.peerPath, "deleted.txt", "feature\n", "Temporary remote branch");
+    await runGit(fixture.peerPath, ["push", "origin", "feature/deleted"]);
+    await client.fetchRemote(fixture.localPath, "origin", { prune: false });
+    await runGit(fixture.localPath, ["branch", "feature/deleted", "origin/feature/deleted"]);
+    await runGit(fixture.localPath, ["tag", "local-only"]);
+    await runGit(fixture.localPath, ["remote", "add", "other", fixture.remotePath]);
+    await runGit(fixture.localPath, ["fetch", "other"]);
+    await runGit(fixture.localPath, ["config", "fetch.prune", "true"]);
+    await runGit(fixture.localPath, ["config", "fetch.pruneTags", "true"]);
+    const head = await client.resolveRevision(fixture.localPath, "HEAD");
+    await runGit(fixture.peerPath, ["push", "origin", "--delete", "feature/deleted"]);
+
+    await client.fetchRemote(fixture.localPath, "origin", { prune: false });
+    expect((await client.readBranches(fixture.localPath)).some(branch => branch.name === "origin/feature/deleted")).toBe(true);
+    await client.fetchRemote(fixture.localPath, "origin");
+    const names = (await client.readBranches(fixture.localPath)).map(branch => branch.fullName);
+    expect(names).not.toContain("refs/remotes/origin/feature/deleted");
+    expect(names).toContain("refs/heads/feature/deleted");
+    expect(names).toContain("refs/remotes/other/feature/deleted");
+    expect((await runGit(fixture.localPath, ["tag", "--list", "local-only"])).stdout.trim()).toBe("local-only");
+    expect(await client.resolveRevision(fixture.localPath, "HEAD")).toBe(head);
+    expect((await runGit(fixture.localPath, ["status", "--porcelain"])).stdout.trim()).toBe("");
+  }, 20_000);
+
+  it("uses pruning through the application service when Fetch has no cleanup option", async () => {
+    await runGit(fixture.localPath, ["update-ref", "refs/remotes/origin/stale", "HEAD"]);
+    const runtime = createCommandRuntime(fixture);
+    const service = new RepositoryCommandService(runtime, client, client);
+    const preflight = await service.preflight({ type: "fetch", targets: [{ repositoryId: "repo", worktreeId: "wt" }] });
+    expect(preflight.command).toMatchObject({ type: "fetch", prune: true });
+    await service.execute(preflight.command, preflight.preflightId, false);
+    await runtime.runQueued();
+    expect((await client.readBranches(fixture.localPath)).some(branch => branch.name === "origin/stale")).toBe(false);
+  });
+
   it("reads effective fetch and all push URLs with Git URL rewriting", async () => {
     const path = fixture.localPath;
     await runGit(path, ["config", "url.https://fetch.example.test/.insteadOf", "fixture:"]);

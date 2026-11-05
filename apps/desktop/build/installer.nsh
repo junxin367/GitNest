@@ -39,7 +39,25 @@
     Page custom GitNestMaintenancePage GitNestMaintenanceLeave
   !macroend
 
+  !macro customInstall
+    ; Keep existing links intact, but repair a missing Start Menu entry.
+    !ifndef DO_NOT_CREATE_START_MENU_SHORTCUT
+      ${IfNot} ${FileExists} "$newStartMenuLink"
+        !insertmacro createMenuDirectory
+        CreateShortCut "$newStartMenuLink" "$appExe" "" "$appExe" 0 "" "" "${APP_DESCRIPTION}"
+        WinShell::SetLnkAUMI "$newStartMenuLink" "${APP_ID}"
+      ${EndIf}
+    !endif
+  !macroend
+
   !macro customHeader
+    ; The directory page and its sanitiser have already been emitted.
+    ; Maintenance keeps the registered folder. Do not let installUtil.nsh
+    ; disable --keep-shortcuts just because the first install has a picker.
+    !ifdef allowToChangeInstallationDirectory
+      !undef allowToChangeInstallationDirectory
+    !endif
+
     LangString GitNestTitle ${LANG_ENGLISH} "GitNest is already installed"
     LangString GitNestTitle ${LANG_SIMPCHINESE} "已安装 GitNest"
     LangString GitNestSubtitle ${LANG_ENGLISH} "Confirm the action for your existing installation."

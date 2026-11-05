@@ -52,7 +52,8 @@ export function fetchRemoteArguments(
 ): string[] {
   return [
     "fetch",
-    ...(prune ? ["--prune"] : []),
+    prune ? "--prune" : "--no-prune",
+    "--no-prune-tags",
     "--",
     remote
   ];
@@ -109,8 +110,13 @@ export function pushBranchArguments(input: {
 
 export function createBranchArguments(
   branch: string,
-  startPoint: string
+  startPoint: string,
+  checkout = false
 ): string[] {
+  if (checkout) {
+    return ["-c", "submodule.recurse=false", "switch", "--no-guess", "--no-recurse-submodules",
+      "--create", branch, "--", startPoint];
+  }
   return [
     "branch",
     "--",

@@ -26,7 +26,7 @@ import { copyTextToClipboard } from "../../shared/lib/copyTextToClipboard";
 import { formatCommitTimestamp } from "../../shared/lib/formatCommitTimestamp";
 import { Icon } from "../../shared/ui/Icon";
 import { Input } from "../../shared/ui/Input";
-import type { RepositoryCommitActionHandler } from "../../features/repository-workflow/RepositoryCommitActions";
+import { commitReplayBlockedReason, type RepositoryCommitActionHandler } from "../../features/repository-workflow/RepositoryCommitActions";
 import {
   RepositoryCommitDetailBreadcrumb,
   type RepositoryCommitDetailView
@@ -72,6 +72,7 @@ export function DetailInspector({
   onOpenSettings,
   onRenameWorkspace
 }: DetailInspectorProps) {
+  const replayBlockedReason = commit ? commitReplayBlockedReason(commit) : undefined;
   const selectedRepository =
     workspace?.selectedTarget && workspace
       ? resolveWorkspaceTarget(
@@ -319,7 +320,7 @@ export function DetailInspector({
             </Button>
             <Button variant="unstyled"
               className="quick-button"
-              disabled={!onCommitAction || (actionBusy ?? busy)}
+              disabled={!onCommitAction || (actionBusy ?? busy) || Boolean(commit.stashRef)}
               onClick={() => void onCommitAction?.("remote", commit)}
               type="button"
             >
@@ -328,16 +329,27 @@ export function DetailInspector({
             </Button>
             <Button variant="unstyled"
               className="quick-button"
-              disabled={!onCommitAction || (actionBusy ?? busy)}
+              disabled={!onCommitAction || (actionBusy ?? busy) || Boolean(replayBlockedReason)}
+              title={replayBlockedReason}
               onClick={() => void onCommitAction?.("cherry-pick", commit)}
               type="button"
             >
               <Icon name="commit" />
-              Cherry-pick
+              拣选提交
             </Button>
             <Button variant="unstyled"
               className="quick-button"
-              disabled={!onCommitAction || (actionBusy ?? busy)}
+              disabled={!onCommitAction || (actionBusy ?? busy) || Boolean(replayBlockedReason)}
+              title={replayBlockedReason}
+              onClick={() => void onCommitAction?.("revert", commit)}
+              type="button"
+            >
+              <Icon name="undo" />
+              还原此提交
+            </Button>
+            <Button variant="unstyled"
+              className="quick-button"
+              disabled={!onCommitAction || (actionBusy ?? busy) || Boolean(commit.stashRef)}
               onClick={() => void onCommitAction?.("create-branch", commit)}
               type="button"
             >

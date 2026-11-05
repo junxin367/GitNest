@@ -2,6 +2,10 @@ import { app, BrowserWindow } from "electron";
 
 import { createApplication } from "./bootstrap/create-application";
 
+if (process.platform === "win32" && app.isPackaged) {
+  app.setAppUserModelId("io.gitnest.desktop");
+}
+
 if (!app.requestSingleInstanceLock()) {
   if (!app.isPackaged) {
     console.warn(

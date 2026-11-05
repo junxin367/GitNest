@@ -56,6 +56,7 @@ export type RepositoryCommand =
       target: RepositoryTarget;
       branch: string;
       startPoint?: string;
+      checkout?: boolean;
     }
   | {
       type: "rename-branch";
@@ -533,7 +534,7 @@ export class RepositoryCommandService {
         remote,
         remoteUrls,
         remoteRefs,
-        prune: command.prune ?? false
+        prune: command.prune ?? true
       })
     };
   }
@@ -816,6 +817,7 @@ export class RepositoryCommandService {
     context: CommandContext,
     signal?: AbortSignal
   ): Promise<CommandTargetPlan> {
+    if (command.checkout) assertCleanWorktree(context.snapshot, "创建并切换分支");
     await assertValidNewBranch(
       this.#gitCommands,
       path,
@@ -841,9 +843,17 @@ export class RepositoryCommandService {
         kind: "local-branch",
         target,
         summary: `创建分支 ${command.branch}`,
-        detail: `新分支将指向 ${startPoint.slice(0, 8)}，但不会自动检出。`
+        detail: command.checkout
+          ? `新分支将指向 ${startPoint.slice(0, 8)}，并立即切换到该分支。`
+          : `新分支将指向 ${startPoint.slice(0, 8)}，当前分支保持不变。`
       }
     ];
+    if (command.checkout) impacts.push({
+      kind: "worktree-update",
+      target,
+      summary: `切换到 ${command.branch}`,
+      detail: "当前工作区将更新为新分支的内容，不会自动储藏修改。"
+    });
     return {
       target,
       path,
@@ -1005,7 +1015,7 @@ export class RepositoryCommandService {
           path,
           plan.remote as string,
           {
-            prune: command.prune ?? false,
+            prune: command.prune ?? true,
             signal
           }
         );
@@ -1048,7 +1058,7 @@ export class RepositoryCommandService {
           path,
           plan.branch as string,
           plan.startPoint as string,
-          { signal }
+          { signal, ...(command.checkout !== undefined ? { checkout: command.checkout } : {}) }
         );
         return;
       case "rename-branch":
@@ -1114,7 +1124,7 @@ function normalizeRepositoryCommand(
         ...(command.remote?.trim()
           ? { remote: command.remote.trim() }
           : {}),
-        prune: command.prune ?? false
+        prune: command.prune ?? true
       };
     case "pull":
       if (command.strategy !== "ff-only") {
@@ -1147,13 +1157,17 @@ function normalizeRepositoryCommand(
         branch: normalizeName(command.branch, "branch")
       };
     case "create-branch":
+      if (command.checkout !== undefined && typeof command.checkout !== "boolean") {
+        throw new GitError("INVALID_REQUEST", "创建后切换分支的选项无效。");
+      }
       return {
         type: "create-branch",
         target: normalizeTarget(command.target),
         branch: normalizeName(command.branch, "branch"),
         ...(command.startPoint?.trim()
           ? { startPoint: command.startPoint.trim() }
-          : {})
+          : {}),
+        ...(command.checkout !== undefined ? { checkout: command.checkout } : {})
       };
     case "rename-branch":
       return {

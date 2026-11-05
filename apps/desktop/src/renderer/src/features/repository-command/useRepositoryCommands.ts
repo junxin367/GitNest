@@ -23,7 +23,7 @@ export interface RepositoryCommandController {
   error: GitReadErrorDto | null;
   notice: string | null;
   completionVersion: number;
-  request(command: RepositoryCommandDto): Promise<boolean>;
+  request(command: RepositoryCommandDto, options?: { confirmed?: boolean }): Promise<boolean>;
   confirm(): Promise<boolean>;
   dismissPreflight(): void;
   cancelOperation(operationId: string): Promise<boolean>;
@@ -259,7 +259,7 @@ export function useRepositoryCommands(
   );
 
   const request = useCallback(
-    async (command: RepositoryCommandDto): Promise<boolean> => {
+    async (command: RepositoryCommandDto, options?: { confirmed?: boolean }): Promise<boolean> => {
       const targetKeys = new Set(
         repositoryCommandTargetKeys(command)
       );
@@ -306,13 +306,13 @@ export function useRepositoryCommands(
           return false;
         }
 
-        if (result.value.confirmationRequired) {
+        if (result.value.confirmationRequired && !options?.confirmed) {
           setPreflight(result.value);
           return true;
         }
         return await executePreflight(
           result.value,
-          false,
+          options?.confirmed === true,
           requestGeneration
         );
       } catch (reason) {
