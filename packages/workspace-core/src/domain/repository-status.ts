@@ -23,6 +23,8 @@ export interface RepositoryStatusSnapshot
     | "revert"
     | "bisect";
   contentVersion?: number;
+  /** Local content identity, excluding remote-tracking metadata. */
+  changesRevision?: string;
   refreshPending: boolean;
   stale: boolean;
   refreshedAt: string;

@@ -165,10 +165,13 @@ describe("useRepositoryMutations", () => {
       configurable: true,
       value: { repository: { stage } } as unknown as GitNestBridge
     });
+    const afterMutation = vi.fn<() => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockImplementation(() => refresh.promise);
     await act(async () => {
       root.render(
         <Harness
-          hooks={{ beforeMutation() {}, afterMutation: () => refresh.promise }}
+          hooks={{ beforeMutation() {}, afterMutation }}
           target={TARGET_A}
           onController={(value) => { controller = value; }}
         />
@@ -178,6 +181,7 @@ describe("useRepositoryMutations", () => {
       expect(await controller?.stageChange(CHANGE)).toBe(false);
     });
     expect(controller?.active).toBeNull();
+    expect(afterMutation).toHaveBeenCalledTimes(1);
 
     let retry: Promise<boolean> | undefined;
     await act(async () => {
@@ -195,6 +199,41 @@ describe("useRepositoryMutations", () => {
     expect(controller?.error).toBeNull();
     expect(controller?.active).toBeNull();
   });
+
+  it.each(["failed", "cancelled", "transport"] as const)(
+    "restores invalidated reads after a %s write and retains the original error",
+    async (failure) => {
+      const stage = vi.fn<GitNestBridge["repository"]["stage"]>(async () => {
+        if (failure === "transport") throw new Error("连接已中断");
+        return { ok: false, error: {
+          code: failure === "cancelled" ? "COMMAND_CANCELLED" : "COMMAND_FAILED",
+          message: "写操作未完成", details: {}
+        }};
+      });
+      Object.defineProperty(window, "gitnest", {
+        configurable: true, value: { repository: { stage } } as unknown as GitNestBridge
+      });
+      const refresh = deferred<void>();
+      const afterMutation = vi.fn(() => refresh.promise);
+      await act(async () => root.render(
+        <Harness target={TARGET_A} hooks={{ beforeMutation() {}, afterMutation }}
+          onController={value => { controller = value; }} />
+      ));
+      let writing!: Promise<boolean>;
+      await act(async () => { writing = controller!.stageChange(CHANGE); });
+      expect(afterMutation).toHaveBeenCalledOnce();
+      expect(controller?.active).toBe("stage");
+      expect(controller?.error?.message).toBe(failure === "transport" ? "连接已中断" : "写操作未完成");
+      await act(async () => {
+        expect(await controller!.stageChange(CHANGE)).toBe(false);
+        refresh.resolve();
+        expect(await writing).toBe(false);
+      });
+      expect(stage).toHaveBeenCalledOnce();
+      expect(controller?.active).toBeNull();
+      expect(controller?.notice).toBeNull();
+    }
+  );
 
   for (const operation of ["stage", "discard", "unstage"] as const) {
     for (const batch of [false, true]) {

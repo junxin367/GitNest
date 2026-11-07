@@ -122,9 +122,8 @@ describe("GitCliClient repository operations integration", () => {
         await runGit(fixture.localPath, [
           "remote", "set-url", "origin", otherRemote
         ]);
-        await expect(
-          service.execute(preflight.command, preflight.preflightId, true)
-        ).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
+        await service.execute(preflight.command, preflight.preflightId, true);
+        await expect(runtime.runQueued()).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
       }
       expect((await runGit(fixture.remotePath, ["rev-parse", "main"])).stdout.trim()).toBe(oldHead);
       expect((await runGit(otherRemote, ["rev-parse", "main"])).stdout.trim()).toBe(oldHead);

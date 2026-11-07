@@ -10,6 +10,7 @@ export type BackgroundRefreshReason =
   | "startup"
   | "workspace-change"
   | "watcher"
+  | "fetch"
   | "focus"
   | "heartbeat"
   | "polling";
@@ -311,13 +312,13 @@ export class WorkspaceRefreshScheduler {
   ): number {
     const priority = this.#priorityOf(target);
     const debounceMs =
-      reason === "watcher"
+      reason === "watcher" || reason === "fetch"
         ? priority === "selected"
           ? this.#options.selectedDebounceMs
           : this.#options.backgroundDebounceMs
         : 0;
     const minimumIntervalMs =
-      reason === "watcher"
+      reason === "watcher" || reason === "fetch"
         ? priority === "selected"
           ? this.#options.selectedMinIntervalMs
           : this.#options.backgroundMinIntervalMs

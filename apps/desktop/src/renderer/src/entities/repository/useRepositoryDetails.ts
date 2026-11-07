@@ -81,7 +81,7 @@ export interface RepositoryDetailsController {
   loadMoreHistory(): Promise<void>;
   reload(
     tab: RepositoryTab,
-    options?: { preserveSelection?: boolean; reuseChanges?: boolean }
+    options?: { preserveSelection?: boolean; reuseChanges?: boolean; waitForSnapshot?: boolean }
   ): Promise<void>;
   invalidate(): void;
   clearError(): void;
@@ -406,7 +406,7 @@ export function useRepositoryDetails(
   );
 
   const loadChanges = useCallback(
-    async (preserveSelection = false, reuseChanges = false) => {
+    async (preserveSelection = true, reuseChanges = false, waitForSnapshot = false) => {
       if (!stableTarget) {
         return;
       }
@@ -537,42 +537,44 @@ export function useRepositoryDetails(
       };
       const unsubscribe = entry.subscribe(receiveChanges);
       changesProgressSubscription.current = unsubscribe;
-      if (reuseChanges && entry.value) receiveChanges(entry.value, true);
+      // Old rows may still paint while a fresh read is pending, but must not
+      // select a file or request its Diff until the new snapshot is available.
+      if (reuseChanges && entry.value) receiveChanges(entry.value, entry.hasSnapshot);
 
-      try {
-        const result = await entry.result;
-        if (!isCurrentQuery("changes", queryId, requestGeneration)) return;
-        if (result.ok) {
-          if (!receivedSnapshot) acceptChanges(result.value);
-          else if (!entry.progressComplete) acceptChanges(result.value, true);
-        } else if (result.error.code !== "COMMAND_CANCELLED") {
-          setError(result.error);
-        }
-      } catch (reason) {
-        if (
-          isCurrentQuery(
-            "changes",
-            queryId,
-            requestGeneration
-          )
-        ) {
-          setError(unexpectedError(reason));
-        }
-      } finally {
-        unsubscribe();
-        if (changesProgressSubscription.current === unsubscribe) {
-          changesProgressSubscription.current = null;
-        }
-        if (finishQuery("changes", queryId)) {
-          activeChangesRequestIdRef.current = null;
-          if (requestGeneration === generation.current) {
-            setLoadingKey("changes", false);
-            setChanges((current) =>
-              current?.statsProgress ? { ...current, statsProgress: undefined } : current
-            );
+      const completion = (async () => {
+        try {
+          const result = await entry.result;
+          if (!isCurrentQuery("changes", queryId, requestGeneration)) return;
+          if (result.ok) {
+            if (!receivedSnapshot) acceptChanges(result.value);
+            else if (!entry.progressComplete) acceptChanges(result.value, true);
+          } else if (result.error.code !== "COMMAND_CANCELLED") {
+            setError(result.error);
+          }
+        } catch (reason) {
+          if (isCurrentQuery("changes", queryId, requestGeneration)) {
+            setError(unexpectedError(reason));
+          }
+        } finally {
+          unsubscribe();
+          if (changesProgressSubscription.current === unsubscribe) {
+            changesProgressSubscription.current = null;
+          }
+          if (finishQuery("changes", queryId)) {
+            activeChangesRequestIdRef.current = null;
+            if (requestGeneration === generation.current) {
+              setLoadingKey("changes", false);
+              setChanges((current) =>
+                current?.statsProgress ? { ...current, statsProgress: undefined } : current
+              );
+            }
           }
         }
-      }
+      })();
+      // Mutation controls can resume once paths/status are current; this
+      // consumer remains subscribed until the statistics query finishes.
+      if (waitForSnapshot) await entry.ready;
+      else await completion;
     },
     [
       cancelQuery,
@@ -1006,12 +1008,13 @@ export function useRepositoryDetails(
   const reload = useCallback(
     async (
       requestedTab: RepositoryTab,
-      options: { preserveSelection?: boolean; reuseChanges?: boolean } = {}
+      options: { preserveSelection?: boolean; reuseChanges?: boolean; waitForSnapshot?: boolean } = {}
     ) => {
       if (requestedTab === "overview") {
         await loadHistory(0, null, null);
       } else if (requestedTab === "changes") {
-        if (!options.preserveSelection) {
+        const preserveSelection = options.preserveSelection ?? true;
+        if (!preserveSelection) {
           cancelQuery("diff");
           setLoadingKey("diff", false);
           selectedChangeRef.current = null;
@@ -1020,7 +1023,7 @@ export function useRepositoryDetails(
           diffRef.current = null;
           setDiff(null);
         }
-        await loadChanges(options.preserveSelection, options.reuseChanges);
+        await loadChanges(preserveSelection, options.reuseChanges, options.waitForSnapshot);
       } else if (requestedTab === "history") {
         const preserveSelection = Boolean(
           selectedCommitHashRef.current
@@ -1133,7 +1136,7 @@ export function useRepositoryDetails(
       targetKey,
       revision: statusRevision
     };
-    void reload(tab, { preserveSelection: true });
+    void reload(tab, { preserveSelection: true, reuseChanges: true });
   }, [reload, statusRevision, tab, targetKey]);
 
   useEffect(() => {

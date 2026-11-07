@@ -24,7 +24,8 @@ describe("RepositoryWorkflowService", () => {
     expect(preview.command).toEqual(command);
     fixture.state.head = "b".repeat(40);
     await expect(fixture.service.preflight(command)).rejects.toThrow("最近提交已变化");
-    await expect(fixture.service.execute(command, preview.preflightId, true)).rejects.toBeDefined();
+    await fixture.service.execute(command, preview.preflightId, true);
+    await expect(fixture.run()).rejects.toBeDefined();
     expect(fixture.client.execute).not.toHaveBeenCalled();
   });
   it("rejects malformed history HEAD identifiers before inspection", async () => {
@@ -37,7 +38,9 @@ describe("RepositoryWorkflowService", () => {
     const preflight = await fixture.service.preflight(amend);
     expect(await fixture.service.execute(amend, preflight.preflightId, true)).toEqual({ operationId: "operation-1" });
     expect(fixture.runtime.queueRepositoryOperation).toHaveBeenCalledWith(target, "workflow", expect.any(Function), { expectedWorkspaceId: "default" });
+    expect(fixture.client.inspect).toHaveBeenCalledTimes(1);
     await fixture.run();
+    expect(fixture.client.inspect).toHaveBeenCalledTimes(2);
     expect(fixture.client.execute).toHaveBeenCalledWith("C:/repo", amend, { signal: fixture.signal });
   });
   it("requires explicit confirmation without consuming preflight", async () => {
@@ -59,20 +62,27 @@ describe("RepositoryWorkflowService", () => {
     expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
     expect(fixture.runtime.queueRepositoryOperation).toHaveBeenCalledTimes(1);
   });
-  it("expires queued authorization before touching Git", async () => {
+  it.each([false, true])("revalidates a long-queued confirmed workflow (content changed=%s)", async changed => {
     const fixture = setup();
     const preflight = await fixture.service.preflight(amend);
     await fixture.service.execute(amend, preflight.preflightId, true);
     fixture.advance(60_001);
-    await expect(fixture.run()).rejects.toMatchObject({ code: "PREFLIGHT_EXPIRED" });
-    expect(fixture.client.execute).not.toHaveBeenCalled();
+    if (changed) fixture.state.fingerprint = "changed-while-queued";
+    if (changed) {
+      await expect(fixture.run()).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
+    } else {
+      await fixture.run();
+    }
+    expect(fixture.client.inspect).toHaveBeenCalledTimes(2);
+    expect(fixture.client.execute).toHaveBeenCalledTimes(changed ? 0 : 1);
   });
   it.each(["before-queue", "inside-queue"] as const)("blocks changed bytes %s", async phase => {
     const fixture = setup();
     const preflight = await fixture.service.preflight(amend);
     if (phase === "inside-queue") await fixture.service.execute(amend, preflight.preflightId, true);
     fixture.state.fingerprint = "different-file-bytes-same-status";
-    await expect(phase === "inside-queue" ? fixture.run() : fixture.service.execute(amend, preflight.preflightId, true)).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
+    if (phase === "before-queue") await fixture.service.execute(amend, preflight.preflightId, true);
+    await expect(fixture.run()).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
     expect(fixture.client.execute).not.toHaveBeenCalled();
   });
   it("blocks workspace switches and changed command parameters", async () => {
@@ -215,7 +225,8 @@ describe("RepositoryWorkflowService", () => {
     expect(fixture.client.validateCommit).toHaveBeenCalledWith("C:/repo", command.commitHash, { allowMerge: true });
     if (mode === "hard") expect(preview.warnings.join("")).toContain("modified.txt");
     fixture.state.branch = "same-head-other-branch";
-    await expect(fixture.service.execute(command, preview.preflightId, true)).rejects.toThrow("当前分支已变化");
+    await fixture.service.execute(command, preview.preflightId, true);
+    await expect(fixture.run()).rejects.toThrow("当前分支已变化");
     expect(fixture.client.execute).not.toHaveBeenCalled();
   });
   it.each(["checkout-commit", "merge", "rebase"] as const)("工作区不干净时拒绝 %s", async type => {

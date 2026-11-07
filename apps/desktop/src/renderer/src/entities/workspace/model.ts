@@ -95,6 +95,27 @@ export function getSnapshotContentRevision(
   ].join("|");
 }
 
+export function getSnapshotChangesRevision(
+  snapshot: RepositoryStatusSnapshotDto | undefined
+): string {
+  if (!snapshot) {
+    return "missing";
+  }
+
+  return [
+    snapshot.changesRevision ?? snapshot.contentVersion ?? snapshot.refreshedAt,
+    snapshot.head,
+    snapshot.branch ?? "",
+    snapshot.staged,
+    snapshot.unstaged,
+    snapshot.untracked,
+    snapshot.conflicted,
+    snapshot.operationState ?? "",
+    snapshot.error?.code ?? "",
+    snapshot.error?.message ?? ""
+  ].join("|");
+}
+
 export function listWorkspaceTargets(
   workspace: WorkspaceDetailsDto | null
 ): RepositoryTargetDto[] {

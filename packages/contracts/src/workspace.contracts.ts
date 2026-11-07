@@ -162,6 +162,8 @@ export interface RepositoryStatusSnapshotDto
     | "revert"
     | "bisect";
   contentVersion?: number;
+  /** Local content identity, excluding remote-tracking metadata. */
+  changesRevision?: string;
   refreshPending: boolean;
   stale: boolean;
   refreshedAt: string;
@@ -206,6 +208,7 @@ export interface WorkspaceOperationDto {
     | "tag-push"
     | "worktree-remove";
   scope: "workspace" | "repository" | "worktree";
+  background?: boolean;
   targetIds: string[];
   state:
     | "queued"

@@ -48,7 +48,7 @@ describe("JsonWorkspaceOperationStore", () => {
       () => "2026-09-04T12:00:00.000Z"
     );
     const operations = [
-      createOperation("operation_1", "running")
+      { ...createOperation("operation_1", "running"), kind: "fetch" as const, background: true }
     ];
 
     await store.save("workspace", operations);

@@ -4,28 +4,28 @@ export function stageAllArguments(): string[] {
 
 export function stageArguments(
   paths: readonly string[],
-  trackedOnly = false
+  trackedOnly = false,
+  fromStdin = false
 ): string[] {
   return [
     "--literal-pathspecs",
     "add",
     ...(trackedOnly ? ["--update"] : []),
-    "--",
-    ...paths
+    ...pathspecArguments(paths, fromStdin)
   ];
 }
 
 export function unstageArguments(
   paths: readonly string[],
-  hasHead: boolean
+  hasHead: boolean,
+  fromStdin = false
 ): string[] {
   return hasHead
     ? [
         "--literal-pathspecs",
         "restore",
         "--staged",
-        "--",
-        ...paths
+        ...pathspecArguments(paths, fromStdin)
       ]
     : [
         "--literal-pathspecs",
@@ -33,22 +33,46 @@ export function unstageArguments(
         "--cached",
         "--force",
         "--ignore-unmatch",
-        "--",
-        ...paths
+        ...pathspecArguments(paths, fromStdin)
       ];
 }
 
 export function restoreWorktreeArguments(
-  paths: readonly string[]
+  paths: readonly string[],
+  fromStdin = false
 ): string[] {
   return [
     "--literal-pathspecs",
     "restore",
     "--worktree",
     "--no-recurse-submodules",
-    "--",
-    ...paths
+    ...pathspecArguments(paths, fromStdin)
   ];
+}
+
+function pathspecArguments(paths: readonly string[], fromStdin: boolean): string[] {
+  return fromStdin
+    ? ["--pathspec-from-file=-", "--pathspec-file-nul"]
+    : ["--", ...paths];
+}
+
+/** Keep read commands and git clean below the Windows command-line limit. */
+export function splitPathspecBatches(paths: readonly string[]): string[][] {
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let length = 0;
+  for (const path of paths) {
+    const cost = path.length * 2 + 3;
+    if (batch.length && (batch.length >= 200 || length + cost > 20_000)) {
+      batches.push(batch);
+      batch = [];
+      length = 0;
+    }
+    batch.push(path);
+    length += cost;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
 }
 
 export function removeUntrackedArguments(

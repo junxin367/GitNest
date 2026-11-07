@@ -131,6 +131,9 @@ function rebuildSnapshot(
     ...(value.contentVersion !== undefined
       ? { contentVersion: value.contentVersion }
       : {}),
+    ...(value.changesRevision !== undefined
+      ? { changesRevision: value.changesRevision }
+      : {}),
     refreshPending: value.refreshPending,
     stale: value.stale,
     refreshedAt: value.refreshedAt,
@@ -189,6 +192,8 @@ function isSnapshot(value: unknown): boolean {
       (typeof value.contentVersion === "number" &&
         Number.isSafeInteger(value.contentVersion) &&
         value.contentVersion >= 0)) &&
+    (value.changesRevision === undefined ||
+      typeof value.changesRevision === "string") &&
     (value.error === undefined ||
       (isRecord(value.error) &&
         typeof value.error.code === "string" &&

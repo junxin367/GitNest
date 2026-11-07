@@ -1,8 +1,10 @@
 import type { CreatedCommit } from "../domain/repository-mutations";
+import type { GitReadPriority } from "./git-client";
 
 export interface GitWriteOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
+  priority?: GitReadPriority;
 }
 
 export interface CreateCommitOptions extends GitWriteOptions {

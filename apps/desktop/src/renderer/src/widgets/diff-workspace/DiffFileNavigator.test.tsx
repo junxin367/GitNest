@@ -427,6 +427,23 @@ describe("DiffFileNavigator selection reveal", () => {
     }
   );
 
+  it("keeps batch staging available above 200 files and submits the complete group", () => {
+    const files = Array.from({ length: 350 }, (_, index) =>
+      file(`unstaged\u0001bulk/file-${index}.ts`, `bulk/file-${index}.ts`));
+    const onStageFiles = vi.fn();
+    act(() => root.render(
+      <DiffFileNavigator
+        configuration={repositoryDiffWorkspaceConfiguration.navigation}
+        fileView="list" files={files} selectedFileKey={files[0]!.key}
+        onSelectedFileChange={vi.fn()} onStageFiles={onStageFiles}
+      />
+    ));
+    const button = container.querySelector<HTMLButtonElement>('button[title="暂存（350 个文件）"]');
+    expect(button).not.toBeNull();
+    act(() => button!.click());
+    expect(onStageFiles).toHaveBeenCalledExactlyOnceWith(files);
+  });
+
   it.each(["list", "tree"] as const)(
     "only renders the previous and next selected %s file rows",
     (fileView) => {

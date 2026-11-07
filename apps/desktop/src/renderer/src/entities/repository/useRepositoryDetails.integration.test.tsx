@@ -195,6 +195,46 @@ describe("useRepositoryDetails", () => {
     expect(controller?.changes?.statsProgress).toBeUndefined();
   });
 
+  it("finishes a mutation refresh after the new snapshot while continuing to receive statistics", async () => {
+    const listeners: Array<(progress: RepositoryChangesProgressDto) => void> = [];
+    let finish!: (result: { ok: true; value: RepositoryChangesDto }) => void;
+    const pending = new Promise<{ ok: true; value: RepositoryChangesDto }>(resolve => { finish = resolve; });
+    const getChanges = vi.fn<GitNestBridge["repository"]["getChanges"]>()
+      .mockResolvedValueOnce({ ok: true, value: createChanges([CHANGE]) })
+      .mockReturnValueOnce(pending);
+    installBridge({
+      getChanges,
+      getDiff: vi.fn(async ({ path }) => ({ ok: true as const, value: createDiff("new diff", path) })),
+      onChangesProgress: listener => { listeners.push(listener); return vi.fn(); }
+    });
+    await renderTarget();
+    act(() => controller!.invalidate());
+    let ready = false;
+    await act(async () => {
+      void controller!.reload("changes", { reuseChanges: true, waitForSnapshot: true }).then(() => { ready = true; });
+      await flushAsyncWork();
+    });
+    expect(ready).toBe(false);
+    const queryId = getChanges.mock.calls[1]![0].queryId;
+    await act(async () => {
+      listeners[1]!({
+        kind: "snapshot", queryId, target: TARGET,
+        snapshot: createChanges([SECOND_CHANGE]).snapshot, completed: 0, total: 1
+      });
+      await flushAsyncWork();
+    });
+    expect(ready).toBe(true);
+    expect(controller?.selectedChange?.path).toBe(SECOND_CHANGE.path);
+    expect(controller?.loading.changes).toBe(false);
+    const updated = { ...SECOND_CHANGE, unstagedStats: { additions: 5, deletions: 2 } };
+    await act(async () => {
+      listeners[1]!({ kind: "stats", queryId, target: TARGET, changes: [updated], completed: 1, total: 1 });
+      finish({ ok: true, value: createChanges([updated]) });
+      await flushAsyncWork();
+    });
+    expect(controller?.changes?.snapshot.changes[0]?.unstagedStats).toEqual(updated.unstagedStats);
+    expect(getChanges).toHaveBeenCalledTimes(2);
+  });
   it.each([false, true])(
     "reuses a background stats query when it completes before returning=%s",
     async (finishInBackground) => {
@@ -292,6 +332,41 @@ describe("useRepositoryDetails", () => {
     await act(async () => { await controller?.reload("changes"); });
     expect(getChanges).toHaveBeenCalledTimes(3);
   });
+
+  it.each([false, true])(
+    "preserves the selected file and visible Diff during default reload after invalidation=%s",
+    async (invalidate) => {
+      let finish!: (result: { ok: true; value: RepositoryChangesDto }) => void;
+      const pending = new Promise<{ ok: true; value: RepositoryChangesDto }>(resolve => {
+        finish = resolve;
+      });
+      const initial = createChanges([CHANGE, SECOND_CHANGE]);
+      const getChanges = vi.fn<GitNestBridge["repository"]["getChanges"]>()
+        .mockResolvedValueOnce({ ok: true, value: initial })
+        .mockReturnValueOnce(pending);
+      installBridge({
+        getChanges,
+        getDiff: vi.fn(async ({ path }) => ({
+          ok: true as const, value: createDiff(`${path} diff`, path)
+        }))
+      });
+      await renderTarget();
+      await act(async () => { await controller?.selectChange(SECOND_CHANGE); });
+      const selectedDiff = controller?.diff;
+      if (invalidate) act(() => controller?.invalidate());
+      let reloading!: Promise<void>;
+      act(() => { reloading = controller!.reload("changes"); });
+      expect(controller?.selectedChange?.path).toBe(SECOND_CHANGE.path);
+      expect(controller?.diff).toBe(selectedDiff);
+      await act(async () => {
+        finish({ ok: true, value: initial });
+        await reloading;
+        await flushAsyncWork();
+      });
+      expect(controller?.selectedChange?.path).toBe(SECOND_CHANGE.path);
+      expect(controller?.diff?.diff.path).toBe(SECOND_CHANGE.path);
+    }
+  );
 
   it("cancels hidden stats queries when the repository page unmounts", async () => {
     const nextTarget = { repositoryId: "repository-b", worktreeId: "worktree-b" };

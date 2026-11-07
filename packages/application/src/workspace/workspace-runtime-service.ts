@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { GitError } from "@gitnest/git-core";
 
 import type {
   GitClient,
@@ -87,6 +88,7 @@ export interface WorkspaceOperation {
     | "tag-push"
     | "worktree-remove";
   scope: "workspace" | "repository" | "worktree";
+  background?: boolean;
   targetIds: string[];
   state: WorkspaceOperationState;
   progress: number;
@@ -173,6 +175,8 @@ export interface RepositoryOperationOptions {
   operationTargets?: RepositoryTarget[];
   refreshTopology?: boolean;
   expectedWorkspaceId?: string;
+  /** Only automatic Fetch may yield to a user-initiated operation. */
+  background?: boolean;
 }
 
 export interface WorkspaceRuntimeOptions {
@@ -281,6 +285,12 @@ export class WorkspaceRuntimeService {
     string,
     Promise<void>
   >();
+  readonly #backgroundFetches = new Map<string, {
+    repositoryId: string;
+    controller: AbortController;
+    completion: Promise<void>;
+  }>();
+  readonly #deferredFetchRefreshes = new Map<string, RepositoryTarget>();
   readonly #operationControllers = new Map<
     string,
     AbortController
@@ -565,6 +575,7 @@ export class WorkspaceRuntimeService {
   ): Promise<WorktreeMutationCompleted<Result>> {
     this.#assertAcceptingWork();
     this.#resolveMutationWorktreePath(target);
+    void this.yieldBackgroundFetch(target.repositoryId);
 
     const key = repositoryTargetKey(target);
     const operation = this.#createOperation(
@@ -590,21 +601,34 @@ export class WorkspaceRuntimeService {
     if (statusRefresh) {
       blockers.push(statusRefresh);
     }
-    const run = Promise.all(
+    const blockersSettled = Promise.all(
       blockers.map((blocker) =>
         blocker.catch(() => undefined)
       )
-    ).then(() =>
-      this.#executeWorktreeMutation(
+    ).then(() => undefined);
+    const controller = new AbortController();
+    this.#operationControllers.set(operation.id, controller);
+    const run = waitForCompletionOrAbort(blockersSettled, controller.signal).then(() => {
+      this.#operationControllers.delete(operation.id);
+      if (controller.signal.aborted) {
+        this.#updateOperation(operation.id, {
+          state: "cancelled", progress: 1,
+          message: "已取消排队中的操作，尚未执行 Git 写入。",
+          finishedAt: this.#clock()
+        });
+        this.#emit();
+        throw new GitError("COMMAND_CANCELLED", "已取消排队中的操作。");
+      }
+      return this.#executeWorktreeMutation(
         target,
         operation,
         action
-      )
-    );
-    const tail = run.then(
-      () => undefined,
-      () => undefined
-    );
+      );
+    });
+    const tail = Promise.all([
+      blockersSettled,
+      run.then(() => undefined, () => undefined)
+    ]).then(() => undefined);
     this.#worktreeMutationTails.set(key, tail);
     this.#repositoryMutationTails.set(
       target.repositoryId,
@@ -624,6 +648,7 @@ export class WorkspaceRuntimeService {
           target.repositoryId
         );
       }
+      this.#flushDeferredFetchRefreshes();
     });
 
     return run;
@@ -643,6 +668,30 @@ export class WorkspaceRuntimeService {
     );
   }
 
+  yieldBackgroundFetch(repositoryId: string): Promise<void> {
+    const pending: Promise<void>[] = [];
+    let changed = false;
+    for (const [operationId, fetch] of this.#backgroundFetches) {
+      if (fetch.repositoryId !== repositoryId) continue;
+      pending.push(fetch.completion);
+      const operation = this.#operations.find(item => item.id === operationId);
+      if (!fetch.controller.signal.aborted && operation &&
+        (operation.state === "queued" || operation.state === "running") &&
+        operation.progress < 0.75) {
+        fetch.controller.abort();
+        this.#updateOperation(operationId, {
+          state: "cancelling",
+          message: "后台 Fetch 正在停止，让用户操作优先执行…"
+        });
+        changed = true;
+      }
+    }
+    if (changed) this.#emit();
+    // Keep the repository tail until Git has actually exited. Deferred status
+    // reads do not block the next writer, and cannot overlap it.
+    return Promise.all(pending).then(() => undefined);
+  }
+
   #admitRepositoryOperation(
     target: RepositoryTarget,
     kind: RepositoryOperationKind,
@@ -653,6 +702,9 @@ export class WorkspaceRuntimeService {
     options: RepositoryOperationOptions
   ): RepositoryOperationAccepted {
     this.#assertAcceptingWork();
+    if (options.background && kind !== "fetch") {
+      throw new WorkspaceError("INVALID_REQUEST", "Only Fetch supports background scheduling.");
+    }
     if (
       options.expectedWorkspaceId &&
       this.#workspace?.id !== options.expectedWorkspaceId
@@ -696,8 +748,10 @@ export class WorkspaceRuntimeService {
         )
       ],
       repositoryOperationMessage(kind, "queued"),
-      "repository"
+      "repository",
+      options.background
     );
+    if (!options.background) void this.yieldBackgroundFetch(target.repositoryId);
     const controller = new AbortController();
     const blockers = new Set<Promise<unknown>>();
     const repositoryTail =
@@ -754,11 +808,17 @@ export class WorkspaceRuntimeService {
       operation.id,
       controller
     );
+    if (options.background) {
+      this.#backgroundFetches.set(operation.id, {
+        repositoryId: target.repositoryId, controller, completion: tail
+      });
+    }
     this.#emit();
     void runSettled.then(() => {
       this.#operationControllers.delete(operation.id);
     });
     void tail.finally(() => {
+      this.#backgroundFetches.delete(operation.id);
       if (
         this.#repositoryMutationTails.get(
           target.repositoryId
@@ -768,6 +828,7 @@ export class WorkspaceRuntimeService {
           target.repositoryId
         );
       }
+      this.#flushDeferredFetchRefreshes();
     });
 
     return { operationId: operation.id };
@@ -798,9 +859,7 @@ export class WorkspaceRuntimeService {
     controller.abort();
     this.#updateOperation(operationId, {
       state: "cancelling",
-      message: `${repositoryOperationLabel(
-        operation.kind as RepositoryOperationKind
-      )}正在取消…`
+      message: `${workspaceOperationLabel(operation.kind)}正在取消…`
     });
     this.#emit();
   }
@@ -977,6 +1036,7 @@ export class WorkspaceRuntimeService {
     this.#snapshots.clear();
     this.#snapshotContentSignatures.clear();
     this.#snapshotChangedPaths.clear();
+    this.#deferredFetchRefreshes.clear();
     this.#snapshotPersistenceRevision = 0;
     this.#snapshotPersistenceDirty = false;
     this.#operations = [];
@@ -1613,6 +1673,7 @@ export class WorkspaceRuntimeService {
         const key = repositoryTargetKey(target);
         const previousContentVersion =
           this.#snapshots.get(key)?.contentVersion ?? 0;
+        const deferredFetch = this.#deferredFetchRefreshes.get(key);
 
         try {
           const snapshot = await this.#refreshTarget(
@@ -1657,6 +1718,10 @@ export class WorkspaceRuntimeService {
           });
           failed += 1;
         } finally {
+          if (generation === this.#workspaceGeneration &&
+            this.#deferredFetchRefreshes.get(key) === deferredFetch) {
+            this.#deferredFetchRefreshes.delete(key);
+          }
           completed += 1;
           const now = Date.now();
           if (
@@ -1779,7 +1844,13 @@ export class WorkspaceRuntimeService {
         }
       );
     const key = repositoryTargetKey(target);
-    const signature = repositorySnapshotContentSignature(snapshot);
+    const changesRevision = repositorySnapshotChangesSignature(snapshot);
+    const signature = JSON.stringify([
+      changesRevision,
+      snapshot.upstream ?? "",
+      snapshot.ahead,
+      snapshot.behind
+    ]);
     const existingSignature =
       this.#snapshotContentSignatures.get(key);
     const existing = this.#snapshots.get(key);
@@ -1789,7 +1860,8 @@ export class WorkspaceRuntimeService {
       return mapStatusSnapshot(
         target,
         snapshot,
-        contentVersion
+        contentVersion,
+        changesRevision
       );
     }
     this.#snapshotChangedPaths.set(
@@ -1807,7 +1879,8 @@ export class WorkspaceRuntimeService {
     return mapStatusSnapshot(
       target,
       snapshot,
-      nextContentVersion
+      nextContentVersion,
+      changesRevision
     );
   }
 
@@ -1996,7 +2069,7 @@ export class WorkspaceRuntimeService {
     await Promise.all(
       repositoryTargets.map((candidate) =>
         this.#inFlight
-          .get(repositoryTargetKey(candidate))
+          .get(this.#inFlightKey(candidate))
           ?.catch(() => undefined)
       )
     );
@@ -2042,7 +2115,9 @@ export class WorkspaceRuntimeService {
             )
       });
       this.#emit();
-      const refreshWarning = options.refreshTopology
+      const refreshWarning = options.background
+        ? this.#deferFetchRefresh(target.repositoryId)
+        : options.refreshTopology
         ? await this.#refreshTopologyAfterRepositoryMutation(
             target.repositoryId
           )
@@ -2078,7 +2153,9 @@ export class WorkspaceRuntimeService {
       const cancelled =
         controller.signal.aborted ||
         getErrorCode(error) === "COMMAND_CANCELLED";
-      const refreshWarning = options.refreshTopology
+      const refreshWarning = options.background
+        ? this.#deferFetchRefresh(target.repositoryId)
+        : options.refreshTopology
         ? await this.#refreshTopologyAfterRepositoryMutation(
             target.repositoryId
           )
@@ -2171,6 +2248,29 @@ export class WorkspaceRuntimeService {
     return this.#refreshMutationTargets([target]);
   }
 
+  #deferFetchRefresh(repositoryId: string): undefined {
+    for (const target of this.#repositoryTargets(repositoryId)) {
+      this.#deferredFetchRefreshes.set(repositoryTargetKey(target), { ...target });
+    }
+    return undefined;
+  }
+
+  #flushDeferredFetchRefreshes(): void {
+    if (this.#disposing || this.#disposed || this.#deferredFetchRefreshes.size === 0) return;
+    const idleTargets: RepositoryTarget[] = [];
+    for (const [key, target] of this.#deferredFetchRefreshes) {
+      if (!this.#targetStillAvailable(target)) {
+        this.#deferredFetchRefreshes.delete(key);
+      } else if (!this.#repositoryMutationTails.has(target.repositoryId) &&
+        !this.#worktreeMutationTails.has(key)) {
+        idleTargets.push(target);
+      }
+    }
+    // Keep entries until a read completes: a new write can start during the
+    // debounce window, and must schedule the deferred read again when it ends.
+    if (idleTargets.length) this.#refreshScheduler.request(idleTargets, "fetch", false);
+  }
+
   async #refreshRepositoryAfterMutation(
     repositoryId: string
   ): Promise<string | undefined> {
@@ -2196,9 +2296,11 @@ export class WorkspaceRuntimeService {
     this.#refreshScheduler.cancel(targets);
 
     const warnings: string[] = [];
+    const generation = this.#workspaceGeneration;
     await Promise.all(
       targets.map(async (target) => {
         const key = repositoryTargetKey(target);
+        const deferredFetch = this.#deferredFetchRefreshes.get(key);
 
         try {
           const snapshot = await this.#limiter.run(() =>
@@ -2222,6 +2324,11 @@ export class WorkspaceRuntimeService {
                 error
               )
             );
+          }
+        } finally {
+          if (generation === this.#workspaceGeneration &&
+            this.#deferredFetchRefreshes.get(key) === deferredFetch) {
+            this.#deferredFetchRefreshes.delete(key);
           }
         }
       })
@@ -2332,6 +2439,7 @@ export class WorkspaceRuntimeService {
           this.#snapshots.delete(key);
           this.#snapshotContentSignatures.delete(key);
           this.#snapshotChangedPaths.delete(key);
+          this.#deferredFetchRefreshes.delete(key);
         }
       }
     }
@@ -2729,12 +2837,14 @@ export class WorkspaceRuntimeService {
     kind: WorkspaceOperation["kind"],
     targetIds: string[],
     message: string,
-    scope: WorkspaceOperation["scope"] = "workspace"
+    scope: WorkspaceOperation["scope"] = "workspace",
+    background = false
   ): WorkspaceOperation {
     const operation: WorkspaceOperation = {
       id: `operation_${++this.#operationSequence}_${this.#clock().replace(/[^0-9]/g, "")}`,
       kind,
       scope,
+      ...(background ? { background: true } : {}),
       targetIds,
       state: "queued",
       progress: 0,
@@ -3050,7 +3160,8 @@ function emptyRefreshBatchResult(): BackgroundRefreshBatchResult {
 function mapStatusSnapshot(
   target: RepositoryTarget,
   snapshot: RepositorySnapshot,
-  contentVersion: number
+  contentVersion: number,
+  changesRevision: string
 ): RepositoryStatusSnapshot {
   return {
     ...target,
@@ -3064,13 +3175,14 @@ function mapStatusSnapshot(
     untracked: snapshot.untracked,
     conflicted: snapshot.conflicted,
     contentVersion,
+    changesRevision,
     refreshPending: false,
     stale: false,
     refreshedAt: snapshot.refreshedAt
   };
 }
 
-function repositorySnapshotContentSignature(
+function repositorySnapshotChangesSignature(
   snapshot: RepositorySnapshot
 ): string {
   const hash = createHash("sha256");
@@ -3078,9 +3190,6 @@ function repositorySnapshotContentSignature(
     JSON.stringify([
       snapshot.branch ?? "",
       snapshot.head,
-      snapshot.upstream ?? "",
-      snapshot.ahead,
-      snapshot.behind,
       snapshot.staged,
       snapshot.unstaged,
       snapshot.untracked,
@@ -3458,6 +3567,7 @@ function backgroundRefreshReasonLabel(
     startup: "启动后台刷新",
     "workspace-change": "Workspace 变更刷新",
     watcher: "文件变化刷新",
+    fetch: "远程引用更新",
     polling: "低频轮询刷新",
     focus: "窗口聚焦刷新",
     heartbeat: "选中工作目录兜底刷新"
@@ -3676,7 +3786,11 @@ function getErrorCode(error: unknown): string {
 }
 
 function getErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message
+  const message = error instanceof Error && error.message
     ? error.message
     : "未知错误。";
+  const completed = error instanceof GitError ? error.details.completedPathCount : undefined;
+  return typeof completed === "number" && Number.isSafeInteger(completed) && completed > 0
+    ? `${message} 此前已处理 ${completed} 个路径，请检查刷新后的变更列表。`
+    : message;
 }

@@ -111,6 +111,7 @@ export interface RepositoryCommandExecutionAccepted {
 
 export interface RepositoryCommandRuntime {
   getCurrent(): Promise<Workspace>;
+  yieldBackgroundFetch?(repositoryId: string): Promise<void>;
   queueRepositoryOperation(
     target: RepositoryTarget,
     kind: RepositoryOperationKind,
@@ -160,7 +161,6 @@ interface BuiltPreflight {
   warnings: CommandWarning[];
   confirmationRequired: boolean;
   plans: CommandTargetPlan[];
-  comparisonKey: string;
 }
 
 interface StoredPreflight extends BuiltPreflight {
@@ -261,8 +261,11 @@ export class RepositoryCommandService {
 
     // Claim the one-shot authorization before asynchronous revalidation.
     this.#preflights.delete(stored.preflightId);
-    const current = await this.#buildPreflight(normalized);
-    if (current.comparisonKey !== stored.comparisonKey) {
+    const workspace = await this.#runtime.getCurrent();
+    const paths = resolveTargetPaths(workspace, commandTargets(normalized));
+    if (workspace.id !== stored.workspaceId || stored.plans.some(plan =>
+      paths.get(repositoryTargetKey(plan.target)) !== plan.path
+    )) {
       throw new GitError(
         "PREFLIGHT_CHANGED",
         "Repository state or command impacts changed after preflight."
@@ -277,6 +280,12 @@ export class RepositoryCommandService {
             plan.target,
             operationKind(normalized),
             async (worktreePath, signal) => {
+              if (worktreePath !== plan.path) {
+                throw new GitError("PREFLIGHT_CHANGED", "The target worktree changed while queued.");
+              }
+              // Revalidate under the repository queue immediately before writing.
+              // Repeating the same full check before admission only adds reads and
+              // network round trips without closing the queued-operation race.
               const latest = await this.#buildTargetPlan(
                 normalized,
                 plan.target,
@@ -341,6 +350,8 @@ export class RepositoryCommandService {
     const workspace = await this.#runtime.getCurrent();
     const targets = commandTargets(command);
     const targetPaths = resolveTargetPaths(workspace, targets);
+    await Promise.all([...new Set(targets.map(target => target.repositoryId))]
+      .map(repositoryId => this.#runtime.yieldBackgroundFetch?.(repositoryId)));
     const plans = await Promise.all(
       targets.map((target) =>
         this.#limiter.run(() =>
@@ -374,17 +385,7 @@ export class RepositoryCommandService {
       impacts,
       warnings,
       confirmationRequired,
-      plans,
-      comparisonKey: JSON.stringify({
-        workspaceId: workspace.id,
-        command: commandKey(command),
-        plans: plans.map((plan) => ({
-          target: repositoryTargetKey(plan.target),
-          fingerprint: plan.fingerprint,
-          impacts: plan.impacts,
-          warnings: plan.warnings
-        }))
-      })
+      plans
     };
   }
 

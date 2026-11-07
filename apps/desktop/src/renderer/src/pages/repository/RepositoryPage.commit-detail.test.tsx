@@ -16,6 +16,7 @@ import type {
   RepositoryCommitDiffDto,
   RepositoryCommitDto,
   RepositoryMediaPreviewDto,
+  RepositoryStatusSnapshotDto,
   RepositoryTargetDto
 } from "@gitnest/contracts";
 import { createDefaultAppSettings } from "@gitnest/contracts";
@@ -2010,6 +2011,180 @@ describe("RepositoryPage AI commit requests", () => {
     });
     expect(getBranches).toHaveBeenCalledTimes(afterCompletion);
   });
+
+  it.each([false, true])("refreshes history once after deferred Fetch status settles (revision changed=%s)", async revisionChanged => {
+    const getHistory = vi.fn<GitNestBridge["repository"]["getHistory"]>(async ({ target }) => ({
+      ok: true, value: { target, page: { commits: [] } }
+    }));
+    const getBranches = vi.fn<GitNestBridge["repository"]["getBranches"]>(async ({ target }) => ({
+      ok: true, value: { target, branches: [] }
+    }));
+    window.gitnest.repository.getHistory = getHistory;
+    window.gitnest.repository.getBranches = getBranches;
+    const snapshot: RepositoryStatusSnapshotDto = {
+      repositoryId: "a", worktreeId: "a-wt",
+      branch: "main", head: "abcdef", ahead: 0, behind: 0,
+      staged: 0, unstaged: 0, untracked: 0, conflicted: 0,
+      contentVersion: 1, changesRevision: "local-content",
+      refreshPending: false, stale: false, refreshedAt: "2026-11-07T00:00:00Z"
+    };
+    const operation = {
+      id: "deferred-fetch", kind: "fetch" as const, background: true,
+      scope: "repository" as const, state: "running" as const,
+      targetIds: ["a:a-wt"], progress: 0, succeeded: 0, failed: 0, message: ""
+    };
+    await renderRepository("a", { tab: "history", snapshots: [snapshot] });
+    expect(getHistory).toHaveBeenCalledTimes(1);
+    await renderRepository("a", {
+      tab: "history", snapshots: [{ ...snapshot, refreshPending: true }], operations: [operation]
+    });
+    const operations = [{ ...operation, state: "succeeded" as const, succeeded: 1 }];
+    await renderRepository("a", {
+      tab: "history", snapshots: [{ ...snapshot, refreshPending: true }], operations
+    });
+    expect(getHistory).toHaveBeenCalledTimes(1);
+    const refreshed = {
+      ...snapshot, contentVersion: revisionChanged ? 2 : 1,
+      behind: revisionChanged ? 1 : 0, refreshedAt: "2026-11-07T00:05:00Z"
+    };
+    await renderRepository("a", { tab: "history", snapshots: [refreshed], operations });
+    expect(getHistory).toHaveBeenCalledTimes(2);
+    expect(getBranches).toHaveBeenCalledTimes(2);
+    await renderRepository("a", { tab: "history", snapshots: [refreshed], operations });
+    expect(getHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses a status-triggered changes read after a mutation without replaying the previous snapshot", async () => {
+    const getChanges = vi.mocked(window.gitnest.repository.getChanges);
+    const refreshed = deferred<Awaited<ReturnType<typeof getChanges>>>();
+    const mutation = deferred<Awaited<ReturnType<GitNestBridge["repository"]["unstage"]>>>();
+    const unstage = vi.fn(() => mutation.promise);
+    window.gitnest.repository.unstage = unstage;
+    const snapshot: RepositoryStatusSnapshotDto = {
+      repositoryId: "a", worktreeId: "a-wt",
+      branch: "main", head: "abcdef", ahead: 0, behind: 0,
+      staged: 1, unstaged: 0, untracked: 0, conflicted: 0,
+      contentVersion: 1, changesRevision: "staged",
+      refreshPending: false, stale: false, refreshedAt: "2026-11-07T00:00:00Z"
+    };
+    await renderRepository("a", { snapshots: [snapshot] });
+    const initialDiffReads = vi.mocked(window.gitnest.repository.getDiff).mock.calls.length;
+    getChanges.mockReturnValueOnce(refreshed.promise);
+    await act(async () => findButtonByLabel(container, "取消暂存 a.ts").click());
+    const nextSnapshot = { ...snapshot, staged: 0, unstaged: 1, changesRevision: "unstaged", contentVersion: 2 };
+    await renderRepository("a", { snapshots: [nextSnapshot] });
+    expect(getChanges).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      mutation.resolve({ ok: true, value: { target: { repositoryId: "a", worktreeId: "a-wt" }, operationId: "unstage" } });
+      await flushAsyncWork();
+    });
+    expect(getChanges).toHaveBeenCalledTimes(2);
+    expect(window.gitnest.repository.getDiff).toHaveBeenCalledTimes(initialDiffReads);
+    await act(async () => {
+      refreshed.resolve({
+        ok: true, value: {
+          target: { repositoryId: "a", worktreeId: "a-wt" },
+          snapshot: { ...nextSnapshot, changes: [{
+            path: "a.ts", kind: "ordinary", indexStatus: ".", worktreeStatus: "M"
+          }] }
+        }
+      });
+      await flushAsyncWork();
+    });
+    expect(getChanges).toHaveBeenCalledTimes(2);
+    expect(window.gitnest.repository.getDiff).toHaveBeenCalledTimes(initialDiffReads + 1);
+    expect(container.querySelector(".diff-workspace-file.selected")?.getAttribute("data-diff-file-key"))
+      .toBe("unstaged\u0001a.ts");
+  });
+
+  it.each(["succeeded", "failed", "cancelled", "interrupted"] as const)(
+    "keeps changes, the selected file and Diff untouched when Fetch finishes as %s",
+    async (state) => {
+      const paths = ["a.ts", "b.ts", "c.ts"];
+      const getChanges = vi.mocked(window.gitnest.repository.getChanges);
+      getChanges.mockImplementation(async ({ target }) => ({
+        ok: true,
+        value: {
+          target,
+          snapshot: {
+            branch: "main", head: "abcdef", ahead: 0, behind: 0,
+            staged: 3, unstaged: 0, untracked: 0, conflicted: 0,
+            refreshedAt: "2026-11-05T00:00:00.000Z",
+            changes: paths.map(path => ({
+              path, kind: "ordinary" as const,
+              indexStatus: "M", worktreeStatus: "."
+            }))
+          }
+        }
+      }));
+      const getDiff = vi.mocked(window.gitnest.repository.getDiff);
+      const getBranches = vi.fn<GitNestBridge["repository"]["getBranches"]>(async ({ target }) => ({
+        ok: true, value: { target, branches: [] }
+      }));
+      const getHistory = vi.fn<GitNestBridge["repository"]["getHistory"]>(async ({ target }) => ({
+        ok: true, value: { target, page: { commits: [] } }
+      }));
+      window.gitnest.repository.getBranches = getBranches;
+      window.gitnest.repository.getHistory = getHistory;
+      const snapshot: RepositoryStatusSnapshotDto = {
+        repositoryId: "a", worktreeId: "a-wt",
+        branch: "main", head: "abcdef", upstream: "origin/main",
+        ahead: 0, behind: 0, staged: 3, unstaged: 0, untracked: 0, conflicted: 0,
+        contentVersion: 1, changesRevision: "local-content",
+        refreshPending: false, stale: false, refreshedAt: "2026-11-05T00:00:00.000Z"
+      };
+      await renderRepository("a", { snapshots: [snapshot] });
+      await act(async () => {
+        container.querySelectorAll<HTMLButtonElement>(".diff-workspace-file-select")[1]!.click();
+      });
+      editMessage("feat: 保留正在编写的提交信息");
+      const selected = container.querySelector(".diff-workspace-file.selected");
+      expect(selected?.textContent).toContain("b.ts");
+      const changesReads = getChanges.mock.calls.length;
+      const diffReads = getDiff.mock.calls.length;
+      const cancelQuery = vi.mocked(window.gitnest.repository.cancelQuery);
+      cancelQuery.mockClear();
+      const operation = {
+        id: "silent-fetch", kind: "fetch" as const, scope: "repository" as const,
+        state: "running" as const, targetIds: ["a:other-worktree"], progress: 0,
+        succeeded: 0, failed: 0, message: ""
+      };
+      const fetchedSnapshot = {
+        ...snapshot, ahead: 1, behind: 3, contentVersion: 2,
+        refreshedAt: "2026-11-05T00:05:00.000Z"
+      };
+      const assertChangesUntouched = () => {
+        expect(getChanges).toHaveBeenCalledTimes(changesReads);
+        expect(getDiff).toHaveBeenCalledTimes(diffReads);
+        expect(cancelQuery).not.toHaveBeenCalled();
+        expect(container.querySelector(".diff-workspace-file.selected")).toBe(selected);
+        expect(container.querySelector(".diff-workspace-file.selected")?.textContent).toContain("b.ts");
+        expect(messageInput().value).toBe("feat: 保留正在编写的提交信息");
+      };
+      await renderRepository("a", {
+        snapshots: [fetchedSnapshot], operations: [operation]
+      });
+      assertChangesUntouched();
+      const operations = [{ ...operation, state }];
+      await renderRepository("a", { snapshots: [fetchedSnapshot], operations });
+      assertChangesUntouched();
+      await renderRepository("a", {
+        snapshots: [fetchedSnapshot], operations,
+        commands: {
+          active: null, busy: false, preflight: null, error: null, notice: null,
+          clearFeedback: noOp, completionVersion: 1, request: requestCommand,
+          confirm: async () => false, dismissPreflight: noOp, cancelOperation: async () => false
+        }
+      });
+      assertChangesUntouched();
+      await renderRepository("a", { tab: "history", snapshots: [fetchedSnapshot], operations });
+      expect(getHistory).toHaveBeenCalled();
+      expect(getBranches).toHaveBeenCalled();
+      await renderRepository("a", { snapshots: [fetchedSnapshot], operations });
+      expect(getChanges).toHaveBeenCalledTimes(changesReads);
+      expect(container.querySelector(".diff-workspace-file.selected")?.textContent).toContain("b.ts");
+    }
+  );
 
   it("does not apply an unmounted page response after the repository page reopens", async () => {
     const oldPage = deferred<Awaited<ReturnType<typeof generate>>>();

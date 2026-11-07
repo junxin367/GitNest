@@ -74,4 +74,14 @@ describe("repository mutation selection", () => {
       "Git exited with code 1. Hook rejected the message"
     );
   });
+  it("explains partial completion while retaining the original failure and diagnostics", () => {
+    const message = formatLocalMutationErrorMessage({
+      code: "COMMAND_FAILED", message: "后续批次失败。",
+      details: { completedPathCount: 201, stderr: "\u001B[31mpermission denied\u001B[0m" }
+    });
+    expect(message).toContain("此前已处理 201 个路径");
+    expect(message).toContain("请检查刷新后的变更列表");
+    expect(message).toContain("后续批次失败。 permission denied");
+    expect(message).not.toContain("\u001B");
+  });
 });

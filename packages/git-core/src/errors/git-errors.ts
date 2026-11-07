@@ -30,3 +30,17 @@ export class GitError extends Error {
     this.details = details;
   }
 }
+
+/** Preserve the original failure while recording successful earlier batches. */
+export function withCompletedMutationPaths(error: unknown, completedPathCount: number): unknown {
+  if (completedPathCount <= 0) return error;
+  const failure = error instanceof GitError
+    ? error
+    : new GitError("COMMAND_FAILED", error instanceof Error ? error.message : "Git 操作未完成。");
+  const previous = failure.details.completedPathCount;
+  return new GitError(failure.code, failure.message, {
+    ...failure.details,
+    completedPathCount: completedPathCount +
+      (typeof previous === "number" && Number.isSafeInteger(previous) && previous > 0 ? previous : 0)
+  });
+}

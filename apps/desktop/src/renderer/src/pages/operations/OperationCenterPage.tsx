@@ -337,7 +337,10 @@ function OperationCard({
     targets.length === 1 ? targets[0] : undefined;
   const primaryTarget = primaryResolvedTarget?.target;
   const canCancel =
-    isRepositoryCommandKind(operation.kind) &&
+    (isRepositoryCommandKind(operation.kind) ||
+      (operation.state === "queued" && [
+        "stage", "unstage", "discard", "commit", "stash-apply", "stash-drop", "stash-pop"
+      ].includes(operation.kind))) &&
     (operation.state === "queued" ||
       operation.state === "running" ||
       operation.state === "cancelling");
@@ -350,6 +353,7 @@ function OperationCard({
     Math.min(operation.progress, 1)
   );
   const progressPercent = Math.round(progress * 100);
+  const measuredProgress = operation.kind === "scan" || operation.kind === "status";
   const label = operationLabel(operation);
   const showProgress =
     operation.state === "running" ||
@@ -400,7 +404,7 @@ function OperationCard({
           {operationStateLabel(operation.state)}
         </span>
       </div>
-      {showProgress && (
+      {showProgress && measuredProgress && (
         <div
           aria-label={`${label}进度`}
           aria-valuemax={100}
@@ -444,7 +448,10 @@ function OperationCard({
             )}
         </div>
         <div className="operation-history-meta">
-          {showProgress && <span>{progressPercent}%</span>}
+          {showProgress && <span>{measuredProgress
+            ? `${progressPercent}%`
+            : operation.state === "cancelling" ? "正在停止"
+              : progress >= 0.75 ? "正在更新状态" : "正在执行"}</span>}
           <span>{formatOperationTime(operation, now)}</span>
           {(canRetry || canCancel) && (
             <div className="operation-history-actions">

@@ -6,11 +6,30 @@ import {
   restoreWorktreeArguments,
   stageAllArguments,
   stageArguments,
+  splitPathspecBatches,
   stashMutationArguments,
   unstageArguments
 } from "./write-repository";
 
 describe("repository write commands", () => {
+  it("uses NUL-delimited stdin for large write selections and bounds read arguments by length", () => {
+    const paths = Array.from({ length: 300 }, (_, index) => `folder/${index}-${"x".repeat(120)}.txt`);
+    for (const args of [
+      stageArguments(paths, false, true),
+      unstageArguments(paths, true, true),
+      unstageArguments(paths, false, true),
+      restoreWorktreeArguments(paths, true)
+    ]) {
+      expect(args).toContain("--literal-pathspecs");
+      expect(args).toContain("--pathspec-from-file=-");
+      expect(args).toContain("--pathspec-file-nul");
+      expect(args).not.toContain(paths[0]);
+    }
+    const batches = splitPathspecBatches(paths);
+    expect(batches.flat()).toEqual(paths);
+    expect(batches.every(batch => batch.length <= 200 &&
+      batch.reduce((sum, path) => sum + path.length * 2 + 3, 0) <= 20_000)).toBe(true);
+  });
   it("stages every working-tree change without a path limit", () => {
     expect(stageAllArguments()).toEqual(["add", "--all"]);
   });

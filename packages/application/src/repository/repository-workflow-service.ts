@@ -53,6 +53,7 @@ export class RepositoryWorkflowService {
   async preflight(input: RepositoryWorkflowCommand): Promise<RepositoryWorkflowPreflight> {
     const command = normalizeCommand(input);
     const context = await this.#resolve(command.target);
+    await this.#runtime.yieldBackgroundFetch?.(command.target.repositoryId);
     const state = { ...await this.#client.inspect(context.path), target: command.target };
     assertAllowed(command, state);
     if ("commitHash" in command) {
@@ -124,11 +125,9 @@ export class RepositoryWorkflowService {
     this.#preflights.delete(preflightId);
     const current = await this.#resolve(command.target);
     if (current.workspaceId !== stored.workspaceId || current.path !== stored.path) throw changed();
-    const beforeQueue = await this.#client.inspect(current.path);
-    if (beforeQueue.fingerprint !== stored.result.state.fingerprint) throw changed();
-    assertAllowed(command, beforeQueue);
     const accepted = await this.#runtime.queueRepositoryOperation(command.target, "workflow", async (path, signal) => {
-      if (Date.parse(stored.result.expiresAt) <= Date.parse(this.#clock())) throw new GitError("PREFLIGHT_EXPIRED", "操作等待期间预检已过期，请重新检查。");
+      // Confirmation already consumed the unexpired authorization. Queue time
+      // alone does not change consent; validate the complete state before writing.
       if (path !== stored.path) throw changed();
       const latest = await this.#client.inspect(path, { signal });
       if (latest.fingerprint !== stored.result.state.fingerprint) throw changed();

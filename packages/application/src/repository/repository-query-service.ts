@@ -163,7 +163,8 @@ export class RepositoryQueryService {
           ...(scope === undefined ? {} : { scope }),
           ...(search === undefined ? {} : { search }),
           ...(traversal === undefined ? {} : { traversal }),
-          signal
+          signal,
+          priority: "interactive"
         })
       };
     });
@@ -181,7 +182,7 @@ export class RepositoryQueryService {
         commit: await this.#gitClient.readCommitDetails(
           path,
           commitHash,
-          { signal }
+          { signal, priority: "interactive" }
         )
       };
     });
@@ -293,7 +294,8 @@ export class RepositoryQueryService {
       return {
         target,
         branches: await this.#gitClient.readBranches(path, {
-          signal
+          signal,
+          priority: "interactive"
         })
       };
     });

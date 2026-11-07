@@ -129,7 +129,7 @@ export class RepositoryAutoFetchScheduler {
               throw new GitError("COMMAND_CANCELLED", "自动 Fetch 已取消。");
             }
             if (loaded.settings.git.autoFetch === false) return;
-            const remotes = await this.#options.git.readRemotes(path, { signal });
+            const remotes = await this.#options.git.readRemotes(path, { signal, priority: "background" });
             let firstFailure: unknown;
             for (const remote of remotes) {
               if (signal.aborted) {
@@ -137,7 +137,7 @@ export class RepositoryAutoFetchScheduler {
               }
               try {
                 await this.#options.git.fetchRemote(path, remote, {
-                  prune: true, signal, timeoutMs: NETWORK_TIMEOUT_MS
+                  prune: true, signal, timeoutMs: NETWORK_TIMEOUT_MS, priority: "background"
                 });
               } catch (error) {
                 // A failing remote must not prevent other remotes from updating.
@@ -146,7 +146,7 @@ export class RepositoryAutoFetchScheduler {
             }
             if (firstFailure) throw firstFailure;
           },
-          { expectedWorkspaceId: workspaceId }
+          { expectedWorkspaceId: workspaceId, background: true }
         );
       } catch (error) {
         this.#options.onError(error);

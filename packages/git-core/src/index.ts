@@ -42,6 +42,7 @@ export type {
 } from "./domain/repository";
 export {
   GitError,
+  withCompletedMutationPaths,
   type GitErrorCode
 } from "./errors/git-errors";
 export { parseBranches } from "./parsers/branches";

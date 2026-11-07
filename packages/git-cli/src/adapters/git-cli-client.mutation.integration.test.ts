@@ -3,6 +3,7 @@ import {
   appendFile,
   mkdir,
   readFile,
+  readdir,
   rename,
   rmdir,
   unlink,
@@ -10,7 +11,8 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { GitError } from "@gitnest/git-core";
 
 import {
   createTemporaryDirectoryFixture
@@ -18,9 +20,112 @@ import {
 
 import { GitCliClient } from "./git-cli-client";
 import { RepositoryMutationService } from "../../../application/src/repository/repository-mutation-service";
+import * as processes from "../process/git-process-runner";
 
 describe("GitCliClient mutation integration", () => {
   const client = new GitCliClient();
+
+  it("reports a completed stage group when the following deletion group fails", async () => {
+    const fixture = await createMutationRepository();
+    const run = processes.runProcess;
+    let intercept: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      await appendFile(join(fixture.repositoryPath, "tracked.txt"), "edit\n");
+      await unlink(join(fixture.repositoryPath, "rename me.txt"));
+      intercept = vi.spyOn(processes, "runProcess").mockImplementation(async request => {
+        if (request.args.includes("add") && request.args.includes("--update")) {
+          throw new GitError("COMMAND_FAILED", "第二组暂存失败。");
+        }
+        return run(request);
+      });
+      await expect(client.stagePaths(fixture.repositoryPath, ["tracked.txt", "rename me.txt"]))
+        .rejects.toMatchObject({ code: "COMMAND_FAILED", details: { completedPathCount: 1 } });
+      const snapshot = await client.readRepositorySnapshot(fixture.repositoryPath);
+      expect(snapshot.staged).toBe(1);
+      expect(snapshot.unstaged).toBe(1);
+    } finally {
+      intercept?.mockRestore();
+      await fixture.dispose();
+    }
+  });
+
+  it("stops a partial discard at the failed batch and reports restored plus removed paths", async () => {
+    const fixture = await createMutationRepository();
+    const path = fixture.repositoryPath;
+    const run = processes.runProcess;
+    let intercept: ReturnType<typeof vi.spyOn> | undefined;
+    let cleanCalls = 0;
+    const cleanBatches: string[][] = [];
+    try {
+      await runGit(path, ["config", "core.autocrlf", "false"]);
+      const paths = Array.from({ length: 450 }, (_, index) => `new-${index}.txt`);
+      for (const entry of paths) await writeFile(join(path, entry), "new\n");
+      await appendFile(join(path, "tracked.txt"), "edit\n");
+      const service = new RepositoryMutationService({
+        async runWorktreeMutation(_target, _kind, action) {
+          return { operationId: "partial-discard", result: await action(path) };
+        }
+      }, client, client);
+      intercept = vi.spyOn(processes, "runProcess").mockImplementation(async request => {
+        if (request.args.includes("clean")) {
+          cleanBatches.push(request.args.slice(request.args.indexOf("--") + 1));
+          if (++cleanCalls === 2) throw new GitError("COMMAND_FAILED", "第二批删除失败。");
+        }
+        return run(request);
+      });
+      await expect(service.discard(
+        { repositoryId: "repo", worktreeId: "wt" }, ["tracked.txt", ...paths], paths
+      )).rejects.toMatchObject({ code: "COMMAND_FAILED", details: { completedPathCount: 201 } });
+      expect(cleanCalls).toBe(2);
+      expect(await readFile(join(path, "tracked.txt"), "utf8")).toBe("tracked\n");
+      const completed = new Set(cleanBatches[0]);
+      const remaining = new Set(await readdir(path));
+      expect(paths.filter(entry => remaining.has(entry))).toEqual(paths.filter(entry => !completed.has(entry)));
+      expect(completed.size).toBe(200);
+      expect(await readFile(join(path, cleanBatches[1]![0]!), "utf8")).toBe("new\n");
+    } finally {
+      intercept?.mockRestore();
+      await fixture.dispose();
+    }
+  }, 30_000);
+
+  it("stages hundreds of long literal paths and unstages 150 complete renames in one request", async () => {
+    const fixture = await createMutationRepository();
+    const path = fixture.repositoryPath;
+    const target = { repositoryId: "repo", worktreeId: "wt" };
+    const service = new RepositoryMutationService({
+      async runWorktreeMutation(_target, _kind, action) {
+        return { operationId: "large-selection", result: await action(path) };
+      }
+    }, client, client);
+    try {
+      const before = Array.from({ length: 150 }, (_, index) =>
+        `before-${index}-[中文]-${"x".repeat(70)}.txt`);
+      const after = before.map(name => name.replace("before-", "after-"));
+      for (let index = 0; index < before.length; index++) {
+        await writeFile(join(path, before[index]!), `unique content ${index}\n`);
+      }
+      await service.stage(target, before);
+      await runGit(path, ["commit", "-m", "bulk rename baseline"]);
+      for (let index = 0; index < before.length; index++) {
+        await rename(join(path, before[index]!), join(path, after[index]!));
+      }
+      const selection = [...before, ...after];
+      await service.stage(target, selection);
+      const renamed = await client.readRepositorySnapshot(path);
+      expect(renamed.changes.filter(change => change.kind === "renamed")).toHaveLength(150);
+      await service.unstage(target, selection);
+      const remaining = await client.readRepositorySnapshot(path);
+      expect(remaining.staged).toBe(0);
+      expect(remaining.untracked).toBe(150);
+      expect((await runGit(path, ["ls-files", "-z"])).stdout.split("\0")).toEqual(expect.arrayContaining(before));
+      for (let index = 0; index < after.length; index++) {
+        expect(await readFile(join(path, after[index]!), "utf8")).toBe(`unique content ${index}\n`);
+      }
+    } finally {
+      await fixture.dispose();
+    }
+  }, 30_000);
 
   for (const operation of ["stage", "discard", "unstage"] as const) {
     for (const recreateOriginal of [false, true]) {

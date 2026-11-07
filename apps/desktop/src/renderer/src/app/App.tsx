@@ -37,7 +37,7 @@ import { Toast, ToastViewport } from "../shared/ui/Toast";
 import {
   listWorkspaceTargets,
   findTargetSnapshot,
-  getSnapshotContentRevision
+  getSnapshotChangesRevision
 } from "../entities/workspace/model";
 import {
   useRepositoryCommitDiff,
@@ -56,6 +56,7 @@ import { useWorkspaceChangedFiles } from "../features/global-search/useWorkspace
 import { RepositoryCommandDialog } from "../features/repository-command/RepositoryCommandDialog";
 import {
   isRepositoryCommandOperation,
+  isBackgroundFetchOperation,
   useRepositoryCommands
 } from "../features/repository-command/useRepositoryCommands";
 import { useAppSettings } from "../features/settings/useAppSettings";
@@ -186,9 +187,11 @@ export function App() {
   );
   const runtimeRefreshing = workspace.operations.some(
     (operation) =>
-      operation.state === "queued" ||
-      operation.state === "running" ||
-      operation.state === "cancelling"
+      !isBackgroundFetchOperation(operation) && (
+        operation.state === "queued" ||
+        operation.state === "running" ||
+        operation.state === "cancelling"
+      )
   );
   const activeWorkspaceTargets = useMemo(
     () => listWorkspaceTargets(workspace.workspace),
@@ -222,7 +225,7 @@ export function App() {
     workspace.operations,
     workspace.workspace?.id,
     view === "repository" && (repositoryTab === "changes" || repositoryTab === "history"),
-    getSnapshotContentRevision(findTargetSnapshot(workspace.snapshots, selectedTarget))
+    getSnapshotChangesRevision(findTargetSnapshot(workspace.snapshots, selectedTarget))
   );
   const [branchFromCommit, setBranchFromCommit] = useState<RepositoryCommitActionTarget | null>(null);
   const [historyOperation, setHistoryOperation] = useState<HistoryOperationIntent | null>(null);
@@ -263,6 +266,7 @@ export function App() {
     : "";
   const selectedRepositoryBusy = workspace.operations.some(
     (operation) =>
+      !isBackgroundFetchOperation(operation) &&
       isRepositoryCommandOperation(operation.kind) &&
       (operation.state === "queued" ||
         operation.state === "running" ||

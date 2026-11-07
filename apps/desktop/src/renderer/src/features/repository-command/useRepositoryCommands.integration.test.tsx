@@ -105,6 +105,23 @@ describe("useRepositoryCommands", () => {
     expect(controller?.notice).toBe("Fetch 已完成。");
   });
 
+  it.each([true, false])("permits a user request only when an active Fetch is automatic=%s", async background => {
+    const command: RepositoryCommandDto = { type: "switch-branch", target: TARGET_A, branch: "feature" };
+    const preflightCommand = vi.fn(async () => ({
+      ok: true as const, value: createPreflight(command, true)
+    }));
+    const executeCommand = vi.fn(async () => ({
+      ok: true as const, value: { operationIds: ["switch"] }
+    }));
+    installBridge({ preflightCommand, executeCommand });
+    await renderHarness(TARGET_A, [{ ...createOperation("fetch", "running"), background }]);
+    expect(controller?.busy).toBe(!background);
+    let accepted: boolean | undefined;
+    await act(async () => { accepted = await controller?.request(command, { confirmed: true }); });
+    expect(accepted).toBe(background);
+    expect(executeCommand).toHaveBeenCalledTimes(background ? 1 : 0);
+  });
+
   it("creates and switches a branch with one explicit dialog action while retaining preflight", async () => {
     const command: RepositoryCommandDto = {
       type: "create-branch", target: TARGET_A, branch: "feature/new", checkout: true

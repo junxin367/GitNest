@@ -193,6 +193,20 @@ describe("OperationCenterPage duration timer", () => {
     expect(card?.textContent).not.toContain("成功 1 · 失败 0");
   });
 
+  it("shows Git execution phases without a fabricated percentage and allows cancelling queued local writes", () => {
+    act(() => render([createOperation("running", { kind: "fetch", progress: 0.1 })], workspace));
+    expect(container.textContent).toContain("正在执行");
+    expect(container.textContent).not.toContain("10%");
+    expect(container.querySelector('[role="progressbar"]')).toBeNull();
+    act(() => render([createOperation("running", { kind: "fetch", progress: 0.75 })], workspace));
+    expect(container.textContent).toContain("正在更新状态");
+    act(() => render([createOperation("queued", { kind: "commit" })], workspace));
+    const cancel = [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "取消");
+    expect(cancel).toBeDefined();
+    act(() => render([createOperation("running", { kind: "commit" })], workspace));
+    expect([...container.querySelectorAll("button")].some(button => button.textContent?.trim() === "取消")).toBe(false);
+  });
+
   function render(
     operations: WorkspaceOperationDto[],
     activeWorkspace: WorkspaceDetailsDto | null = null,

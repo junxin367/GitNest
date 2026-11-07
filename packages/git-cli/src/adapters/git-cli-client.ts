@@ -18,6 +18,7 @@ import {
 
 import {
   GitError,
+  withCompletedMutationPaths,
   normalizeCommitHistorySearch,
   normalizeCommitHistoryTraversal,
   parseBranches,
@@ -123,6 +124,7 @@ import {
   restoreWorktreeArguments,
   stageAllArguments,
   stageArguments,
+  splitPathspecBatches,
   stashMutationArguments,
   unstageArguments
 } from "../commands/write-repository";
@@ -161,7 +163,7 @@ const UNTRACKED_STATS_CONCURRENCY = 4;
 const SNAPSHOT_FINGERPRINT_CONCURRENCY = 4;
 const CHANGE_STATS_PUBLISH_INTERVAL_MS = 1_000;
 const REMOTE_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024;
-const MAX_MUTATION_PATHS = 200;
+const MAX_MUTATION_PATHS = 50_000;
 const MAX_RELATIVE_PATH_LENGTH = 4_096;
 const MAX_COMMIT_SUBJECT_LENGTH = 200;
 const MAX_COMMIT_BODY_LENGTH = 100_000;
@@ -475,7 +477,7 @@ export class GitCliClient
     options: ReadCommitHistoryOptions = {}
   ): Promise<CommitHistoryPage> {
     const worktreePath = await validateDirectoryPath(path);
-    const executablePath = await this.#getExecutablePath(options.signal);
+    const executablePath = await this.#getExecutablePath(options.signal, options.priority);
     const limit = clampHistoryPageLimit(options.limit);
     const offset = clampHistoryOffset(options.offset);
     const search = normalizeCommitHistorySearch(options.search);
@@ -501,6 +503,7 @@ export class GitCliClient
       executable: executablePath,
       cwd: worktreePath,
       signal: options.signal,
+      priority: options.priority,
       timeoutMs: options.timeoutMs
     };
 
@@ -647,11 +650,12 @@ export class GitCliClient
   ): Promise<CommitDetails> {
     const worktreePath = await validateDirectoryPath(path);
     const normalizedHash = validateCommitHash(commitHash);
-    const executablePath = await this.#getExecutablePath(options.signal);
+    const executablePath = await this.#getExecutablePath(options.signal, options.priority);
     const commandOptions = {
       executable: executablePath,
       cwd: worktreePath,
       signal: options.signal,
+      priority: options.priority,
       timeoutMs: options.timeoutMs,
       outputLimitBytes: COMMIT_OUTPUT_LIMIT_BYTES
     };
@@ -934,7 +938,7 @@ export class GitCliClient
     options: GitReadOptions = {}
   ): Promise<Branch[]> {
     const worktreePath = await validateDirectoryPath(path);
-    const executablePath = await this.#getExecutablePath(options.signal);
+    const executablePath = await this.#getExecutablePath(options.signal, options.priority);
 
     try {
       const result = await runProcess({
@@ -942,6 +946,7 @@ export class GitCliClient
         cwd: worktreePath,
         args: BRANCH_ARGUMENTS,
         signal: options.signal,
+        priority: options.priority,
         timeoutMs: options.timeoutMs
       });
       const branches = parseBranches(result.stdout).map((branch) => ({
@@ -963,6 +968,7 @@ export class GitCliClient
         args: MERGED_REMOTE_BRANCH_ARGUMENTS,
         allowFailure: true,
         signal: options.signal,
+        priority: options.priority,
         timeoutMs: options.timeoutMs
       });
       assertAllowFailureIsRepository(mergedResult);
@@ -995,7 +1001,8 @@ export class GitCliClient
   ): Promise<string[]> {
     const worktreePath = await validateDirectoryPath(path);
     const executablePath = await this.#getExecutablePath(
-      options.signal
+      options.signal,
+      options.priority
     );
 
     try {
@@ -1004,6 +1011,7 @@ export class GitCliClient
         cwd: worktreePath,
         args: READ_REMOTES_ARGUMENTS,
         signal: options.signal,
+        priority: options.priority,
         timeoutMs: options.timeoutMs
       });
       return [
@@ -1230,7 +1238,8 @@ export class GitCliClient
     const worktreePath = await validateDirectoryPath(path);
     const remoteName = validateRemoteName(remote);
     const executablePath = await this.#getExecutablePath(
-      options.signal
+      options.signal,
+      options.priority
     );
 
     try {
@@ -1248,6 +1257,7 @@ export class GitCliClient
               options.prune ?? true
             ),
             signal: options.signal,
+            priority: options.priority,
             timeoutMs:
               options.timeoutMs ?? DEFAULT_NETWORK_TIMEOUT_MS,
             outputLimitBytes: REMOTE_OUTPUT_LIMIT_BYTES,
@@ -1933,6 +1943,7 @@ export class GitCliClient
     const executablePath = await this.#getExecutablePath(
       options.signal
     );
+    let completedPaths = 0;
 
     try {
       const commandOptions = {
@@ -1942,9 +1953,8 @@ export class GitCliClient
         timeoutMs:
           options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS
       };
-      const deletedResult = await runProcess({
-        ...commandOptions,
-        args: [
+      const deletedOutput = await readPathspecOutput(
+        commandOptions, [
           "-c",
           "core.fsmonitor=false",
           "-c",
@@ -1955,13 +1965,11 @@ export class GitCliClient
           "--no-textconv",
           "--name-only",
           "--diff-filter=D",
-          "-z",
-          "--",
-          ...relativePaths
-        ]
-      });
+          "-z"
+        ], relativePaths
+      );
       const deletedPaths = new Set(
-        deletedResult.stdout.split("\0").filter(Boolean)
+        deletedOutput.split("\0").filter(Boolean)
       );
       const requestedPaths = new Set(
         relativePaths.map(normalizeMutationPath)
@@ -1981,14 +1989,11 @@ export class GitCliClient
       const normalPaths = relativePaths.filter(
         (path) => !isDeleted(path)
       );
+      const normalPathSet = new Set(normalPaths.map(normalizeMutationPath));
       const removedPaths = relativePaths.filter(
         (path) =>
           isDeleted(path) &&
-          !normalPaths.some((parent) =>
-            normalizeMutationPath(path).startsWith(
-              `${normalizeMutationPath(parent)}/`
-            )
-          )
+          !hasSelectedParent(normalizeMutationPath(path), normalPathSet)
       );
 
       // Literal pathspecs still recurse into directories. A selected file
@@ -2002,14 +2007,16 @@ export class GitCliClient
         }
         await runProcess({
           ...commandOptions,
-          args: stageArguments(pathsToStage, trackedOnly),
+          args: stageArguments(pathsToStage, trackedOnly, true),
+          input: pathsToStage.join("\0") + "\0",
           outputLimitBytes: WRITE_OUTPUT_LIMIT_BYTES,
           discardOutputAfterLimit: true,
           writeIntent: true
         });
+        completedPaths += pathsToStage.length;
       }
     } catch (error) {
-      throw mapRepositoryError(error, worktreePath);
+      throw withCompletedMutationPaths(mapRepositoryError(error, worktreePath), completedPaths);
     }
   }
 
@@ -2051,10 +2058,12 @@ export class GitCliClient
     );
 
     try {
-      const stagedResult = await runProcess({
+      const stagedOutput = await readPathspecOutput({
         executable: executablePath,
         cwd: worktreePath,
-        args: [
+        signal: options.signal,
+        timeoutMs: options.timeoutMs
+      }, [
           "-c",
           "core.fsmonitor=false",
           "-c",
@@ -2066,17 +2075,12 @@ export class GitCliClient
           "--no-textconv",
           "--no-renames",
           "--name-only",
-          "-z",
-          "--",
-          ...relativePaths
-        ],
-        signal: options.signal,
-        timeoutMs: options.timeoutMs
-      });
+          "-z"
+        ], relativePaths);
       const requestedPaths = new Set(
         relativePaths.map(normalizeMutationPath)
       );
-      const unselectedPaths = stagedResult.stdout
+      const unselectedPaths = stagedOutput
         .split("\0")
         .filter((path) => path && !requestedPaths.has(path));
       if (unselectedPaths.length > 0) {
@@ -2088,11 +2092,7 @@ export class GitCliClient
       }
       const pathspecs = relativePaths.filter((path) => {
         const normalizedPath = normalizeMutationPath(path);
-        return ![...requestedPaths].some(
-          (parent) =>
-            parent !== normalizedPath &&
-            normalizedPath.startsWith(`${parent}/`)
-        );
+        return !hasSelectedParent(normalizedPath, requestedPaths);
       });
       const hasHead = await repositoryHasHead({
         executable: executablePath,
@@ -2103,7 +2103,8 @@ export class GitCliClient
       await runProcess({
         executable: executablePath,
         cwd: worktreePath,
-        args: unstageArguments(pathspecs, hasHead),
+        args: unstageArguments(pathspecs, hasHead, true),
+        input: pathspecs.join("\0") + "\0",
         signal: options.signal,
         timeoutMs:
           options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
@@ -2128,22 +2129,19 @@ export class GitCliClient
     );
 
     try {
-      const indexResult = await runProcess({
+      const indexOutput = await readPathspecOutput({
         executable: executablePath,
         cwd: worktreePath,
-        args: [
+        signal: options.signal,
+        timeoutMs: options.timeoutMs
+      }, [
           "--literal-pathspecs",
           "ls-files",
           "--stage",
-          "-z",
-          "--",
-          ...relativePaths
-        ],
-        signal: options.signal,
-        timeoutMs: options.timeoutMs
-      });
+          "-z"
+        ], relativePaths);
       const restoredFilePaths = new Set<string>();
-      for (const record of indexResult.stdout.split("\0").filter(Boolean)) {
+      for (const record of indexOutput.split("\0").filter(Boolean)) {
         const separator = record.indexOf("\t");
         const metadata = record.slice(0, separator);
         const indexPath = record.slice(separator + 1);
@@ -2165,7 +2163,8 @@ export class GitCliClient
       await runProcess({
         executable: executablePath,
         cwd: worktreePath,
-        args: restoreWorktreeArguments(relativePaths),
+        args: restoreWorktreeArguments(relativePaths, true),
+        input: relativePaths.join("\0") + "\0",
         signal: options.signal,
         timeoutMs:
           options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
@@ -2188,21 +2187,25 @@ export class GitCliClient
     const executablePath = await this.#getExecutablePath(
       options.signal
     );
+    let completedPaths = 0;
 
     try {
-      await runProcess({
-        executable: executablePath,
-        cwd: worktreePath,
-        args: removeUntrackedArguments(relativePaths),
-        signal: options.signal,
-        timeoutMs:
-          options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
-        outputLimitBytes: WRITE_OUTPUT_LIMIT_BYTES,
-        discardOutputAfterLimit: true,
-        writeIntent: true
-      });
+      for (const batch of splitPathspecBatches(relativePaths)) {
+        await runProcess({
+          executable: executablePath,
+          cwd: worktreePath,
+          args: removeUntrackedArguments(batch),
+          signal: options.signal,
+          timeoutMs:
+            options.timeoutMs ?? DEFAULT_WRITE_TIMEOUT_MS,
+          outputLimitBytes: WRITE_OUTPUT_LIMIT_BYTES,
+          discardOutputAfterLimit: true,
+          writeIntent: true
+        });
+        completedPaths += batch.length;
+      }
     } catch (error) {
-      throw mapRepositoryError(error, worktreePath);
+      throw withCompletedMutationPaths(mapRepositoryError(error, worktreePath), completedPaths);
     }
   }
 
@@ -3875,6 +3878,31 @@ function validateRelativePathspec(path: string): string {
   return path;
 }
 
+async function readPathspecOutput(
+  options: CommandOptions,
+  args: string[],
+  paths: readonly string[]
+): Promise<string> {
+  const outputs: string[] = [];
+  let bytes = 0;
+  for (const batch of splitPathspecBatches(paths)) {
+    const result = await runProcess({ ...options, args: [...args, "--", ...batch] });
+    bytes += Buffer.byteLength(result.stdout);
+    if (bytes > 16 * 1024 * 1024) {
+      throw new GitError("OUTPUT_LIMIT_EXCEEDED", "所选文件的 Git 校验输出过大，请缩小选择范围。");
+    }
+    outputs.push(result.stdout);
+  }
+  return outputs.join("");
+}
+
+function hasSelectedParent(path: string, selected: ReadonlySet<string>): boolean {
+  for (let slash = path.lastIndexOf("/"); slash > 0; slash = path.lastIndexOf("/", slash - 1)) {
+    if (selected.has(path.slice(0, slash))) return true;
+  }
+  return false;
+}
+
 function validateRelativePathspecs(
   paths: readonly string[]
 ): string[] {
@@ -3887,6 +3915,9 @@ function validateRelativePathspecs(
       "INVALID_REQUEST",
       `Repository mutations require between 1 and ${MAX_MUTATION_PATHS} paths.`
     );
+  }
+  if (paths.reduce((length, path) => length + (typeof path === "string" ? path.length : 0), 0) > 8 * 1024 * 1024) {
+    throw new GitError("INVALID_REQUEST", "所选路径总长度超过限制，请缩小选择范围。");
   }
 
   return [

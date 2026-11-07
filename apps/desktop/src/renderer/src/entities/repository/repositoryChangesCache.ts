@@ -13,7 +13,10 @@ type ChangesListener = (value: RepositoryChangesDto, snapshot: boolean) => void;
 interface ChangesEntry {
   revision: string | undefined;
   readonly value: RepositoryChangesDto | null;
+  readonly hasSnapshot: boolean;
   readonly progressComplete: boolean;
+  /** First authoritative snapshot, or completion/cancellation if no snapshot arrives. */
+  ready: Promise<void>;
   result: Promise<GitReadResult<RepositoryChangesDto>>;
   subscribe(listener: ChangesListener): () => void;
   cancel(): void;
@@ -52,9 +55,12 @@ export class RepositoryChangesCache {
     this.#discard(key);
 
     let value: RepositoryChangesDto | null = cached?.value ?? null;
+    let hasSnapshot = false;
     let progressComplete = false;
     let active = true;
     let pending = true;
+    let markReady!: () => void;
+    const ready = new Promise<void>(resolve => { markReady = resolve; });
     const listeners = new Set<ChangesListener>();
     const unsubscribe = this.#repository.onChangesProgress((progress) => {
       if (
@@ -65,6 +71,10 @@ export class RepositoryChangesCache {
         return;
       }
       value = applyRepositoryChangesProgress(value, progress);
+      if (progress.kind === "snapshot") {
+        hasSnapshot = true;
+        markReady();
+      }
       progressComplete = progress.completed >= progress.total;
       if (value) {
         for (const listener of listeners) {
@@ -75,7 +85,9 @@ export class RepositoryChangesCache {
     const entry: ChangesEntry = {
       revision,
       get value() { return value; },
+      get hasSnapshot() { return hasSnapshot; },
       get progressComplete() { return progressComplete; },
+      ready,
       subscribe(listener) {
         listeners.add(listener);
         return () => { listeners.delete(listener); };
@@ -83,6 +95,7 @@ export class RepositoryChangesCache {
       cancel: () => {
         if (!active) return;
         active = false;
+        markReady();
         unsubscribe();
         listeners.clear();
         if (pending) void this.#repository.cancelQuery({ queryId });
@@ -100,6 +113,7 @@ export class RepositoryChangesCache {
           });
           if (active && result.ok) {
             value = result.value;
+            hasSnapshot = true;
           } else if (entry.revision !== undefined && this.#entries.get(key) === entry) {
             this.#entries.delete(key);
           }
@@ -109,6 +123,7 @@ export class RepositoryChangesCache {
           throw reason;
         } finally {
           pending = false;
+          markReady();
           unsubscribe();
         }
       })

@@ -150,6 +150,17 @@ describe("useRepositoryWorkflow inspect scheduling", () => {
     expect(inspect).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps workflow actions available during automatic Fetch and skips its terminal inspection", async () => {
+    const fetch: WorkspaceOperationDto = { ...operation("auto-fetch", "running"), kind: "fetch", background: true };
+    await render(targetA, [fetch], "workspace", true, "unchanged-local-content");
+    expect(controller.busy).toBe(false);
+    expect(inspect).toHaveBeenCalledTimes(1);
+    await render(targetA, [{ ...fetch, state: "succeeded" }], "workspace", true, "unchanged-local-content");
+    expect(inspect).toHaveBeenCalledTimes(1);
+    await render(targetA, [{ ...fetch, background: false }], "workspace", true, "unchanged-local-content");
+    expect(controller.busy).toBe(true);
+  });
+
   it("shares repeated reloads until the in-flight read settles", async () => {
     const read = deferred<InspectResult>();
     inspect.mockReturnValueOnce(read.promise);

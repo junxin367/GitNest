@@ -192,6 +192,7 @@ function isOperation(value: unknown): boolean {
       value.kind as WorkspaceOperation["kind"]
     ) &&
     typeof value.scope === "string" &&
+    (value.background === undefined || typeof value.background === "boolean") &&
     OPERATION_SCOPES.has(
       value.scope as WorkspaceOperation["scope"]
     ) &&
@@ -224,6 +225,7 @@ function rebuildOperation(
     id: operation.id,
     kind: operation.kind,
     scope: operation.scope,
+    ...(operation.background ? { background: true } : {}),
     targetIds: [...operation.targetIds],
     state: operation.state,
     progress: operation.progress,

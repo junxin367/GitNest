@@ -108,6 +108,7 @@ export function useRepositoryMutations(
       setError(null);
       setNotice(null);
 
+      let completedNotice: string | null = null;
       try {
         const result = await invoke(stableTarget);
         if (requestGeneration !== generation.current) {
@@ -124,19 +125,8 @@ export function useRepositoryMutations(
           return false;
         }
 
-        const completedNotice = successMessage(result.value);
+        completedNotice = successMessage(result.value);
         setNotice(completedNotice);
-        try {
-          await hooks.afterMutation();
-        } catch {
-          // A failed read cannot undo a completed write or make it safe to retry.
-          if (requestGeneration === generation.current) {
-            setNotice(
-              `${completedNotice} 状态刷新失败，请重新读取仓库状态。`
-            );
-          }
-        }
-        return requestGeneration === generation.current;
       } catch (reason) {
         if (requestGeneration === generation.current) {
           setError(unexpectedMutationError(reason));
@@ -144,10 +134,23 @@ export function useRepositoryMutations(
         return false;
       } finally {
         if (requestGeneration === generation.current) {
-          inFlight.current = false;
-          setActive(null);
+          try {
+            // Invalidating before the write cancels pending statistics too.
+            // Recover that read even after rejection/cancellation or a partial write.
+            await hooks.afterMutation();
+          } catch {
+            if (completedNotice && requestGeneration === generation.current) {
+              setNotice(`${completedNotice} 状态刷新失败，请重新读取仓库状态。`);
+            }
+          } finally {
+            if (requestGeneration === generation.current) {
+              inFlight.current = false;
+              setActive(null);
+            }
+          }
         }
       }
+      return requestGeneration === generation.current;
     },
     [hooks, scope, stableTarget]
   );
@@ -346,9 +349,13 @@ export function canDiscardChange(
 export function formatLocalMutationErrorMessage(
   error: GitReadErrorDto
 ): string {
+  const completed = error.details.completedPathCount;
+  const message = typeof completed === "number" && Number.isSafeInteger(completed) && completed > 0
+    ? `操作未全部完成：此前已处理 ${completed} 个路径。请检查刷新后的变更列表。 ${error.message}`
+    : error.message;
   const stderr = error.details.stderr;
   if (typeof stderr !== "string") {
-    return error.message;
+    return message;
   }
 
   const diagnostic = stderr
@@ -361,8 +368,8 @@ export function formatLocalMutationErrorMessage(
     .slice(0, 600);
 
   return diagnostic
-    ? `${error.message} ${diagnostic}`
-    : error.message;
+    ? `${message} ${diagnostic}`
+    : message;
 }
 
 function unexpectedMutationError(

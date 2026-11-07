@@ -33,6 +33,7 @@ import { useWorkspaceWorktreeCommands } from "../../features/worktree-command/us
 import { useRepositoryMutations } from "../../entities/repository/useRepositoryMutations";
 import {
   findTargetSnapshot,
+  getSnapshotChangesRevision,
   getSnapshotContentRevision,
   resolveWorkspaceTarget
 } from "../../entities/workspace/model";
@@ -107,7 +108,9 @@ export function RepositoryPage({
   onWorkspaceTopologyChanged
 }: RepositoryPageProps) {
   const snapshot = findTargetSnapshot(snapshots, target);
-  const statusRevision = getSnapshotContentRevision(snapshot);
+  const statusRevision = tab === "changes"
+    ? getSnapshotChangesRevision(snapshot)
+    : getSnapshotContentRevision(snapshot);
   const details = useRepositoryDetails(
     target,
     tab,
@@ -144,7 +147,7 @@ export function RepositoryPage({
   const mutationHooks = useMemo(
     () => ({
       beforeMutation: details.invalidate,
-      afterMutation: () => details.reload("changes")
+      afterMutation: () => details.reload("changes", { reuseChanges: true, waitForSnapshot: true })
     }),
     [details.invalidate, details.reload]
   );
@@ -218,6 +221,7 @@ export function RepositoryPage({
   const commandCompletion = completedCommand
     ? `${completedCommand.id}:${completedCommand.state}` : "";
   const handledFetchCompletion = useRef({ targetKey, version: fetchCompletion });
+  const handledStatusRevision = useRef({ targetKey, version: statusRevision });
   const refreshedCommandCompletion = useRef(commandCompletion);
   const handledWorkflowCompletion = useRef(workflow?.completionVersion ?? 0);
   const handledWorktreeCommandCompletion = useRef(
@@ -408,9 +412,16 @@ export function RepositoryPage({
 
   useEffect(() => {
     const sameTarget = handledFetchCompletion.current.targetKey === targetKey;
+    const statusChanged = handledStatusRevision.current.targetKey === targetKey &&
+      handledStatusRevision.current.version !== statusRevision;
+    handledStatusRevision.current = { targetKey, version: statusRevision };
     const fetched = sameTarget && fetchCompletion !== "" &&
       handledFetchCompletion.current.version !== fetchCompletion;
-    handledFetchCompletion.current = { targetKey, version: fetchCompletion };
+    const awaitingFetchStatus = fetched && Boolean(snapshot?.refreshPending);
+    handledFetchCompletion.current = {
+      targetKey,
+      version: awaitingFetchStatus ? handledFetchCompletion.current.version : fetchCompletion
+    };
     const commandChanged = handledCommandCompletion.current !== commands.completionVersion;
     const commandNeedsRefresh = commandChanged &&
       (!commandCompletion || refreshedCommandCompletion.current !== commandCompletion);
@@ -421,17 +432,26 @@ export function RepositoryPage({
     }
     if (
       !commandNeedsRefresh &&
-      !fetched
+      (!fetched || awaitingFetchStatus)
     ) {
       return;
     }
     refreshedCommandCompletion.current = commandCompletion;
-    details.invalidate();
-    void details.reload(tab);
+    if (commandNeedsRefresh && completedCommand?.kind !== "fetch") {
+      details.invalidate();
+      void details.reload(tab);
+    } else if (tab !== "changes" && !snapshot?.refreshPending && !statusChanged) {
+      // Fetch updates refs; keep the changes cache and in-flight Diff intact.
+      // A new status revision already refreshes this tab through the details hook.
+      void details.reload(tab);
+    }
   }, [
     commands.completionVersion,
     commandCompletion,
+    completedCommand?.kind,
     fetchCompletion,
+    snapshot?.refreshPending,
+    statusRevision,
     targetKey,
     details.invalidate,
     details.reload,

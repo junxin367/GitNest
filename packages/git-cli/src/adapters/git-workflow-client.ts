@@ -50,13 +50,12 @@ export class GitCliWorkflowClient implements GitWorkflowClient {
     const headResult = await this.#run(path, ["rev-parse", "--verify", "HEAD"], options, false, true);
     const head = headResult.exitCode === 0 ? headResult.stdout.trim() : null;
     const gitDir = (await this.#run(path, ["rev-parse", "--absolute-git-dir"], options)).stdout.trim();
-    const [branchResult, status, index, diff, staged, untracked, metadata, headInfo, remotes] = await Promise.all([
+    const [branchResult, status, index, diff, staged, metadata, headInfo, remotes] = await Promise.all([
       this.#run(path, ["symbolic-ref", "--quiet", "--short", "HEAD"], options, false, true),
       this.#run(path, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], options),
-      this.#run(path, ["ls-files", includeFingerprint ? "--stage" : "--unmerged", "-z"], options),
+      includeFingerprint ? this.#run(path, ["ls-files", "--stage", "-z"], options) : undefined,
       includeFingerprint ? this.#run(path, ["diff", "--no-ext-diff", "--no-textconv", "--binary", "--no-renames"], options) : undefined,
       includeFingerprint ? this.#run(path, ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--binary", "--no-renames"], options) : undefined,
-      this.#run(path, ["ls-files", "--others", "--exclude-standard", "-z"], options),
       readOperationMetadata(gitDir),
       head ? this.#run(path, ["show", "-s", "--format=%P%n%B", head], options) : undefined,
       head ? this.#run(path, ["branch", "-r", "--contains", head, "--format=%(refname:short)"], options) : undefined
@@ -65,12 +64,14 @@ export class GitCliWorkflowClient implements GitWorkflowClient {
     if ("rebase-apply/applying" in metadata) {
       throw new GitError("INVALID_REQUEST", "检测到进行中的 git am。请在终端完成 git am --continue 或 git am --abort 后再使用这些操作。");
     }
-    const conflictedPaths = [...new Set(index.stdout.split("\0").filter((entry) =>
-      /^[0-7]+ [a-f0-9]+ [123]\t/.test(entry)
-    ).map((entry) => entry.slice(entry.indexOf("\t") + 1)))];
-    const untrackedPaths = untracked.stdout.split("\0").filter(Boolean);
+    const conflictedPaths = index
+      ? [...new Set(index.stdout.split("\0").filter((entry) =>
+          /^[0-7]+ [a-f0-9]+ [123]\t/.test(entry)
+        ).map((entry) => entry.slice(entry.indexOf("\t") + 1)))]
+      : statusPathsByCode(status.stdout, code => ["DD", "AU", "UD", "UA", "DU", "AA", "UU"].includes(code));
+    const untrackedPaths = statusPathsByCode(status.stdout, code => code === "??");
     const hash = createHash("sha256");
-    for (const text of [head ?? "", branchResult.stdout, status.stdout, index.stdout, diff?.stdout ?? "", staged?.stdout ?? "", JSON.stringify(metadata), remotes?.stdout ?? ""]) {
+    for (const text of [head ?? "", branchResult.stdout, status.stdout, index?.stdout ?? "", diff?.stdout ?? "", staged?.stdout ?? "", JSON.stringify(metadata), remotes?.stdout ?? ""]) {
       hash.update(String(Buffer.byteLength(text))).update(":").update(text);
     }
     // Status alone misses edits to an already-dirty file. Hash untracked bytes too.
@@ -261,6 +262,19 @@ function parseStatusPaths(raw: string): string[] {
       const source = entries[++i];
       if (source) paths.push(source);
     }
+  }
+  return [...new Set(paths)];
+}
+
+function statusPathsByCode(raw: string, matches: (code: string) => boolean): string[] {
+  const entries = raw.split("\0");
+  const paths: string[] = [];
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index] ?? "";
+    if (entry.length < 4) continue;
+    const code = entry.slice(0, 2);
+    if (matches(code)) paths.push(entry.slice(3));
+    if (/[RC]/.test(code)) index++;
   }
   return [...new Set(paths)];
 }

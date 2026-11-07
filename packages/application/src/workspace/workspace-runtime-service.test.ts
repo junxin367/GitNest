@@ -1217,6 +1217,53 @@ describe("WorkspaceRuntimeService", () => {
     }
   );
 
+  it("keeps the changes revision stable for remote-only updates while detecting local content edits", async () => {
+    const workspace = createWorkspace(1);
+    const gitClient = new TrackingGitClient(undefined, [{
+      path: "src/app.ts", indexStatus: ".", worktreeStatus: "M", kind: "ordinary"
+    }]);
+    let now = "2026-11-05T00:00:00.000Z";
+    let behind = 0;
+    let contentFingerprint = "original";
+    const read = gitClient.readRepositorySnapshot.bind(gitClient);
+    const reads = vi.spyOn(gitClient, "readRepositorySnapshot")
+      .mockImplementation(async (path, options) => ({
+        ...await read(path, options),
+        upstream: "origin/main", behind, contentFingerprint, refreshedAt: now
+      }));
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace), gitClient,
+      new MemorySnapshotStore(), new FakeWatcher(),
+      { autoRefresh: false, selectedTargetHeartbeatIntervalMs: 0, staleAfterMs: 1, clock: () => now }
+    );
+    const refresh = async () => {
+      const previousReads = reads.mock.calls.length;
+      now = new Date(Date.parse(now) + 60_000).toISOString();
+      await runtime.refreshStaleOnFocus();
+      return waitForState(runtime, state =>
+        reads.mock.calls.length > previousReads && !state.snapshots[0]?.refreshPending
+      );
+    };
+    try {
+      await runtime.requestWorkspaceRefresh("manual");
+      const initial = await waitForState(runtime, state =>
+        state.snapshots[0]?.contentVersion === 1 &&
+        state.operations.some(operation => operation.state === "succeeded")
+      );
+      expect(initial.snapshots[0]?.changesRevision).toBeTruthy();
+      behind = 3;
+      const fetched = await refresh();
+      expect(fetched.snapshots[0]?.behind).toBe(3);
+      expect(fetched.snapshots[0]?.contentVersion).toBe(2);
+      expect(fetched.snapshots[0]?.changesRevision).toBe(initial.snapshots[0]?.changesRevision);
+      contentFingerprint = "edited-with-the-same-path-and-status";
+      const edited = await refresh();
+      expect(edited.snapshots[0]?.changesRevision).not.toBe(fetched.snapshots[0]?.changesRevision);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("keeps no-op refreshes stable and advances content versions only for relevant watcher changes", async () => {
     const workspace = createWorkspace(1);
     const target =
@@ -2596,6 +2643,233 @@ describe("WorkspaceRuntimeService", () => {
     });
     expect(gitClient.calls).toHaveLength(1);
     await runtime.dispose();
+  });
+
+  it("keeps partial completion visible in operation history after a failed batch", async () => {
+    const workspace = createWorkspace(1);
+    const target = workspace.selectedTarget as RepositoryTarget;
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace), new TrackingGitClient(),
+      new MemorySnapshotStore([createCachedSnapshot(target)]), new FakeWatcher(),
+      { autoRefresh: false }
+    );
+    try {
+      await expect(runtime.runWorktreeMutation(target, "discard", async () => {
+        throw new GitError("COMMAND_FAILED", "后续批次失败。", { completedPathCount: 201 });
+      })).rejects.toMatchObject({ details: { completedPathCount: 201 } });
+      const state = await runtime.getState();
+      expect(state.operations[0]?.state).toBe("failed");
+      expect(state.operations[0]?.message).toContain("此前已处理 201 个路径");
+      expect(state.snapshots[0]?.refreshPending).toBe(false);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it.each(["stage", "switch-branch"] as const)(
+    "stops automatic Fetch for %s while waiting for its process to exit",
+    async (kind) => {
+      const workspace = createWorkspace(1);
+      const target = workspace.selectedTarget as RepositoryTarget;
+      const runtime = new WorkspaceRuntimeService(
+        new FakeConfiguration(workspace), new TrackingGitClient(),
+        new MemorySnapshotStore([createCachedSnapshot(target)]), new FakeWatcher(),
+        { autoRefresh: false, selectedTargetHeartbeatIntervalMs: 0 }
+      );
+      let release!: () => void;
+      const processExit = new Promise<void>(resolve => { release = resolve; });
+      let aborted = false;
+      let foregroundStarted = false;
+      let localWrite: Promise<unknown> | undefined;
+      try {
+        await runtime.getState();
+        const fetch = await runtime.queueRepositoryOperation(target, "fetch", async (_path, signal) => {
+          signal.addEventListener("abort", () => { aborted = true; }, { once: true });
+          await processExit;
+          if (signal.aborted) throw new GitError("COMMAND_CANCELLED", "自动 Fetch 已停止。");
+        }, { background: true });
+        await waitForState(runtime, state => state.operations.some(item =>
+          item.id === fetch.operationId && item.state === "running" && item.background));
+        if (kind === "stage") {
+          localWrite = runtime.runWorktreeMutation(target, kind, async () => { foregroundStarted = true; });
+        } else {
+          await runtime.queueRepositoryOperation(target, kind, async () => { foregroundStarted = true; });
+        }
+        await waitForState(runtime, state => state.operations.some(item =>
+          item.id === fetch.operationId && item.state === "cancelling"));
+        expect(aborted).toBe(true);
+        expect(foregroundStarted).toBe(false);
+        release();
+        await localWrite;
+        await waitForState(runtime, state => state.operations.some(item =>
+          item.kind === kind && item.state === "succeeded"));
+        expect(foregroundStarted).toBe(true);
+      } finally {
+        release();
+        await localWrite;
+        await runtime.dispose();
+      }
+    }
+  );
+
+  it.each(["running", "completed"] as const)(
+    "lets a foreground write run before deferred Fetch refreshes of other Worktrees (Fetch %s)",
+    async fetchState => {
+    const workspace = createWorkspace(2);
+    const target = workspace.selectedTarget as RepositoryTarget;
+    const other = { ...workspace.groups[0]!.targets[1]!, repositoryId: target.repositoryId };
+    workspace.groups[0]!.targets[1] = other;
+    workspace.worktrees[1]!.repositoryId = target.repositoryId;
+    workspace.worktrees[1]!.isPrimary = false;
+    workspace.worktrees[1]!.gitDir = `${workspace.repositories[0]!.commonDir}\\worktrees\\other`;
+    workspace.repositories[0]!.worktreeIds.push(other.worktreeId);
+    workspace.repositories = [workspace.repositories[0]!];
+    let blockOther = false;
+    let otherStarted = false;
+    let releaseOther!: () => void;
+    const otherGate = new Promise<void>(resolve => { releaseOther = resolve; });
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
+    let networkStarted!: () => void;
+    const networkReady = new Promise<void>(resolve => { networkStarted = resolve; });
+    let startWrite!: () => void;
+    const writeStarted = new Promise<void>(resolve => { startWrite = resolve; });
+    let behind = 0;
+    const git = new TrackingGitClient(async (_index, path) => {
+      if (blockOther && path.endsWith("1")) {
+        otherStarted = true;
+        await otherGate;
+      }
+    });
+    const read = git.readRepositorySnapshot.bind(git);
+    vi.spyOn(git, "readRepositorySnapshot").mockImplementation(async (...args) => ({
+      ...await read(...args), behind
+    }));
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace), git, new MemorySnapshotStore(), new FakeWatcher(),
+      {
+        autoRefresh: false, selectedTargetHeartbeatIntervalMs: 0,
+        currentTargetDebounceMs: 100, backgroundTargetDebounceMs: 100,
+        currentTargetMinIntervalMs: 0, backgroundTargetMinIntervalMs: 0
+      }
+    );
+    let writing: Promise<unknown> | undefined;
+    try {
+      await runtime.requestWorkspaceRefresh("manual");
+      await waitForState(runtime, state => state.monitor.mode === "watching" &&
+        state.snapshots.length === 2 && state.snapshots.every(snapshot => !snapshot.refreshPending));
+      blockOther = true;
+      const fetch = await runtime.queueRepositoryOperation(target, "fetch", async (_path, signal) => {
+        behind = 2;
+        networkStarted();
+        if (fetchState === "completed") return;
+        await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () =>
+          reject(new GitError("COMMAND_CANCELLED", "Fetch 已停止。")), { once: true }));
+      }, { background: true });
+      await networkReady;
+      if (fetchState === "completed") {
+        await waitForState(runtime, state => state.operations.some(item =>
+          item.id === fetch.operationId && item.state === "succeeded"));
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      writing = runtime.runWorktreeMutation(target, "stage", async () => {
+        startWrite();
+        await writeGate;
+      });
+      await resolveWithin(writeStarted, 500);
+      expect(otherStarted).toBe(false);
+      if (fetchState === "completed") {
+        // Let the deferred timer run while a foreground writer owns the queue.
+        await new Promise(resolve => setTimeout(resolve, 150));
+        expect(otherStarted).toBe(false);
+      }
+      releaseWrite();
+      await writing;
+      await waitForCondition(() => otherStarted);
+      releaseOther();
+      const settled = await waitForState(runtime, state => state.snapshots.every(snapshot =>
+        snapshot.behind === 2 && !snapshot.refreshPending));
+      expect(settled.snapshots).toHaveLength(2);
+      expect(git.calls).toHaveLength(4);
+    } finally {
+      releaseWrite();
+      releaseOther();
+      await writing;
+      await runtime.dispose();
+    }
+  });
+
+  it.each(["succeeded", "failed", "cancelled"] as const)(
+    "refreshes remote status in the background after automatic Fetch is %s",
+    async outcome => {
+      const workspace = createWorkspace(1);
+      const target = workspace.selectedTarget as RepositoryTarget;
+      let behind = 0;
+      const git = new TrackingGitClient();
+      const read = git.readRepositorySnapshot.bind(git);
+      vi.spyOn(git, "readRepositorySnapshot").mockImplementation(async (...args) => ({
+        ...await read(...args), behind
+      }));
+      const runtime = new WorkspaceRuntimeService(
+        new FakeConfiguration(workspace), git, new MemorySnapshotStore(), new FakeWatcher(),
+        { autoRefresh: false, selectedTargetHeartbeatIntervalMs: 0, currentTargetDebounceMs: 10, currentTargetMinIntervalMs: 0 }
+      );
+      try {
+        await runtime.requestWorkspaceRefresh("manual");
+        const initial = await waitForState(runtime, state => state.monitor.mode === "watching" &&
+          state.snapshots.length === 1 && !state.snapshots[0]!.refreshPending);
+        const operation = await runtime.queueRepositoryOperation(target, "fetch", async () => {
+          behind = 3;
+          if (outcome !== "succeeded") throw new GitError(
+            outcome === "cancelled" ? "COMMAND_CANCELLED" : "COMMAND_FAILED", "Fetch 未全部完成。"
+          );
+        }, { background: true });
+        await waitForState(runtime, state => state.operations.some(item =>
+          item.id === operation.operationId && item.state === outcome));
+        const refreshed = await waitForState(runtime, state => state.snapshots[0]?.behind === 3 &&
+          !state.snapshots[0].refreshPending);
+        expect(refreshed.snapshots[0]?.changesRevision).toBe(initial.snapshots[0]?.changesRevision);
+        expect(git.calls).toHaveLength(2);
+      } finally {
+        await runtime.dispose();
+      }
+    }
+  );
+
+  it("cancels a queued local mutation without releasing the earlier writer", async () => {
+    const workspace = createWorkspace(1);
+    const target = workspace.selectedTarget as RepositoryTarget;
+    const runtime = new WorkspaceRuntimeService(
+      new FakeConfiguration(workspace), new TrackingGitClient(),
+      new MemorySnapshotStore([createCachedSnapshot(target)]), new FakeWatcher(),
+      { autoRefresh: false, selectedTargetHeartbeatIntervalMs: 0 }
+    );
+    await runtime.getState();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const first = runtime.runWorktreeMutation(target, "commit", async () => gate);
+    let cancelledStarted = false;
+    const second = runtime.runWorktreeMutation(target, "unstage", async () => { cancelledStarted = true; });
+    const rejection = expect(second).rejects.toMatchObject({ code: "COMMAND_CANCELLED" });
+    try {
+      const pending = await waitForState(runtime, state =>
+        state.operations.some(item => item.kind === "unstage" && item.state === "queued"));
+      await runtime.cancelOperation(pending.operations.find(item => item.kind === "unstage")!.id);
+      await rejection;
+      let lastStarted = false;
+      const last = runtime.runWorktreeMutation(target, "stage", async () => { lastStarted = true; });
+      await waitForState(runtime, state => state.operations.some(item => item.kind === "stage" && item.state === "queued"));
+      expect(cancelledStarted).toBe(false);
+      expect(lastStarted).toBe(false);
+      release();
+      await first;
+      await last;
+      expect(lastStarted).toBe(true);
+    } finally {
+      release();
+      await first;
+      await runtime.dispose();
+    }
   });
 
   it("queues repository operations behind local writes for the same repository", async () => {

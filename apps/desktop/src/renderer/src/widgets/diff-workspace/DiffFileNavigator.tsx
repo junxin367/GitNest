@@ -127,7 +127,6 @@ type DirectoryCollapseStore = ReturnType<typeof createDirectoryCollapseStore>;
 
 export type DiffFileSelectionOrigin = "automatic" | "user";
 
-const MAX_GROUP_MUTATION_PATHS = 200;
 const DEFAULT_COLLAPSED_SECTIONS: DiffFileSectionCollapseState = {
   staged: false,
   unstaged: false,
@@ -765,25 +764,18 @@ export function DiffFileNavigator({
     const discardCandidates: DiffViewerFile[] = [];
     for (const file of section.files) {
       if (
-        toggleCandidates.length <= MAX_GROUP_MUTATION_PATHS &&
         (stagedSection ? canUnstageFile?.(file) ?? true : canStageFile?.(file) ?? true)
       ) toggleCandidates.push(file);
       if (
-        !stagedSection && discardCandidates.length <= MAX_GROUP_MUTATION_PATHS &&
+        !stagedSection &&
         (canDiscardFile?.(file) ?? true)
       ) discardCandidates.push(file);
-      if (
-        toggleCandidates.length > MAX_GROUP_MUTATION_PATHS &&
-        (stagedSection || discardCandidates.length > MAX_GROUP_MUTATION_PATHS)
-      ) break;
     }
     const canToggleGroup =
       toggleCandidates.length > 0 &&
-      toggleCandidates.length <= MAX_GROUP_MUTATION_PATHS &&
       Boolean(stagedSection ? onUnstageFiles : onStageFiles);
     const canDiscardGroup =
       discardCandidates.length > 0 &&
-      discardCandidates.length <= MAX_GROUP_MUTATION_PATHS &&
       Boolean(onDiscardFiles);
 
     if (!canToggleGroup && !canDiscardGroup) {

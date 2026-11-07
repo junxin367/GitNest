@@ -30,6 +30,23 @@ describe("GitCliWorkflowClient real Git workflows", () => {
     expect(state.fingerprint).toBe("");
     expect(calls.some(args => args.includes("diff"))).toBe(false);
     expect(calls.some(args => args.includes("--stage"))).toBe(false);
+    expect(calls.some(args => args.includes("ls-files"))).toBe(false);
+    expect(calls).toHaveLength(6);
+  });
+  it("reads untracked and conflict paths from porcelain without treating rename sources as new records", async () => {
+    const client = new GitCliWorkflowClient({
+      executable: "unused",
+      runner: async ({ args }) => ({
+        exitCode: 0, stderr: "", durationMs: 0,
+        stdout: args.includes("--absolute-git-dir") ? "Z:/gitnest-nonexistent-ui-fixture/.git"
+          : args.includes("--verify") ? "a".repeat(40)
+          : args.includes("status") ? "R  new.txt\0?? misleading-source.txt\0?? real.txt\0UU conflict.txt\0AA both-added.txt\0"
+          : args.includes("symbolic-ref") ? "main" : ""
+      })
+    });
+    const state = await client.inspect("Z:/gitnest-nonexistent-ui-fixture", { includeFingerprint: false });
+    expect(state.untrackedPaths).toEqual(["real.txt"]);
+    expect(state.conflictedPaths).toEqual(["conflict.txt", "both-added.txt"]);
   });
   it("stashes literal selected paths and leaves other edits intact", async () => {
     const fixture = await repository();

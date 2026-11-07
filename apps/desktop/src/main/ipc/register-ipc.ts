@@ -155,7 +155,7 @@ import {
 import { openDiffViewerWindow } from "../windows/diff-viewer-window";
 
 let registered = false;
-const MAX_MUTATION_PATHS = 200;
+const MAX_MUTATION_PATHS = 50_000;
 const MAX_MUTATION_PATH_LENGTH = 4_096;
 const MAX_COMMIT_SUBJECT_LENGTH = 200;
 const MAX_COMMIT_BODY_LENGTH = 100_000;
@@ -3072,6 +3072,9 @@ function validateRepositoryPathsMutationRequest(
 
     return path;
   });
+  if (paths.reduce((length, path) => length + path.length, 0) > 8 * 1024 * 1024) {
+    throw new GitError("INVALID_REQUEST", "所选路径总长度超过限制，请缩小选择范围。");
+  }
 
   if (new Set(paths).size !== paths.length) {
     throw new GitError(

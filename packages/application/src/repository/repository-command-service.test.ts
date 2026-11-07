@@ -45,6 +45,35 @@ const LOCAL_HEAD = "a".repeat(40);
 const REMOTE_HEAD = "b".repeat(40);
 
 describe("RepositoryCommandService", () => {
+  it("reads remote advertisements only for preview and final queued validation", async () => {
+    const client = new FakeRepositoryClient();
+    const remoteReads = vi.spyOn(client, "readRemoteBranches");
+    const runtime = new FakeRuntime();
+    const service = createService(runtime, client);
+    const preview = await service.preflight({ type: "fetch", targets: [TARGET] });
+    expect(remoteReads).toHaveBeenCalledTimes(1);
+    await service.execute(preview.command, preview.preflightId, false);
+    expect(remoteReads).toHaveBeenCalledTimes(1);
+    expect(client.snapshotReads).toBe(1);
+    await runtime.runQueued(0);
+    expect(remoteReads).toHaveBeenCalledTimes(2);
+    expect(client.snapshotReads).toBe(2);
+    expect(client.fetchCalls).toHaveLength(1);
+  });
+
+  it("revalidates a confirmed command after a long queue without repeating confirmation", async () => {
+    let now = Date.parse("2026-11-07T00:00:00Z");
+    const runtime = new FakeRuntime();
+    const client = new FakeRepositoryClient();
+    const service = createService(runtime, client, { clock: () => new Date(now).toISOString() });
+    const preview = await service.preflight({ type: "fetch", targets: [TARGET] });
+    await service.execute(preview.command, preview.preflightId, false);
+    now += 60_001;
+    await runtime.runQueued(0);
+    expect(client.snapshotReads).toBe(2);
+    expect(client.fetchCalls).toHaveLength(1);
+  });
+
   it.each([
     new GitError("INVALID_REQUEST", "A target was removed."),
     new WorkspaceError("INVALID_REQUEST", "Workspace changed during submission."),
@@ -188,16 +217,14 @@ describe("RepositoryCommandService", () => {
             : type === "pull" && change === "ancestry"
               ? "NON_FAST_FORWARD"
               : "PREFLIGHT_CHANGED";
-          await expect(phase === "while-queued"
-            ? runtime.runQueued(0)
-            : service.execute(preflight.command, preflight.preflightId, true)
-          ).rejects.toMatchObject({ code: expectedCode });
+          if (phase === "before-confirm") {
+            await service.execute(preflight.command, preflight.preflightId, true);
+          }
+          await expect(runtime.runQueued(0)).rejects.toMatchObject({ code: expectedCode });
           expect(client.fetchCalls).toHaveLength(0);
           expect(client.pullCalls).toHaveLength(0);
           expect(client.pushCalls).toHaveLength(0);
-          if (phase === "before-confirm") {
-            expect(runtime.queued).toHaveLength(0);
-          }
+          expect(runtime.queued).toHaveLength(1);
         }
       );
     }
@@ -214,10 +241,11 @@ describe("RepositoryCommandService", () => {
         : { type, targets: [TARGET] };
       const preflight = await service.preflight(command);
       client.fetchUrls = ["https://other.example.test/repository.git"];
-      await expect(
-        service.execute(preflight.command, preflight.preflightId, true)
-      ).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
-      expect(runtime.queued).toHaveLength(0);
+      await service.execute(preflight.command, preflight.preflightId, true);
+      await expect(runtime.runQueued(0)).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
+      expect(client.fetchCalls).toHaveLength(0);
+      expect(client.pullCalls).toHaveLength(0);
+      expect(client.pushCalls).toHaveLength(0);
     }
   );
 
@@ -246,11 +274,10 @@ describe("RepositoryCommandService", () => {
     const push = await service.preflight({ type: "push", targets: [TARGET] });
     const fetch = await service.preflight({ type: "fetch", targets: [TARGET] });
     client.pushUrls.push("https://backup.example.test/repository.git");
-    await expect(
-      service.execute(push.command, push.preflightId, true)
-    ).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
+    await service.execute(push.command, push.preflightId, true);
+    await expect(runtime.runQueued(0)).rejects.toMatchObject({ code: "PREFLIGHT_CHANGED" });
     await service.execute(fetch.command, fetch.preflightId, false);
-    await runtime.runQueued(0);
+    await runtime.runQueued(1);
   });
 
   it("rejects a preflight from another Workspace even when both contain the same repository", async () => {
@@ -449,16 +476,12 @@ describe("RepositoryCommandService", () => {
     client.remoteBranches.set("origin", [
       createRemoteBranch("main", REMOTE_HEAD)
     ]);
-    await expect(
-      service.execute(
-        changed.command,
-        changed.preflightId,
-        false
-      )
-    ).rejects.toMatchObject({
+    await service.execute(changed.command, changed.preflightId, false);
+    await expect(runtime.runQueued(1)).rejects.toMatchObject({
       code: "PREFLIGHT_CHANGED"
     });
-    expect(runtime.queued).toHaveLength(1);
+    expect(runtime.queued).toHaveLength(2);
+    expect(client.fetchCalls).toHaveLength(0);
   });
 
   it.each<{

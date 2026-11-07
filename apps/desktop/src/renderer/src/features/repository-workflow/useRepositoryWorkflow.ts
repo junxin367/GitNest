@@ -6,6 +6,7 @@ import type {
   RepositoryWorkflowStateDto,
   WorkspaceOperationDto
 } from "@gitnest/contracts";
+import { isBackgroundFetchOperation } from "../repository-command/useRepositoryCommands";
 
 export interface RepositoryWorkflowRequestOptions {
   confirmed?: boolean;
@@ -67,7 +68,7 @@ export function useRepositoryWorkflow(
   const operationsRef = useRef(operations);
   operationsRef.current = operations;
   const terminalStates = useMemo(() => new Map(operations.filter(item =>
-    !activeState(item.state) && item.kind !== "status" && item.kind !== "scan" &&
+    !activeState(item.state) && item.kind !== "status" && item.kind !== "scan" && item.kind !== "fetch" &&
     item.targetIds.includes(`${scope.target?.repositoryId}:${scope.target?.worktreeId}`)
   ).map(item => [item.id, item.state])), [operations, scope]);
   const previousTerminalStates = useRef(terminalStates);
@@ -182,6 +183,7 @@ export function useRepositoryWorkflow(
   const hasActiveOperation = useCallback(() => {
     const key = `${scope.target?.repositoryId}:${scope.target?.worktreeId}`;
     return operationsRef.current.some(item => activeState(item.state) &&
+      !isBackgroundFetchOperation(item) &&
       item.kind !== "status" && item.kind !== "scan" && item.targetIds.includes(key));
   }, [scope]);
   const executePreflight = useCallback(async (candidate: RepositoryWorkflowPreflightDto) => {

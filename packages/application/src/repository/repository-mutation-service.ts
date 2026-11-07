@@ -1,5 +1,6 @@
 import {
   GitError,
+  withCompletedMutationPaths,
   type CreatedCommit,
   type GitClient,
   type GitMutationClient,
@@ -15,7 +16,7 @@ import type {
   WorktreeMutationKind
 } from "../workspace/workspace-runtime-service";
 
-const MAX_MUTATION_PATHS = 200;
+const MAX_MUTATION_PATHS = 50_000;
 const MAX_RELATIVE_PATH_LENGTH = 4_096;
 const MAX_COMMIT_SUBJECT_LENGTH = 200;
 const MAX_COMMIT_BODY_LENGTH = 100_000;
@@ -128,8 +129,9 @@ export class RepositoryMutationService {
     expectedUntrackedPaths: readonly string[] = []
   ): Promise<RepositoryPathsMutationResult> {
     const requestedPaths = validateMutationPaths(paths);
+    const requested = new Set(requestedPaths);
     if (
-      expectedUntrackedPaths.some((path) => !requestedPaths.includes(path)) ||
+      expectedUntrackedPaths.some((path) => !requested.has(path)) ||
       new Set(expectedUntrackedPaths).size !== expectedUntrackedPaths.length
     ) {
       throw new GitError(
@@ -148,8 +150,6 @@ export class RepositoryMutationService {
           );
         const trackedPaths: string[] = [];
         const untrackedPaths: string[] = [];
-        const requested = new Set(requestedPaths);
-
         for (const change of snapshot.changes) {
           const pathsForChange = [
             change.path,
@@ -175,11 +175,9 @@ export class RepositoryMutationService {
           }
         }
 
-        const unavailable = requestedPaths.filter(
-          (path) =>
-            !trackedPaths.includes(path) &&
-            !untrackedPaths.includes(path)
-        );
+        const trackedSet = new Set(trackedPaths);
+        const untrackedSet = new Set(untrackedPaths);
+        const unavailable = requestedPaths.filter(path => !trackedSet.has(path) && !untrackedSet.has(path));
         if (unavailable.length > 0) {
           throw new GitError(
             "INVALID_REQUEST",
@@ -190,7 +188,7 @@ export class RepositoryMutationService {
 
         if (
           untrackedPaths.some((path) => !confirmedUntracked.has(path)) ||
-          expectedUntrackedPaths.some((path) => !untrackedPaths.includes(path))
+          expectedUntrackedPaths.some((path) => !untrackedSet.has(path))
         ) {
           throw new GitError(
             "INVALID_REQUEST",
@@ -206,10 +204,14 @@ export class RepositoryMutationService {
           );
         }
         if (untrackedPaths.length > 0) {
-          await this.#gitWriter.removeUntrackedPaths(
-            worktreePath,
-            [...new Set(untrackedPaths)]
-          );
+          try {
+            await this.#gitWriter.removeUntrackedPaths(
+              worktreePath,
+              [...untrackedSet]
+            );
+          } catch (error) {
+            throw withCompletedMutationPaths(error, trackedSet.size);
+          }
         }
       }
     );
@@ -355,6 +357,9 @@ function validateMutationPaths(
       "INVALID_REQUEST",
       `Repository mutations require between 1 and ${MAX_MUTATION_PATHS} paths.`
     );
+  }
+  if (paths.reduce((length, path) => length + (typeof path === "string" ? path.length : 0), 0) > 8 * 1024 * 1024) {
+    throw new GitError("INVALID_REQUEST", "所选路径总长度超过限制，请缩小选择范围。");
   }
 
   const validated = paths.map((path) => {

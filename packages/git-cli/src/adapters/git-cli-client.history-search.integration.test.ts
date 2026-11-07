@@ -1,10 +1,84 @@
 import { spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTemporaryDirectoryFixture, type TemporaryDirectoryFixture } from "@gitnest/testkit";
 import { GitCliClient } from "./git-cli-client";
 import { stashMatchesHistorySearch } from "./history-stashes";
+import { ChronologicalHistoryReader } from "./chronological-history";
+import * as processes from "../process/git-process-runner";
+
+describe("compact history index", () => {
+  it("shares an in-flight index and keeps it running when only one reader cancels", async () => {
+    const hash = "a".repeat(40);
+    let finish!: (value: Awaited<ReturnType<typeof processes.runProcess>>) => void;
+    const pending = new Promise<Awaited<ReturnType<typeof processes.runProcess>>>(resolve => { finish = resolve; });
+    const reads = vi.spyOn(processes, "runProcess").mockReturnValue(pending);
+    try {
+      const reader = new ChronologicalHistoryReader();
+      const firstController = new AbortController();
+      const first = reader.read({ executable: "unused", cwd: "same", signal: firstController.signal }, [hash], undefined, 1, 1);
+      const second = reader.read({ executable: "unused", cwd: "same" }, [hash], undefined, 1, 1);
+      await Promise.resolve();
+      expect(reads).toHaveBeenCalledTimes(1);
+      firstController.abort();
+      await expect(first).rejects.toMatchObject({ code: "COMMAND_CANCELLED" });
+      expect(reads.mock.calls[0]![0].signal?.aborted).toBe(false);
+      finish({ stdout: `${hash}\t1700000000`, stderr: "", exitCode: 0, durationMs: 0 });
+      expect(await second).toEqual({ commits: [] });
+      await reader.read({ executable: "unused", cwd: "same" }, [hash], undefined, 1, 1);
+      expect(reads).toHaveBeenCalledTimes(1);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
+  it("aborts an unused index and permits a new reader without accepting the old result", async () => {
+    const hash = "a".repeat(40);
+    let finishOld!: (value: Awaited<ReturnType<typeof processes.runProcess>>) => void;
+    const old = new Promise<Awaited<ReturnType<typeof processes.runProcess>>>(resolve => { finishOld = resolve; });
+    const reads = vi.spyOn(processes, "runProcess")
+      .mockReturnValueOnce(old)
+      .mockResolvedValue({ stdout: `${hash}\t1700000000`, stderr: "", exitCode: 0, durationMs: 0 });
+    try {
+      const reader = new ChronologicalHistoryReader();
+      const controller = new AbortController();
+      const first = reader.read({ executable: "unused", cwd: "retry", signal: controller.signal }, [hash], undefined, 1, 1);
+      await Promise.resolve();
+      controller.abort();
+      await expect(first).rejects.toMatchObject({ code: "COMMAND_CANCELLED" });
+      expect(reads.mock.calls[0]![0].signal?.aborted).toBe(true);
+      const retried = await reader.read({ executable: "unused", cwd: "retry" }, [hash], undefined, 1, 1);
+      expect(retried).toEqual({ commits: [] });
+      finishOld({ stdout: "invalid old output", stderr: "", exitCode: 0, durationMs: 0 });
+      await Promise.resolve();
+      await reader.read({ executable: "unused", cwd: "retry" }, [hash], undefined, 1, 1);
+      expect(reads).toHaveBeenCalledTimes(2);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
+  it.each([40, 64])("caches over 250000 commits with %s-character hashes instead of rescanning each page", async hashLength => {
+    const length = 250_001;
+    const hash = (index: number) => index.toString(16).padStart(hashLength, "0");
+    const output = Array.from({ length }, (_, index) => `${hash(index + 1)}\t1700000000`).join("\n");
+    const reads = vi.spyOn(processes, "runProcess").mockResolvedValue({
+      stdout: output, stderr: "", exitCode: 0, durationMs: 0
+    });
+    try {
+      const reader = new ChronologicalHistoryReader();
+      const options = { executable: "unused", cwd: "virtual-history" };
+      await reader.read(options, [hash(length)], undefined, 1, length);
+      await reader.read(options, [hash(length)], undefined, 1, length);
+      expect(reads).toHaveBeenCalledTimes(1);
+      await reader.read(options, [hash(length - 1)], undefined, 1, length);
+      expect(reads).toHaveBeenCalledTimes(2);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+});
 
 describe("full repository history search", () => {
   let fixture: TemporaryDirectoryFixture;

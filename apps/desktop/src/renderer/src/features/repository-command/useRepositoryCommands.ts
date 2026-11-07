@@ -85,6 +85,7 @@ export function useRepositoryCommands(
   operationsRef.current = operations;
   const operationBusy = operations.some(
     (operation) =>
+      !isBackgroundFetchOperation(operation) &&
       isRepositoryCommandOperation(operation.kind) &&
       (operation.state === "queued" ||
         operation.state === "running" ||
@@ -265,6 +266,7 @@ export function useRepositoryCommands(
       );
       const conflictingOperation = operationsRef.current.some(
         (operation) =>
+          !isBackgroundFetchOperation(operation) &&
           isRepositoryCommandOperation(operation.kind) &&
           isActiveOperation(operation.state) &&
           operation.targetIds.some((id) => targetKeys.has(id))
@@ -473,6 +475,12 @@ export function isRepositoryCommandOperation(
     "tag-push",
     "worktree-remove"
   ].includes(kind);
+}
+
+export function isBackgroundFetchOperation(
+  operation: Pick<WorkspaceOperationDto, "kind" | "background">
+): boolean {
+  return operation.kind === "fetch" && operation.background === true;
 }
 
 function isActiveOperation(
