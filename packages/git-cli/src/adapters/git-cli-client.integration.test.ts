@@ -187,6 +187,33 @@ describe("GitCliClient integration", () => {
     );
   });
 
+  it("retries an oversized status with directory-level untracked output and keeps branch metadata", async () => {
+    const original = processRunner.runProcess;
+    const statusArgs: Array<readonly string[]> = [];
+    const run = vi.spyOn(processRunner, "runProcess").mockImplementation(async (request) => {
+      if (request.args.includes("status")) {
+        statusArgs.push(request.args);
+        if (statusArgs.length === 1) {
+          throw new GitError(
+            "OUTPUT_LIMIT_EXCEEDED",
+            "status output exceeded"
+          );
+        }
+      }
+      return original(request);
+    });
+
+    try {
+      const snapshot = await client.readRepositorySnapshot(fixture.repositoryPath);
+      expect(snapshot.branch).toBe("main");
+      expect(statusArgs).toHaveLength(2);
+      expect(statusArgs[0]).toContain("--untracked-files=all");
+      expect(statusArgs[1]).toContain("--untracked-files=normal");
+    } finally {
+      run.mockRestore();
+    }
+  });
+
   it("publishes files immediately and batches independent stats at one second intervals", async () => {
     const original = processRunner.runProcess;
     let release!: () => void;

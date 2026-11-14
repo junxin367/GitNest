@@ -163,6 +163,7 @@ const UNTRACKED_STATS_CONCURRENCY = 4;
 const SNAPSHOT_FINGERPRINT_CONCURRENCY = 4;
 const CHANGE_STATS_PUBLISH_INTERVAL_MS = 1_000;
 const REMOTE_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024;
+const STATUS_FALLBACK_OUTPUT_LIMIT_BYTES = 64 * 1024 * 1024;
 const MAX_MUTATION_PATHS = 50_000;
 const MAX_RELATIVE_PATH_LENGTH = 4_096;
 const MAX_COMMIT_SUBJECT_LENGTH = 200;
@@ -359,10 +360,9 @@ export class GitCliClient
     );
 
     try {
-      const result = await runProcess({
+      const result = await readRepositoryStatus({
         executable: executablePath,
         cwd: worktreePath,
-        args: STATUS_ARGUMENTS,
         signal: options.signal,
         priority: options.priority,
         timeoutMs: options.timeoutMs
@@ -2474,10 +2474,7 @@ export class GitCliClient
       const historyLimit = clampHistoryLimit(options.historyLimit);
       const [statusResult, branchResult, worktreeResult, historyResult] =
         await Promise.all([
-          runProcess({
-            ...commandOptions,
-            args: STATUS_ARGUMENTS
-          }),
+          readRepositoryStatus(commandOptions),
           runProcess({
             ...commandOptions,
             args: BRANCH_ARGUMENTS
@@ -2641,6 +2638,36 @@ interface CommandOptions {
   signal?: AbortSignal | undefined;
   priority?: GitReadPriority | undefined;
   timeoutMs?: number | undefined;
+}
+
+async function readRepositoryStatus(
+  options: CommandOptions
+): Promise<Awaited<ReturnType<typeof runProcess>>> {
+  try {
+    return await runProcess({
+      ...options,
+      args: STATUS_ARGUMENTS
+    });
+  } catch (error) {
+    if (
+      !(error instanceof GitError) ||
+      error.code !== "OUTPUT_LIMIT_EXCEEDED"
+    ) {
+      throw error;
+    }
+
+    // 超大仓库的完整未跟踪文件列表可能超过进程上限；降级到目录级未跟踪项，
+    // 保留分支头和可读状态，避免变更页把整个仓库误判为“分支不可用”。
+    return runProcess({
+      ...options,
+      args: STATUS_ARGUMENTS.map((argument) =>
+        argument === "--untracked-files=all"
+          ? "--untracked-files=normal"
+          : argument
+      ),
+      outputLimitBytes: STATUS_FALLBACK_OUTPUT_LIMIT_BYTES
+    });
+  }
 }
 
 async function readRepositoryMediaPreview(
